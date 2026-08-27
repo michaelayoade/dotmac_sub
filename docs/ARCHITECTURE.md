@@ -539,6 +539,7 @@ AuthenticationBinding (installed verifier configuration)
 ├── binding_key + mechanism_code (immutable deployment-global identity)
 ├── mechanism_code vocabulary is open and owner-declared: local, radius, oidc
 ├── name (operator-facing label), is_active
+├── install_authentication_binding is the typed, audited runtime writer
 └── no credential material and no radius_server_id coupling
 
 Staff Party credential adoption (R1 operator adapter)

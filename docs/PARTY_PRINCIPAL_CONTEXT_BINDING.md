@@ -133,6 +133,16 @@ remain separate approval-bound work: the existing Subscriber executor cannot
 bind SystemUsers, and no command infers identity from email, name, username, or
 other contact values.
 
+New verifier bindings are installed only through
+`credential_party_binding.install_authentication_binding`; the operator adapter
+is `scripts/authentication/install_authentication_binding.py`. It validates the
+owner-declared mechanism, commits the row and typed audit evidence atomically,
+and accepts only an exact replay. The unique binding-key constraint arbitrates
+concurrent installers inside the owner-authorized savepoint; a loser re-reads
+and accepts only the exact database winner. Migration 527's two deterministic
+rows remain historical bootstrap evidence and are never expanded to mirror a
+later runtime mechanism declaration.
+
 The first real credential-projection caller is
 `scripts/migration/execute_staff_party_credential_adoption.py`. Its public
 boundary is fully typed: immutable plan item, plan, approval, phase, outcome,

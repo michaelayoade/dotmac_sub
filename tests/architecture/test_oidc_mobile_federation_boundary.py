@@ -278,6 +278,14 @@ def test_the_fixture_provisions_through_the_canonical_writer() -> None:
 
     source = _source(FIXTURES)
     tree = ast.parse(source)
+    assert "install_authentication_binding(" in source, (
+        "tests/oidc_mobile_fixtures.py must install its verifier binding through "
+        "app.services.credential_party_binding, not construct an unproducible row"
+    )
+    assert "AuthenticationBinding(" not in source, (
+        "tests/oidc_mobile_fixtures.py constructs AuthenticationBinding directly; "
+        "only install_authentication_binding may own that registry write"
+    )
     assert "bind_credential_party(" in source, (
         "tests/oidc_mobile_fixtures.py must provision through "
         "app.services.credential_party_binding, not around it"

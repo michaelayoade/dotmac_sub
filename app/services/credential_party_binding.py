@@ -26,12 +26,12 @@ from typing import NoReturn
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from app.models.audit import AuditActorType
 from app.models.auth import AuthenticationBinding, UserCredential
 from app.models.party import Party, PartyIdentityStatus, PartyType
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.authentication_mechanism_registry import (
     UndeclaredAuthenticationMechanismError,
     UnmappedAuthenticationMechanismStorageError,
@@ -45,10 +45,17 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 
 _OWNER = "party.credential_authentication_projection"
 _COMMAND_SCOPE = "party:credential_authentication_projection"
+AUTHENTICATION_BINDING_INSTALL_SCOPE = "party:authentication_binding_registry"
+_INSTALL_BINDING_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern="installed authentication binding registry",
+    name="install_authentication_binding",
+)
 _BIND_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="credential Party authentication projection",
@@ -66,6 +73,30 @@ class CredentialPrincipalKind(StrEnum):
     subscriber = "subscriber"
     system_user = "system_user"
     reseller_user = "reseller_user"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticationBindingInstallation:
+    """Install one named verifier binding through its canonical owner."""
+
+    context: CommandContext
+    binding_key: str
+    mechanism_code: str
+    name: str
+    description: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticationBindingInstalled:
+    """Immutable evidence for one committed verifier installation."""
+
+    binding_id: UUID
+    binding_key: str
+    mechanism_code: str
+    name: str
+    description: str | None
+    installed_at: datetime
+    replayed: bool
 
 
 def _error(suffix: str, message: str, **details: object) -> NoReturn:
@@ -124,6 +155,156 @@ def _as_utc(value: datetime) -> datetime:
     """Return a stable aware instant across PostgreSQL and SQLite tests."""
 
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _install_authentication_binding(
+    db: Session,
+    command: AuthenticationBindingInstallation,
+) -> AuthenticationBindingInstalled:
+    if command.context.scope != AUTHENTICATION_BINDING_INSTALL_SCOPE:
+        _error(
+            "invalid_command",
+            "Authentication binding installation scope is invalid.",
+            field="scope",
+        )
+    binding_key = _required_text(command.binding_key, "binding_key")
+    mechanism_code = _required_text(command.mechanism_code, "mechanism_code")
+    name = _required_text(command.name, "name")
+    description = (command.description or "").strip() or None
+    for field, value, limit in (
+        ("binding_key", binding_key, 80),
+        ("mechanism_code", mechanism_code, 40),
+        ("name", name, 120),
+    ):
+        if len(value) > limit:
+            _error(
+                "invalid_command",
+                f"{field} exceeds its {limit}-character contract.",
+                field=field,
+                maximum_length=limit,
+            )
+    try:
+        mechanism_code = require_declared_mechanism(mechanism_code)
+    except UndeclaredAuthenticationMechanismError:
+        _error(
+            "undeclared_mechanism",
+            "No SOT owner declares the requested authentication mechanism.",
+            mechanism_code=mechanism_code,
+        )
+
+    def existing_binding() -> AuthenticationBinding | None:
+        return db.scalar(
+            select(AuthenticationBinding)
+            .where(AuthenticationBinding.binding_key == binding_key)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def exact_replay(existing: AuthenticationBinding) -> AuthenticationBindingInstalled:
+        """Return one exact installed row; refuse every ambiguous reuse."""
+
+        if existing.mechanism_code != mechanism_code:
+            _error(
+                "binding_identity_conflict",
+                "The binding key is already installed for another mechanism.",
+                binding_key=binding_key,
+                expected_mechanism_code=mechanism_code,
+                actual_mechanism_code=existing.mechanism_code,
+            )
+        if not existing.is_active:
+            _error(
+                "authentication_binding_inactive",
+                "The binding key identifies a retired verifier; install a new key.",
+                binding_key=binding_key,
+            )
+        if existing.name != name or existing.description != description:
+            _error(
+                "binding_configuration_conflict",
+                "The binding key is installed with different reviewed metadata.",
+                binding_key=binding_key,
+            )
+        return AuthenticationBindingInstalled(
+            binding_id=existing.id,
+            binding_key=existing.binding_key,
+            mechanism_code=existing.mechanism_code,
+            name=existing.name,
+            description=existing.description,
+            installed_at=_as_utc(existing.created_at),
+            replayed=True,
+        )
+
+    existing = existing_binding()
+    if existing is not None:
+        return exact_replay(existing)
+
+    # The lookup is advisory; two installations can both observe no row. The
+    # unique binding-key constraint is the arbiter. Keep the INSERT inside the
+    # owner-authorized SAVEPOINT so losing that race does not poison the outer
+    # command transaction, then re-read the winner deterministically.
+    def insert() -> AuthenticationBinding:
+        binding = AuthenticationBinding(
+            binding_key=binding_key,
+            mechanism_code=mechanism_code,
+            name=name,
+            description=description,
+            is_active=True,
+        )
+        db.add(binding)
+        db.flush()
+        return binding
+
+    try:
+        binding = execute_owner_savepoint(db, insert)
+    except IntegrityError:
+        winner = existing_binding()
+        if winner is None:
+            _error(
+                "binding_installation_conflict",
+                "A concurrent binding installation conflict has no readable winner.",
+                binding_key=binding_key,
+            )
+        return exact_replay(winner)
+    stage_audit_event(
+        db,
+        action="authentication_binding.installed",
+        entity_type="authentication_binding",
+        entity_id=str(binding.id),
+        actor=AuditActor.system(
+            command.context.actor,
+            label=command.context.actor,
+        ),
+        metadata={
+            "binding_key": binding.binding_key,
+            "mechanism_code": binding.mechanism_code,
+            "command_id": str(command.context.command_id),
+            "correlation_id": str(command.context.correlation_id),
+            "scope": command.context.scope,
+            "reason": command.context.reason,
+        },
+    )
+    return AuthenticationBindingInstalled(
+        binding_id=binding.id,
+        binding_key=binding.binding_key,
+        mechanism_code=binding.mechanism_code,
+        name=binding.name,
+        description=binding.description,
+        installed_at=_as_utc(binding.created_at),
+        replayed=False,
+    )
+
+
+def install_authentication_binding(
+    db: Session,
+    command: AuthenticationBindingInstallation,
+) -> AuthenticationBindingInstalled:
+    """Install one verifier binding and commit its audit evidence atomically."""
+
+    return execute_owner_command(
+        db,
+        definition=_INSTALL_BINDING_COMMAND,
+        context=command.context,
+        operation=lambda: _install_authentication_binding(db, command),
+    )
 
 
 def _locked_credential(db: Session, credential_id: UUID) -> UserCredential:
@@ -449,8 +630,10 @@ def _bind_credential_party(
         action="credential.party_authentication_projected",
         entity_type="user_credential",
         entity_id=str(credential.id),
-        actor_type=AuditActorType.system,
-        actor_label=command.context.actor,
+        actor=AuditActor.system(
+            command.context.actor,
+            label=command.context.actor,
+        ),
         metadata={
             "party_id": str(party.id),
             "authentication_binding_id": str(binding.id),
@@ -677,6 +860,9 @@ def credential_convergence_report(db: Session) -> CredentialConvergenceReport:
 
 
 __all__ = [
+    "AUTHENTICATION_BINDING_INSTALL_SCOPE",
+    "AuthenticationBindingInstallation",
+    "AuthenticationBindingInstalled",
     "CredentialBindingError",
     "CredentialConvergenceReport",
     "CredentialPartyBinding",
@@ -685,5 +871,6 @@ __all__ = [
     "PrincipalReadinessCohort",
     "bind_credential_party",
     "credential_convergence_report",
+    "install_authentication_binding",
     "resolve_binding_for_mechanism",
 ]

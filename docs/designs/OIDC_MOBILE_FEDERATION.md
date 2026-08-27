@@ -87,7 +87,7 @@ names the *wrong* identity rather than a weaker one.
 | `oidc_mobile_issuer` | `OIDC_MOBILE_ISSUER` | no | — |
 | `oidc_mobile_client_id` | `OIDC_MOBILE_CLIENT_ID` | no | — |
 | `oidc_mobile_redirect_uri` | `OIDC_MOBILE_REDIRECT_URI` | no | — |
-| `oidc_mobile_audience` | `OIDC_MOBILE_AUDIENCE` | no | — |
+| `oidc_mobile_audience` | `OIDC_MOBILE_AUDIENCE` | no | —; must exactly equal `oidc_mobile_client_id` |
 | `oidc_mobile_binding_key` | `OIDC_MOBILE_BINDING_KEY` | no | — |
 | `oidc_mobile_deployment_id` | `OIDC_MOBILE_DEPLOYMENT_ID` | no | — |
 | `oidc_mobile_jwks_source` | `OIDC_MOBILE_JWKS_SOURCE` | yes | `discovery` |
@@ -149,7 +149,8 @@ disabling that module silently disable a login path.
 3. Signature verifies against the pinned issuer's JWKS.
 4. `iss` equals the pinned issuer (checked by the library and again by hand —
    it is the one claim worth checking twice).
-5. `aud` contains the configured audience.
+5. `aud` contains the configured audience, which the boot/configuration gate
+   requires to equal the public application client id.
 6. `azp` equals the configured client **when `aud` is multi-valued**. Without
    this, an assertion minted for a different client that happens to list our
    audience would be admitted.
@@ -255,8 +256,21 @@ recorded for the operator, not handed to the caller.
 
 ## Operator setup
 
-1. Install an `authentication_bindings` row with `mechanism_code = "oidc"` and
-   the `binding_key` the settings name. Two issuers are two bindings.
+1. Install the verifier through the typed, audited canonical owner (never with
+   a direct row insert). Two issuers are two bindings:
+
+   ```bash
+   python -m scripts.authentication.install_authentication_binding \
+     --binding-key oidc.field.primary \
+     --mechanism-code oidc \
+     --name "Field mobile OIDC" \
+     --description "Pinned field-mobile verifier" \
+     --actor operator:release \
+     --reason "Reviewed MOB-05 verifier installation"
+   ```
+
+   The exact command replays the committed binding. Reusing a key with a
+   changed mechanism or reviewed metadata fails closed.
 2. Bind each field technician's external subject: create a `user_credentials`
    row with `provider = sso`, `username` = the subject and the staff
    `system_user_id`, then run `credential_party_binding.bind_credential_party`

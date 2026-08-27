@@ -8,7 +8,9 @@ single-use column is what refuses the replay.
 
 from __future__ import annotations
 
+import json
 import time
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -21,9 +23,13 @@ from sqlalchemy.orm import Session
 from app.models.auth import AuthenticationBinding, AuthProvider, UserCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services.credential_party_binding import (
+    AUTHENTICATION_BINDING_INSTALL_SCOPE,
+    AuthenticationBindingInstallation,
+    AuthenticationBindingInstalled,
     CredentialPartyBinding,
     CredentialPrincipalKind,
     bind_credential_party,
+    install_authentication_binding,
 )
 from app.services.operator_tenant import OPERATOR_TENANT_ID, provision_operator_tenant
 from app.services.owner_commands import CommandContext
@@ -32,9 +38,9 @@ from tests.staff_identity_fixtures import add_bound_staff_user
 CREDENTIAL_BINDING_SCOPE = "party:credential_authentication_projection"
 
 ISSUER = "https://idp.test.invalid/realms/field"
-CLIENT_ID = "dotmac-field-mobile"
+CLIENT_ID = "io.dotmac.field"
 REDIRECT_URI = "https://links.test.invalid/oidc/field/callback"
-AUDIENCE = "io.dotmac.field"
+AUDIENCE = CLIENT_ID
 BINDING_KEY = "oidc.field.primary"
 DEPLOYMENT_ID = "sub-test-deployment"
 JWKS_URI = "https://idp.test.invalid/realms/field/protocol/openid-connect/certs"
@@ -156,6 +162,16 @@ def assertion_claims(
     return claims
 
 
+def unsigned_assertion(claims: dict[str, Any]) -> str:
+    """Build the hostile ``alg=none`` wire shape without asking JOSE to sign it."""
+
+    def encoded(value: dict[str, Any]) -> str:
+        payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+        return urlsafe_b64encode(payload).rstrip(b"=").decode()
+
+    return f"{encoded({'alg': 'none', 'typ': 'JWT'})}.{encoded(claims)}."
+
+
 def _set(db: Session, domain: SettingDomain, key: str, value: str) -> None:
     row = (
         db.query(DomainSetting)
@@ -202,7 +218,7 @@ def configure_federation(
 
 def install_oidc_binding(
     db: Session, *, binding_key: str = BINDING_KEY
-) -> AuthenticationBinding:
+) -> AuthenticationBindingInstalled:
     """Install the verifier binding an operator installs first.
 
     It is always ACTIVE. A binding is deactivated later, by
@@ -211,27 +227,33 @@ def install_oidc_binding(
     be provisioned against a verifier that is already switched off.
     """
 
-    binding = AuthenticationBinding(
-        binding_key=binding_key,
-        mechanism_code="oidc",
-        name="Field mobile OIDC",
-        is_active=True,
+    return install_authentication_binding(
+        db,
+        AuthenticationBindingInstallation(
+            context=CommandContext.system(
+                actor="test:oidc-operator",
+                scope=AUTHENTICATION_BINDING_INSTALL_SCOPE,
+                reason="reviewed OIDC verifier installation fixture",
+            ),
+            binding_key=binding_key,
+            mechanism_code="oidc",
+            name="Field mobile OIDC",
+        ),
     )
-    db.add(binding)
-    db.flush()
-    return binding
 
 
-def deactivate_binding(db: Session, binding: AuthenticationBinding) -> None:
+def deactivate_binding(db: Session, binding: AuthenticationBindingInstalled) -> None:
     """Switch an installed verifier off, the way an operator retires one."""
 
-    binding.is_active = False
+    row = db.get(AuthenticationBinding, binding.binding_id)
+    assert row is not None
+    row.is_active = False
     db.flush()
 
 
 def bind_field_technician(
     db: Session,
-    binding: AuthenticationBinding,
+    binding: AuthenticationBindingInstalled,
     *,
     subject: str = "keycloak-subject-1",
     is_active: bool = True,
@@ -271,7 +293,7 @@ def bind_field_technician(
     credential_id = credential.id
     user_id = user.id
     person_id = person.id
-    binding_id = binding.id
+    binding_id = binding.binding_id
     db.commit()
 
     bind_credential_party(
