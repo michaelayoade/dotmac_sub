@@ -154,6 +154,17 @@ through its own CDN from addresses that cannot be predicted.
   the Apple document as taking **up to 24 hours** to reach devices, and re-run
   the device checks after it has.
 
+### Callback logging
+
+The callback query carries the short-lived authorization `code` and ceremony
+`state`. The server-wide access log therefore does **not** apply to the exact
+`/oidc/field/callback` location: that location must contain `access_log off;`.
+The two association-document locations keep their dedicated access log because
+their requests contain no authorization response. `check_field_applinks.py`
+parses the exact callback block and refuses a missing, commented-out or
+destination-bearing directive; a server-level or association-location
+directive cannot satisfy that guard.
+
 ### Health check
 
 ```sh

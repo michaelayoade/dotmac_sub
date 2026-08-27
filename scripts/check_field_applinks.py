@@ -628,6 +628,8 @@ def check_serving_spec(
         f"absent'.",
     )
 
+    check_callback_access_log(r, conf, text, callback_path)
+
     fallback = origin_dir / "site" / (callback_path.lstrip("/") + ".html")
     r.check(
         fallback.exists(),
@@ -640,6 +642,48 @@ def check_serving_spec(
             f"{fallback}: the fallback page must carry no script. It must never "
             f"read, forward or bounce an authorization code.",
         )
+
+
+def check_callback_access_log(
+    r: Report, conf: pathlib.Path, text: str, callback_path: str
+) -> None:
+    """Require the query-bearing callback to override inherited access logging."""
+    uncommented = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    header = re.compile(
+        rf"^\s*location\s*=\s*{re.escape(callback_path)}\s*\{{",
+        re.MULTILINE,
+    )
+    blocks: list[str] = []
+    for match in header.finditer(uncommented):
+        depth = 1
+        cursor = match.end()
+        while cursor < len(uncommented) and depth:
+            if uncommented[cursor] == "{":
+                depth += 1
+            elif uncommented[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        if depth == 0:
+            blocks.append(uncommented[match.end() : cursor - 1])
+
+    if not r.check(
+        len(blocks) == 1,
+        f"{conf}: expected exactly one complete exact-match location for "
+        f"{callback_path!r}, found {len(blocks)}",
+    ):
+        return
+
+    directives = [
+        value.strip()
+        for value in re.findall(r"^\s*access_log\s+([^;]+);", blocks[0], re.MULTILINE)
+    ]
+    r.check(
+        directives == ["off"],
+        f"{conf}: the exact {callback_path} location must contain exactly "
+        f"'access_log off;' and no logging destination, found {directives!r}. "
+        f"OIDC authorization responses carry code and state in the query string, "
+        f"which nginx otherwise writes through the inherited server access log.",
+    )
 
 
 def finish(r: Report, args) -> int:

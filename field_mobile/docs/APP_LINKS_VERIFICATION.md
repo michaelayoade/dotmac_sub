@@ -36,6 +36,10 @@ not an assumption.
 - [ ] `scripts/check_field_applinks.py --require-real` exits 0. If it does not, a
       placeholder or a malformed identifier is still present and **nothing below
       can pass**.
+- [ ] The applied nginx callback location matches the checked-in serving spec:
+      `access_log off;` is inside the exact `/oidc/field/callback` block. The
+      query carries the authorization `code` and ceremony `state`; inheriting
+      the server access log would persist both before the app receives them.
 
 Record the two identifiers here when they exist (both are public identifiers, not
 secrets — but never record a keystore password anywhere):

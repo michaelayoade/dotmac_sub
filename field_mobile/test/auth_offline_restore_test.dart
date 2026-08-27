@@ -181,7 +181,14 @@ void main() {
         refreshToken: 'refresh-dead',
         loginMode: LoginMode.staff,
       );
-      final recording = _RecordingWipe(device.wipe);
+      final releaseWipe = Completer<void>();
+      addTearDown(() {
+        if (!releaseWipe.isCompleted) releaseWipe.complete();
+      });
+      final recording = _RecordingWipe(
+        device.wipe,
+        waitUntil: releaseWipe.future,
+      );
       final session = device.lifecycle(wipeOverride: recording);
       await session.restore();
       expect(session.store, isNotNull);
@@ -199,8 +206,30 @@ void main() {
       container = containerFor(device.tokenStore, api, session: session);
       addTearDown(container.dispose);
 
-      container.read(authControllerProvider);
-      await pumpEventQueue();
+      // Await the state owner's semantic completion signal, not an arbitrary
+      // number of event-loop turns. CI is slow enough for the credential clear
+      // to finish before the store close, which made the old pumpEventQueue()
+      // observation race the wipe it was trying to prove.
+      final terminal = Completer<Unauthenticated>();
+      final subscription = container.listen<AuthState>(authControllerProvider, (
+        _,
+        next,
+      ) {
+        if (next is Unauthenticated && !terminal.isCompleted) {
+          terminal.complete(next);
+        }
+      }, fireImmediately: true);
+      addTearDown(subscription.close);
+
+      // A deliberately parked wipe is the canary: the controller must not
+      // publish Unauthenticated while principal-scoped storage is still open.
+      await recording.started.timeout(const Duration(seconds: 2));
+      expect(container.read(authControllerProvider), isA<RestoringSession>());
+      expect(session.store, isNotNull);
+      expect(terminal.isCompleted, isFalse);
+
+      releaseWipe.complete();
+      final state = await terminal.future.timeout(const Duration(seconds: 2));
 
       // Exactly one wipe, with the revocation trigger. Two would mean the
       // restore path had grown a second ending of its own.
@@ -212,9 +241,8 @@ void main() {
       expect(await device.tokenStore.loginMode, isNull);
       expect(session.store, isNull);
 
-      final state = container.read(authControllerProvider);
-      expect(state, isA<Unauthenticated>());
-      expect((state as Unauthenticated).error, isNotNull);
+      expect(identical(container.read(authControllerProvider), state), isTrue);
+      expect(state.error, isNotNull);
     },
   );
 
@@ -517,15 +545,21 @@ class _ModeOnlyTokenStore extends InMemoryTokenStore {
 }
 
 class _RecordingWipe implements OfflineWipe {
-  _RecordingWipe(this.delegate);
+  _RecordingWipe(this.delegate, {required this.waitUntil});
 
   final OfflineWipe delegate;
+  final Future<void> waitUntil;
   final List<WipeRequest> requests = [];
+  final Completer<WipeRequest> _started = Completer<WipeRequest>();
+
+  Future<WipeRequest> get started => _started.future;
 
   @override
-  Future<void> wipe(WipeRequest request, {SecureFieldStore? live}) {
+  Future<void> wipe(WipeRequest request, {SecureFieldStore? live}) async {
     requests.add(request);
-    return delegate.wipe(request, live: live);
+    if (!_started.isCompleted) _started.complete(request);
+    await waitUntil;
+    await delegate.wipe(request, live: live);
   }
 
   @override
