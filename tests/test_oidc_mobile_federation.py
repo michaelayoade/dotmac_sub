@@ -12,11 +12,14 @@ assertion cannot tell a working verifier from a function that returns True.
 from __future__ import annotations
 
 import time
+from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from starlette.requests import Request
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.oidc_mobile import OidcCeremonyOutcome, OidcMobileCeremony
 from app.services import oidc_mobile_federation as federation
@@ -39,6 +42,7 @@ from tests.oidc_mobile_fixtures import (
     configure_federation,
     deactivate_binding,
     install_oidc_binding,
+    unsigned_assertion,
 )
 
 
@@ -149,6 +153,48 @@ def test_a_valid_s256_ceremony_exchanges_for_a_sub_session(
     assert issued.principal_id == user.id
 
 
+def test_start_returns_a_frozen_value_and_leaves_the_session_ready_for_exchange(
+    db_session, signing_key, transport
+):
+    """The start result must not lazy-refresh an ORM row after its commit."""
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+
+    started = _start(db_session)
+
+    assert not db_session.in_transaction()
+    with pytest.raises(FrozenInstanceError):
+        started.ceremony_id = uuid4()
+
+    token = signing_key.sign(assertion_claims(started.nonce))
+    issued = _exchange(db_session, started.ceremony_id, token)
+    assert issued.access_token
+    assert not db_session.in_transaction()
+
+
+def test_admission_audit_names_the_resolved_user_and_party(
+    db_session, signing_key, transport
+):
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    user, person, _credential = bind_field_technician(db_session, binding)
+
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+    _exchange(db_session, started.ceremony_id, token)
+
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "auth.oidc_mobile_assertion_admitted")
+        .one()
+    )
+    assert audit.actor_type is AuditActorType.user
+    assert audit.actor_id == str(user.id)
+    assert audit.actor_party_id == person.id
+
+
 def test_the_raw_nonce_is_never_stored(db_session, signing_key, transport):
     """A stored nonce would let read access mint a replay-satisfying assertion."""
 
@@ -248,9 +294,7 @@ def test_an_unsigned_assertion_is_refused(db_session, signing_key, transport):
 
     configure_federation(db_session)
     started = _start(db_session)
-    from jose import jws
-
-    token = jws.sign(assertion_claims(started.nonce), key="", algorithm="none")
+    token = unsigned_assertion(assertion_claims(started.nonce))
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
@@ -431,7 +475,9 @@ def test_an_expired_ceremony_is_refused_and_burned(db_session, signing_key, tran
     configure_federation(db_session)
     started = _start(db_session)
     row = db_session.get(OidcMobileCeremony, started.ceremony_id)
-    row.expires_at = row.created_at
+    now = datetime.now(UTC)
+    row.created_at = now - timedelta(minutes=10)
+    row.expires_at = now - timedelta(minutes=5)
     db_session.commit()
 
     token = signing_key.sign(assertion_claims(started.nonce))
@@ -486,6 +532,7 @@ def test_a_failure_at_session_issuance_leaves_the_ceremony_burned(
 
     started = _start(db_session)
     token = signing_key.sign(assertion_claims(started.nonce))
+    original_issue_tokens = auth_flow_service.AuthFlow._issue_tokens
 
     def _issuance_fails(*_args, **_kwargs):
         raise RuntimeError("session store unavailable")
@@ -515,7 +562,11 @@ def test_a_failure_at_session_issuance_leaves_the_ceremony_burned(
     assert _refusal(exc) == "ceremony_already_used"
 
     # And the intended failure mode really is available: run a fresh ceremony.
-    monkeypatch.undo()
+    monkeypatch.setattr(
+        auth_flow_service.AuthFlow,
+        "_issue_tokens",
+        staticmethod(original_issue_tokens),
+    )
     fresh = _start(db_session)
     fresh_token = signing_key.sign(assertion_claims(fresh.nonce))
     assert _exchange(db_session, fresh.ceremony_id, fresh_token).access_token
@@ -542,6 +593,7 @@ def test_a_refused_exchange_still_burns_the_ceremony(
     row = db_session.get(OidcMobileCeremony, started.ceremony_id)
     assert row.consumed_at is not None
     assert row.failure_reason == "nonce_mismatch"
+    db_session.commit()
 
     # And the now-burned ceremony refuses even a correct assertion.
     with pytest.raises(federation.OidcFederationRefused) as exc:
@@ -885,6 +937,22 @@ def test_a_static_jwks_source_without_a_uri_is_incomplete(db_session, transport)
     with pytest.raises(OidcFederationConfigError) as exc:
         _start(db_session)
     assert "oidc_mobile_jwks_uri" in exc.value.details["missing_settings"]
+
+
+def test_the_assertion_audience_must_equal_the_public_client_id(db_session, transport):
+    configure_federation(
+        db_session,
+        overrides={"oidc_mobile_audience": "a-different-resource"},
+    )
+
+    with pytest.raises(OidcFederationConfigError) as exc:
+        _start(db_session)
+
+    assert exc.value.code.endswith(".configuration_incomplete")
+    assert exc.value.details["mismatched_settings"] == [
+        "oidc_mobile_audience",
+        "oidc_mobile_client_id",
+    ]
 
 
 def test_identifiers_do_not_inherit_from_the_platform_scope(db_session):

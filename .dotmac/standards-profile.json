@@ -111,7 +111,7 @@
         "path": "tests/test_crm_ticket_pull.py",
         "symbol": "test_latest_crm_updated_at_watermark",
         "category": "sync_checkpoint",
-        "fingerprint": "b1e64edb3787646f0464e2076086f3b8e25e0bbc0c0b1d8e40de52409109d4c3"
+        "fingerprint": "03c45fad7c1a26e5c6ade4222d19ad0190ce37795403d89308d1c3fd23143aeb"
       },
       {
         "path": "tests/test_email_services.py",
