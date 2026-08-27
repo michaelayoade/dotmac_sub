@@ -76,6 +76,33 @@
             </div>
         </div>
         {% endcall %}
+        {% call card("Upcoming Charges Report", color="teal") %}
+        <div id="upcoming-charges-settings" class="scroll-mt-24 space-y-4">
+            <p class="text-sm text-slate-600 dark:text-slate-300">These are report defaults, not billing or enforcement rules. Staff can still narrow the reminder worklist from the report page.</p>
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Postpaid due window (days)</label>
+                    <input type="number" min="0" max="365" name="upcoming_charges_postpaid_lead_days" value="{{ billing.upcoming_charges_postpaid_lead_days or '14' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    <p class="mt-1 text-xs text-slate-500">Unpaid collectible invoices due in this many days.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Prepaid coverage window (days)</label>
+                    <input type="number" min="0" max="365" name="upcoming_charges_prepaid_lead_days" value="{{ billing.upcoming_charges_prepaid_lead_days or '7' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    <p class="mt-1 text-xs text-slate-500">Exact paid coverage ending in this many days.</p>
+                </div>
+                <div class="sm:col-span-2 lg:col-span-1">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Prepaid contracted plan price bands</label>
+                    <input type="text" name="upcoming_charges_prepaid_amount_bands" value="{{ billing.upcoming_charges_prepaid_amount_bands or '50000-100000,100000-500000,500000-' }}" placeholder="50000-100000,100000-500000,500000-" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    <p class="mt-1 text-xs text-slate-500">Comma-separated min-max ranges. Leave only the final maximum blank for infinity. Bounds may touch but cannot overlap.</p>
+                </div>
+            </div>
+            <label class="flex items-center gap-3 rounded-xl border border-slate-200 p-4 text-sm font-medium text-slate-700 dark:border-slate-700 dark:text-slate-300">
+                <input type="hidden" name="upcoming_charges_include_funded_prepaid_default" value="false">
+                <input type="checkbox" name="upcoming_charges_include_funded_prepaid_default" value="true" {% if billing.upcoming_charges_include_funded_prepaid_default in ['true', true, '1', 1] %}checked{% endif %} class="rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                Show already-funded prepaid customers by default
+            </label>
+        </div>
+        {% endcall %}
         {% call card("Document Numbering", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2">
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Number Format</label><input type="text" name="invoice_number_format" value="{{ billing.invoice_number_format or 'INV{year}{month}{next|6}' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm font-mono text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900"><p class="mt-1 text-xs text-slate-500">Variables: {year}, {month}, {day}, {next}, {next|N} for zero-padded</p></div>

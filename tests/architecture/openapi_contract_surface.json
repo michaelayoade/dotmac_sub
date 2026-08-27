@@ -5097,6 +5097,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/integration/observations/payment-settlements/{capability_binding_id}/descriptor/v3": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "29a47f047c9c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/integration/observations/{capability_binding_id}/descriptor": {
    "params": [
     "header:authorization",
@@ -5106,6 +5118,18 @@
    "request": null,
    "responses": {
     "200": "a6c70c734df6",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integration/observations/{capability_binding_id}/descriptor/v3": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "9642b6d04c85",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18215,6 +18239,48 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/vendor/auth/login": {
+   "params": [],
+   "request": "c72afbe92b93",
+   "responses": {
+    "200": "216a2032e1dc",
+    "401": "3ad691f81154",
+    "403": "1f8988becd33",
+    "422": "a11c9d9b2af8",
+    "429": "94ee1082dcf9"
+   }
+  },
+  "POST /api/v1/vendor/auth/logout": {
+   "params": [],
+   "request": "6be51466488a",
+   "responses": {
+    "200": "1c08bf81b48a",
+    "404": "9523a0d991e3",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/vendor/auth/mfa": {
+   "params": [],
+   "request": "bd92271ed1e6",
+   "responses": {
+    "200": "0808ecba5470",
+    "401": "d9b79917028c",
+    "403": "1f8988becd33",
+    "404": "497921479c5a",
+    "422": "a11c9d9b2af8",
+    "429": "1a170828a0d7"
+   }
+  },
+  "POST /api/v1/vendor/auth/refresh": {
+   "params": [],
+   "request": "90c7b5605b06",
+   "responses": {
+    "200": "0808ecba5470",
+    "401": "deccacd2458e",
+    "403": "1f8988becd33",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/vendor/fiber/cable-registrations": {
    "params": [
     "header:authorization",
@@ -19073,6 +19139,9 @@
   "CampaignStepUpdate": "6804fecaf7e3",
   "CampaignUnsubscribeRead": "1d4ff16606cf",
   "CampaignUpdate": "7681c918673f",
+  "CapabilityContractDeprecationDocument": "dcc5be1f8474",
+  "CapabilityContractDocument": "e0fe9802015d",
+  "CapabilitySchemaGraceDocument": "fdefcbb27b1c",
   "CatalogOfferCreate": "48cc4d12ca81",
   "CatalogOfferRead": "207c31b5e582",
   "CatalogOfferUpdate": "17ed53516c46",
@@ -19939,6 +20008,7 @@
   "PriceType": "991176fa607a",
   "PriceUnit": "8587e7348110",
   "ProductPortDescriptorV1": "7fa027fa20f0",
+  "ProductPortDescriptorV3": "cdcc534fd811",
   "ProjectCostSummary": "f953c7ceefa5",
   "ProjectCreate": "306ae5d9f212",
   "ProjectGanttUpdate": "38b022ae411d",
@@ -20109,6 +20179,7 @@
   "SessionUpdate": "67c007064d12",
   "SettlementObservation": "c2bf3c0a85cd",
   "SettlementProductPortDescriptorV2": "28ea93e0d2df",
+  "SettlementProductPortDescriptorV3": "ffdb1f5619e4",
   "SettlementTransportEvidence": "c1bc3e9c99ad",
   "ShiftCreate": "60488314a714",
   "ShiftRead": "360213b8ce8f",
@@ -20291,8 +20362,13 @@
   "VendorCapabilityUpdate": "1530a7cc897f",
   "VendorJobEvidenceRead": "2d66a85061b0",
   "VendorJobPlanSummaryRead": "907e36fa7375",
+  "VendorLoginRequest": "9101b219587e",
+  "VendorLoginResponse": "fcdd341250ca",
+  "VendorLogoutRequest": "7f1e82d3194d",
+  "VendorLogoutResponse": "ece30e092155",
   "VendorMaterialReleaseCreate": "fc371c7f8878",
   "VendorMaterialReleaseItemCreate": "265a29450d05",
+  "VendorMfaVerifyRequest": "58d14b18dd94",
   "VendorPurchaseInvoiceCreate": "19fbbc4e1285",
   "VendorPurchaseInvoiceLineCreate": "2587fe7016e4",
   "VendorPurchaseInvoiceLineRead": "e57b8e825f4f",
@@ -20303,6 +20379,7 @@
   "VendorQuoteCreate": "0b74cb0747ce",
   "VendorQuoteLineCreate": "050f15cee6ec",
   "VendorQuoteLineUpdate": "d9d1913e8bd3",
+  "VendorRefreshRequest": "5f21c5f36419",
   "VendorReview": "74e7731221a0",
   "VendorRouteRevisionCreate": "c47a23ac2e0a",
   "VendorSpliceCreate": "812732d6c5b1",
@@ -20314,6 +20391,7 @@
   "VendorStrandDamageCreate": "e488839369cb",
   "VendorStrandDamageResponse": "967987a89305",
   "VendorSubmissionConfirm": "02e3d0612139",
+  "VendorTokenResponse": "b345819c7461",
   "VerifyEmailRequest": "aedd7a91b07e",
   "VerifyEmailResponse": "1fae1392036c",
   "VlanCreate": "2b694eb08046",

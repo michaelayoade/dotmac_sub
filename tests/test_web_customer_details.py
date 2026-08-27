@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -253,6 +254,9 @@ def test_customer_billing_ledger_tab_is_permission_gated_and_lazy() -> None:
         'hx-get="/admin/customers/person/{{ customer.id }}/billing/ledger"' in template
     )
     assert 'hx-trigger="revealed once"' in template
+    assert 'aria-label="Customer ledger pagination"' in Path(
+        "templates/admin/customers/_billing_ledger.html"
+    ).read_text(encoding="utf-8")
     assert "/admin/billing/ledger?account=" not in template
 
 
@@ -319,6 +323,7 @@ def test_customer_billing_ledger_route_renders_only_the_selected_customer(
             f"/admin/customers/person/{subscriber.id}/billing/ledger"
         ),
         customer_id=subscriber.id,
+        page=1,
         db=db_session,
     )
     rendered = response.body.decode("utf-8")
@@ -328,6 +333,63 @@ def test_customer_billing_ledger_route_renders_only_the_selected_customer(
     assert "Other customer adjustment" not in rendered
     assert f'href="/admin/billing/ledger/{selected_entry.id}"' in rendered
     assert f"customer_ref={subscriber.id}" in rendered
+    assert "Showing 1–1 of 1 entries" in rendered
+
+
+def test_customer_billing_ledger_route_renders_ten_rows_and_page_navigation(
+    db_session, subscriber
+):
+    subscriber.user_type = UserType.customer
+    for index in range(1, 13):
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal(str(index)),
+                currency="NGN",
+                memo=f"Ledger page row {index:02d}",
+                effective_date=datetime(2026, 2, index, tzinfo=UTC),
+            )
+        )
+    db_session.commit()
+
+    first_response = customer_routes.customer_billing_ledger(
+        request=_bare_request(
+            f"/admin/customers/person/{subscriber.id}/billing/ledger"
+        ),
+        customer_id=subscriber.id,
+        page=1,
+        db=db_session,
+    )
+    first_page = first_response.body.decode("utf-8")
+
+    assert first_page.count('title="View entry ') == 10
+    assert "Ledger page row 12" in first_page
+    assert "Ledger page row 03" in first_page
+    assert "Ledger page row 02" not in first_page
+    assert "Showing 1–10 of 12 entries" in first_page
+    assert "Page 1 of 2" in first_page
+    assert (
+        f"/admin/customers/person/{subscriber.id}/billing/ledger?page=2" in first_page
+    )
+
+    second_response = customer_routes.customer_billing_ledger(
+        request=_bare_request(
+            f"/admin/customers/person/{subscriber.id}/billing/ledger?page=2"
+        ),
+        customer_id=subscriber.id,
+        page=2,
+        db=db_session,
+    )
+    second_page = second_response.body.decode("utf-8")
+
+    assert second_page.count('title="View entry ') == 2
+    assert "Ledger page row 02" in second_page
+    assert "Ledger page row 01" in second_page
+    assert "Ledger page row 03" not in second_page
+    assert "Showing 11–12 of 12 entries" in second_page
+    assert "Page 2 of 2" in second_page
 
 
 def test_customer_360_service_health_contains_only_active_services(

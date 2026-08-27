@@ -2557,7 +2557,6 @@ def start_conversation(
                 contact_subscriber = (
                     db.query(Subscriber)
                     .filter(Subscriber.id == subscriber_uuid)
-                    .filter(Subscriber.party_id.is_(None))
                     .filter(Subscriber.is_active.is_(True))
                     .filter(Subscriber.status == SubscriberStatus.active)
                     .one_or_none()

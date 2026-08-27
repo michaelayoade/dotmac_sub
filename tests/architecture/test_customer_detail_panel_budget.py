@@ -18,8 +18,17 @@ def test_network_panel_is_lazy_and_selects_only_its_fragment() -> None:
     template = _source("templates/admin/customers/detail.html")
 
     assert 'id="customer-network-panel"' in template
+    assert 'id="customer-network-panel-content"' in template
     assert 'hx-trigger="revealed"' in template
-    assert 'hx-select="#customer-network-panel"' in template
+    assert 'hx-select="#customer-network-panel-content"' in template
+    assert 'hx-select="#customer-network-panel"' not in template
+    assert template.index("x-show=\"activeTab === 'network'\"") < template.index(
+        'id="customer-network-panel-content"'
+    )
+    assert (
+        "if (hash === 'network') {\n                this.activeTab = 'network';"
+        in template
+    )
     assert "network_access_is_bounded" in template
     assert "{% if sub_conn %}" in template
 

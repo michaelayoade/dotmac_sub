@@ -192,6 +192,7 @@
                     <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                         <span x-show="searchQuery" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Search: ${searchQuery}`"></span>
                         <span x-show="currentCustomerType" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Type: ${customerTypeLabel()}`"></span>
+                        <span x-show="currentBillingMode" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Billing: ${billingModeLabel()}`"></span>
                         <span x-show="currentStatus" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Status: ${titleCase(currentStatus)}`"></span>
                         <span x-show="currentInfrastructureId" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`${titleCase(currentInfrastructureType)} filtered`"></span>
                         <a x-show="activeFilterCount > 0" x-cloak href="/admin/customers" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">Clear filters</a>
@@ -222,13 +223,22 @@
                         "hx-sync": "#customers-filters:replace"
                     } %}
                     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-                        <div class="xl:col-span-2">
+                        <div>
                             {% set customer_type_options = [
                                 {"value": "", "label": "All Types"},
                                 {"value": "person", "label": "Individual"},
                                 {"value": "business", "label": "Business"}
                             ] %}
                             {{ filter_select("customer_type", customer_type_options, value=("person" if customer_type in ['person', 'individual'] else customer_type or ""), label="Type", color="amber", attrs=live_filter_attrs) }}
+                        </div>
+                        <div>
+                            {% set billing_mode_options = [
+                                {"value": "", "label": "All Billing"},
+                                {"value": "prepaid", "label": "Prepaid"},
+                                {"value": "postpaid", "label": "Postpaid"},
+                                {"value": "non_billable", "label": "Non-billable"}
+                            ] %}
+                            {{ filter_select("billing_mode", billing_mode_options, value=billing_mode or "", label="Billing", color="amber", attrs=live_filter_attrs) }}
                         </div>
                         <div>
                             {% set status_options = [
@@ -838,6 +848,7 @@ function customersPage(bulkContract) {
         activeFilterCount: {{ active_filter_count or 0 }},
         searchQuery: {{ (search or '') | tojson }},
         currentCustomerType: {{ (('person' if customer_type in ['person', 'individual'] else customer_type) or '') | tojson }},
+        currentBillingMode: {{ (billing_mode or '') | tojson }},
         currentStatus: {{ (status or '') | tojson }},
         currentInfrastructureType: {{ (infrastructure_type or '') | tojson }},
         currentInfrastructureId: {{ (infrastructure_id or '') | tojson }},
@@ -1268,6 +1279,7 @@ function customersPage(bulkContract) {
             const filters = this.currentFilters();
             this.searchQuery = filters.search;
             this.currentCustomerType = filters.customer_type;
+            this.currentBillingMode = filters.billing_mode;
             this.currentStatus = filters.status;
             this.currentInfrastructureType = filters.infrastructure_type;
             this.currentInfrastructureId = filters.infrastructure_id;
@@ -1322,6 +1334,7 @@ function customersPage(bulkContract) {
                 return {
                     search: '',
                     customer_type: '',
+                    billing_mode: '',
                     status: '',
                     infrastructure_type: '',
                     infrastructure_id: ''
@@ -1332,6 +1345,7 @@ function customersPage(bulkContract) {
             return {
                 search: (data.get('search') || '').toString(),
                 customer_type: (data.get('customer_type') || '').toString(),
+                billing_mode: (data.get('billing_mode') || '').toString(),
                 status: (data.get('status') || '').toString(),
                 infrastructure_type: infrastructureId
                     ? (data.get('infrastructure_type') || '').toString()
@@ -1341,7 +1355,7 @@ function customersPage(bulkContract) {
         },
 
         countActiveFilters(filters) {
-            return ['search', 'customer_type', 'status', 'infrastructure_id']
+            return ['search', 'customer_type', 'billing_mode', 'status', 'infrastructure_id']
                 .reduce((count, key) => count + (filters[key] ? 1 : 0), 0);
         },
 
@@ -1359,6 +1373,13 @@ function customersPage(bulkContract) {
                 return 'Business';
             }
             return '';
+        },
+
+        billingModeLabel() {
+            if (this.currentBillingMode === 'non_billable') {
+                return 'Non-billable';
+            }
+            return this.titleCase(this.currentBillingMode);
         },
 
         buildSelectionPayload(expectedCount = null) {

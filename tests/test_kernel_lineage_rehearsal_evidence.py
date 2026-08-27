@@ -19,10 +19,13 @@ from scripts.migration.kernel_lineage_rehearsal_evidence import (
 )
 
 
-def _evidence() -> KernelLineageRehearsalEvidence:
+def _evidence(
+    *,
+    source_revisions: tuple[str, ...] = ("528_roles_kernel_r1_additive",),
+) -> KernelLineageRehearsalEvidence:
     empty_digest = "0" * 64
     return KernelLineageRehearsalEvidence(
-        source_revisions=("528_roles_kernel_r1_additive",),
+        source_revisions=source_revisions,
         tables=tuple(
             TableContract(
                 table_name=table_name,
@@ -87,6 +90,35 @@ def test_bundle_rejects_unknown_fields_that_could_smuggle_row_data() -> None:
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         KernelLineageRehearsalEvidence.model_validate(payload)
+
+
+def test_bundle_accepts_host_and_composed_module_revision_ids() -> None:
+    revisions = (
+        "559_upcoming_charges_indexes",
+        "558_receivable_projection",
+        "557_outbox_relay_prereq",
+        "bi_0001_billing",
+        "cl_0001_collections",
+        "pm_0001_payment_intents",
+        "so_0001_service_delivery_orders",
+        "su_0003_billing_treatments",
+    )
+
+    assert _evidence(source_revisions=revisions).source_revisions == revisions
+
+
+@pytest.mark.parametrize(
+    "revision",
+    (
+        "billing_0001_billing",
+        "bi_001_billing",
+        "BI_0001_billing",
+        "bi_0001_Billing",
+    ),
+)
+def test_bundle_rejects_revision_ids_outside_composed_contract(revision: str) -> None:
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        _evidence(source_revisions=(revision,))
 
 
 def test_private_writer_refuses_overwrite_and_uses_owner_only_mode(tmp_path) -> None:

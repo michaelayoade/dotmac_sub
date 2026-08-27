@@ -48,13 +48,21 @@ class FakeHttpAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-/// Unsigned JWT with the given expiry — the client only reads the exp claim.
-String fakeJwt({required DateTime expiry, String sub = 'person-1'}) {
+/// Unsigned JWT with the given expiry. The client reads the exp claim to decide
+/// when to refresh, and the subject/type to decide which local storage scope
+/// the session owns. It never trusts the token for authorization.
+String fakeJwt({
+  required DateTime expiry,
+  String sub = 'person-1',
+  String principalType = 'system_user',
+}) {
   String b64(Map<String, Object> data) =>
       base64Url.encode(utf8.encode(jsonEncode(data))).replaceAll('=', '');
   final header = b64({'alg': 'HS256', 'typ': 'JWT'});
   final payload = b64({
     'sub': sub,
+    'principal_id': sub,
+    'principal_type': principalType,
     'exp': expiry.millisecondsSinceEpoch ~/ 1000,
   });
   return '$header.$payload.signature';

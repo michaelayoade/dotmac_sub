@@ -8,18 +8,19 @@ import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
 import 'package:dotmac_field/features/jobs/work_order_evidence_map_models.dart';
 import 'package:dotmac_field/features/jobs/work_order_evidence_map_repository.dart';
 import 'package:dotmac_field/features/jobs/work_order_evidence_map_screen.dart';
-import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   setUpAll(() {
@@ -31,17 +32,19 @@ void main() {
     }
   });
 
+  late SecureFieldStore store;
   late AppDatabase db;
   late FakeHttpAdapter adapter;
-  late InMemoryTokenStore store;
+  late InMemoryTokenStore tokens;
   late SyncService sync;
   late ProviderContainer container;
 
   setUp(() async {
-    db = AppDatabase(NativeDatabase.memory());
+    store = await openTestStore();
+    db = store.database;
     adapter = FakeHttpAdapter();
-    store = InMemoryTokenStore();
-    await store.save(
+    tokens = InMemoryTokenStore();
+    await tokens.save(
       accessToken: fakeJwt(
         expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
       ),
@@ -52,13 +55,14 @@ void main() {
     dio.httpClientAdapter = adapter;
     final api = ApiClient(
       baseUrl: 'https://test.local',
-      tokenStore: store,
+      tokenStore: tokens,
       dio: dio,
     );
     sync = SyncService(
       db: db,
       api: api,
       connectivity: FakeConnectivity(),
+      evidence: store.evidence,
       delay: (_) async {},
     );
     container = ProviderContainer(
@@ -156,7 +160,7 @@ void main() {
       return (200, _response('WO-1', reportChar: 'a'));
     });
     await repo().fetch('WO-1');
-    await store.save(
+    await tokens.save(
       accessToken: fakeJwt(
         expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
         sub: 'person-2',

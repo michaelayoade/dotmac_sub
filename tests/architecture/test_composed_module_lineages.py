@@ -1,7 +1,7 @@
 """A composed module is declared in three places, and they must agree.
 
 Composing a Starter module into Sub is not one edit. It is a dependency pin in
-`pyproject.toml`, a lineage appended in `alembic/env.py`, and a prerequisite
+`pyproject.toml`, a package resource in `alembic.ini`, and a prerequisite
 binding in `app/migration_bindings.py`. Each is load-bearing and each fails
 differently when it is the one that was forgotten:
 
@@ -21,7 +21,7 @@ belief that the others were considered.
 
 from __future__ import annotations
 
-import ast
+import configparser
 import tomllib
 from importlib import import_module
 from pathlib import Path
@@ -29,32 +29,21 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_PY = PROJECT_ROOT / "alembic" / "env.py"
+ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 
 def _declared_lineages() -> tuple[str, ...]:
-    """`_COMPOSED_MODULE_LINEAGES` read from source, not by importing `env.py`.
+    """Read the locations Alembic uses before ``env.py`` is executed."""
 
-    Importing it would need a database URL and would run the composition it is
-    supposed to be checking.
-    """
-
-    tree = ast.parse(ENV_PY.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        target = None
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            target = node.target.id
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
-            first = node.targets[0]
-            target = first.id if isinstance(first, ast.Name) else None
-        if target == "_COMPOSED_MODULE_LINEAGES" and node.value is not None:
-            return tuple(
-                element.value
-                for element in ast.walk(node.value)
-                if isinstance(element, ast.Constant) and isinstance(element.value, str)
-            )
-    raise AssertionError("alembic/env.py declares no _COMPOSED_MODULE_LINEAGES")
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(ALEMBIC_INI)
+    entries = parser["alembic"]["version_locations"].split()
+    return tuple(
+        entry.removesuffix(".migrations:versions")
+        for entry in entries
+        if entry.endswith(".migrations:versions")
+    )
 
 
 def _pinned_distributions() -> set[str]:
@@ -82,7 +71,7 @@ def test_every_composed_lineage_is_pinned() -> None:
         if _distribution_for(name) not in pinned
     )
     assert not unpinned, (
-        "alembic/env.py composes these lineages and pyproject.toml pins no such "
+        "alembic.ini composes these lineages and pyproject.toml pins no such "
         "distribution:\n  " + "\n  ".join(unpinned)
     )
 
@@ -105,7 +94,7 @@ def test_every_pinned_dotmac_module_composes_its_lineage() -> None:
     )
     assert not missing, (
         "these modules are pinned and their lineages are not composed in "
-        "alembic/env.py, so `alembic upgrade heads` would report success without "
+        "alembic.ini, so `alembic upgrade heads` would report success without "
         "creating their schemas:\n  " + "\n  ".join(missing)
     )
 

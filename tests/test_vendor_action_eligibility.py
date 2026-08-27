@@ -97,6 +97,23 @@ def test_vendor_template_uses_the_shared_action_gate():
     ).read_text(encoding="utf-8")
     assert "action_permitted(request, quote.edit_action)" in source
     assert "action_permitted(request, invoice.edit_action)" in source
+    assert 'lines/{{ line.id }}/update"' in source
+    assert 'lines/{{ line.id }}/delete"' in source
+    assert ">Save<" in source
+    assert ">Remove<" in source
+
+
+def test_vendor_template_exposes_material_request_and_vat_summary():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/vendor/project_detail.html"
+    ).read_text(encoding="utf-8")
+    assert "Start quote with VAT" in source
+    assert "VAT added" in source
+    assert "quote.tax_total" in source
+    assert ">Subtotal<" in source
+    assert 'href="#material-request-form"' in source
+    assert 'id="material-request-form"' in source
+    assert "New material request" in source
 
 
 def test_vendor_project_template_has_action_error_banner():
@@ -118,3 +135,13 @@ def test_vendor_portal_post_actions_render_project_errors():
     assert "error_message=str(exc.detail" in source
     assert source.count("_project_action_error_response(") >= 16
     assert '@router.post("/projects/{project_id}/submissions/confirm")' in source
+    assert (
+        '@router.post("/projects/{project_id}/quotes/{quote_id}/lines/'
+        '{line_id}/update")'
+    ) in source
+    assert (
+        '@router.post("/projects/{project_id}/quotes/{quote_id}/lines/'
+        '{line_id}/delete")'
+    ) in source
+    assert "UpdateVendorQuoteLineCommand(" in source
+    assert "DeleteVendorQuoteLineCommand(" in source

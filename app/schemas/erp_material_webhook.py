@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErpMaterialStatusLine(BaseModel):
@@ -12,7 +12,9 @@ class ErpMaterialStatusLine(BaseModel):
 
 
 class ErpMaterialStatusWebhook(BaseModel):
-    omni_id: UUID
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_request_id: UUID
     request_id: str = Field(min_length=1, max_length=120)
     request_number: str | None = Field(default=None, max_length=120)
     old_status: str | None = Field(default=None, max_length=40)

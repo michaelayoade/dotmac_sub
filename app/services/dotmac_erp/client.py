@@ -351,11 +351,11 @@ class DotMacERPClient:
         """POST a field expense request to ERP as an expense claim.
 
         ``POST /sync/sub/expense-claims`` — idempotent create-and-submit: an
-        identical resend of the same ``omni_id`` returns the existing claim
+        identical resend of the same ``source_claim_id`` returns the existing claim
         (200); a first create returns 201. The ``idempotency_key`` is sent as the
         ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
         no-op on the ERP side. Returns the ERP body
-        (``claim_id``/``claim_number``/``status``/``omni_id``).
+        (``claim_id``/``claim_number``/``status``/``source_claim_id``).
         """
         return self.post(
             "/api/v1/sync/sub/expense-claims",
@@ -364,15 +364,16 @@ class DotMacERPClient:
             expected_status_codes={200, 201},
         )
 
-    def get_expense_claim_status(self, omni_id: str) -> dict | None:
+    def get_expense_claim_status(self, source_claim_id: str) -> dict | None:
         """Poll ERP for an expense claim's approval/payment status.
 
-        ``GET /sync/sub/expense-claims/{omni_id}`` where ``omni_id`` is sub's
-        ``FieldExpenseRequest.id``. Returns the status body, or ``None`` when the
-        claim is not (yet) known to ERP (404) — callers degrade rather than error.
+        ``GET /sync/sub/expense-claims/{source_claim_id}`` where the source claim
+        id is Sub's ``FieldExpenseRequest.id``. Returns the status body, or
+        ``None`` when the claim is not (yet) known to ERP (404) — callers degrade
+        rather than error.
         """
         try:
-            return self.get(f"/api/v1/sync/sub/expense-claims/{omni_id}")
+            return self.get(f"/api/v1/sync/sub/expense-claims/{source_claim_id}")
         except DotMacERPNotFoundError:
             return None
 
@@ -400,11 +401,11 @@ class DotMacERPClient:
         """POST an approved field material request to ERP as an ISSUE.
 
         ``POST /sync/sub/material-requests`` — idempotent create-and-issue: an
-        identical resend of the same ``omni_id`` returns the existing request
+        identical resend of the same ``source_request_id`` returns the existing request
         (200); a first create returns 201. The ``idempotency_key`` is sent as the
         ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
         no-op on the ERP side. Returns the ERP body
-        (``request_id``/``request_number``/``status``/``omni_id``).
+        (``request_id``/``request_number``/``status``/``source_request_id``).
         """
         return self.post(
             "/api/v1/sync/sub/material-requests",
@@ -413,16 +414,16 @@ class DotMacERPClient:
             expected_status_codes={200, 201},
         )
 
-    def get_material_request_status(self, omni_id: str) -> dict | None:
+    def get_material_request_status(self, source_request_id: str) -> dict | None:
         """Poll ERP for a material request's fulfillment/stock status.
 
-        ``GET /sync/sub/material-requests/{omni_id}`` where ``omni_id`` is sub's
-        ``FieldMaterialRequest.id``. Returns the status body, or ``None`` when the
-        request is not (yet) known to ERP (404) — callers degrade rather than
-        error.
+        ``GET /sync/sub/material-requests/{source_request_id}`` where the source
+        request id is Sub's ``FieldMaterialRequest.id``. Returns the status body,
+        or ``None`` when the request is not (yet) known to ERP (404) — callers
+        degrade rather than error.
         """
         try:
-            return self.get(f"/api/v1/sync/sub/material-requests/{omni_id}")
+            return self.get(f"/api/v1/sync/sub/material-requests/{source_request_id}")
         except DotMacERPNotFoundError:
             return None
 
@@ -552,10 +553,9 @@ class DotMacERPClient:
     # (staff head-count) are ERP data. Sub reads them over the API for the
     # regulatory pack and keeps no copy — ERP stays the owner.
     #
-    # The paths keep ERP's existing ``/sync/crm/ncc/*`` names rather than sub's
-    # usual ``/sync/sub/*``: those are the endpoints ERP exposes today (a legacy
-    # of the CRM-era caller). The data is not CRM's; renaming belongs on ERP's
-    # side of the contract, not guessed at from here.
+    # Both reads use the neutral Sub collaboration namespace. The data is
+    # ERP-owned; the caller path records the consuming application, not a
+    # predecessor transport.
 
     def get_ncc_financials(
         self,
@@ -583,7 +583,7 @@ class DotMacERPClient:
             params["end_date"] = end_date
         if as_of_date:
             params["as_of_date"] = as_of_date
-        return self.get("/api/v1/sync/crm/ncc/financials", params=params or None)
+        return self.get("/api/v1/sync/sub/ncc/financials", params=params or None)
 
     def get_ncc_staff_headcount(self) -> dict:
         """Fetch the NCC year-end return's Section G staff head-count from ERP.
@@ -592,4 +592,4 @@ class DotMacERPClient:
             dict with keys: total_active, by_category
             (category -> nationality -> gender -> count)
         """
-        return self.get("/api/v1/sync/crm/ncc/staff-headcount")
+        return self.get("/api/v1/sync/sub/ncc/staff-headcount")

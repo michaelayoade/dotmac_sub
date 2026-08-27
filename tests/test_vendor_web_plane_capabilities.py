@@ -15,12 +15,15 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import HTMLResponse
 
 from app.db import get_db
 from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
+from app.web import vendor_portal as vendor_portal_web
 from app.web.auth.dependencies import require_web_auth
 from app.web.vendor_portal import router
 
@@ -105,3 +108,74 @@ def test_supervisor_clears_the_web_route_revision_capability_gate(db_session):
     resp = client.post(f"/vendor/projects/{uuid4()}/route-revisions/{uuid4()}/submit")
 
     assert resp.status_code != 403
+
+
+def test_vendor_dashboard_uses_independent_project_page_offsets(
+    db_session, monkeypatch
+):
+    user = _member(db_session, "field")
+    captured_calls = []
+
+    def fake_list_projects(db, vendor_id, *, available, limit, offset, search):
+        captured_calls.append(
+            {
+                "available": available,
+                "limit": limit,
+                "offset": offset,
+                "search": search,
+            }
+        )
+        return [{"id": uuid4()} for _ in range(limit)]
+
+    def fake_template_response(template_name, context, status_code=200):
+        assert template_name == "vendor/dashboard.html"
+        assert context["my_projects_page"]["page"] == 2
+        assert context["my_projects_page"]["has_next"] is True
+        assert context["available_projects_page"]["page"] == 3
+        assert context["available_projects_page"]["has_next"] is True
+        return HTMLResponse("", status_code=status_code)
+
+    monkeypatch.setattr(
+        vendor_portal_web.vendor_portal_operations,
+        "list_projects",
+        fake_list_projects,
+    )
+    monkeypatch.setattr(
+        vendor_portal_web.templates,
+        "TemplateResponse",
+        fake_template_response,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/vendor",
+            "headers": [],
+            "query_string": b"my_page=2&available_page=3",
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "client": ("testclient", 50000),
+        }
+    )
+
+    response = vendor_portal_web.vendor_dashboard(
+        request,
+        search="alpha",
+        my_page=2,
+        available_page=3,
+        auth={
+            "principal_id": str(user.id),
+            "person_id": str(user.id),
+            "subscriber_id": str(user.id),
+            "principal_type": "system_user",
+            "roles": [],
+            "scopes": [],
+        },
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    assert captured_calls == [
+        {"available": False, "limit": 26, "offset": 25, "search": "alpha"},
+        {"available": True, "limit": 13, "offset": 24, "search": "alpha"},
+    ]

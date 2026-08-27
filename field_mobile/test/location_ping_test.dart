@@ -2,11 +2,17 @@ import 'dart:io';
 
 import 'package:dotmac_field/core/location/location_ping_store.dart';
 import 'package:dotmac_field/core/location/location_source.dart';
+import 'package:dotmac_field/core/secure/evidence_cipher.dart';
 import 'package:dotmac_field/features/location/location_cadence.dart';
 import 'package:dotmac_field/features/location/location_ping_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // The queue on disk is an envelope, so every file store in these tests is
+  // built with a real key and a real scope, exactly as the app builds it.
+  const scopeKey = 'scope-under-test';
+  EvidenceCipher cipher() => EvidenceCipher(EvidenceCipher.newKey());
+
   group('location batch response', () {
     test('accepts a fully accounted mixed response', () {
       expect(
@@ -263,6 +269,8 @@ void main() {
       await file.writeAsString('{private malformed payload');
       final store = FileLocationPingStore(
         file,
+        cipher: cipher(),
+        scopeKey: scopeKey,
         clock: () => DateTime.utc(2026, 8, 18, 12),
       );
       addTearDown(() async {
@@ -286,7 +294,11 @@ void main() {
           'field-location-pings',
         );
         final file = File('${directory.path}/pending.json');
-        final store = FileLocationPingStore(file);
+        final store = FileLocationPingStore(
+          file,
+          cipher: cipher(),
+          scopeKey: scopeKey,
+        );
         addTearDown(() async {
           if (await directory.exists()) await directory.delete(recursive: true);
         });

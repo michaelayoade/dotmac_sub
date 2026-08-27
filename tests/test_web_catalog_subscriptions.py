@@ -540,6 +540,44 @@ def test_subscription_form_context_uses_ipam_ranges_for_ipv4_blocks(
     assert available["available_count"] == 1
 
 
+def test_available_ipv4_selector_exact_search_reaches_deep_pool_address(
+    db_session,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Public 160",
+            "ip_version": "ipv4",
+            "cidr": "160.119.0.0/16",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+    selector = f"pool:{pool.id}:160.119.0.0/16"
+    target_ip = "160.119.126.220"
+
+    first_page = (
+        web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+            db_session,
+            selector=selector,
+            limit=5,
+        )
+    )
+    assert target_ip not in first_page["addresses"]
+    assert first_page["has_more"] is True
+
+    searched = web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+        db_session,
+        selector=selector,
+        query=target_ip,
+        limit=5,
+    )
+
+    assert searched["addresses"] == [target_ip]
+    assert searched["available_count"] == 1
+
+
 def test_parse_subscription_form_keeps_single_ipv4_row():
     form = FormData(
         [
@@ -1862,6 +1900,42 @@ def test_subscription_form_context_hides_child_routes_assigned_to_other_subscrib
     assert "160.119.127.12/30" in child_cidrs
 
 
+def test_subscription_form_context_keeps_unreserved_wan_rows_available_for_routes(
+    db_session,
+    subscriber,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Range 160",
+            "ip_version": "ipv4",
+            "cidr": "160.119.126.0/24",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+    db_session.add(
+        IPv4Address(
+            address="160.119.126.221",
+            pool_id=pool.id,
+            is_reserved=False,
+            allocation_type="wan",
+        )
+    )
+    db_session.commit()
+
+    children = web_catalog_subscriptions_service.route_child_options_for_parent(
+        db_session,
+        parent_cidr="160.119.126.0/24",
+        prefix=30,
+        current_subscriber_id=subscriber.id,
+    )
+
+    child_cidrs = {child["cidr"] for child in children}
+    assert "160.119.126.220/30" in child_cidrs
+
+
 def test_update_subscription_with_audit_syncs_additional_routes(
     db_session,
     subscriber,
@@ -2139,6 +2213,52 @@ def test_update_subscription_rejects_additional_route_with_unrelated_reserved_ip
             additional_route_cidrs=["160.119.127.16/30"],
             additional_route_metrics=["1"],
         )
+
+
+def test_update_subscription_allows_additional_route_with_unreserved_wan_ipam_row(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    add_on = _public_ip_addon(db_session, name="/30 IP", ip_prefix_length=30)
+    db_session.add(
+        IPv4Address(
+            address="160.119.126.221",
+            is_reserved=False,
+            allocation_type="wan",
+        )
+    )
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [],
+        [],
+        None,
+        None,
+        additional_route_cidrs=["160.119.126.220/30"],
+        additional_route_metrics=["1"],
+        ip_addon_id=str(add_on.id),
+        ip_addon_quantity="1",
+    )
+
+    route = (
+        db_session.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber.id)
+        .filter(SubscriberAdditionalRoute.cidr == "160.119.126.220/30")
+        .one()
+    )
+    assert route.is_active is True
 
 
 def test_update_subscription_rejects_existing_route_with_management_ipam_row(

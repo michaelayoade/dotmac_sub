@@ -177,8 +177,8 @@ class _FakeERPClient:
             raise outcome
         return outcome
 
-    def get_expense_claim_status(self, omni_id):
-        self.status_calls.append(omni_id)
+    def get_expense_claim_status(self, source_claim_id):
+        self.status_calls.append(source_claim_id)
         outcome = self._status.pop(0) if self._status else None
         if isinstance(outcome, Exception):
             raise outcome
@@ -193,17 +193,17 @@ class _FakeERPClient:
 # ---------------------------------------------------------------------------
 
 
-def test_payload_mapping_matches_crm_shape(db_session):
+def test_payload_mapping_matches_neutral_erp_contract(db_session):
     request = _make_submitted_request(db_session)
     payload = expense_sync.build_expense_claim_payload(request)
 
-    assert payload["omni_id"] == str(request.id)
+    assert payload["source_claim_id"] == str(request.id)
     assert payload["purpose"] == "Transport for extra drop cable"
     assert payload["claim_date"] == date.today().isoformat()
     assert payload["requested_by_email"] == request.requested_by_system_user.email
-    # ticket/project ids come off the work-order mirror (sub has no direct FKs).
-    assert payload["ticket_crm_id"] == "crm-ticket-77"
-    assert payload["project_crm_id"] == "crm-project-88"
+    # Neutral source references come from retained work-order provenance.
+    assert payload["ticket_source_reference"] == "crm-ticket-77"
+    assert payload["project_source_reference"] == "crm-project-88"
     assert payload["currency_code"] == "NGN"
     assert payload["remarks"] == "Customer site was missing materials"
 
@@ -279,7 +279,7 @@ def test_submit_enqueues_with_owner_and_enabled_capability(db_session):
     assert row.flow == FieldErpSyncFlow.expense_claim.value
     assert row.idempotency_key == f"exp-{request.id}-submit-v1"
     assert row.status == FieldErpSyncStatus.pending.value
-    assert row.payload["omni_id"] == str(request.id)
+    assert row.payload["source_claim_id"] == str(request.id)
 
 
 def test_resubmit_reuses_the_same_outbox_row(db_session):
@@ -308,7 +308,7 @@ def test_delivery_accepted_writes_erp_fields_back(db_session):
                 "claim_id": "ERP-CLAIM-1",
                 "claim_number": "EXP-0001",
                 "status": "submitted",
-                "omni_id": str(request.id),
+                "source_claim_id": str(request.id),
             }
         ]
     )

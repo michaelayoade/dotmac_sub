@@ -169,6 +169,13 @@ def _get_descriptor(client, binding, *, token=MIRROR_TOKEN):
     )
 
 
+def _get_descriptor_v3(client, binding, *, token=MIRROR_TOKEN):
+    return client.get(
+        f"/api/v1/integration/observations/{binding.id}/descriptor/v3",
+        headers={"X-Api-Key": token} if token else {},
+    )
+
+
 def _counts(db_session) -> tuple[int, int, int]:
     return (
         db_session.query(InboxProviderObservation).count(),
@@ -514,6 +521,45 @@ def test_descriptor_digest_covers_every_published_fact(client, binding):
 
     assert descriptor_digest(descriptor) == asserted
     descriptor["destination_scope"]["ref"] = "sales"
+    assert descriptor_digest(descriptor) != asserted
+
+
+def test_sub_publishes_the_messaging_contract_on_descriptor_v3(client, binding):
+    from app.services.integrations.product_port_descriptor import descriptor_digest
+
+    response = _get_descriptor_v3(client, binding)
+
+    assert response.status_code == 200, response.text
+    descriptor = response.json()
+    assert descriptor["schema_version"] == "dotmac.io/product-port-descriptor/v3"
+    assert (
+        descriptor["wire_schema_version"]
+        == "dotmac.io/integrator-observation-envelope/v1"
+    )
+    assert descriptor["capability_id"] == "messaging.receive.v1"
+    assert descriptor["capability_contract"] == {
+        "command_schema": None,
+        "result_schema": None,
+        "observation_schema": None,
+        "deprecation": None,
+        "schema_grace": {
+            "reason": (
+                "The shared messaging.receive.v1 id is still served by "
+                "divergent connector-normalized observation payloads; its "
+                "successor contracts and exact connector digest claims are "
+                "not published yet."
+            ),
+            "retire_after": "2026-09-30",
+            "tracked_by": (
+                "docs/INTEGRATOR_MESSAGING_RECEIVE_CUTOVER.md#capability-schema-grace"
+            ),
+        },
+        "contract_digest": None,
+    }
+
+    asserted = descriptor.pop("descriptor_digest")
+    assert descriptor_digest(descriptor) == asserted
+    descriptor["capability_contract"]["schema_grace"]["retire_after"] = "2026-10-01"
     assert descriptor_digest(descriptor) != asserted
 
 

@@ -6,7 +6,16 @@ from decimal import Decimal
 from typing import TypeVar, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -20,6 +29,7 @@ from app.schemas.vendor_portal import (
     VendorMaterialReleaseItemCreate,
     VendorQuoteCreate,
     VendorQuoteLineCreate,
+    VendorQuoteLineUpdate,
     VendorRouteRevisionCreate,
 )
 from app.schemas.vendor_purchase_invoice import (
@@ -46,9 +56,11 @@ from app.services.vendor_portal_operations import (
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
+    DeleteVendorQuoteLineCommand,
     RequestVendorAdvanceCommand,
     RequestVendorMaterialReleaseCommand,
     SubmitVendorRouteRevisionCommand,
+    UpdateVendorQuoteLineCommand,
     vendor_portal_operations,
 )
 from app.services.vendor_purchase_invoices import (
@@ -67,6 +79,8 @@ from app.web.vendor_auth_flow import require_vendor_web_auth
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendor", tags=["web-vendor-portal"])
 ResultT = TypeVar("ResultT")
+_MY_PROJECTS_PAGE_SIZE = 25
+_AVAILABLE_PROJECTS_PAGE_SIZE = 12
 
 
 def _submission_http_error(exc: DomainError) -> HTTPException:
@@ -159,6 +173,34 @@ def _context(auth: dict, db: Session, capability: str | None = None) -> dict:
 def _redirect(project_id: str, message: str | None = None) -> RedirectResponse:
     suffix = f"?message={message}" if message else ""
     return RedirectResponse(f"/vendor/projects/{project_id}{suffix}", status_code=303)
+
+
+def _project_page(
+    db: Session,
+    *,
+    vendor_id: str,
+    available: bool,
+    page: int,
+    page_size: int,
+    search: str | None,
+) -> dict[str, object]:
+    normalized_page = max(1, page)
+    rows = vendor_portal_operations.list_projects(
+        db,
+        vendor_id,
+        available=available,
+        limit=page_size + 1,
+        offset=(normalized_page - 1) * page_size,
+        search=search,
+    )
+    return {
+        "items": rows[:page_size],
+        "page": normalized_page,
+        "has_previous": normalized_page > 1,
+        "has_next": len(rows) > page_size,
+        "previous_page": normalized_page - 1,
+        "next_page": normalized_page + 1,
+    }
 
 
 def _project_detail_response(
@@ -313,22 +355,41 @@ def _as_built_payload(
 @router.get("", response_class=HTMLResponse)
 def vendor_dashboard(
     request: Request,
+    search: str | None = Query(default=None, max_length=120),
+    my_page: int = Query(default=1, ge=1),
+    available_page: int = Query(default=1, ge=1),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     vendor_id = str(context["native_vendor_id"])
+    search_term = (search or "").strip()
+    my_projects_page = _project_page(
+        db,
+        vendor_id=vendor_id,
+        available=False,
+        page=my_page,
+        page_size=_MY_PROJECTS_PAGE_SIZE,
+        search=search_term,
+    )
+    available_projects_page = _project_page(
+        db,
+        vendor_id=vendor_id,
+        available=True,
+        page=available_page,
+        page_size=_AVAILABLE_PROJECTS_PAGE_SIZE,
+        search=search_term,
+    )
     return templates.TemplateResponse(
         "vendor/dashboard.html",
         {
             "request": request,
             "vendor": context["native_vendor"],
-            "available_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=True, limit=50, offset=0
-            ),
-            "my_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=False, limit=100, offset=0
-            ),
+            "search": search_term,
+            "available_projects": available_projects_page["items"],
+            "available_projects_page": available_projects_page,
+            "my_projects": my_projects_page["items"],
+            "my_projects_page": my_projects_page,
         },
     )
 
@@ -410,7 +471,7 @@ def vendor_create_closure_proposal(
 def vendor_create_quote(
     request: Request,
     project_id: str,
-    vat_rate_percent: Decimal = Form(default=Decimal("0")),
+    vat_rate_percent: Decimal = Form(default=Decimal("7.5")),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
@@ -687,6 +748,93 @@ def vendor_add_quote_line(
             request, db, auth=auth, project_id=project_id, exc=http_error
         )
     return _redirect(project_id, "Quote line added")
+
+
+@router.post("/projects/{project_id}/quotes/{quote_id}/lines/{line_id}/update")
+def vendor_update_quote_line(
+    request: Request,
+    project_id: str,
+    quote_id: str,
+    line_id: str,
+    description: str = Form(...),
+    quantity: Decimal = Form(...),
+    unit_price: Decimal = Form(...),
+    item_type: str | None = Form(default=None),
+    auth: dict = Depends(require_vendor_web_auth),
+    db: Session = Depends(get_db),
+):
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_line_update",
+        )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.update_quote_line(
+                db,
+                UpdateVendorQuoteLineCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    line_id=line_id,
+                    payload=VendorQuoteLineUpdate(
+                        item_type=item_type,
+                        description=description,
+                        quantity=quantity,
+                        unit_price=unit_price,
+                    ),
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid quote line.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
+    return _redirect(project_id, "Quote line updated")
+
+
+@router.post("/projects/{project_id}/quotes/{quote_id}/lines/{line_id}/delete")
+def vendor_delete_quote_line(
+    request: Request,
+    project_id: str,
+    quote_id: str,
+    line_id: str,
+    auth: dict = Depends(require_vendor_web_auth),
+    db: Session = Depends(get_db),
+):
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_line_deletion",
+        )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.delete_quote_line(
+                db,
+                DeleteVendorQuoteLineCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    line_id=line_id,
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
+    return _redirect(project_id, "Quote line removed")
 
 
 @router.post("/projects/{project_id}/quotes/{quote_id}/submit")

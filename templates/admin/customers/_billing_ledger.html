@@ -31,7 +31,9 @@
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
             <h3 class="font-semibold text-slate-900 dark:text-white">Financial Activity</h3>
-            {% if customer_ledger.is_truncated %}<span class="text-xs text-amber-600 dark:text-amber-400">Showing the latest 200 entries</span>{% endif %}
+            {% if customer_ledger.entries %}
+            <span class="text-xs text-slate-500 dark:text-slate-400">Showing {{ customer_ledger.page_start }}–{{ customer_ledger.page_end }} of {{ customer_ledger.total_entries }} entries</span>
+            {% endif %}
         </div>
         {% if customer_ledger.entries %}
         <div class="overflow-x-auto">
@@ -70,6 +72,37 @@
         <div class="px-5 py-12 text-center">
             <p class="text-sm font-semibold text-slate-900 dark:text-white">No ledger activity yet</p>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Customer credits and debits will appear here when billing activity occurs.</p>
+        </div>
+        {% endif %}
+        {% if customer_ledger.total_entries > customer_ledger.per_page %}
+        <div class="flex flex-col gap-3 border-t border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ customer_ledger.page }} of {{ customer_ledger.total_pages }}</p>
+            <nav class="flex items-center gap-2" aria-label="Customer ledger pagination">
+                {% if customer_ledger.previous_page_url %}
+                <a href="{{ customer_ledger.previous_page_url }}"
+                   hx-get="{{ customer_ledger.previous_page_url }}"
+                   hx-target="#customer-billing-ledger"
+                   hx-swap="innerHTML"
+                   hx-push-url="false"
+                   class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Previous
+                </a>
+                {% else %}
+                <span aria-disabled="true" class="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-600">Previous</span>
+                {% endif %}
+                {% if customer_ledger.next_page_url %}
+                <a href="{{ customer_ledger.next_page_url }}"
+                   hx-get="{{ customer_ledger.next_page_url }}"
+                   hx-target="#customer-billing-ledger"
+                   hx-swap="innerHTML"
+                   hx-push-url="false"
+                   class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Next
+                </a>
+                {% else %}
+                <span aria-disabled="true" class="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-600">Next</span>
+                {% endif %}
+            </nav>
         </div>
         {% endif %}
     </div>

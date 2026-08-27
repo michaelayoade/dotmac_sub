@@ -293,15 +293,32 @@ survive in a path nothing exercises, invisible and unfixed.
 1. **Provider identity.** `provider` remains `meta_cloud_api`; transport
    provenance stays on the integration receipt. This preserves one identity
    through the producer-overlap window.
-2. **Binding, capability, paths, and scope.** Sub publishes them together as
-   `ProductPortDescriptorV1`. The Integrator's named reconciler imports an
-   immutable digest snapshot and repairs drift by rereading it; operators no
-   longer transcribe parallel binding and capability maps.
+2. **Binding, capability, paths, scope, and payload declaration.** Sub keeps
+   legacy `ProductPortDescriptorV1` available and publishes descriptor v3 on
+   `/descriptor/v3`. V3 independently names the established messaging envelope
+   wire and carries the domain-owned `CapabilityContract` document. The
+   Integrator's named reconciler imports an immutable digest snapshot and
+   repairs drift by rereading it; operators no longer transcribe parallel
+   binding, capability, or schema maps.
 3. **The seven integration-platform tables Sub still owns**, which
    `dotmac-integration` was extracted from. Until Sub retires them, both sides
    hold a control plane for the same concept. Known duplication, not a
    contradiction — the port is built against Sub's existing services precisely
    so it survives that retirement without a rewrite.
+
+### Capability schema grace
+
+`messaging.receive.v1` does not yet have one truthful pre-delivery observation
+schema. Meta WhatsApp and Meta Social still normalize divergent payloads behind
+that shared id, and the later Sub destination envelope is not the payload that
+`dotmac-integration.ingress.record_batch` validates. Publishing that envelope
+as the contract would be a false gate.
+
+Descriptor v3 therefore publishes an explicit `SchemaGrace` through
+2026-09-30, tracked by this section. Retire it by succeeding the divergent
+shared id with domain contracts that each publish an exact observation schema,
+then release connector manifests claiming those digests. The Integrator must
+not invent a union or treat the grace as a permanent optional field.
 
 ---
 

@@ -614,6 +614,28 @@ jobs:
             docker exec ci-db pg_isready -U postgres >/dev/null 2>&1 && break
             sleep 2
           done
+          # Exhausting the loop above used to fall through with exit 0. A
+          # database that never came up was then reported by the NEXT step as
+          # an opaque "database connection or role operation failed", naming
+          # migrations for a fault that was service startup. Readiness is a
+          # precondition of this step, so prove it here and fail loudly.
+          if ! docker exec ci-db pg_isready -U postgres >/dev/null 2>&1; then
+            echo "::error::ci-db did not become ready within 60s"
+            docker inspect --format='status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ci-db || true
+            docker logs ci-db || true
+            exit 1
+          fi
+          # Redis had no readiness check at all, which is the same defect in
+          # its most complete form: an unproven precondition.
+          for i in $(seq 1 30); do
+            docker exec ci-redis redis-cli ping >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! docker exec ci-redis redis-cli ping >/dev/null 2>&1; then
+            echo "::error::ci-redis did not become ready within 60s"
+            docker logs ci-redis || true
+            exit 1
+          fi
 
       - name: Run migrations and application health check
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
@@ -622,6 +644,8 @@ jobs:
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
             -e REDIS_URL=redis://ci-redis:6379/0"
+          docker run --rm $common_args dotmac-sub:ci sh -c \
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py'
           docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci

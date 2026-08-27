@@ -77,6 +77,7 @@ def test_billing_settings_reject_enabled_notice_without_days(db_session):
             {
                 "renewal_invoice_notice_enabled": "true",
                 "renewal_invoice_notice_days": "",
+                "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
             },
         )
 

@@ -600,6 +600,8 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.account_visibility",
         "customer.accounts",
         "access.subscription_lifecycle",
+        "financial.billing_profile",
+        "financial.subscription_billing_treatments",
         "service_intent.catalog_policy",
         "network.identity",
         "network.ip_assignment_lifecycle",

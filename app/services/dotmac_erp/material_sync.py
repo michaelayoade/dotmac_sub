@@ -101,14 +101,16 @@ def _from_warehouse_code(request: FieldMaterialRequest) -> str | None:
 
 
 def build_material_request_payload(request: FieldMaterialRequest) -> dict:
-    """Map a ``FieldMaterialRequest`` to ERP's ``CRMMaterialRequestPayload`` shape.
+    """Map a ``FieldMaterialRequest`` to ERP's ``SubMaterialRequestPayload`` shape.
 
-    Mirrors CRM's ``_map_material_request``: ``omni_id`` is sub's request UUID,
+    Ports the historical mapper into a neutral contract: ``source_request_id``
+    is Sub's request UUID,
     ``request_type='ISSUE'``, ``status='submitted'``, each line carries
     ``item_code`` / ``quantity`` / ``uom`` / ``from_warehouse_code`` (and
     ``serial_numbers`` when known). ``requested_by_email`` lets ERP match the
-    employee; ``ticket_crm_id`` comes off the work-order mirror (sub has no direct
-    FK). See the module docstring for the serials/warehouse fidelity gap.
+    employee; ``ticket_source_reference`` comes from retained work-order
+    provenance (Sub has no direct FK). See the module docstring for the
+    serials/warehouse fidelity gap.
     """
     warehouse_code = _from_warehouse_code(request)
 
@@ -139,12 +141,12 @@ def build_material_request_payload(request: FieldMaterialRequest) -> dict:
     mirror = request.work_order_mirror
 
     return {
-        "omni_id": str(request.id),
+        "source_request_id": str(request.id),
         "request_type": "ISSUE",
         "status": _ERP_SUBMISSION_STATUS,
         "schedule_date": schedule_date,
         "requested_by_email": _requester_email(request),
-        "ticket_crm_id": getattr(mirror, "crm_ticket_id", None),
+        "ticket_source_reference": getattr(mirror, "crm_ticket_id", None),
         "remarks": request.notes or "",
         "items": item_rows,
     }

@@ -13,19 +13,44 @@ independently deployed Dotmac Integrator. That external migration is now in its
 shadow phase.
 
 Sub owns a ProductPort descriptor v2 and typed ProductObservation v1 receiver
-for `payments.settlement.observation.v1`. The Integrator authenticates as a
-scoped machine principal and carries its durable installation UUID as opaque
-source provenance. A nullable unique mapping on Sub's `PaymentProvider` selects
-the local financial identity; neither a connector key nor provider payload can
-select that record. The receiver records a deduplicated `integration.inbox`
-fact and delegates the consequence to `financial.payment_webhooks`, which in
-turn uses the existing provider-event and payment participants.
+for `payments.settlement.observation.v1`. It also publishes descriptor v3 on the
+parallel `/descriptor/v3` path: the v3 metadata independently names that
+unchanged ProductObservation wire and carries finance's domain-owned capability
+contract. The Integrator authenticates as a scoped machine principal and
+carries its durable installation UUID as opaque source provenance. A nullable
+unique mapping on Sub's `PaymentProvider` selects the local financial identity;
+neither a connector key nor provider payload can select that record. The
+receiver records a deduplicated `integration.inbox` fact and delegates the
+consequence to `financial.payment_webhooks`, which in turn uses the existing
+provider-event and payment participants.
+
+### Capability schema grace
+
+Paystack and Flutterwave do not yet publish one exact product-owned
+pre-delivery observation schema and matching connector digest claims for the
+shared settlement id. The later ProductObservation envelope accepted by Sub is
+not that engine seam: source installation, destination scope and delivery
+provenance are added after the connector event has been recorded.
+
+Descriptor v3 therefore declares a finite `SchemaGrace` through 2026-09-30.
+Retirement requires one truthful domain observation schema (or versioned
+successors where the two normalized payloads cannot converge), then exact
+claims in both connector manifests. An expired grace fails closed; it is not a
+compatibility mode the Integrator may extend or reconstruct.
 
 The direct Paystack and Flutterwave callbacks remain the incumbent writers
 during shadow comparison. Cutover requires per-provider parity and explicit
 mapping. Flutterwave v4 does not report provider fee evidence on the current
 connector contract, so Sub refuses to infer zero or move money on that path;
 the mirror can report the gap without recording a consequence.
+
+The settlement mirror is deliberately usable while the Integrator installation
+or capability binding is configured but disabled. It resolves the pinned
+runtime context with the existing mirror-only disabled-state seam, compares
+against incumbent evidence, and writes no receipt or financial consequence.
+The live settlement receiver still requires both installation and binding to be
+enabled. Missing, quarantined, retired, unconfigured, or wrong-capability
+bindings fail closed on both paths.
 
 Machine-principal authentication is additive while the legacy API-key verifier
 remains available. Its HMAC key is therefore optional until that fallback is

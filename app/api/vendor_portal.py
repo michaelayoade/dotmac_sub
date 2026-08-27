@@ -206,7 +206,11 @@ def list_available_projects(
     db: Session = Depends(get_db),
 ):
     items = vendor_portal_operations.list_projects(
-        db, _vendor_id(context), available=True, limit=limit, offset=offset
+        db,
+        _vendor_id(context),
+        available=True,
+        limit=limit,
+        offset=offset,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
@@ -221,7 +225,11 @@ def list_my_projects(
     db: Session = Depends(get_db),
 ):
     items = vendor_portal_operations.list_projects(
-        db, _vendor_id(context), available=False, limit=limit, offset=offset
+        db,
+        _vendor_id(context),
+        available=False,
+        limit=limit,
+        offset=offset,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 

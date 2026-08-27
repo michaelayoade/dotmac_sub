@@ -80,6 +80,7 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     script = ScriptDirectory.from_config(config)
     # Single-headed with 375 in the head's ancestry; later revisions (e.g. the
     # integration platform chain) may extend past it — asserting the exact

@@ -583,6 +583,19 @@ class Invoice(Base):
             "due_date_basis",
             "due_at",
         ),
+        Index(
+            "ix_invoices_upcoming_collectible_due",
+            "due_at",
+            "account_id",
+            postgresql_where=text(
+                "is_active AND balance_due > 0 AND due_at IS NOT NULL "
+                "AND status IN ('issued', 'partially_paid', 'overdue')"
+            ),
+            sqlite_where=text(
+                "is_active AND balance_due > 0 AND due_at IS NOT NULL "
+                "AND status IN ('issued', 'partially_paid', 'overdue')"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2286,6 +2299,20 @@ class ServiceEntitlement(Base):
             "subscription_id",
             "starts_at",
             "ends_at",
+        ),
+        Index(
+            "ix_service_entitlements_active_end_subscription",
+            "ends_at",
+            "subscription_id",
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_service_entitlements_active_subscription_end",
+            "subscription_id",
+            "ends_at",
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
         ),
         Index(
             "uq_service_entitlements_active_invoice_line",

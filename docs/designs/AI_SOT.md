@@ -183,6 +183,13 @@ conditions. If a customer explicitly asks for a human, AI intake records
 `human_requested=true`, stops troubleshooting and requests handoff while
 preserving already collected facts.
 
+Policy versions may opt into immediate handoff after classification through
+`conversation_policy.handoff_after_classification`. The default is false for
+newly saved conversational policies. A classifier result that requires an
+approved follow-up question takes precedence over this option, so low-confidence
+or otherwise incomplete classifications remain in the clarification path instead
+of being escalated to Team Inbox routing immediately.
+
 Policy versions may select `conversation_engine_mode=custom_v1` or
 `conversation_engine_mode=langgraph_v1`. LangGraph is an orchestration layer
 only: it hydrates the same `AiIntakeSession.metadata["conversation_state"]`,

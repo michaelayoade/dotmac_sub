@@ -29,7 +29,10 @@ class AuthRepository {
         ));
     final result = LoginResult.fromJson(data as Map<String, dynamic>);
     if (result.isAuthenticated) {
-      await storage.save(
+      // One atomic write that opens a brand-new session generation. The
+      // identity is stamped on later by the controller, once /auth/me says who
+      // these tokens belong to (TokenStorage.adoptScope).
+      await storage.beginSession(
         accessToken: result.accessToken!,
         refreshToken: result.refreshToken,
       );
@@ -48,7 +51,7 @@ class AuthRepository {
           options: Options(extra: {'skipAuth': true}),
         ));
     final pair = TokenPair.fromJson(data as Map<String, dynamic>);
-    await storage.save(
+    await storage.beginSession(
       accessToken: pair.accessToken,
       refreshToken: pair.refreshToken,
     );
@@ -175,7 +178,13 @@ class AuthRepository {
         ));
   }
 
-  /// POST /auth/logout (best-effort) then clear local tokens.
+  /// POST /auth/logout — best-effort revocation of the server-side session.
+  ///
+  /// Deliberately does NOT clear local state. Credentials are one participant
+  /// in a session teardown, not the whole of it, and a repository quietly
+  /// clearing a subset was how local sign-out and session expiry drifted apart
+  /// in the first place. `SessionWipe` owns the teardown; this method owns the
+  /// network call and nothing else.
   Future<void> logout() async {
     final refresh = await storage.readRefreshToken();
     try {
@@ -183,6 +192,5 @@ class AuthRepository {
     } catch (_) {
       // Logout should always succeed locally even if the network call fails.
     }
-    await storage.clear();
   }
 }

@@ -65,6 +65,7 @@ def test_reports_permission_migrations_form_the_single_head_chain():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     script = ScriptDirectory.from_config(config)
     # Single-headed with the reports chain in the head's ancestry; asserting
     # the exact head breaks on every migration added after it.

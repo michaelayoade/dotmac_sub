@@ -17,7 +17,7 @@
 3. Create a non-human ERP identity limited to inventory read, material-request submit, and material-request status read. These are service scopes, not human roles.
 4. Store its credential and a separate webhook signing secret in the connector bindings.
 5. Configure ERP to POST to `/webhooks/erp-material/{capability_binding_id}` with a stable `X-Dotmac-Delivery` ID and `X-Dotmac-Signature: sha256=<HMAC-SHA256 exact body>`.
-6. ERP must send the Sub UUID as `omni_id`, its request identity, status, update time, and issued serials by line sequence.
+6. ERP must send the Sub UUID as `source_request_id`, its ERP-owned request identity, status, update time, and issued serials by line sequence.
 
 ## Controlled activation
 
@@ -29,7 +29,7 @@
    catalogue into a select control.
 4. Submit and issue one ERP canary, then prove both webhook and scheduled reconciliation converge.
 5. Prove a manual canary creates no ERP delivery and rejects an ERP callback.
-6. Disable the CRM sender before assigning material-request flow ownership to Sub.
+6. Confirm the retired CRM sender is absent before assigning material-request flow ownership to Sub.
 
 ## Safety and external work
 

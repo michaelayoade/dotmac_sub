@@ -1922,9 +1922,10 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Read-only product-owned declaration of destination identity, "
-                "capability meaning, endpoint paths, activation state, and "
-                "opaque local stream scope. The Integrator reconciles an "
-                "immutable digest snapshot; it never authors these facts."
+                "capability meaning, payload schema or dated grace, product "
+                "wire, endpoint paths, activation state, and opaque local "
+                "stream scope. The Integrator reconciles an immutable digest "
+                "snapshot; it never authors these facts."
             ),
             contract=ServiceContract(
                 concerns=(

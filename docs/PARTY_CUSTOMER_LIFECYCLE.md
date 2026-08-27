@@ -66,7 +66,7 @@ person or organization is; each named domain owner keeps its own lifecycle.
 | Sales Order | `sales.orders` | Accepted/manual order and fulfilment handoff |
 | Sales implementation coordination | `sales.fulfillment` | Structural Project/InstallationProject creation and verified release coordination |
 | Service Order lifecycle | `operations.service_order_lifecycle` | Implementation gate, provisioning outcome, and activation consequence |
-| Customer Experience handoff | `customer.experience_handoff` | Readiness, attention, attention resolution, acceptance, and durable actor/time/event evidence |
+| Customer Experience handoff | `customer.experience_handoff` | Readiness, attention, acceptance, and durable actor/time/event evidence |
 | Subscriber account | `customer.accounts` | Billing and service account owned by a Party |
 | Customer credential enrollment | `auth.customer_credential_enrollment` | Purpose-bound local credential creation and Subscriber-email verification; no Party activation |
 | Subscription state | `access.subscription_lifecycle` and catalog/subscription owners | Service lifecycle and access projection |

@@ -24,6 +24,7 @@ from app.models.vendor_routes import (
 from app.schemas.vendor_portal import (
     VendorQuoteCreate,
     VendorQuoteLineCreate,
+    VendorQuoteLineUpdate,
     VendorRouteRevisionCreate,
 )
 from app.services import vendor_project_records
@@ -34,8 +35,10 @@ from app.services.vendor_portal_operations import (
     ConfigureVendorProcurementCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
+    DeleteVendorQuoteLineCommand,
     ReviewVendorQuoteCommand,
     SubmitVendorRouteRevisionCommand,
+    UpdateVendorQuoteLineCommand,
     VendorProjectWorkspaceError,
     vendor_portal_operations,
 )
@@ -73,6 +76,11 @@ def _chain(db_session):
 
 
 def _create_quote_command(installation, vendor_id, user_id):
+    project_id = (
+        installation.id
+        if isinstance(installation, InstallationProject)
+        else installation
+    )
     return CreateVendorQuoteCommand(
         context=_context(
             actor=str(user_id),
@@ -80,7 +88,7 @@ def _create_quote_command(installation, vendor_id, user_id):
             reason="test quote creation",
         ),
         payload=VendorQuoteCreate(
-            project_id=installation.id,
+            project_id=project_id,
             currency="NGN",
             vat_rate_percent=Decimal("7.5"),
         ),
@@ -115,6 +123,41 @@ def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_sessi
     assert installation.status == InstallationProjectStatus.open_for_bidding.value
     assert installation.assignment_type == VendorAssignmentType.bidding.value
     assert installation.bidding_close_at is not None
+
+
+def test_vendor_project_list_filters_by_project_search(db_session):
+    installation, vendor, _user = _chain(db_session)
+    installation.project.name = "Alpha estate deployment"
+    installation.project.code = "ALP-100"
+    other_project = Project(name="Beta tower build", code="BET-200")
+    db_session.add(other_project)
+    db_session.flush()
+    other_installation = InstallationProject(
+        project_id=other_project.id,
+        assigned_vendor_id=vendor.id,
+    )
+    db_session.add(other_installation)
+    db_session.commit()
+
+    name_matches = vendor_portal_operations.list_projects(
+        db_session,
+        str(vendor.id),
+        available=False,
+        limit=50,
+        offset=0,
+        search="alpha",
+    )
+    code_matches = vendor_portal_operations.list_projects(
+        db_session,
+        str(vendor.id),
+        available=False,
+        limit=50,
+        offset=0,
+        search="BET-200",
+    )
+
+    assert [row["id"] for row in name_matches] == [installation.id]
+    assert [row["id"] for row in code_matches] == [other_installation.id]
 
 
 def test_a_vendor_cannot_quote_a_project_assigned_to_another_vendor(db_session):
@@ -391,6 +434,7 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
     installation, vendor, user = _chain(db_session)
     vendor_id = str(vendor.id)
     user_id = str(user.id)
+    project_id = installation.id
     command = CreateVendorQuoteCommand(
         context=_context(
             actor=user_id,
@@ -398,7 +442,7 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
             reason="test quote creation",
         ),
         payload=VendorQuoteCreate(
-            project_id=installation.id,
+            project_id=project_id,
             currency="NGN",
             vat_rate_percent=Decimal("7.5"),
         ),
@@ -437,6 +481,82 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
         .count()
         == 2
     )
+
+
+def test_quote_line_edits_recalculate_vat_totals(db_session):
+    installation, vendor, user = _chain(db_session)
+    installation_id = installation.id
+    vendor_id = str(vendor.id)
+    user_id = str(user.id)
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+    quote = vendor_portal_operations.create_quote(
+        db_session,
+        _create_quote_command(installation_id, vendor_id, user_id),
+    )
+    quote = vendor_portal_operations.add_quote_line(
+        db_session,
+        AddVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line creation",
+            ),
+            quote_id=str(quote["id"]),
+            payload=VendorQuoteLineCreate(
+                description="Installation labor",
+                quantity=Decimal("2"),
+                unit_price=Decimal("10000"),
+            ),
+            vendor_id=vendor_id,
+        ),
+    )
+    line_id = str(quote["line_items"][0].id)
+    db_session_adapter.release_read_transaction(db_session)
+
+    quote = vendor_portal_operations.update_quote_line(
+        db_session,
+        UpdateVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line update",
+            ),
+            quote_id=str(quote["id"]),
+            line_id=line_id,
+            payload=VendorQuoteLineUpdate(
+                description="Updated installation labor",
+                quantity=Decimal("3"),
+                unit_price=Decimal("10000"),
+            ),
+            vendor_id=vendor_id,
+        ),
+    )
+
+    assert quote["subtotal"] == Decimal("30000.00")
+    assert quote["tax_total"] == Decimal("2250.00")
+    assert quote["total"] == Decimal("32250.00")
+    assert quote["line_items"][0].description == "Updated installation labor"
+    db_session_adapter.release_read_transaction(db_session)
+
+    quote = vendor_portal_operations.delete_quote_line(
+        db_session,
+        DeleteVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line deletion",
+            ),
+            quote_id=str(quote["id"]),
+            line_id=line_id,
+            vendor_id=vendor_id,
+        ),
+    )
+
+    assert quote["line_items"] == []
+    assert quote["subtotal"] == Decimal("0.00")
+    assert quote["tax_total"] == Decimal("0.00")
+    assert quote["total"] == Decimal("0.00")
 
 
 def test_rejected_quote_edit_rolls_back_the_owner_transaction(db_session):

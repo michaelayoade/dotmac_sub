@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from app.module_release_contracts import SUBSCRIPTIONS_RELEASE
 from app.shadow.manifest import (
     BlockingPrerequisite,
     CohortManifest,
@@ -39,6 +40,10 @@ from app.shadow.vocabulary import AdoptionState, AuthorityMode, PersistencePlane
 
 #: Integrated Starter cohort worktree (`agent/dotmac-billing`), kernel 0.1.0a75.
 COHORT_REVISION: Final[str] = "516c5a99d7331f1f3ca4e6da0b7305c9620b5733"
+
+#: Released Subscriptions a3 peeled-tag commit. Unlike `COHORT_REVISION`, this
+#: pin belongs only to the independently released Subscriptions distribution.
+SUBSCRIPTIONS_REVISION: Final[str] = SUBSCRIPTIONS_RELEASE.revision
 
 #: Network module suite snapshot (`agent/network-module-suite-snapshot`).
 #: Built against kernel 0.1.0a73 and unvalidated — see the blocking prerequisite
@@ -143,9 +148,9 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
     ),
     _module(
         module="subscriptions",
-        package="dotmac-subscriptions",
-        version="0.1.0a2",
-        revision=_STARTER,
+        package=SUBSCRIPTIONS_RELEASE.package,
+        version=SUBSCRIPTIONS_RELEASE.version,
+        revision=SUBSCRIPTIONS_REVISION,
         plane=PersistencePlane.DUAL,
         gate="shadow subscription state equals access.subscription_lifecycle at each watermark",
         rollback="revert the coupled shadow watermark; Sub subscription authority never moved",
@@ -416,4 +421,9 @@ SHADOW_COHORT: Final[CohortManifest] = CohortManifest(
     modules=_ENTRIES,
 )
 
-__all__ = ["COHORT_REVISION", "NETWORK_SNAPSHOT_REVISION", "SHADOW_COHORT"]
+__all__ = [
+    "COHORT_REVISION",
+    "NETWORK_SNAPSHOT_REVISION",
+    "SHADOW_COHORT",
+    "SUBSCRIPTIONS_REVISION",
+]
