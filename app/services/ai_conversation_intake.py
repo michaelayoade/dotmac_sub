@@ -1776,9 +1776,7 @@ def has_human_takeover(db: Session, conversation: InboxConversation) -> bool:
             if isinstance(message_metadata, Mapping)
             else {}
         )
-        sent_by_person_id = (
-            str(metadata.get("sent_by_person_id") or "").strip().lower()
-        )
+        sent_by_person_id = str(metadata.get("sent_by_person_id") or "").strip().lower()
         if sent_by_person_id in {"", "null", "none"}:
             continue
         sender_type = str(metadata.get("sender_type") or "").strip().lower()
@@ -2603,7 +2601,6 @@ def _process_one_session(
     if (
         not engine_forced_handoff
         and outcome.status == AiIntakeStatus.awaiting_follow_up
-        and outcome.config_id is not None
         and outcome.classification is not None
         and follow_up_question is not None
     ):

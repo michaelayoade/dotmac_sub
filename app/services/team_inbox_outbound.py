@@ -80,7 +80,7 @@ class InboxReplyPayload:
 class AiIntakeFollowUpPayload:
     question: str
     inbound_message_id: UUID
-    config_id: UUID
+    config_id: UUID | None
     follow_up_count: int
     session_id: UUID | None = None
     policy_id: UUID | None = None
@@ -878,7 +878,9 @@ def send_ai_intake_follow_up(
                 else None,
                 "ai_message_purpose": "clarification",
                 "ai_intake_follow_up": True,
-                "ai_intake_config_id": str(payload.config_id),
+                "ai_intake_config_id": str(payload.config_id)
+                if payload.config_id is not None
+                else None,
                 "ai_intake_inbound_message_id": str(payload.inbound_message_id),
                 "ai_intake_follow_up_count": payload.follow_up_count,
                 "author_name": payload.display_name,
