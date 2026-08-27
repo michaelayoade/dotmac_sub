@@ -1173,7 +1173,17 @@ serialization behavior.
 
 - **Email**: SMTP with Jinja2 templates
 - **SMS**: Twilio API
-- **Push**: FCM/APNs
+- **Push**: FCM/APNs through `app.services.push`. Rich subject/body content is
+  retained only in Sub's authenticated notification record. The FCM boundary
+  emits generic display text plus the closed `PushIntentV1` data contract
+  (`contract_version`, a registered `intent_code`/`subject_kind` pair,
+  `subject_id`, `tenant_id`, `principal_id`, `issued_at`, and the two optional
+  fencing/coalescing fields). It accepts no arbitrary data bag and emits no
+  route, URL, deep link, preview, title, body, comment, or work-order prose in
+  `message.data`. Both mobile clients derive navigation from their own closed
+  intent maps; malformed or unknown contract versions fail to the authenticated
+  inbox (self-care) or no navigation (field), and display prose is never parsed
+  as a route.
 
 ### Webhook Delivery
 
