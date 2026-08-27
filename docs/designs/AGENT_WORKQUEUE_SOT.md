@@ -72,6 +72,13 @@ common visible row action. Claim, complete, snooze, and restore live in the
 row's overflow control. Templates consume owner-produced labels and hints; they
 do not infer status, urgency, or action eligibility.
 
+The row title is static identity text rather than a duplicate link. A compact,
+sticky section navigator above the work surface moves between `Right now`,
+Inbox, Tickets, Projects, and Work orders. Its selected state follows direct
+navigation and manual scrolling without changing projection state. Smooth
+scroll destinations reserve the navigator's measured height so section titles
+remain visible on desktop and narrow viewports.
+
 Claim and complete use the shared server-owned `ActionForm` contract. Each
 rendered form carries an owner-generated fingerprint of the current native
 item state and available action. Completion also presents impact and requires

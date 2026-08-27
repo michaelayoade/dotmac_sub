@@ -1000,13 +1000,33 @@ def test_sales_orders_table_uses_compact_disclosed_layout():
         encoding="utf-8"
     )
 
-    assert 'x-data="{ ordersExpanded: false }"' in template
+    assert 'x-data="{ ordersExpanded: false, orderSearchActive: false }"' in template
     assert 'class="w-full min-w-[760px] text-sm"' in template
+    assert 'class="hidden overflow-x-auto sm:block"' in template
     assert "min-w-[1250px]" not in template
     assert "Customer & Agent" in template
     assert "'Financials'" in template
+    assert '>Action</th>' not in template
+    assert '>View</a>' not in template
+    assert "colspan=6)" not in template
+    assert 'data-order-no-results><td colspan="5"' in template
     assert "data-compact-order-row" in template
-    assert "ordersExpanded || {{ loop.index0 }} < 10" in template
+    assert "ordersExpanded || orderSearchActive || {{ loop.index0 }} < 10" in template
+    assert "data-order-search" in template
+    assert "data-order-search-text" in template
+    assert "data-order-no-results" in template
+    assert "data-mobile-order-list" in template
+    assert "data-mobile-order-card" in template
+    assert "data-mobile-order-statuses" in template
+    assert ">Order status</p>" in template
+    assert ">Payment status</p>" in template
+    assert ">Source:</span>" in template
+    assert "data-order-search-record" in template
+    assert 'class="grid gap-3 p-3 sm:hidden"' in template
+    assert "x-collapse.duration.300ms" in template
+    assert 'placeholder="Search orders"' in template
+    assert "Search orders on this page" in template
+    assert "row.classList.toggle('hidden', !matchesQuery)" in template
     assert "data-orders-toggle" in template
     assert "Show all orders ({{ orders|length }})" in template
     assert "Show fewer orders" in template
@@ -1014,6 +1034,16 @@ def test_sales_orders_table_uses_compact_disclosed_layout():
     assert ">Payment status</p>" in template
     assert 'x-transition:enter="transition ease-out duration-300"' in template
     assert "prefers-reduced-motion: reduce" in template
+
+
+def test_admin_theme_toggle_suppresses_visual_tooltip_on_mobile():
+    layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
+
+    theme_toggle = layout.split("<!-- Dark mode toggle -->", maxsplit=1)[1].split(
+        "<!-- Notifications -->", maxsplit=1
+    )[0]
+    assert theme_toggle.count("window.innerWidth >= 640") == 2
+    assert 'aria-label="Toggle dark mode"' in theme_toggle
 
 
 def test_sales_agent_options_use_active_customer_experience_system_users(db_session):

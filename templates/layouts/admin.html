@@ -744,9 +744,9 @@
 
                 <!-- Dark mode toggle -->
                 <button x-on:click="$store.darkMode.toggle()"
-                        @mouseenter="openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
+                        @mouseenter="if (window.innerWidth >= 640) openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
                         @mouseleave="closeTopbarTooltip()"
-                        @focus="openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
+                        @focus="if (window.innerWidth >= 640) openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
                         @blur="closeTopbarTooltip()"
                         aria-label="Toggle dark mode"
                         :aria-pressed="$store.darkMode.on.toString()"
