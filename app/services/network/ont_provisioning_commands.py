@@ -25,7 +25,7 @@ from app.services.network.ont_authorization_contracts import (
     OntAuthorizationTarget,
     RequestAssignedOntAuthorization,
 )
-from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import canonical as canonical_serial
 from app.services.network_operation_dispatch import (
     NetworkOperationCommand,
     NetworkOperationDispatchError,
@@ -163,7 +163,7 @@ def evaluate_assigned_authorization(
             AssignedAuthorizationDecisionCode.ONT_NOT_FOUND,
             "ONT not found.",
         )
-    if normalize_serial(ont.serial_number) != target.serial_number.value:
+    if canonical_serial(ont.serial_number) != target.serial_number.value:
         return AssignedAuthorizationDecision(
             AssignedAuthorizationDecisionCode.SERIAL_MISMATCH,
             "The submitted serial does not match the assigned ONT.",
