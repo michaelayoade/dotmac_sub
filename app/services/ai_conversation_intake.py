@@ -2473,19 +2473,7 @@ def _process_one_session(
     session_metadata[processed_key] = True
     session_metadata["last_generation_attempt_id"] = str(generation.id)
     session.metadata_ = session_metadata
-    if has_human_takeover(db, conversation):
-        logger.info(
-            "ai intake stopped by human takeover",
-            extra={
-                "event": "ai_intake_human_takeover_detected",
-                "conversation_id": str(conversation.id),
-                "session_id": str(session.id),
-                "inbound_message_id": str(inbound.id),
-            },
-        )
-        complete_session(session, state="stopped_human_takeover")
-        mark_conversation_ai_metadata(conversation, session=session, active=False)
-        return True
+
     engine_forced_handoff = False
     engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
         None
@@ -2716,6 +2704,19 @@ def _process_one_session(
             source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
         )
         mark_conversation_ai_metadata(conversation, session=session, active=True)
+        return True
+    if has_human_takeover(db, conversation):
+        logger.info(
+            "ai intake stopped by human takeover",
+            extra={
+                "event": "ai_intake_human_takeover_detected",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+            },
+        )
+        complete_session(session, state="stopped_human_takeover")
+        mark_conversation_ai_metadata(conversation, session=session, active=False)
         return True
     routing = team_inbox_routing.resolve_channel_routing_decision(
         db,
