@@ -25,14 +25,19 @@ from app.db import Base
 
 
 class AuthProvider(enum.Enum):
-    # Legacy persisted provider vocabulary; compatibility-only during R1.
+    # Legacy persisted STORAGE vocabulary; compatibility-only during R1.
     # New mechanism membership is declared by its SOT owner through
     # authentication_mechanism_registry, and THAT is the declared vocabulary:
     # ``sso`` is the coarse persisted column value, ``oidc`` is the declared
     # mechanism code carried by the credential's authentication_binding. A
     # credential stored as ``sso`` is therefore not "SSO in general" but
     # whatever mechanism its binding declares, exactly as ``radius`` rows are
-    # scoped by their radius_server_id. ``AuthFlow.login`` still refuses
+    # scoped by their radius_server_id. That registry also owns the one
+    # mechanism -> provider mapping (local->local, radius->radius, oidc->sso),
+    # which fails closed: an unmapped mechanism is refused rather than assumed
+    # to be stored under its own name, and there is deliberately no
+    # ``oidc`` member here for it to be stored as.
+    # ``AuthFlow.login`` still refuses
     # ``sso``, deliberately: a federated credential has no password and must
     # never be reachable through the password login path.
     # Keep these as comments: an enum docstring becomes an OpenAPI schema

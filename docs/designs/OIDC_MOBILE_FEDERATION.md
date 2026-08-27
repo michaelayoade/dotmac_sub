@@ -175,6 +175,13 @@ falls out is the safe one: if minting fails after the ceremony committed, the
 ceremony is still burned and the device runs a fresh one. The failure mode is
 "log in again", never "the assertion is still redeemable".
 
+That is proven by breaking it, not by reading it: a test injects a real failure
+inside `AuthFlow._issue_tokens` after the admission command has committed, then
+checks that the ceremony is consumed, that no session row exists, that the same
+assertion is refused as `ceremony_already_used`, and that a fresh ceremony
+still succeeds. A static assertion about ordering would pass just as happily if
+the burn were rolled back with the mint.
+
 A **refused** exchange also burns the ceremony. That is why refusals are
 returned as values from inside the owner command rather than raised: an
 exception would roll the burn back and leave the row redeemable.
@@ -250,13 +257,26 @@ recorded for the operator, not handed to the caller.
 
 1. Install an `authentication_bindings` row with `mechanism_code = "oidc"` and
    the `binding_key` the settings name. Two issuers are two bindings.
-2. Bind each field technician's external subject: a `user_credentials` row with
-   that `authentication_binding_id`, `username` = the subject, the staff
-   `system_user_id`, and the party/tenant/evidence projection columns
-   (`credential_party_binding` owns this write).
+2. Bind each field technician's external subject: create a `user_credentials`
+   row with `provider = sso`, `username` = the subject and the staff
+   `system_user_id`, then run `credential_party_binding.bind_credential_party`
+   to project party, binding, tenant and evidence. That command owns those six
+   columns; nothing else may write them, including a test fixture.
+
+   The credential is stored as `sso` while the binding declares `oidc`, and
+   those two names are related only by the fail-closed mapping declared in
+   `app/services/authentication_mechanism_registry.py` (`local` → `local`,
+   `radius` → `radius`, `oidc` → `sso`). The writer and
+   `credential_convergence_report` both read that one declaration; a mechanism
+   with no declared storage provider is refused rather than assumed to be
+   stored under its own name. See
+   `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md` for why there is no
+   `AuthProvider.oidc`.
 3. Configure the settings above.
 4. Turn `auth.oidc_mobile_federation` on. The next boot verifies the
    configuration and refuses to start if any identifier is missing.
 
 Deactivating the binding row disables the client: every exchange is then
-refused with `verifier_unavailable`, and no session is issued.
+refused with `verifier_unavailable`, and no session is issued. Deactivation is
+a retirement, not a provisioning state — a technician cannot be bound to an
+already-inactive binding, because the canonical writer refuses one.
