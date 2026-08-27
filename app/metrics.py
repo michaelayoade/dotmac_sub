@@ -112,7 +112,7 @@ OIDC_MOBILE_CEREMONY_COMPLETED = Counter(
     "Field-mobile OIDC ceremonies that ended in an issued Sub session",
 )
 # `reason` is the exchange's refusal vocabulary. Non-zero on
-# `binding_mismatch`, `nonce_mismatch` or `signature_invalid` is worth an
+# `binding_mismatch`, `nonce_mismatch` or `assertion_invalid` is worth an
 # operator's attention; `ceremony_expired` is ordinary user behaviour.
 OIDC_MOBILE_EXCHANGE_FAILED = Counter(
     "oidc_mobile_exchange_failed_total",

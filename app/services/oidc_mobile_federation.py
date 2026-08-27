@@ -20,19 +20,29 @@ Sub never sees the authorization code either.
 every check below; there is no partial credit and no fallback:
 
 * the ceremony exists, has not expired, and has not been used;
-* the signature verifies against the pinned issuer's JWKS;
-* the algorithm is asymmetric and exactly allowed (`RS256`) — `none` and the
-  HMAC family are refused before a key is even looked up;
-* `iss` equals the pinned issuer;
-* `aud` contains the configured audience, and `azp` is the configured client
-  when `aud` is multi-valued;
-* `exp`, `nbf`, and an `iat` that is not implausibly old;
-* the token's `nonce` matches the ceremony's stored hash, compared in constant
-  time;
 * every pinned binding — ceremony, client, redirect, deployment — matches for
   EXACT equality;
+* `dotmac_auth_oidc.native.NativeIDTokenVerifier` accepts the assertion, which
+  is the whole of: the signature against the pinned issuer's key set, the
+  algorithm allowlist applied BEFORE any key is resolved (`none` and the HMAC
+  family never reach key resolution), the JWK's own declared `alg` against the
+  token's, exact `iss`, `aud` containing the registered client with `azp`
+  required when `aud` is multi-valued, `exp`/`nbf`/`iat` with leeway, the
+  maximum token age in BOTH directions, and a constant-time comparison of the
+  token's `nonce` against this ceremony's stored digest;
 * the verified subject has an ACTIVE local credential against the installed
   verifier, and that credential resolves to an eligible staff principal.
+
+## The verifier is a package, and Sub does not second-guess it
+
+Sub owns the ceremony, the bindings, the local identity and the session. It
+does not own ID-token verification: `dotmac-auth-oidc` does, Sub holds one
+long-lived verifier per registration (`app.services.oidc_mobile_verifier`), and
+this module re-checks none of the list above. A local re-check would not be
+defence in depth — it would be a second implementation that disagrees silently,
+because only one of the two decides. The verifier's refusals arrive as typed
+exception CLASSES and are mapped to Sub's closed vocabulary by class alone;
+their message text never reaches a log, a metric, an event or a caller.
 
 ## Two transactions, in this order, deliberately
 
@@ -68,19 +78,23 @@ verifier, a nonce, a subject, a key id or an email, truncated or otherwise.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID
 
+from dotmac_auth_oidc.errors import (
+    ConfigurationError,
+    IDTokenError,
+    JWKSError,
+    NonceMismatchError,
+    OIDCError,
+    UnsupportedAlgorithmError,
+)
+from dotmac_auth_oidc.native import NonceBinding
 from fastapi import Request
-from jose import jwt
-from jose.exceptions import JWTError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -89,6 +103,7 @@ from app.metrics import (
     OIDC_MOBILE_CEREMONY_COMPLETED,
     OIDC_MOBILE_CEREMONY_STARTED,
     OIDC_MOBILE_EXCHANGE_FAILED,
+    OIDC_MOBILE_JWKS_REFRESH_FAILURES,
     OIDC_MOBILE_REPLAY_REFUSED,
     OIDC_MOBILE_UNBOUND_SUBJECT,
 )
@@ -102,14 +117,13 @@ from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.oidc_mobile_config import (
-    ALLOWED_ID_TOKEN_ALGORITHMS,
     OIDC_MECHANISM_CODE,
     REQUIRED_CODE_CHALLENGE_METHOD,
     OidcMobileFederationConfig,
     federation_enabled,
     require_federation_config,
 )
-from app.services.oidc_mobile_jwks import signing_key
+from app.services.oidc_mobile_verifier import get_verifier
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -151,18 +165,10 @@ REFUSAL_REASONS: frozenset[str] = frozenset(
     {
         "federation_disabled",
         "unsupported_challenge_method",
-        "malformed_assertion",
         "algorithm_not_allowed",
         "signing_key_unknown",
-        "signature_invalid",
-        "issuer_mismatch",
-        "audience_mismatch",
-        "authorized_party_mismatch",
-        "assertion_expired",
-        "assertion_not_yet_valid",
-        "assertion_too_old",
-        "subject_missing",
-        "nonce_missing",
+        "provider_unavailable",
+        "assertion_invalid",
         "nonce_mismatch",
         "ceremony_not_found",
         "ceremony_expired",
@@ -270,9 +276,19 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 
 def nonce_digest(nonce: str) -> str:
-    """SHA-256 hex of a nonce. The only form that is ever persisted."""
+    """The one persisted nonce form: the verifier's OWN binding digest.
 
-    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+    Deliberately produced by ``NonceBinding`` rather than by a local
+    ``hashlib`` call that happens to agree with it today. The exchange
+    reconstructs the binding from this stored column with
+    ``NonceBinding.from_sha256_hex``, and that constructor accepts exactly 64
+    lowercase hex characters — so a digest computed here in any other shape
+    would not be a weaker match, it would be a ceremony that can never be
+    redeemed at all. Deriving it from the same class that will later validate
+    it removes the possibility rather than documenting it.
+    """
+
+    return NonceBinding.from_plaintext(nonce).sha256_hex
 
 
 class _Refused(Exception):  # noqa: N818 - a control signal, not a failure
@@ -433,112 +449,98 @@ def start_mobile_ceremony(
 
 
 # ---------------------------------------------------------------------------
-# 5b. Assertion verification (no database writes happen in here)
+# 5b. Assertion verification — delegated whole to `dotmac-auth-oidc`
 # ---------------------------------------------------------------------------
 
 
-def _verified_claims(
-    id_token: str, config: OidcMobileFederationConfig
-) -> dict[str, Any]:
-    """Verify the assertion completely, or raise a safe refusal.
+#: Package exception -> Sub refusal category. The package's contract is the
+#: exception CLASS, not its message, so this table branches on nothing else:
+#: parsing an exception's text would couple Sub's operator vocabulary to a
+#: sentence the package is free to reword, and would put library prose one
+#: mistake away from a caller-visible detail.
+#:
+#: The vocabulary is SHORTER than it was, and that is the honest outcome rather
+#: than a loss. `signature_invalid`, `issuer_mismatch`, `audience_mismatch`,
+#: `authorized_party_mismatch`, `assertion_expired`, `assertion_not_yet_valid`,
+#: `assertion_too_old`, `subject_missing`, `nonce_missing` and
+#: `malformed_assertion` were ten names for one decision the verifier now makes
+#: as a unit: this assertion is not admissible. Keeping ten labels over a
+#: distinction Sub can no longer observe would mean either inventing the
+#: difference from a message string or emitting a category that never fires —
+#: and a declared category nothing emits is exactly what the closed vocabulary
+#: exists to forbid. `nonce_missing` in particular was never separable in the
+#: first place: an absent nonce and a wrong one are both "not this ceremony's
+#: nonce", and the package answers both with `NonceMismatchError`.
+def _verification_refusal(exc: OIDCError) -> _Refused:
+    """One package exception as one safe category, counted where it belongs.
 
-    The algorithm is checked from the HEADER before any key is fetched. Doing
-    it here rather than relying on the JWT library's `algorithms` argument
-    alone gives a precise refusal category and, more importantly, means an
-    `alg: none` token never reaches the key-resolution path at all — so it
-    cannot even cost an outbound request.
+    Written as a branch per exception with the category spelled out inline,
+    rather than as a class-to-string table, deliberately: the closed-vocabulary
+    guard finds categories by reading the literal arguments to `_refuse` out of
+    this file, so a table would hide five of them from the very check that
+    keeps the vocabulary closed. A lookup that is invisible to its own guard is
+    not tidier, it is unmonitored.
+
+    Ordered most specific first — `UnsupportedAlgorithmError` and
+    `NonceMismatchError` are both `IDTokenError` subclasses, so a broader
+    branch above them would swallow the two categories worth distinguishing.
+    The final branch is the catch-all for `DiscoveryError` (the well-known
+    document could not be fetched or named another issuer), `ConfigurationError`
+    (a registration Sub built that the package refuses) and any other
+    `OIDCError` (transport). None of them is a decision about the caller, which
+    is why they stay apart from `verifier_unavailable` — that one means an
+    operator switched Sub's OWN verifier binding off.
+    """
+
+    if isinstance(exc, UnsupportedAlgorithmError):
+        return _refuse("algorithm_not_allowed")
+    if isinstance(exc, NonceMismatchError):
+        return _refuse("nonce_mismatch")
+    if isinstance(exc, IDTokenError):
+        return _refuse("assertion_invalid")
+    if isinstance(exc, JWKSError):
+        # An availability signal about the identity provider, split out of the
+        # refusal counter because it is not a judgement about the assertion.
+        OIDC_MOBILE_JWKS_REFRESH_FAILURES.labels(stage="key_set").inc()
+        return _refuse("signing_key_unknown")
+    OIDC_MOBILE_JWKS_REFRESH_FAILURES.labels(stage="discovery").inc()
+    return _refuse("provider_unavailable")
+
+
+def _verified_subject(
+    id_token: str, config: OidcMobileFederationConfig, nonce_hash: str
+) -> str:
+    """The external subject this assertion proves, or a safe refusal.
+
+    Sub re-checks NOTHING the verifier already decided. The whole list —
+    signature against the pinned issuer's key set, the algorithm allowlist
+    applied before any key is resolved, the JWK's declared `alg` against the
+    token's, exact `iss`, `aud` containing the client and `azp` when `aud` is
+    multi-valued, `exp`/`nbf`/`iat` with leeway, the maximum token age in both
+    directions, and the constant-time nonce comparison — belongs to
+    `NativeIDTokenVerifier`. A second copy here would not be defence in depth;
+    it would be the copy that misses the next fix, and the two would disagree
+    silently because only one of them decides.
+
+    The nonce binding is reconstructed from the ceremony's STORED DIGEST. Sub
+    persists a hash and never the plaintext, and that stays true: the binding
+    holds a digest, compares in constant time, and has no accessor that could
+    hand a nonce back.
     """
 
     try:
-        header = jwt.get_unverified_header(id_token)
-    except (JWTError, AttributeError, ValueError):
-        raise _refuse("malformed_assertion") from None
-
-    algorithm = header.get("alg")
-    if not isinstance(algorithm, str) or algorithm not in ALLOWED_ID_TOKEN_ALGORITHMS:
-        raise _refuse("algorithm_not_allowed")
-
-    key = signing_key(config, header.get("kid"))
-    if key is None:
-        raise _refuse("signing_key_unknown")
+        binding = NonceBinding.from_sha256_hex(nonce_hash)
+    except ConfigurationError:
+        # A stored binding the verifier cannot use is a ceremony that can never
+        # match any nonce. Reported as a mismatch because that is what it is,
+        # and burned for the same reason a real mismatch is.
+        raise _refuse("nonce_mismatch") from None
 
     try:
-        claims = jwt.decode(
-            id_token,
-            key,
-            algorithms=sorted(ALLOWED_ID_TOKEN_ALGORITHMS),
-            audience=config.audience,
-            issuer=config.issuer,
-            options={
-                "verify_signature": True,
-                "verify_aud": True,
-                "verify_iss": True,
-                "verify_exp": True,
-                "verify_nbf": True,
-                "verify_iat": True,
-                "verify_at_hash": False,
-                "require_aud": True,
-                "require_exp": True,
-                "require_iat": True,
-                "require_iss": True,
-                "require_sub": True,
-                "leeway": config.clock_skew_seconds,
-            },
-        )
-    except JWTError as exc:
-        # The library reports every claim failure as one error type, so the
-        # category is derived from its text. Mapping it here keeps the closed
-        # vocabulary closed; anything unrecognised degrades to
-        # `signature_invalid`, which is the safe direction.
-        text = str(exc).lower()
-        if "expire" in text:
-            raise _refuse("assertion_expired") from None
-        if "not yet valid" in text or "nbf" in text:
-            raise _refuse("assertion_not_yet_valid") from None
-        if "audience" in text:
-            raise _refuse("audience_mismatch") from None
-        if "issuer" in text:
-            raise _refuse("issuer_mismatch") from None
-        if "signature" in text:
-            raise _refuse("signature_invalid") from None
-        raise _refuse("malformed_assertion") from None
-
-    if claims.get("iss") != config.issuer:
-        # Belt and braces: the library already compared it, and an issuer this
-        # deployment does not trust is the one claim worth checking twice.
-        raise _refuse("issuer_mismatch")
-
-    audience = claims.get("aud")
-    audiences = [audience] if isinstance(audience, str) else list(audience or ())
-    if config.audience not in audiences:
-        raise _refuse("audience_mismatch")
-    if len(audiences) > 1:
-        # A multi-valued audience means the token was minted for more than one
-        # recipient, and `azp` is the only claim that says which party actually
-        # requested it. Without this check, an assertion issued to a different
-        # client that happens to list our audience would be admitted.
-        if claims.get("azp") != config.client_id:
-            raise _refuse("authorized_party_mismatch")
-
-    issued_at = claims.get("iat")
-    if not isinstance(issued_at, int):
-        raise _refuse("malformed_assertion")
-    age = _now().timestamp() - issued_at
-    if age > config.max_assertion_age_seconds + config.clock_skew_seconds:
-        # `exp` alone is the identity provider's opinion of freshness. An
-        # assertion minted long before this exchange is not a live login even
-        # if it has not expired yet.
-        raise _refuse("assertion_too_old")
-    if age < -config.clock_skew_seconds:
-        raise _refuse("assertion_not_yet_valid")
-
-    subject = claims.get("sub")
-    if not isinstance(subject, str) or not subject.strip():
-        raise _refuse("subject_missing")
-    nonce = claims.get("nonce")
-    if not isinstance(nonce, str) or not nonce.strip():
-        raise _refuse("nonce_missing")
-    return claims
+        verified = get_verifier(config).verify(id_token, nonce_binding=binding)
+    except OIDCError as exc:
+        raise _verification_refusal(exc) from None
+    return verified.subject
 
 
 # ---------------------------------------------------------------------------
@@ -584,10 +586,30 @@ def _admit(
     db: Session,
     command: ExchangeMobileAssertionCommand,
     config: OidcMobileFederationConfig,
-    subject: str,
-    nonce: str,
 ) -> AdmittedFederatedPrincipal:
-    """Burn the ceremony and resolve the principal, under one lock."""
+    """Burn the ceremony and resolve the principal, under one lock.
+
+    The assertion is verified INSIDE this lock, after the ceremony's own
+    cheap checks and before anything is resolved. Two properties fall out of
+    that ordering and both are the reason for it:
+
+    * **Every refusal burns the ceremony**, verification refusals included.
+      Before the verifier moved into `dotmac-auth-oidc`, verification ran ahead
+      of the lock, so a bad signature left the row redeemable and an attacker
+      holding an assertion could keep trying against a live ceremony. That was
+      an artifact of ordering, not a decision, and it is now closed.
+    * **A ceremony that is already refused costs nothing outbound.** Expiry,
+      replay and every pinned-binding comparison are settled from local rows
+      first, so a caller cannot buy a request to the identity provider with a
+      ceremony id that was never going to be admitted.
+
+    Verification is a memory-only operation whenever the held verifier's key
+    set is warm, which is the steady state — the verifier is process-lived
+    precisely so that stays true. A cold or rotating key set costs one fetch,
+    bounded by ``oidc_mobile_jwks_timeout_seconds``, while this row lock is
+    held; the contended row is one single-use ceremony belonging to one device,
+    so nothing else waits on it.
+    """
 
     now = _now()
     ceremony = db.scalars(
@@ -607,12 +629,6 @@ def _admit(
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "ceremony_expired")
         raise _refuse("ceremony_expired")
 
-    # Constant time: a byte-by-byte comparison of the digest leaks how much of
-    # a guessed nonce was right, and the nonce is the anti-replay binding.
-    if not hmac.compare_digest(ceremony.nonce_hash, nonce_digest(nonce)):
-        _burn(ceremony, now, OidcCeremonyOutcome.failed, "nonce_mismatch")
-        raise _refuse("nonce_mismatch")
-
     # EXACT equality on every pinned binding. No prefix match, no wildcard, no
     # trailing-slash tolerance, no scheme coercion, no case folding — a loose
     # comparison here is what would quietly undo the verified-redirect
@@ -628,6 +644,12 @@ def _admit(
     ):
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "binding_mismatch")
         raise _refuse("binding_mismatch")
+
+    try:
+        subject = _verified_subject(command.id_token, config, ceremony.nonce_hash)
+    except _Refused as refused:
+        _burn(ceremony, now, OidcCeremonyOutcome.failed, refused.reason)
+        raise
 
     binding = db.scalars(
         select(AuthenticationBinding)
@@ -762,14 +784,7 @@ def exchange_mobile_assertion(
             if not federation_enabled(db):
                 return _refuse("federation_disabled")
             config = require_federation_config(db)
-            claims = _verified_claims(command.id_token, config)
-            return _admit(
-                db,
-                command,
-                config,
-                str(claims["sub"]).strip(),
-                str(claims["nonce"]).strip(),
-            )
+            return _admit(db, command, config)
         except _Refused as refused:
             return refused
 

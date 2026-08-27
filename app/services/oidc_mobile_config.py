@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dotmac_auth_oidc.native import NATIVE_ID_TOKEN_ALGORITHMS
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -49,8 +50,23 @@ REQUIRED_CODE_CHALLENGE_METHOD = "S256"
 #: configurations, they are the removal of the signature check (`none`) or the
 #: substitution of a symmetric key an attacker may already hold (`HS*`). A
 #: configurable algorithm list is how "alg: none" becomes reachable in
-#: production. Widening this is a code change and a review.
-ALLOWED_ID_TOKEN_ALGORITHMS = frozenset({"RS256"})
+#: production.
+#:
+#: It is now BOUND to the verifier's own module-level allowlist rather than
+#: restated. Sub does not apply this set — `NativeIDTokenVerifier` refuses an
+#: algorithm outside it before any key is resolved — so a second copy here
+#: could only ever be a copy that disagreed, and a Sub-side list that quietly
+#: widened while the verifier stayed narrow (or the reverse) would describe a
+#: guarantee nothing enforces. Widening it is a package release and a review,
+#: not a change to this file.
+ALLOWED_ID_TOKEN_ALGORITHMS: frozenset[str] = NATIVE_ID_TOKEN_ALGORITHMS
+
+#: The two ways a deployment names its signing keys. `discovery` derives the
+#: JWKS URI from the pinned issuer's well-known document; `static_uri` names
+#: the URI itself and contacts no discovery endpoint. They are EXCLUSIVE — see
+#: `require_federation_config`.
+JWKS_SOURCE_DISCOVERY = "discovery"
+JWKS_SOURCE_STATIC_URI = "static_uri"
 
 #: Every identifier a ceremony pins. Missing any one of them is a refusal, not
 #: a default.
@@ -112,9 +128,9 @@ def require_federation_config(db: Session) -> OidcMobileFederationConfig:
     resolved = {key: _text(db, key) for key in _REQUIRED_KEYS}
     missing = sorted(key for key, value in resolved.items() if value is None)
 
-    jwks_source = _text(db, "oidc_mobile_jwks_source") or "discovery"
+    jwks_source = _text(db, "oidc_mobile_jwks_source") or JWKS_SOURCE_DISCOVERY
     jwks_uri = _text(db, "oidc_mobile_jwks_uri")
-    if jwks_source == "static_uri" and jwks_uri is None:
+    if jwks_source == JWKS_SOURCE_STATIC_URI and jwks_uri is None:
         # `static_uri` names a URI. Falling back to discovery here would make a
         # misconfigured deployment quietly contact a different endpoint from
         # the one it declared.
@@ -128,6 +144,29 @@ def require_federation_config(db: Session) -> OidcMobileFederationConfig:
                 "Set every listed auth setting, then restart."
             ),
             details={"missing_settings": sorted(missing)},
+        )
+
+    if jwks_source == JWKS_SOURCE_DISCOVERY and jwks_uri is not None:
+        # Discovery and a static URI are MUTUALLY EXCLUSIVE, and this refusal
+        # is what makes them so. Before the verifier moved into
+        # `dotmac-auth-oidc` this combination was silently resolved in
+        # discovery's favour, so a deployment could carry a `jwks_uri` an
+        # operator believed was in force while every key actually came from the
+        # well-known document. Preferring one is the failure; naming the
+        # contradiction is the fix.
+        raise OidcFederationConfigError(
+            code="auth.oidc_mobile_federation.configuration_incomplete",
+            message=(
+                "Field-mobile OIDC federation accepts either a discovery JWKS "
+                "source or a static JWKS URI, never both. Clear one of them, "
+                "then restart."
+            ),
+            details={
+                "mismatched_settings": [
+                    "oidc_mobile_jwks_source",
+                    "oidc_mobile_jwks_uri",
+                ]
+            },
         )
 
     client_id = str(resolved["oidc_mobile_client_id"])

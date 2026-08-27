@@ -58,10 +58,20 @@ _SETTINGS = {
 
 
 class RecordingTransport:
-    """A JWKS transport that counts every outbound call it is asked to make.
+    """A `dotmac_auth_oidc` transport that counts every call it is asked to make.
 
     Counting is the point: the bound on refresh is a claim about how many
     requests reach the identity provider, and only a counter can falsify it.
+    Sub no longer implements a transport in production — `HttpxTransport`
+    inside the package is the shipped one — so this exists purely to make that
+    claim observable from Sub's own exchange.
+
+    It implements the package's `Transport` protocol, `post_form` included. The
+    method is unreachable from the native path (a public native client runs its
+    own code exchange and Sub never sees the authorization code), and it raises
+    rather than returning a plausible document so a future change that started
+    reaching the token endpoint through here would fail loudly instead of
+    quietly succeeding.
     """
 
     def __init__(self, keys: list[dict[str, Any]] | None = None) -> None:
@@ -69,11 +79,31 @@ class RecordingTransport:
         self.calls: list[str] = []
         self.fail = False
 
-    def get_json(self, url: str, *, timeout_seconds: int) -> dict[str, Any]:
+    def get_json(self, url: str, *, timeout: float) -> dict[str, Any]:
         self.calls.append(url)
         if self.fail:
             raise RuntimeError("identity provider unreachable")
+        if url.endswith("/.well-known/openid-configuration"):
+            return {
+                "issuer": ISSUER,
+                "authorization_endpoint": f"{ISSUER}/protocol/openid-connect/auth",
+                "token_endpoint": f"{ISSUER}/protocol/openid-connect/token",
+                "jwks_uri": JWKS_URI,
+            }
         return {"keys": list(self.keys)}
+
+    def post_form(
+        self,
+        url: str,
+        *,
+        data: dict[str, str],
+        auth: tuple[str, str] | None,
+        timeout: float,
+    ) -> dict[str, Any]:
+        raise AssertionError(
+            "the native path never reaches a token endpoint: the device runs "
+            "its own PKCE exchange and Sub never receives the authorization code"
+        )
 
 
 @dataclass
@@ -160,6 +190,18 @@ def assertion_claims(
     if extra:
         claims.update(extra)
     return claims
+
+
+def sign_without_kid(key: SigningKey, claims: dict[str, Any]) -> str:
+    """A well-formed RS256 assertion that names no signing key.
+
+    Its own helper because `SigningKey.sign` always writes a `kid`, and a token
+    without one is the shape that must never buy an outbound request: an
+    unaddressable key can only be found by trying every published key until one
+    verifies, which is not validation.
+    """
+
+    return jwt.encode(claims, key.private_pem, algorithm="RS256")
 
 
 def unsigned_assertion(claims: dict[str, Any]) -> str:

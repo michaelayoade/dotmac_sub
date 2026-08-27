@@ -23,7 +23,7 @@ from app.models.audit import AuditActorType, AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.oidc_mobile import OidcCeremonyOutcome, OidcMobileCeremony
 from app.services import oidc_mobile_federation as federation
-from app.services import oidc_mobile_jwks as jwks
+from app.services import oidc_mobile_verifier as verifier
 from app.services.oidc_mobile_config import (
     ALLOWED_ID_TOKEN_ALGORITHMS,
     OidcFederationConfigError,
@@ -42,6 +42,7 @@ from tests.oidc_mobile_fixtures import (
     configure_federation,
     deactivate_binding,
     install_oidc_binding,
+    sign_without_kid,
     unsigned_assertion,
 )
 
@@ -53,14 +54,23 @@ def signing_key() -> SigningKey:
 
 @pytest.fixture()
 def transport(signing_key: SigningKey):
+    """Install a counting transport and a FRESH verifier for each test.
+
+    Both halves matter. The verifier is process-lived in production precisely
+    so its key set survives requests, which means a held one would otherwise
+    carry the previous test's keys — and every call count in this file would be
+    measuring the wrong process. Resetting after installing is what makes the
+    counter belong to this test.
+    """
+
     recording = RecordingTransport([signing_key.public_jwk])
-    previous = jwks.install_transport(recording)
-    jwks.reset_cache()
+    previous = verifier.install_transport(recording)
+    verifier.reset_verifiers()
     try:
         yield recording
     finally:
-        jwks.install_transport(previous)
-        jwks.reset_cache()
+        verifier.install_transport(previous)
+        verifier.reset_verifiers()
 
 
 def _context(reason: str = "test") -> CommandContext:
@@ -221,6 +231,34 @@ def test_the_raw_nonce_is_never_stored(db_session, signing_key, transport):
     assert started.nonce not in {value for value in stored.values() if value}
 
 
+def test_the_stored_digest_is_the_verifiers_own_nonce_binding(
+    db_session, signing_key, transport
+):
+    """What the ceremony persists is exactly what the verifier will accept.
+
+    The exchange reconstructs the binding with
+    `NonceBinding.from_sha256_hex(ceremony.nonce_hash)`, and that constructor
+    takes 64 lowercase hex characters or nothing. A digest stored in any other
+    shape would not be a weaker match — it would be a ceremony that can never
+    be redeemed by any nonce at all, which no happy-path test would catch until
+    a real device tried. Deriving the stored value from the same class that
+    later validates it is what removes the gap; this pins that it stays derived.
+    """
+
+    from dotmac_auth_oidc.native import NonceBinding
+
+    configure_federation(db_session)
+    started = _start(db_session)
+
+    row = db_session.get(OidcMobileCeremony, started.ceremony_id)
+    binding = NonceBinding.from_sha256_hex(row.nonce_hash)
+    assert binding.matches(started.nonce)
+    assert not binding.matches(started.nonce + "x")
+    # The binding holds a digest and nothing else: there is no accessor that
+    # could hand a nonce back, and its repr does not carry the digest either.
+    assert started.nonce not in repr(binding)
+
+
 def test_starting_a_ceremony_creates_no_user_and_no_session(db_session, transport):
     configure_federation(db_session)
     from app.models.auth import Session as AuthSession
@@ -286,7 +324,12 @@ def test_the_wire_contract_has_nowhere_to_put_a_verifier():
 
 
 def test_only_rs256_is_accepted():
+    """Sub's declared allowlist IS the verifier's, not a copy that agrees."""
+
+    from dotmac_auth_oidc.native import NATIVE_ID_TOKEN_ALGORITHMS
+
     assert ALLOWED_ID_TOKEN_ALGORITHMS == frozenset({"RS256"})
+    assert ALLOWED_ID_TOKEN_ALGORITHMS is NATIVE_ID_TOKEN_ALGORITHMS
 
 
 def test_an_unsigned_assertion_is_refused(db_session, signing_key, transport):
@@ -321,6 +364,17 @@ def test_an_hmac_signed_assertion_is_refused(db_session, transport):
 
 
 def test_a_signature_from_the_wrong_key_is_refused(db_session, signing_key, transport):
+    """A real RS256 signature over the right claims, by the wrong key.
+
+    The kid matches a published key, so the token reaches signature
+    verification and is refused there. This and the six tests below all end in
+    `assertion_invalid`: the verifier decides admissibility as a unit, and Sub
+    no longer separates "the signature was wrong" from "the audience was
+    wrong". What each test still proves is that the wrong INPUT is refused —
+    which is the property, and it is falsifiable exactly as before, because a
+    verifier that accepted any of them would return a session.
+    """
+
     configure_federation(db_session)
     started = _start(db_session)
     impostor = SigningKey.generate(kid=signing_key.kid)
@@ -328,7 +382,7 @@ def test_a_signature_from_the_wrong_key_is_refused(db_session, signing_key, tran
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "signature_invalid"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_a_wrong_issuer_is_refused(db_session, signing_key, transport):
@@ -340,7 +394,7 @@ def test_a_wrong_issuer_is_refused(db_session, signing_key, transport):
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "issuer_mismatch"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_a_wrong_audience_is_refused(db_session, signing_key, transport):
@@ -352,7 +406,7 @@ def test_a_wrong_audience_is_refused(db_session, signing_key, transport):
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "audience_mismatch"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_a_multi_valued_audience_requires_the_right_authorized_party(
@@ -373,7 +427,7 @@ def test_a_multi_valued_audience_requires_the_right_authorized_party(
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "authorized_party_mismatch"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_a_multi_valued_audience_with_the_right_azp_is_admitted(
@@ -408,7 +462,7 @@ def test_an_expired_assertion_is_refused(db_session, signing_key, transport):
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) in {"assertion_expired", "assertion_too_old"}
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_a_not_yet_valid_assertion_is_refused(db_session, signing_key, transport):
@@ -426,7 +480,7 @@ def test_a_not_yet_valid_assertion_is_refused(db_session, signing_key, transport
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "assertion_not_yet_valid"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 def test_an_unexpired_but_stale_assertion_is_refused(
@@ -443,7 +497,7 @@ def test_an_unexpired_but_stale_assertion_is_refused(
 
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "assertion_too_old"
+    assert _refusal(exc) == "assertion_invalid"
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +653,78 @@ def test_a_refused_exchange_still_burns_the_ceremony(
     with pytest.raises(federation.OidcFederationRefused) as exc:
         _exchange(db_session, started.ceremony_id, good_token)
     assert _refusal(exc) == "ceremony_already_used"
+
+
+def test_a_verification_refusal_burns_the_ceremony_too(
+    db_session, signing_key, transport
+):
+    """An assertion the verifier rejects still consumes the ceremony.
+
+    This is the property the verifier swap CLOSED rather than preserved. While
+    verification ran ahead of the ceremony lock, a bad signature refused
+    without burning anything, so a caller holding a forged assertion could keep
+    firing at a live ceremony until it expired. Verifying under the lock makes
+    every refusal terminal, and the ordering is now load-bearing rather than
+    incidental — which is why it is pinned here and not merely commented.
+    """
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    db_session.commit()
+
+    started = _start(db_session)
+    impostor = SigningKey.generate(kid=signing_key.kid)
+    with pytest.raises(federation.OidcFederationRefused) as exc:
+        _exchange(
+            db_session,
+            started.ceremony_id,
+            impostor.sign(assertion_claims(started.nonce)),
+        )
+    assert _refusal(exc) == "assertion_invalid"
+
+    db_session.expire_all()
+    row = db_session.get(OidcMobileCeremony, started.ceremony_id)
+    assert row.consumed_at is not None
+    assert row.outcome == OidcCeremonyOutcome.failed.value
+    assert row.failure_reason == "assertion_invalid"
+    db_session.commit()
+
+    # The device must run a fresh ceremony; the spent one is not retryable
+    # even with a genuine assertion.
+    with pytest.raises(federation.OidcFederationRefused) as exc:
+        _exchange(
+            db_session,
+            started.ceremony_id,
+            signing_key.sign(assertion_claims(started.nonce)),
+        )
+    assert _refusal(exc) == "ceremony_already_used"
+
+
+def test_a_refused_ceremony_never_reaches_the_identity_provider(
+    db_session, signing_key, transport
+):
+    """A ceremony already refusable is settled from local rows, outbound-free.
+
+    The endpoint is unauthenticated, so whoever can post an assertion chooses
+    the ceremony id. If a burned, expired or mispinned ceremony still spent a
+    key-set fetch on the way to its refusal, that choice would be an outbound
+    request the caller bought for nothing.
+    """
+
+    configure_federation(db_session)
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+
+    # A ceremony id that was never real.
+    with pytest.raises(federation.OidcFederationRefused):
+        _exchange(db_session, uuid4(), token)
+    # A ceremony whose pinned client is not the one the device says it used.
+    with pytest.raises(federation.OidcFederationRefused) as exc:
+        _exchange(db_session, started.ceremony_id, token, client_id="other-client")
+    assert _refusal(exc) == "binding_mismatch"
+
+    assert transport.calls == []
 
 
 def test_a_redirect_uri_the_device_did_not_use_is_refused(
@@ -849,9 +975,18 @@ def test_an_unknown_kid_flood_cannot_amplify_into_outbound_requests(
     assert len(transport.calls) == 1
 
 
-def test_a_failed_refresh_does_not_discard_the_working_key_set(
+def test_an_identity_provider_outage_does_not_break_a_login_on_a_held_key(
     db_session, signing_key, transport
 ):
+    """The availability half of holding a verifier for the process lifetime.
+
+    A key set that had to be re-fetched per exchange would make every login
+    depend on the identity provider being reachable at that instant. The held
+    verifier's cache is what turns a provider outage into a degraded service
+    rather than a total one, and the only way to see it is to break the
+    transport after the keys are warm.
+    """
+
     configure_federation(db_session)
     binding = install_oidc_binding(db_session)
     bind_field_technician(db_session, binding)
@@ -867,34 +1002,24 @@ def test_a_failed_refresh_does_not_discard_the_working_key_set(
     assert _exchange(db_session, started.ceremony_id, token).access_token
 
 
-def test_an_absent_kid_never_costs_an_outbound_request(db_session, signing_key):
-    from app.services.oidc_mobile_config import OidcMobileFederationConfig
+def test_an_absent_kid_never_costs_an_outbound_request(
+    db_session, signing_key, transport
+):
+    """A token that names no signing key is unaddressable, so it buys nothing.
 
-    recording = RecordingTransport([signing_key.public_jwk])
-    previous = jwks.install_transport(recording)
-    jwks.reset_cache()
-    try:
-        config = OidcMobileFederationConfig(
-            issuer=ISSUER,
-            client_id=CLIENT_ID,
-            redirect_uri=REDIRECT_URI,
-            audience=AUDIENCE,
-            binding_key="k",
-            deployment_id="d",
-            jwks_source="static_uri",
-            jwks_uri="https://idp.test.invalid/certs",
-            jwks_min_refresh_seconds=300,
-            jwks_timeout_seconds=5,
-            ceremony_ttl_seconds=300,
-            clock_skew_seconds=60,
-            max_assertion_age_seconds=300,
-        )
-        assert jwks.signing_key(config, None) is None
-        assert jwks.signing_key(config, "") is None
-        assert recording.calls == []
-    finally:
-        jwks.install_transport(previous)
-        jwks.reset_cache()
+    Driven through the real exchange rather than by calling a key resolver
+    directly: the claim is about what an unauthenticated caller can make Sub do
+    outbound, and only the endpoint that caller reaches can answer it.
+    """
+
+    configure_federation(db_session)
+    started = _start(db_session)
+    token = sign_without_kid(signing_key, assertion_claims(started.nonce))
+
+    with pytest.raises(federation.OidcFederationRefused) as exc:
+        _exchange(db_session, started.ceremony_id, token)
+    assert _refusal(exc) == "assertion_invalid"
+    assert transport.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +1062,56 @@ def test_a_static_jwks_source_without_a_uri_is_incomplete(db_session, transport)
     with pytest.raises(OidcFederationConfigError) as exc:
         _start(db_session)
     assert "oidc_mobile_jwks_uri" in exc.value.details["missing_settings"]
+
+
+def test_discovery_and_a_static_jwks_uri_cannot_both_be_configured(
+    db_session, transport
+):
+    """The verifier's two key sources are exclusive, so Sub refuses the pair.
+
+    This combination used to be resolved silently in discovery's favour, which
+    is the failure worth naming: an operator could see `oidc_mobile_jwks_uri`
+    set, believe it was in force, and have every key actually come from the
+    well-known document. Preferring one is what made it invisible.
+    """
+
+    configure_federation(
+        db_session,
+        overrides={"oidc_mobile_jwks_source": "discovery"},
+    )
+
+    with pytest.raises(OidcFederationConfigError) as exc:
+        _start(db_session)
+    assert exc.value.details["mismatched_settings"] == [
+        "oidc_mobile_jwks_source",
+        "oidc_mobile_jwks_uri",
+    ]
+
+
+def test_a_discovery_source_reaches_the_well_known_document(
+    db_session, signing_key, transport
+):
+    """The sensitivity half: `discovery` must be a working source, not a hole.
+
+    A test that only ever proves the refusal above would pass just as well if
+    `discovery` had stopped resolving keys altogether.
+    """
+
+    configure_federation(
+        db_session,
+        overrides={"oidc_mobile_jwks_source": "discovery", "oidc_mobile_jwks_uri": ""},
+    )
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    db_session.commit()
+
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+    assert _exchange(db_session, started.ceremony_id, token).access_token
+    # Discovery costs one extra call, and exactly one: the document names the
+    # key set, and both are then held for the process.
+    assert transport.calls[0].endswith("/.well-known/openid-configuration")
+    assert len(transport.calls) == 2
 
 
 def test_the_assertion_audience_must_equal_the_public_client_id(db_session, transport):

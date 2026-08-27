@@ -90,8 +90,8 @@ names the *wrong* identity rather than a weaker one.
 | `oidc_mobile_audience` | `OIDC_MOBILE_AUDIENCE` | no | —; must exactly equal `oidc_mobile_client_id` |
 | `oidc_mobile_binding_key` | `OIDC_MOBILE_BINDING_KEY` | no | — |
 | `oidc_mobile_deployment_id` | `OIDC_MOBILE_DEPLOYMENT_ID` | no | — |
-| `oidc_mobile_jwks_source` | `OIDC_MOBILE_JWKS_SOURCE` | yes | `discovery` |
-| `oidc_mobile_jwks_uri` | `OIDC_MOBILE_JWKS_URI` | no | — |
+| `oidc_mobile_jwks_source` | `OIDC_MOBILE_JWKS_SOURCE` | yes | `discovery`; exclusive with `oidc_mobile_jwks_uri` |
+| `oidc_mobile_jwks_uri` | `OIDC_MOBILE_JWKS_URI` | no | —; required by, and only valid with, `static_uri` |
 | `oidc_mobile_jwks_min_refresh_seconds` | `OIDC_MOBILE_JWKS_MIN_REFRESH_SECONDS` | yes | `300` |
 | `oidc_mobile_jwks_timeout_seconds` | `OIDC_MOBILE_JWKS_TIMEOUT_SECONDS` | yes | `5` |
 | `oidc_mobile_ceremony_ttl_seconds` | `OIDC_MOBILE_CEREMONY_TTL_SECONDS` | yes | `300` |
@@ -137,33 +137,94 @@ It has no `owner_module`. Federated login is an authentication mechanism, not
 an optional product module, and gating it behind a module toggle would make
 disabling that module silently disable a login path.
 
+## Who verifies the assertion
+
+Sub does not. `dotmac-auth-oidc` (`NativeIDTokenVerifier`, pinned exactly at
+`0.1.0a2`) owns ID-token verification whole, and Sub re-checks none of it. The
+package is the right owner because the same protocol core has to serve every
+Dotmac relying party; a Sub-local copy would be the copy that misses the next
+fix, and the two would disagree silently because only one of them decides.
+
+`app/services/oidc_mobile_verifier.py` is all that remains on Sub's side: it
+translates Sub's deployment settings into the package's registration and holds
+**one verifier per registration for the process lifetime**. The lifetime is not
+an optimisation. The verifier's `ProviderCache` *is* the bound on outbound
+requests, so a verifier rebuilt per request would start empty every time and
+turn an unauthenticated endpoint into an amplifier pointed at the identity
+provider. The registration key is the complete tuple of trusted values, so an
+operator who repoints the key source gets a new verifier with a new cache
+rather than a stale one answering under new settings.
+
+Sub keeps its own settings; they reach the package here and nowhere else:
+
+| Sub setting | Package argument |
+| --- | --- |
+| `oidc_mobile_issuer` | `PublicNativeClientConfig.issuer` |
+| `oidc_mobile_client_id` (`= oidc_mobile_audience`) | `PublicNativeClientConfig.client_id` |
+| `oidc_mobile_max_assertion_age_seconds` | `PublicNativeClientConfig.max_token_age_seconds` |
+| `oidc_mobile_clock_skew_seconds` | `PublicNativeClientConfig.leeway_seconds` |
+| `oidc_mobile_jwks_source` = `static_uri` + `oidc_mobile_jwks_uri` | `PublicNativeClientConfig.jwks_uri` |
+| `oidc_mobile_jwks_source` = `discovery` | neither override; the package derives the well-known URL from the issuer |
+| `oidc_mobile_jwks_timeout_seconds` | `NativeIDTokenVerifier(timeout=…)` |
+| `oidc_mobile_jwks_min_refresh_seconds` | `NativeIDTokenVerifier(jwks_min_refetch=…)` |
+
+The package's two key sources are **mutually exclusive**, so Sub refuses a
+deployment that configures both instead of preferring one. That combination
+used to be resolved silently in discovery's favour, which is the failure worth
+naming: an operator could see `oidc_mobile_jwks_uri` set, believe it was in
+force, and have every key actually come from the well-known document.
+
 ## Admission: the conjunction, with no partial credit
 
 1. Ceremony exists, is unexpired, and is unused (`SELECT … FOR UPDATE`, re-read
    under the lock).
-2. Algorithm is asymmetric and exactly allowed — `RS256`. Checked from the
-   header **before** a key is looked up, so `alg: none` never reaches key
-   resolution and cannot even cost an outbound request. `none` and the HMAC
-   family are not weaker configurations, so the allowlist is code, not a
-   setting.
-3. Signature verifies against the pinned issuer's JWKS.
-4. `iss` equals the pinned issuer (checked by the library and again by hand —
-   it is the one claim worth checking twice).
-5. `aud` contains the configured audience, which the boot/configuration gate
-   requires to equal the public application client id.
-6. `azp` equals the configured client **when `aud` is multi-valued**. Without
-   this, an assertion minted for a different client that happens to list our
-   audience would be admitted.
-7. `exp`, `nbf`, and an `iat` that is not implausibly old. `exp` alone is the
-   identity provider's opinion of freshness; `oidc_mobile_max_assertion_age_seconds`
-   is Sub's.
-8. The token's `nonce` matches the ceremony's stored hash, compared with
-   `hmac.compare_digest`. A byte-by-byte comparison leaks how much of a guessed
-   nonce was right, and the nonce is the anti-replay binding.
-9. Every pinned binding — ceremony, client, redirect, deployment — matches for
-   exact equality.
-10. The verified subject has exactly one **active** credential against the
-    installed verifier, and it resolves to an eligible staff principal.
+2. Every pinned binding — ceremony, client, redirect, deployment — matches for
+   exact equality. Settled from local rows **before** the assertion is
+   verified, so a ceremony that was never going to be admitted cannot buy an
+   outbound request to the identity provider.
+3. `NativeIDTokenVerifier.verify` accepts the assertion, which is the whole of:
+   * the algorithm is exactly `RS256`, checked from the header **before** a key
+     is looked up, so `alg: none` and the HMAC family never reach key
+     resolution and cannot even cost an outbound request. They are not weaker
+     configurations, so the allowlist is the package's module-level constant
+     and not a setting — `ALLOWED_ID_TOKEN_ALGORITHMS` is *bound* to it rather
+     than restated;
+   * the token names a `kid`, and the JWK found for it declares `use: sig`,
+     permits `verify`, and declares no algorithm other than the token's;
+   * the signature verifies against the pinned issuer's key set;
+   * `iss` exactly equals the pinned issuer;
+   * `aud` contains the registered client — which the configuration gate
+     requires `oidc_mobile_audience` to equal — and `azp` equals it whenever
+     `aud` is multi-valued. Without that, an assertion minted for a different
+     client that happens to list our audience would be admitted;
+   * `exp`, `nbf` and `iat` with `oidc_mobile_clock_skew_seconds` of leeway,
+     plus `oidc_mobile_max_assertion_age_seconds` applied in **both**
+     directions. `exp` alone is the identity provider's opinion of freshness;
+     the age bound is Sub's;
+   * the token's `nonce` matches this ceremony's stored digest, compared in
+     constant time. A byte-by-byte comparison would leak how much of a guessed
+     nonce was right, and the nonce is the anti-replay binding.
+4. The verified subject has exactly one **active** credential against the
+   installed verifier, and it resolves to an eligible staff principal.
+
+Step 3 runs **inside** the ceremony's lock. Two properties follow, and both are
+the reason for the ordering: every refusal burns the ceremony, verification
+refusals included; and a ceremony that is already refusable is settled without
+an outbound request. Before the verifier moved into the package, verification
+ran ahead of the lock, so a bad signature left the row redeemable and a caller
+holding a forged assertion could keep firing at a live ceremony. That was an
+artifact of ordering rather than a decision, and it is now closed.
+
+### The nonce never leaves as plaintext
+
+The ceremony persists `sha256_hex(nonce)` and never the nonce, and the digest
+is produced by `NonceBinding.from_plaintext(...).sha256_hex` — the verifier's
+own class — rather than by a local hash that happens to agree with it. The
+exchange restores the binding with `NonceBinding.from_sha256_hex(nonce_hash)`,
+which accepts exactly 64 lowercase hex characters. A digest stored in any other
+shape would not be a weaker match; it would be a ceremony no nonce can ever
+redeem. Deriving the stored value from the class that later validates it
+removes the gap instead of documenting it.
 
 Then, in this order: burn the ceremony and resolve the principal (one owner
 command, which commits), then mint the session through
@@ -212,16 +273,21 @@ without a restart. It is also a free amplifier: an unauthenticated caller
 chooses the `kid`, and a resolver that refreshes whenever it does not recognise
 one turns each such request into an outbound request to the identity provider.
 
-The bound has three independent parts:
+The bound now lives in the package's `ProviderCache`, and Sub's contribution is
+to keep it reachable and to supply the number:
 
-* **At most one fetch per resolution.** No retry loop. A failed refresh answers
-  "no key" and the exchange refuses.
-* **A minimum interval between *attempts*, not between successes.** The stamp
-  moves before the fetch and moves whether it succeeds or fails. Stamping only
-  on success would leave a permanently failing identity provider being polled
-  by every request.
+* **The forced refetch is rate-limited.** A `kid` the cache does not hold buys
+  at most one upstream request per `oidc_mobile_jwks_min_refresh_seconds`, and
+  the interval is measured between *attempts* rather than successes — so a
+  permanently failing identity provider is not polled once per hostile token.
+  Sub passes the setting explicitly; a verifier built without it would silently
+  run the package default, and no single-request test would notice.
 * **The working key set survives a failed refresh.** An outage does not
   invalidate keys that are still valid.
+* **The cache must survive the request**, which is what
+  `app/services/oidc_mobile_verifier.py` exists to guarantee. This is the half
+  Sub can still get wrong on its own: the bound is correct in the package and
+  worthless if the object holding it is rebuilt per exchange.
 
 The cache is per process, deliberately not shared through Redis: a JWKS is
 small, cheap to re-fetch and public, and sharing it would add a cross-process
@@ -242,7 +308,32 @@ Events: `oidc_mobile_ceremony.started`, `oidc_mobile_assertion.admitted`
 
 `reason` comes from a **closed** vocabulary (`REFUSAL_REASONS`); a category
 outside it cannot be emitted, which is what stops a future refusal carrying a
-subject or a token fragment "just for debugging". Nothing on this path — log
+subject or a token fragment "just for debugging". Verification refusals are
+mapped from the package's exception **class**, never from its message text: the
+class is the package's stable contract, while the message is prose it is free
+to reword and is one mistake away from becoming a caller-visible detail.
+
+| Package exception | `reason` |
+| --- | --- |
+| `UnsupportedAlgorithmError` | `algorithm_not_allowed` |
+| `NonceMismatchError` | `nonce_mismatch` |
+| `IDTokenError` (any other) | `assertion_invalid` |
+| `JWKSError` | `signing_key_unknown` |
+| `DiscoveryError` (incl. `IssuerMismatchError`) | `provider_unavailable` |
+| `ConfigurationError`, any other `OIDCError` | `provider_unavailable` |
+
+The vocabulary is **shorter** than it was, and that is the honest outcome
+rather than a loss. `signature_invalid`, `issuer_mismatch`,
+`audience_mismatch`, `authorized_party_mismatch`, `assertion_expired`,
+`assertion_not_yet_valid`, `assertion_too_old`, `subject_missing`,
+`nonce_missing` and `malformed_assertion` were ten names for one decision the
+verifier now makes as a unit. Keeping ten labels over a distinction Sub can no
+longer observe would mean either inventing the difference from a message string
+or declaring categories that never fire — and a declared category nothing emits
+is exactly what the closed vocabulary exists to forbid. `provider_unavailable`
+is new and stays separate from `verifier_unavailable`: one says the identity
+provider could not answer, the other says an operator switched Sub's own
+verifier binding off. Nothing on this path — log
 line, metric label, event payload, audit record or error detail — carries a
 token, an authorization code, a PKCE verifier, a nonce, an external subject, a
 key id or an email, truncated or otherwise. A truncated identifier is still an
