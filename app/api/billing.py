@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Never
 from uuid import UUID
@@ -122,6 +122,8 @@ from app.schemas.billing import (
     PaymentProviderEventRead,
     PaymentProviderRead,
     PaymentRead,
+    PaymentReferenceReconcileRead,
+    PaymentReferenceReconcileRequest,
     PaymentRefundPreviewRead,
     PaymentRefundPreviewRequest,
     PaymentRefundRead,
@@ -160,6 +162,11 @@ from app.services.payment_provider_events import (
     PaymentProviderEventQuery,
     ProviderEventOrderBy,
     ProviderEventOrderDirection,
+)
+from app.services.payment_reconciliation import (
+    RECONCILIATION_SCOPE,
+    ReconcileTopupReferenceCommand,
+    reconcile_topup_reference,
 )
 from app.services.response import list_response as build_list_response
 from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
@@ -1260,7 +1267,54 @@ def list_payment_providers(
 # --- Payment Events ---
 
 
+@router.post(
+    "/payment-events/reconcile-reference",
+    response_model=PaymentReferenceReconcileRead,
+    tags=["payment-events"],
+)
+def reconcile_payment_reference(
+    payload: PaymentReferenceReconcileRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:provider:write")),
+) -> PaymentReferenceReconcileRead:
+    """Verify one trusted reference notification against the gateway."""
+
+    actor_type, actor_id = _financial_actor(principal)
+    if actor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Financial principal identity is incomplete.",
+        )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        result = reconcile_topup_reference(
+            db,
+            ReconcileTopupReferenceCommand(
+                provider_type=payload.provider_type,
+                reference=payload.reference,
+                observed_at=datetime.now(UTC),
+            ),
+            context=CommandContext.system(
+                actor=f"{actor_type.value}:{actor_id}",
+                scope=RECONCILIATION_SCOPE,
+                reason="Reconcile ERP-notified Paystack reference",
+                idempotency_key=f"erp-paystack-notice:{payload.reference}",
+            ),
+        )
+    except DomainError as exc:
+        _payment_provider_event_error(exc)
+    return PaymentReferenceReconcileRead(
+        intent_id=result.intent_id,
+        disposition=result.disposition.value,
+        payment_id=result.payment_id,
+    )
+
+
 def _payment_provider_event_error(exc: DomainError) -> Never:
+    if exc.code == "financial.payment_reconciliation.reference_not_found":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message)
+    if exc.code == "financial.payment_reconciliation.reference_ambiguous":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message)
     suffix = exc.code.removeprefix("financial.payment_provider_events.")
     status_code = {
         "provider_not_found": status.HTTP_404_NOT_FOUND,

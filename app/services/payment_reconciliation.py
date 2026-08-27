@@ -113,6 +113,15 @@ class RunTopupReconciliationCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ReconcileTopupReferenceCommand:
+    """Request immediate verification of one provider reference."""
+
+    provider_type: PaymentProviderType
+    reference: str
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class TopupReconciliationCandidate:
     """Immutable identity passed across the external observation boundary."""
 
@@ -656,6 +665,90 @@ def _reconciliation_candidates(
             reference=row.reference,
         )
         for row in rows
+    )
+
+
+def reconcile_topup_reference(
+    db: Session,
+    command: ReconcileTopupReferenceCommand,
+    *,
+    context: CommandContext,
+) -> ReconciledTopupResult:
+    """Verify and reconcile one notified reference through the canonical owners."""
+
+    reference = command.reference.strip()
+    if not reference:
+        raise _error("reference_invalid", "Payment reference is required")
+    provider_type = parse_supported_provider_type(command.provider_type.value)
+    rows = db.execute(
+        select(TopupIntent.id, TopupIntent.provider_type, TopupIntent.reference)
+        .where(TopupIntent.reference == reference)
+        .where(TopupIntent.provider_type == provider_type.value)
+        .limit(2)
+    ).all()
+    if not rows:
+        raise _error(
+            "reference_not_found",
+            "No top-up intent matches the provider reference",
+            provider_reference=reference,
+        )
+    if len(rows) != 1:
+        raise _error(
+            "reference_ambiguous",
+            "More than one top-up intent matches the provider reference",
+            provider_reference=reference,
+        )
+    row = rows[0]
+    candidate = TopupReconciliationCandidate(
+        intent_id=row.id,
+        provider_type=parse_supported_provider_type(row.provider_type),
+        reference=row.reference,
+    )
+    observed_at = _as_utc(command.observed_at)
+    observation = payment_gateway_adapter.observe_verification(
+        db,
+        provider_type=candidate.provider_type.value,
+        reference=candidate.reference,
+    )
+    db_session_adapter.release_read_transaction(db)
+    if observation.outcome is PaymentGatewayVerificationOutcome.succeeded:
+        if observation.transaction is None:
+            raise _error(
+                "observation_incomplete",
+                "Successful gateway observation omitted transaction evidence",
+                intent_id=str(candidate.intent_id),
+            )
+        return settle_verified_reconciled_topup(
+            db,
+            ReconcileVerifiedTopupCommand(
+                candidate=candidate,
+                transaction=observation.transaction,
+                observed_at=observed_at,
+            ),
+            context=_candidate_context(
+                context,
+                candidate,
+                scope=VERIFIED_SETTLEMENT_SCOPE,
+                reason="Settle explicitly notified verified top-up",
+            ),
+        )
+    return record_reconciled_gateway_observation(
+        db,
+        ReconcileGatewayObservationCommand(
+            candidate=candidate,
+            observation=observation,
+            observed_at=observed_at,
+            source=GatewayTopupObservationSource.gateway_reconciliation,
+        ),
+        context=_candidate_context(
+            context,
+            candidate,
+            scope=GATEWAY_OBSERVATION_SCOPE,
+            reason="Project explicitly notified gateway observation",
+            idempotency_suffix=(
+                f"{observation.outcome.value}-{int(observed_at.timestamp())}"
+            ),
+        ),
     )
 
 

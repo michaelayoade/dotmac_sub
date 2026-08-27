@@ -48,7 +48,7 @@ late success can complete those states. Provider transaction identity and existi
 payment/event idempotency constraints ensure webhook and reconciliation replay
 settle exactly once.
 
-The production Paystack webhook URL is:
+The preferred direct production Paystack webhook URL is:
 
 ```text
 https://selfcare.dotmac.io/api/v1/payment-events/paystack
@@ -64,6 +64,15 @@ and is resolved by the Paystack integration binding.
 Paystack owns delivery configuration. A Sub deployment can expose and verify
 the endpoint, but it cannot prove that the live Paystack account is configured
 to send events without signed delivery evidence.
+
+When the merchant account permits only the existing ERP webhook destination,
+ERP may act as a verified notification relay. ERP must validate Paystack's
+signature over the original body and send only the provider type and reference
+to the authenticated `POST /api/v1/payment-events/reconcile-reference` route.
+Sub then verifies that reference directly with Paystack and remains the sole
+owner of payment, allocation, balance, subscription, and access consequences.
+The ERP notice is a wake-up signal, not financial evidence, and a failed relay
+must return a retryable error to Paystack.
 
 ## Safe endpoint check
 

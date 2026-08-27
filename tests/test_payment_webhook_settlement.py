@@ -49,8 +49,10 @@ from app.services.payment_gateway_adapter import (
 )
 from app.services.payment_reconciliation import (
     RECONCILIATION_SCOPE,
+    ReconcileTopupReferenceCommand,
     RunTopupReconciliationCommand,
     reconcile_pending_topups,
+    reconcile_topup_reference,
     topup_reconciliation_backlog,
 )
 from app.services.settings_cache import SettingsCache
@@ -725,6 +727,52 @@ def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
     db_session.refresh(intent)
     assert intent.status == "completed"
     assert intent.completed_payment_id == payment.id
+
+
+def test_notified_reference_is_reconciled_without_waiting_for_stale_sweep(
+    db_session, subscriber
+):
+    _make_provider(db_session)
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="DMAC-ERP-NOTICE-1",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="NGN",
+                external_id="erp-notice-transaction-1",
+                memo_prefix="Paystack",
+            )
+        ),
+    ):
+        result = reconcile_topup_reference(
+            db_session,
+            ReconcileTopupReferenceCommand(
+                provider_type=PaymentProviderType.paystack,
+                reference=intent.reference,
+                observed_at=datetime.now(UTC),
+            ),
+            context=CommandContext.system(
+                actor="pytest",
+                scope=RECONCILIATION_SCOPE,
+                reason="Test ERP-notified reference",
+            ),
+        )
+
+    assert result.intent_id == intent.id
+    assert result.payment_id is not None
 
 
 def test_reconciliation_routes_typed_deposit_through_deposit_owner(

@@ -1363,6 +1363,19 @@ class PaymentProviderEventBase(BaseModel):
     processed_at: datetime | None = None
 
 
+class PaymentReferenceReconcileRequest(BaseModel):
+    """Trusted wake-up notice; settlement is still verified with the gateway."""
+
+    provider_type: PaymentProviderType = PaymentProviderType.paystack
+    reference: str = Field(min_length=1, max_length=160)
+
+
+class PaymentReferenceReconcileRead(BaseModel):
+    intent_id: UUID
+    disposition: str
+    payment_id: UUID | None = None
+
+
 class PaymentProviderEventCreate(PaymentProviderEventBase):
     pass
 
