@@ -16,14 +16,21 @@ import 'package:flutter_test/flutter_test.dart';
 /// app compiles in. `scripts/check_field_applinks.py` runs the wider
 /// cross-artifact version of this in CI (it also reaches the association
 /// documents under `deploy/links.dotmac.io/`, which live outside this package).
+/// Reads a declaration file with its XML comments removed.
+///
+/// Each of these files carries a comment explaining why a particular shape is
+/// forbidden -- and such a comment necessarily NAMES the forbidden shape. A
+/// scan over the raw text reads its own explanation as the defect it
+/// describes, so `isNot(contains('CFBundleURLTypes'))` would fail on the very
+/// comment saying there must not be one. Strip first, then assert.
+String _declarations(String path) => File(
+  path,
+).readAsStringSync().replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+
 void main() {
-  final manifest = File(
-    'android/app/src/main/AndroidManifest.xml',
-  ).readAsStringSync();
-  final entitlements = File(
-    'ios/Runner/Runner.entitlements',
-  ).readAsStringSync();
-  final infoPlist = File('ios/Runner/Info.plist').readAsStringSync();
+  final manifest = _declarations('android/app/src/main/AndroidManifest.xml');
+  final entitlements = _declarations('ios/Runner/Runner.entitlements');
+  final infoPlist = _declarations('ios/Runner/Info.plist');
   final pbxproj = File(
     'ios/Runner.xcodeproj/project.pbxproj',
   ).readAsStringSync();
@@ -107,6 +114,16 @@ void main() {
       ).allMatches(entitlements).map((m) => m.group(1)!).toList();
       expect(domains, hasLength(1));
       expect(domains.single, isNot(contains('*')));
+    });
+
+    test('the comment stripper is load-bearing', () {
+      // A check over already-clean text passes for the wrong reason. These
+      // files DO name the forbidden shapes in their comments, so the stripper
+      // must actually be removing something -- otherwise the assertion below
+      // is running against the raw text and would fail.
+      final raw = File('ios/Runner/Info.plist').readAsStringSync();
+      expect(raw, contains('CFBundleURLTypes'));
+      expect(infoPlist, isNot(contains('CFBundleURLTypes')));
     });
 
     test('declares no custom URL scheme', () {
