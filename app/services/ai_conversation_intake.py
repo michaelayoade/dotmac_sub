@@ -2601,6 +2601,9 @@ def _process_one_session(
         and outcome.classification.requires_follow_up
     )
     if should_deliver_follow_up:
+        delivery_question = " ".join(str(follow_up_question or "").split())
+        if not delivery_question:
+            delivery_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
         metadata.setdefault("ai_intake_engine_action", "continue_classifier")
         metadata.setdefault("ai_intake_engine_reason", "legacy_classifier_path")
         inbound.metadata_ = metadata
@@ -2608,7 +2611,7 @@ def _process_one_session(
             db,
             conversation=conversation,
             payload=team_inbox_outbound.AiIntakeFollowUpPayload(
-                question=follow_up_question,
+                question=delivery_question,
                 inbound_message_id=inbound.id,
                 config_id=outcome.config_id,
                 follow_up_count=outcome.follow_up_count,
