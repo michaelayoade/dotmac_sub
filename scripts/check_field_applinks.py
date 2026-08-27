@@ -79,7 +79,9 @@ def read_json(report: Report, path: pathlib.Path):
         return None
 
 
-def dart_default(report: Report, source: str, name: str, path: pathlib.Path) -> str | None:
+def dart_default(
+    report: Report, source: str, name: str, path: pathlib.Path
+) -> str | None:
     """Extract `const String <name> = String.fromEnvironment(..., defaultValue: X)`."""
     literal = re.search(
         rf"const String {name} = String\.fromEnvironment\(\s*'[A-Z0-9_]+',\s*"
@@ -87,12 +89,16 @@ def dart_default(report: Report, source: str, name: str, path: pathlib.Path) -> 
         source,
     )
     if not literal:
-        report.check(False, f"{path}: no String.fromEnvironment default found for {name}")
+        report.check(
+            False, f"{path}: no String.fromEnvironment default found for {name}"
+        )
         return None
     const_name = literal.group(1)
     value = re.search(rf"const String {const_name} = '([^']*)';", source)
     if not value:
-        report.check(False, f"{path}: {name}'s default {const_name} has no string literal")
+        report.check(
+            False, f"{path}: {name}'s default {const_name} has no string literal"
+        )
         return None
     return value.group(1)
 
@@ -121,7 +127,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    root = pathlib.Path(args.repo_root or pathlib.Path(__file__).resolve().parent.parent)
+    root = pathlib.Path(
+        args.repo_root or pathlib.Path(__file__).resolve().parent.parent
+    )
     app = root / args.app_dir
     origin_dir = root / args.origin_dir
     site = origin_dir / "site"
@@ -214,7 +222,15 @@ def check_android_manifest(
     if not path.exists():
         r.check(False, f"missing: {path}")
         return None
-    tree = ET.parse(path)
+    # S314 exemption. The enforceable premise: `path` is always a
+    # repository-tracked file resolved from this script's own location
+    # (see REPO_ROOT), never network input and never operator-supplied.
+    # An attacker able to rewrite AndroidManifest.xml already controls the
+    # tree this gate reads. defusedxml is NOT used deliberately: CI invokes
+    # this script as bare `python3` in the Flutter jobs, with no project
+    # virtualenv, so a third-party import would crash the gate rather than
+    # harden it.
+    tree = ET.parse(path)  # noqa: S314
     root = tree.getroot()
 
     def attr(node, name):
@@ -295,10 +311,7 @@ def check_android_manifest(
     # Flutter's engine only forwards the link into the Dart router when this is
     # set; without it the filter verifies and the link still never reaches the
     # coordinator.
-    flags = {
-        attr(m, "name"): attr(m, "value")
-        for m in root.iter("meta-data")
-    }
+    flags = {attr(m, "name"): attr(m, "value") for m in root.iter("meta-data")}
     r.check(
         flags.get("flutter_deeplinking_enabled") == "true",
         f'{path}: flutter_deeplinking_enabled must be "true" so a verified link '
@@ -527,8 +540,16 @@ def check_aasa(
     if isinstance(components, list):
         for component in components:
             r.check(
-                set(component) <= {"/", "?", "#", "comment", "exclude", "caseSensitive",
-                                   "percentEncoded"},
+                set(component)
+                <= {
+                    "/",
+                    "?",
+                    "#",
+                    "comment",
+                    "exclude",
+                    "caseSensitive",
+                    "percentEncoded",
+                },
                 f"{path}: unexpected keys in a components entry: {sorted(component)}",
             )
             r.check(
@@ -627,9 +648,13 @@ def finish(r: Report, args) -> int:
     if r.failures:
         for failure in r.failures:
             print(f"::error::{failure}")
-        print(f"\nFAILED: {len(r.failures)} problem(s) with the verified redirect boundary.")
+        print(
+            f"\nFAILED: {len(r.failures)} problem(s) with the verified redirect boundary."
+        )
         return 1
-    mode = "release/publish (placeholders rejected)" if args.require_real else "structural"
+    mode = (
+        "release/publish (placeholders rejected)" if args.require_real else "structural"
+    )
     print(f"Verified redirect boundary OK [{mode}].")
     return 0
 
