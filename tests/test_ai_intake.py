@@ -149,6 +149,50 @@ def test_exact_account_and_channel_config_wins_over_default(db_session):
     assert resolved.confidence_threshold == 0.9
 
 
+def test_meta_social_inbound_provider_matches_canonical_connector_scope(db_session):
+    exact = _config(
+        db_session,
+        scope_key="meta.social:ig-1",
+        channel_type="instagram_dm",
+        confidence_threshold=0.91,
+    )
+
+    resolved = ai_intake.resolve_config(
+        db_session,
+        _request(
+            channel_type="instagram_dm",
+            provider="meta_social",
+            account_scope="ig-1",
+        ),
+    )
+
+    assert resolved is not None
+    assert resolved.id == exact.id
+    assert resolved.confidence_threshold == 0.91
+
+
+def test_canonical_meta_social_provider_still_matches_legacy_scope(db_session):
+    exact = _config(
+        db_session,
+        scope_key="meta_social:ig-1",
+        channel_type="instagram_dm",
+        confidence_threshold=0.82,
+    )
+
+    resolved = ai_intake.resolve_config(
+        db_session,
+        _request(
+            channel_type="instagram_dm",
+            provider="meta.social",
+            account_scope="ig-1",
+        ),
+    )
+
+    assert resolved is not None
+    assert resolved.id == exact.id
+    assert resolved.confidence_threshold == 0.82
+
+
 def test_campaign_attribution_is_excluded_when_configured(db_session, monkeypatch):
     _config(db_session)
     gateway = _Gateway(_classification())
