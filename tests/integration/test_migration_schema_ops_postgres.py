@@ -245,7 +245,7 @@ def test_declared_precreated_module_schema_create_is_skipped(
     """A restricted migrator must not need database CREATE for this no-op."""
 
     connection = guarded_ops
-    connection.exec_driver_sql('CREATE SCHEMA "mod_payments"')
+    connection.exec_driver_sql('CREATE SCHEMA IF NOT EXISTS "mod_payments"')
 
     def fail_if_delegated(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("raw CREATE SCHEMA was delegated instead of skipped")
