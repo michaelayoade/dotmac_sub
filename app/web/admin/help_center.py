@@ -39,7 +39,7 @@ def _article_matches(article: HelpArticle, *, query: str, category: str) -> bool
 
 
 def _group_articles(articles: list[HelpArticle]) -> list[dict[str, object]]:
-    categories = []
+    categories: list[dict[str, object]] = []
     for category in sorted({article.category for article in ARTICLES}):
         category_articles = [
             article for article in articles if article.category == category
