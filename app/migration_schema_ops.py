@@ -65,7 +65,7 @@ __all__ = [
 _DECLARED_SCHEMA_CREATE = re.compile(
     r"""
     \A\s*
-    CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+
+    CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?
     (?:
         " (?P<quoted> [^"]+ ) "
         |
@@ -89,7 +89,7 @@ def _statement_text(statement: Any) -> str | None:
 
 
 def declared_idempotent_schema_create_target(statement: Any) -> str | None:
-    """Return the declared ``mod_*`` schema a raw idempotent create targets."""
+    """Return the declared ``mod_*`` schema a raw schema create targets."""
 
     text = _statement_text(statement)
     if text is None:

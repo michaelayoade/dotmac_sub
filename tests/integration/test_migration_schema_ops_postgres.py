@@ -230,8 +230,17 @@ def test_a_missing_schema_does_not_report_phantom_objects(guarded_ops) -> None:
     assert not constraint_exists(SHARED_NAME, "uq_guard_canary", "mod_does_not_exist")
 
 
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "CREATE SCHEMA IF NOT EXISTS mod_payments;",
+        "CREATE SCHEMA mod_payments;",
+        'CREATE SCHEMA "mod_payments";',
+        "CREATE SCHEMA mod_payments AUTHORIZATION dotmac_app;",
+    ),
+)
 def test_declared_precreated_module_schema_create_is_skipped(
-    guarded_ops, monkeypatch: pytest.MonkeyPatch
+    guarded_ops, monkeypatch: pytest.MonkeyPatch, statement: str
 ) -> None:
     """A restricted migrator must not need database CREATE for this no-op."""
 
@@ -244,4 +253,4 @@ def test_declared_precreated_module_schema_create_is_skipped(
     monkeypatch.setattr(op, "execute", fail_if_delegated)
     install_idempotent_schema_ops()
 
-    assert op.execute("CREATE SCHEMA IF NOT EXISTS mod_payments;") is None
+    assert op.execute(statement) is None
