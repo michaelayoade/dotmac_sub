@@ -204,7 +204,7 @@ def test_main_must_contain_the_staged_source_as_the_identical_tree() -> None:
     )
 
 
-def test_main_authorization_must_be_a_distinct_release_commit() -> None:
+def test_main_only_release_authorizes_the_staged_source_commit() -> None:
     main = _main()
     outcome = evaluate_production_eligibility(
         ReleaseCandidateRecord(
@@ -220,9 +220,8 @@ def test_main_authorization_must_be_a_distinct_release_commit() -> None:
         )
     )
 
-    assert outcome.blockers == (
-        ProductionEligibilityBlocker.SOURCE_AND_RELEASE_REVISION_MATCH,
-    )
+    assert outcome.approved
+    assert outcome.blockers == ()
 
 
 def test_non_green_source_staging_and_main_evidence_all_block() -> None:

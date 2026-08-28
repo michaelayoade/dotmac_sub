@@ -85,7 +85,7 @@ class GitCommitSha:
 
 @dataclass(frozen=True, slots=True)
 class GitTreeSha:
-    """Content identity used to prove dev and main contain the same tree."""
+    """Content identity used to prove staged source and release match."""
 
     value: str
 
@@ -228,7 +228,6 @@ class ProductionEligibilityBlocker(str, Enum):
     MAIN_CI_NOT_GREEN = "main_ci_not_green"
     MAIN_TREE_MISMATCH = "main_tree_mismatch"
     SOURCE_REVISION_NOT_IN_MAIN = "source_revision_not_in_main"
-    SOURCE_AND_RELEASE_REVISION_MATCH = "source_and_release_revision_match"
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,10 +277,6 @@ def evaluate_production_eligibility(
             blockers.append(ProductionEligibilityBlocker.MAIN_TREE_MISMATCH)
         if not main.source_revision_is_ancestor:
             blockers.append(ProductionEligibilityBlocker.SOURCE_REVISION_NOT_IN_MAIN)
-        if main.release_revision == artifact.source_revision:
-            blockers.append(
-                ProductionEligibilityBlocker.SOURCE_AND_RELEASE_REVISION_MATCH
-            )
 
     return ProductionEligibilityOutcome(
         candidate=candidate,
