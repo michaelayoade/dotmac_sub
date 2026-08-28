@@ -667,10 +667,23 @@ jobs:
           INTEGRATION_RESULT: ${{ needs.integration-run.result }}
         run: test "$INTEGRATION_RESULT" = "success"
 
+  # Depends on `changes` ALONE, deliberately.
+  #
+  # This job checks the repository out itself and starts its own ci-db and
+  # ci-redis. It consumes no artifact, image, database or output from any test
+  # lane, so the previous `needs:` list bought nothing but sequencing -- roughly
+  # three minutes of critical path spent waiting for evidence it never reads.
+  #
+  # The trade is deliberate and visible to reviewers: a pull request whose tests
+  # fail can now show a GREEN Docker check, because the build genuinely did
+  # succeed. Docker build success has never been evidence that the tests passed;
+  # it previously looked like it was because of the ordering. The other required
+  # contexts still gate the merge, so nothing lands on a green build alone.
   docker-build:
     name: Docker Build & Health Check
-    needs: [changes, lint, type-check, import-boundaries, test, security, pre-commit, integration-test]
-    if: always() && needs.changes.result == 'success' && (needs.changes.outputs.docs-only == 'true' || (needs.lint.result == 'success' && needs.type-check.result == 'success' && needs.import-boundaries.result == 'success' && needs.test.result == 'success' && needs.security.result == 'success' && needs.pre-commit.result == 'success' && needs.integration-test.result == 'success'))
+    needs: [changes]
+    if: always() && needs.changes.result == 'success'
+
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -745,7 +758,7 @@ jobs:
           docker run --rm $common_args dotmac-sub:ci sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
           docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
