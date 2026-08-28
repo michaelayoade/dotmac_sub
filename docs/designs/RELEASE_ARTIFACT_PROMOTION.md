@@ -68,8 +68,9 @@ The release record has one canonical identity tuple:
 ```
 
 Staging acceptance must repeat the same source commit, tree, and digest.
-Production authorization adds a distinct `main` release commit whose tree must
-equal the source tree and whose ancestry must contain the source commit.
+Production authorization records the current `main` release commit. In the
+main-only path this is normally the same commit as the staged source; its tree
+must equal the source tree and its ancestry must contain the source commit.
 
 ## State model
 
@@ -130,8 +131,8 @@ not an input to the release-control decision.
   and `main` push.
 - The retired staging path treated each successful dev image build as a
   staging candidate.
-- The retired production gate assumed image source and release authorization
-  were the same commit and accepted a generic `SKIP_BACKUP=1` override.
+- The retired production gate accepted a generic `SKIP_BACKUP=1` override and
+  did not bind authorization to complete typed staging evidence.
 
 ### New owner and paths
 
@@ -140,8 +141,8 @@ not an input to the release-control decision.
 - A staging deployment record will bind acceptance to the immutable digest.
 - The promotion workflow proves main tree equality, ancestry, main CI, and
   staging acceptance before adding production aliases to the same digest.
-- The production adapter verifies distinct source and release revisions and
-  deploy by digest.
+- The production adapter verifies the recorded source and release revisions
+  and deploys by digest. The main-only path permits them to be identical.
 - A typed backup-policy decision owns the staging skip, production default,
   and proven no-migration hotfix exception.
 
@@ -161,7 +162,7 @@ Cutover requires all of the following:
 - staging deploys and records success for that digest;
 - main CI passes for a commit with the identical tree and required ancestry;
 - the promotion workflow attaches aliases without invoking a Docker build;
-- the production verifier approves the separated source/release evidence;
+- the production verifier approves the recorded source/release evidence;
 - backup-policy tests prove staging skip, production default, and hotfix
   fail-closed behavior; and
 - architecture tests prevent ordinary `main` pushes from restoring duplicate
