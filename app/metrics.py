@@ -28,6 +28,11 @@ API_SYNC_PRESSURE_LIMITED = Counter(
     "API sync requests rejected before they could acquire DB resources",
     ["bucket", "scope"],
 )
+PAYMENT_PROVIDER_WEBHOOK_INGRESS = Counter(
+    "payment_provider_webhook_ingress_total",
+    "Payment-provider webhook requests admitted or limited before DB access",
+    ["provider", "outcome"],
+)
 DATABASE_TRANSACTION_SPANS = Histogram(
     "database_transaction_span_seconds",
     "Root SQLAlchemy transaction duration from first statement to completion",

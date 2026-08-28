@@ -24,7 +24,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import material_catalog
 from app.services.integrations import erp_admin as erp_admin_service
-from app.services.integrations import installations
+from app.services.integrations import installations, payment_capability
 from app.services.owner_commands import CommandContext
 from app.tasks.dotmac_erp_outbox import refresh_material_catalog
 
@@ -131,6 +131,9 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
+            "webhook_ingress_url": (
+                f"{str(request.base_url).rstrip('/')}{state['webhook']['endpoint_path']}"
+            ),
             "page_title": "Integrations",
             "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
             "table_title": "Connectors",
@@ -1188,6 +1191,48 @@ def payment_gateway_config_save(
 
 
 @router.post(
+    "/payment-gateways/{provider_type}/webhook-policy",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def payment_gateway_webhook_policy_save(
+    request: Request,
+    provider_type: str,
+    requests_per_window: int = Form(...),
+    window_seconds: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        _binding, ingress = installations.execute_command(
+            db,
+            lambda: (
+                web_integrations_payment_gateways_service.update_webhook_ingress_policy(
+                    db,
+                    provider_type_value=provider_type,
+                    requests_per_window=requests_per_window,
+                    window_seconds=window_seconds,
+                )
+            ),
+        )
+        payment_capability.publish_webhook_ingress_policy(provider_type, ingress)
+    except Exception as exc:
+        return _payment_gateway_config_response(
+            request,
+            db,
+            provider_type=provider_type,
+            error=str(exc),
+            status_code=400,
+        )
+    return RedirectResponse(
+        url=(
+            f"/admin/integrations/payment-gateways/{provider_type}"
+            "?webhook_policy_saved=1"
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
     "/payment-gateways/{provider_type}/enable",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
@@ -1210,11 +1255,14 @@ def payment_gateway_enable(
             status_code=400,
         )
     try:
-        installations.execute_command(
+        installation = installations.execute_command(
             db,
             lambda: web_integrations_payment_gateways_service.validate_and_enable(
                 db, provider_type_value=provider_type
             ),
+        )
+        web_integrations_payment_gateways_service.publish_configured_webhook_ingress_policy(
+            installation
         )
     except Exception as exc:
         return _payment_gateway_config_response(

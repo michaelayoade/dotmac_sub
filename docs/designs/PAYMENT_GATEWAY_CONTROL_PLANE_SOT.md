@@ -28,6 +28,7 @@ appear first. An operator choosing an option is not a failover event.
 | Gateway finance identity and settlement-channel bootstrap | `financial.payment_gateway_finance` |
 | Intent amount, account, provider and pinned checkout binding | `financial.gateway_topup_intent_commands` |
 | Provider webhook observations | `financial.payment_provider_events` |
+| Provider webhook ingress traffic policy | `integration.installations` through the `payments.webhook.v1` binding |
 | Payment, allocation, refund and ledger consequences | Existing financial command owners |
 | Direct-transfer customer presentment | `financial.collection_accounts` |
 | Recorded settlement classification | `financial.payment_channels` |
@@ -64,6 +65,15 @@ reconciliation, and refund bindings remain enabled so in-flight payments can
 finish safely. Disabling or quarantining the full installation is a separate
 incident action.
 
+The exact signed provider webhook routes are code-owned and never participate
+in the generic API sync-pressure bucket. Each `payments.webhook.v1` binding owns
+a bounded `ingress_rate_limit` policy containing `requests_per_window` and
+`window_seconds`. The admin payment-gateway page is the only mutation surface.
+Redis and process-local copies are replaceable runtime projections, hydrated
+from enabled bindings at startup; safe bounded defaults apply while a projection
+is unavailable. Operators cannot enter arbitrary exempt paths or select an
+unbounded limit.
+
 ## Intent provenance
 
 New customer and reseller gateway intents persist the provider type, finance
@@ -97,6 +107,9 @@ must never invent Paystack, a provider key, or a default provider.
 - First viewport: checkout state and reason, installation state, lifecycle
   bundle readiness, stored-reference presence, presentment priority, and the
   next valid setup action.
+- Inbound evidence: canonical ingress URL, expected delivery source, effective
+  bounded traffic policy, generic-guard classification, and sanitized recent
+  receipt state without raw payloads, headers, signatures, or secret material.
 - Primary action: save a reference-only configuration revision. Secondary
   action: explicitly confirm the impact preview, then validate and enable or
   disable new checkout.

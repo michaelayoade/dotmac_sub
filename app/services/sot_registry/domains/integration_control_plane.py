@@ -236,6 +236,7 @@ DOMAIN = DomainSOT(
                 "explicit integration manifest adoption",
                 "immutable integration configuration revisions",
                 "integration capability grants and bindings",
+                "payment webhook ingress traffic policy",
                 "Meta social installation configuration",
                 "pre-activation integration webhook verification",
             ),
@@ -284,6 +285,15 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.AUTHORITATIVE_RECORD,
                         input_names=(
                             "deployed connector manifest",
+                            "integration installation protocol",
+                            "canonical integration installation aggregate",
+                        ),
+                        canonical_writer="integration.installations",
+                    ),
+                    ConcernContract(
+                        name="payment webhook ingress traffic policy",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
                             "integration installation protocol",
                             "canonical integration installation aggregate",
                         ),
