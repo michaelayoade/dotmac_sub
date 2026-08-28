@@ -1,34 +1,33 @@
-# Dev-to-staging-to-main promotion
+# Main-to-staging-to-production release
 
-This repository promotes release changes through `dev` and the staging
-environment before `main`. A feature branch must not bypass this path.
+This repository releases from a single trunk. A feature branch merges into
+`main`; `main` is then built once into an immutable image, that exact image is
+deployed to staging, and only the accepted digest is authorized for production.
 
-**Open your pull request against `dev`, not `main`.** The `Dev-First Gate`
-check (`.github/workflows/dev-first-gate.yml`) fails any pull request targeting
-`main` whose head is not `dev`, `agent/promote-*`, `agent/reconcile-*`,
-`promote/*`, or `reconcile/*`. Retarget with `gh pr edit <number> --base dev`.
+**There is no `dev` branch and no branch-to-branch promotion.** The former
+dev-first hop was removed on 2026-08-28 because it cost a merge, a
+reconciliation pull request, and a second full CI cycle per release without
+adding a check that the digest gate did not already make.
 
-For a production incident that genuinely cannot wait for the staging cycle, the
-`dev-first:override` label lets a pull request through. It is deliberately
-visible: the label stays on the pull request and the run records a warning.
-Overridden work reaches production without staging having run it, so reconcile
-`main` back into `dev` afterwards.
+**Staging did not become optional.** It moved from being a branch gate to being
+a digest gate. `Promote staged digest for production` refuses to authorize any
+digest that has no matching staging acceptance document, so nothing reaches
+production that a real host has not already run.
+What was removed is the merge, not the proof.
 
-## Promotion sequence
+## Release sequence
 
-1. Open the feature pull request against `dev` with the appropriate
+1. Open the feature pull request against `main` with the appropriate
    `version:major`, `version:minor`, `version:patch`, or `version:none` label.
    Do not edit `VERSION` in the source pull request; the version-bump workflow
    owns the separate rolling bump pull request after merge.
-2. Require CI, Mobile CI, and Version Impact to pass before merging.
-3. Merge into `dev` and let the rolling version-bump pull request be created
-   when the version-impact automation requires one.
-4. Select the exact `origin/dev` SHA intended for deployment and require CI and
-   Mobile CI to pass on that exact commit.
-   An open rolling version-bump pull request does not block
-   a digest-bound candidate for an already-selected source SHA; it governs
-   semver metadata and aliases, not deployment authority.
-5. Dispatch `Build release candidate once` on `dev`, supplying that full dev
+2. Require CI, Mobile CI, and Version Impact to pass, then squash-merge into
+   `main`.
+3. Select the exact `origin/main` SHA intended for deployment and require CI and
+   Mobile CI to pass on that exact commit. An open rolling version-bump pull
+   request does not block a digest-bound candidate for an already-selected
+   source SHA; it governs semver metadata and aliases, not deployment authority.
+4. Dispatch `Build release candidate once` on `main`, supplying that full main
    SHA as `candidate_sha`. The workflow refuses a stale SHA or non-green source,
    builds the application once on GitHub, and records its immutable OCI digest.
    The build also derives `/app/product-manifest.json` from the image's exact
@@ -37,25 +36,21 @@ Overridden work reaches production without staging having run it, so reconcile
    document inside the image, and publishes `candidate.json` schema v2 plus
    `product-manifest.json`; the typed candidate record carries the manifest's
    `product_manifest_digest`.
-6. Let `Deploy dev to staging` deploy that exact digest, then complete staging
+5. Let `Deploy main to staging` deploy that exact digest, then complete staging
    acceptance against `http://10.120.121.20:8001`. **That acceptance covers
    application behaviour only — it does not exercise network equipment.** See
    "What staging acceptance does not cover" below.
-7. Promote the accepted dev tree to `main` without unrelated changes. The
-   promotion PR uses `version:none` with a body explaining that the version was
-   already established and validated on dev. **Merge it with a merge commit,
-   never a squash** — see "Merge methods" below.
-8. Require CI and Mobile CI on the exact resulting `main` commit. Dispatch
-   `Promote staged digest for production` on `main` with the candidate build
-   run, staging run, and full main SHA. It proves tree equality and ancestry,
-   records typed authorization, and attaches version and `latest` aliases to
-   the staged digest without rebuilding.
-9. Synchronize `main` back into `dev` through a zero-file pull request and merge
-   it with a merge commit. Branch protection rejects direct ref updates even
-   when they are fast-forwards; see "Synchronize `dev` after promotion" below.
-10. Dispatch `Deploy authorized digest to production` only after Michael names
-    `dotmac-sub-prod`, supplies the authorization run ID, and the protected
-    production environment approves it. The default path takes a backup.
+6. Dispatch `Promote staged digest for production` on `main` with the candidate
+   build run, the staging run, and the full main SHA. It proves tree equality
+   and ancestry, records typed authorization, and attaches the version and
+   `latest` aliases to the staged digest without rebuilding. A candidate that
+   never reached staging has no acceptance document and is refused here.
+7. Dispatch `Deploy authorized digest to production` only after Michael names
+   `dotmac-sub-prod`, supplies the authorization run ID, and the protected
+   production environment approves it. The default path takes a backup.
+
+There is no post-release branch reconciliation step. The release ran on the
+branch it was authored on, so no second branch is left behind to catch up.
 
 Invoke the candidate workflow only for the exact source SHA intended for this
 release. Do not build and stage every intermediate feature merge. The isolated
@@ -68,20 +63,23 @@ only `latest` is advanced to the authorized production digest.
 Schema-v1 release evidence predates the product-manifest identity and is not
 accepted by the schema-v2 readers. Do not combine evidence from the two schema
 versions or retrofit a manifest onto an old candidate: select the current green
-`dev` SHA and build a new candidate once.
+`main` SHA and build a new candidate once.
 
 ## Release Freeze
 
-Once release deployment is in flight, `dev` is frozen for merges until the
+Once release deployment is in flight, `main` is frozen for merges until the
 candidate is deployed to production or the release is explicitly abandoned. The
 freeze is intentionally narrow: feature branch pushes, pull request creation,
-and pull request updates continue, but no pull request should merge into `dev`
-while `Build release candidate once`, `Deploy dev to staging`,
+and pull request updates continue, but no pull request should merge into `main`
+while `Build release candidate once`, `Deploy main to staging`,
 `Promote staged digest for production`, or `Deploy authorized digest to
 production` is queued or running.
 
-The `Release Freeze Gate` workflow is the required pull-request check that
-enforces this boundary on `dev`. It reads active GitHub Actions runs and fails
+This freeze carries more weight on a single trunk than it did with a `dev` hop:
+`main` is now both the branch people merge into and the branch a candidate is
+selected from, so an unfrozen merge moves the release base directly. The
+`Release Freeze Gate` workflow is the required pull-request check that enforces
+this boundary on `main`. It reads active GitHub Actions runs and fails
 only when one of those release-control workflows is queued or in progress. It
 does not inspect open pull requests and does not reinterpret the selected
 candidate; the candidate SHA and OCI digest remain the deployment authority.
@@ -89,12 +87,12 @@ candidate; the candidate SHA and OCI digest remain the deployment authority.
 ### One-time workflow bootstrap
 
 GitHub accepts `workflow_dispatch` only after the workflow file exists on the
-default branch. Therefore, the promotion that first introduces
-`release-candidate.yml` cannot use that workflow to stage itself. Use the
-previously active dev-image staging path for that one promotion, with all of its
-existing CI, staging, and approval gates. Once the change reaches `main`, every
-later release uses the explicit candidate workflow. Do not fabricate an
-evidence artifact or bypass staging to shorten the bootstrap.
+default branch. A pull request that ADDS or RENAMES a release-chain workflow
+therefore cannot be staged by the workflow it introduces: the dispatchable
+version does not exist until that pull request has merged to `main`. Merge it
+first, then dispatch the candidate build against the resulting `main` SHA as
+usual. Do not fabricate an evidence artifact or bypass staging to shorten the
+bootstrap.
 
 ## What staging acceptance does not cover
 
@@ -134,41 +132,34 @@ staging bug mutate live plant, and is not recommended.
 
 ## Merge methods
 
-The method is not a style preference here; it decides whether the two branches
-stay related.
+Every pull request into `main` is squash-merged. Retiring the `dev` branch
+retired the whole class of problem this section used to describe: there is no
+promotion pull request whose head is a long-lived branch, so there is no
+ancestry to preserve between two trunks and no reconciliation owed after a
+release.
 
 | Pull request | Method |
 |---|---|
-| Feature or fix into `dev` | Squash |
-| Promotion, `dev` into `main` | **Merge commit** |
-| Reconciliation, `main` into `dev` | **Merge commit** |
+| Feature or fix into `main` | Squash |
+| Rolling version bump into `main` | Squash |
+| `integration/**` or `consolidate/**` batch into `main` | Merge commit |
 
-A squash-merged promotion lands on `main` as a single new commit that `dev` has
-never seen. `main` stops being an ancestor of `dev` the moment it merges, and
-the next promotion opened with `head=dev` reports `CONFLICTING` — typically on
-`VERSION`, `CHANGELOG.md`, `pyproject.toml`, `package.json`,
-`package-lock.json`, and the three mobile version files, because both branches
-edited the same lines to different values from a common older base. Squashing
-the reconciliation does not repair it either: squash discards the record that
-main's value was considered and deliberately rejected, so the same conflict
-returns next release.
+A batch branch keeps a merge commit because its individual commits carry the
+migration sequence that `migration_sequence_gate.py` reads; squashing a batch
+collapses that ordering into one commit and the gate can no longer see it.
 
-A merge commit keeps `main` a real ancestor of `dev`, so promotions
-fast-forward cleanly and no reconciliation is owed.
-
-Check ancestry before opening a promotion:
-
-```
-git merge-base --is-ancestor origin/main origin/dev && echo ok
-```
-
-If that fails, the branches have already diverged. Do not open the promotion
-from `dev`. Reconcile first, as described in the next section.
+Why the old rule existed, so it is not reintroduced by habit: a squash-merged
+`dev`-into-`main` promotion landed on `main` as a commit `dev` had never seen,
+`main` stopped being an ancestor of `dev`, and the next promotion reported
+`CONFLICTING` on `VERSION`, `CHANGELOG.md`, `pyproject.toml`, `package.json`,
+`package-lock.json`, and the three mobile version files. That failure mode is
+structural to two-trunk promotion and cannot occur with one trunk. If a
+long-lived branch is ever reintroduced, restore the merge-commit rule with it.
 
 ### Branch protection: green is required, an approving review is not
 
-`dev` requires its status checks to pass and **zero** approving reviews. That is
-deliberate, not an oversight. Do not add a review requirement without first
+`main` requires its status checks to pass and **zero** approving reviews. That
+is deliberate, not an oversight. Do not add a review requirement without first
 satisfying the precondition below.
 
 Release automation here is single-account. The rolling version-bump pull request
@@ -196,55 +187,16 @@ validates the token and warns rather than falling back silently.
 Once automation is a separate identity, a review requirement becomes meaningful
 rather than ceremonial, and can be reconsidered.
 
-### Synchronize `dev` after a promotion merges
+### `delete_branch_on_merge` deletes the head branch of every merged PR
 
-A merge-commit promotion creates a commit **on `main` only**. `main` becomes
-merge(`main`, `dev`), while `dev` stays at the commit that was promoted — one of
-that merge's own parents. So the moment the promotion lands, `main` is no longer
-an ancestor of `dev`, and the ancestry check above starts failing again.
+The repository sets `delete_branch_on_merge: true`. That is what you want for
+topic branches, and with a single trunk every merged head IS a topic branch, so
+the trap that used to exist here is gone: a promotion pull request's head was
+`dev`, and merging one deleted `dev` outright (hit live on 2026-07-31).
 
-This is not content divergence. `dev` is simply behind by the merge commit and
-its head is still an ancestor of `main`. Close it with a zero-file
-reconciliation pull request from a short-lived branch at `main` into `dev`.
-GitHub branch protection requires every `dev` update to arrive through a pull
-request and rejects even a non-force fast-forward ref update:
-
-```
-git fetch origin main dev
-git switch -c agent/reconcile-main-to-dev origin/main
-git push origin agent/reconcile-main-to-dev
-gh pr create --base dev --head agent/reconcile-main-to-dev \
-  --title "chore: reconcile main into dev" --label version:none
-```
-
-Verify both invariants afterwards:
-
-```
-git merge-base --is-ancestor origin/main origin/dev && echo ok
-gh api repos/michaelayoade/dotmac_sub/compare/main...dev \
-  --jq '"\(.status) ahead=\(.ahead_by) behind=\(.behind_by)"'   # identical 0 0
-```
-
-Skip this and the next promotion re-enters the reconciliation path the merge
-methods above exist to eliminate — the branches drift apart one merge commit per
-release, which is slower to notice than a squash-driven divergence because the
-trees stay identical while only the history separates.
-
-### Merging a promotion deletes `dev` unless `dev` is protected
-
-The repository sets `delete_branch_on_merge: true`, which deletes the **head**
-branch of every merged pull request. That is what you want for topic branches.
-A promotion PR's head is `dev`, so merging one deletes `dev`.
-
-Passing or omitting `--delete-branch` on `gh pr merge` makes no difference. That
-flag only controls whether the CLI removes your *local* branch; the remote
-deletion comes from the repository setting.
-
-`dev` is protected against deletion and force-pushes, and GitHub silently skips
-auto-deletion for protected branches, so this is handled. Do not remove that
-protection. If a long-lived branch is ever added — a release or maintenance
-branch that pull requests will be opened *from* — protect it the same way
-before the first such pull request merges:
+The rule survives its instance. If a long-lived branch is ever added — a release
+or maintenance branch that pull requests will be opened *from* — protect it
+against deletion before the first such pull request merges:
 
 ```
 gh api -X PUT repos/michaelayoade/dotmac_sub/branches/<branch>/protection --input - <<'JSON'
@@ -254,43 +206,31 @@ gh api -X PUT repos/michaelayoade/dotmac_sub/branches/<branch>/protection --inpu
 JSON
 ```
 
+Passing or omitting `--delete-branch` on `gh pr merge` makes no difference. That
+flag only controls whether the CLI removes your *local* branch; the remote
+deletion comes from the repository setting. Mistaking the two is the whole trap.
+
 If it does happen, nothing is lost: the deleted branch's head is a parent of the
 new merge commit, so every commit is still reachable. Recreate it at the base
-branch's **new head**, not at its own former head — the former head would leave
-the branches diverged again, while the merge commit makes them identical, which
-is the correct post-promotion state:
+branch's **new head**, not at its own former head.
 
-```
-git push origin <new-main-sha>:refs/heads/dev
-```
+Watch for the misleading first symptom: `git fetch --prune` drops the remote
+ref and later commands fail with `fatal: Not a valid object name`, which reads
+like a stale ref or a fetch race. Confirm against `git ls-remote --heads origin`
+or the branches API before concluding either way.
 
-Watch for the misleading first symptom: `git fetch --prune` drops
-`origin/dev` and later commands fail with `fatal: Not a valid object name
-origin/dev`, which reads like a stale ref or a fetch race. Confirm against
-`git ls-remote --heads origin` or the branches API before concluding either way.
+## Hotfixes
 
-## When `main` receives commits directly
+A hotfix is not a special path any more. It is a pull request into `main` like
+any other, and it goes through the same candidate build, staging deploy, and
+digest authorization. The `dev-first:override` label no longer exists; there is
+nothing left for it to override.
 
-Anything merged straight into `main` — a hotfix, or a pull request opened
-against `main` by someone not following this runbook — is invisible to `dev`
-and to staging. It was never staged, and the next promotion will collide with
-it.
-
-Reconcile before promoting:
-
-1. Branch from `dev` and `git merge origin/main` into it.
-2. Resolve conflicts by authority, not by taking a side wholesale:
-   - Version metadata → dev's, the higher version being promoted.
-   - `CHANGELOG.md` → union of both; entries are already descending.
-   - Migration head assertions → do not guess. Diff `alembic/versions/` and
-     assert what the DAG actually is.
-   - The same test edited differently on both sides → keep both cases. Taking
-     one side silently drops the other's coverage.
-3. Run the full validation on the reconciled tree, then merge it into `dev`
-   with a merge commit.
-
-The reconciliation branch has `main` as a real ancestor, so it can also serve
-as the promotion head if one is needed immediately.
+The only production exception that remains is the backup exception:
+`scripts/deploy_production.sh --hotfix-no-migrations`, which requires an
+incident/change reference plus a reason, and verifies that the running and
+candidate images carry an identical migration set.
+It shortens the deploy, not the pipeline.
 
 ## Automatic staging deployment contract
 
@@ -314,20 +254,20 @@ all of the following are true:
   deployment runner. Interactive development, agents, and diagnostic edits use
   separate worktrees and never write into the deployment worktree.
 - The tracked deployment worktree is clean. The workflow refuses to discard
-  tracked changes, verifies the exact fetched `origin/dev` candidate, checks it
+  tracked changes, verifies the exact fetched `origin/main` candidate, checks it
   out at detached `HEAD`, and leaves every local branch pointer unchanged. A
   local development branch is preserved as a reference but never controls or
   blocks deployment checkout state.
 
 The workflow accepts only a successful manually dispatched `Build release
-candidate once` run from this repository's current `dev` tip. Start it with an
+candidate once` run from this repository's current `main` tip. Start it with an
 exact full SHA, for example:
 
 ```bash
-gh workflow run release-candidate.yml --ref dev -f candidate_sha=<full-dev-sha>
+gh workflow run release-candidate.yml --ref main -f candidate_sha=<full-main-sha>
 ```
 
-The candidate workflow requires the exact dev SHA to have green CI and Mobile
+The candidate workflow requires the exact main SHA to have green CI and Mobile
 CI, refuses to overwrite an existing `candidate-<full-sha>` bootstrap tag,
 builds only on a GitHub-hosted runner, and uploads
 `release-candidate-evidence`. That typed document binds the source commit, Git
@@ -354,11 +294,13 @@ protected `production` environment. It downloads exact candidate and staging
 artifacts by run ID, rechecks green `main`, tree equality, and ancestry, then
 registry-tags the same digest. It never invokes a Docker build.
 
-GitHub records the manually dispatched candidate run on `dev`, but records the
-downstream `Deploy dev to staging` `workflow_run` on the default `main` branch
-where that workflow executes. Production promotion validates those transport
-branches independently from the typed staging acceptance, which still binds the
-exact `dev` candidate revision, tree, digest, and build run.
+The candidate run and the downstream `Deploy main to staging` `workflow_run`
+are both recorded on `main` — the dispatched candidate because that is the
+branch it is dispatched against, and the staging run because a `workflow_run`
+is always attributed to the default branch where the workflow executes.
+Production promotion validates those transport branches independently from the
+typed staging acceptance, which binds the exact candidate revision, tree,
+digest, and build run.
 
 `Deploy authorized digest to production` remains fail-closed until the
 repository variable `PRODUCTION_DEPLOY_ENABLED` is exactly `true`. The
@@ -405,14 +347,15 @@ existing staging backup files are unchanged.
 ## Failure behavior
 
 - A missing runner, disabled repository switch, wrong host path, dirty tracked
-  checkout, stale dev SHA, failed check, malformed or mismatched evidence,
+  checkout, stale main SHA, failed check, malformed or mismatched evidence,
   missing digest, unexpected port, or active Celery Beat prevents deployment.
 - The deployment checkout never moves, merges, resets, or force-updates a local
   branch. It detaches at the verified candidate so an unrelated local branch
-  cannot diverge from `origin/dev` and block or influence a release.
+  cannot diverge from `origin/main` and block or influence a release.
 - `scripts/deploy.sh` still owns backup, migration, candidate health, primary
   health, worker readiness, rollback, and image-retention behavior; the guarded
   staging adapter supplies only the staging-specific backup and proxy opt-outs.
-- A failed staging deployment never authorizes promotion to `main`.
+- A failed staging deployment never authorizes a production digest: the
+  authorization step requires a staging acceptance document and finds none.
 - Production deploys only a typed, authorized digest. The self-hosted production
   job runs bounded operational checks and no repository test suite.

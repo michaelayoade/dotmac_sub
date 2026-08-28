@@ -450,9 +450,10 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "pull_request:" in workflow
-    # Both events must still cover main and dev. Batch branches run these same
-    # gates instead of meeting them for the first time at the batch -> dev merge.
-    protected_branches = "branches: [main, dev, 'integration/**', 'consolidate/**']"
+    # `main` is the single release trunk, so both events must cover it. Batch
+    # branches run these same gates instead of meeting them for the first time
+    # at the batch -> main merge.
+    protected_branches = "branches: [main, 'integration/**', 'consolidate/**']"
     assert workflow.count(protected_branches) == 2
     assert "make test-integration" in workflow
     assert "poetry run alembic upgrade head" not in workflow

@@ -1,44 +1,87 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Every workflow that participates in selecting, staging, authorizing, or
+# deploying a release. The trunk assertions below sweep this set rather than a
+# hand-listed file, so a new release-chain workflow cannot reintroduce a second
+# trunk unnoticed.
+RELEASE_CHAIN = (
+    ".github/workflows/ci.yml",
+    ".github/workflows/mobile.yml",
+    ".github/workflows/engineering-standards.yml",
+    ".github/workflows/version-impact.yml",
+    ".github/workflows/version-bump-pr.yml",
+    ".github/workflows/version-tag.yml",
+    ".github/workflows/release-candidate.yml",
+    ".github/workflows/release-freeze-gate.yml",
+    ".github/workflows/staging-deploy.yml",
+    ".github/workflows/release-promotion.yml",
+    ".github/workflows/production-deploy.yml",
+)
+
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_dev_pull_requests_run_required_ci_gates() -> None:
+def test_main_is_the_only_release_trunk_in_the_whole_chain() -> None:
+    """The `dev` hop is retired; no release workflow may name a second trunk.
+
+    Removing `dev-first-gate.yml` alone would not have removed the hop: the
+    candidate build checked out `dev`, staging triggered on `dev`, and the
+    promotion demanded candidate evidence recorded on `dev`. A grep-shaped
+    assertion is the honest one here, because the failure mode is exactly a
+    single surviving `dev` reference quietly splitting the release in two.
+    """
+
+    for path in RELEASE_CHAIN:
+        workflow = _read(path)
+        for line_number, line in enumerate(workflow.splitlines(), start=1):
+            code = line.split("#", maxsplit=1)[0]
+            # `/dev/null` is a shell device path and `development` is a word;
+            # neither is a branch name. Everything else that spells `dev` is.
+            code = re.sub(r"/dev/\w+", "", code).replace("development", "")
+            assert "dev" not in code, (
+                f"{path}:{line_number} still names a `dev` branch: {line.strip()}"
+            )
+
+    assert not (ROOT / ".github/workflows/dev-first-gate.yml").exists()
+
+
+def test_pull_requests_into_main_run_the_required_ci_gates() -> None:
     for path in (".github/workflows/ci.yml", ".github/workflows/mobile.yml"):
         workflow = _read(path)
-        # main and dev stay covered; both batch prefixes join them so adoption
-        # and consolidation branches run the required gates too.
+        # `main` stays covered; both batch prefixes join it so adoption and
+        # consolidation branches run the required gates too.
         assert (
             "pull_request:\n"
-            "    branches: [main, dev, 'integration/**', 'consolidate/**']" in workflow
+            "    branches: [main, 'integration/**', 'consolidate/**']" in workflow
         )
 
     version_impact = _read(".github/workflows/version-impact.yml")
     assert "pull_request:" in version_impact
-    assert "branches: [main, dev]" in version_impact
+    assert "branches: [main]" in version_impact
 
 
-def test_release_freeze_gate_blocks_dev_merges_during_deployment() -> None:
+def test_release_freeze_gate_blocks_main_merges_during_deployment() -> None:
     workflow = _read(".github/workflows/release-freeze-gate.yml")
     runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
     guidance = " ".join(_read("AGENTS.md").split())
 
     assert yaml.safe_load(workflow)
     assert "name: Release Freeze Gate" in workflow
-    assert "pull_request:\n    branches: [dev]" in workflow
+    assert "pull_request:\n    branches: [main]" in workflow
     assert "merge_group:" in workflow
     assert "actions: read" in workflow
     for guarded in (
         "Build release candidate once",
-        "Deploy dev to staging",
+        "Deploy main to staging",
         "Promote staged digest for production",
         "Deploy authorized digest to production",
     ):
@@ -48,7 +91,9 @@ def test_release_freeze_gate_blocks_dev_merges_during_deployment() -> None:
     assert "gh pr" not in workflow
     assert "pulls" not in workflow
     assert "Open pull requests" not in workflow
-    assert "dev` is frozen for merges" in runbook
+    # On a single trunk the freeze is the only thing holding the release base
+    # still, so the runbook must say that rather than merely restate the rule.
+    assert "carries more weight on a single trunk" in runbook
     assert "does not inspect open pull requests" in runbook
     assert "does not block feature branch pushes" in guidance
 
@@ -64,7 +109,7 @@ def test_ghcr_isolated_to_the_pinned_genieacs_runtime() -> None:
     assert "type=raw,value=latest" not in workflow
 
 
-def test_release_candidate_build_is_explicit_green_dev_and_digest_evidenced() -> None:
+def test_release_candidate_build_is_explicit_green_main_and_digest_evidenced() -> None:
     workflow = _read(".github/workflows/release-candidate.yml")
     dockerfile = _read("Dockerfile")
 
@@ -72,9 +117,9 @@ def test_release_candidate_build_is_explicit_green_dev_and_digest_evidenced() ->
     assert "on:\n  workflow_dispatch:" in workflow
     assert "on:\n  push:" not in workflow
     assert "candidate_sha:" in workflow
-    assert "ref: dev" in workflow
+    assert "ref: main" in workflow
     assert "WORKFLOW_REF: ${{ github.ref }}" in workflow
-    assert '"refs/heads/dev"' in workflow
+    assert '"refs/heads/main"' in workflow
     assert 'const required = ["CI", "Mobile CI"]' in workflow
     assert "Refusing stale candidate" in workflow
     assert "Candidate image already exists" in workflow
@@ -104,10 +149,12 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
 
     # Parsing catches malformed YAML independently of the text contract checks.
     assert yaml.safe_load(workflow)
+    assert "name: Deploy main to staging" in workflow
     assert 'workflows: ["Build release candidate once"]' in workflow
-    assert "branches: [dev]" in workflow
+    assert "branches: [main]" in workflow
     assert "vars.STAGING_AUTO_DEPLOY_ENABLED == 'true'" in workflow
     assert "github.event.workflow_run.event == 'workflow_dispatch'" in workflow
+    assert "github.event.workflow_run.head_branch == 'main'" in workflow
     assert (
         "github.event.workflow_run.head_repository.full_name == github.repository"
         in workflow
@@ -124,7 +171,7 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
     assert 'git -C "$STAGING_DEPLOY_DIR" checkout --detach "$CANDIDATE_SHA"' in workflow
     assert 'git -C "$STAGING_DEPLOY_DIR" symbolic-ref -q HEAD' in workflow
     for forbidden_branch_mutation in (
-        'git -C "$STAGING_DEPLOY_DIR" checkout dev',
+        'git -C "$STAGING_DEPLOY_DIR" checkout main',
         'git -C "$STAGING_DEPLOY_DIR" merge --ff-only',
         'git -C "$STAGING_DEPLOY_DIR" branch --force',
         "git reset --hard",
@@ -177,19 +224,67 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
     assert 'exec bash "${ROOT_DIR}/scripts/deploy.sh" "$@"' in staging_adapter
 
 
-def test_agents_guidance_requires_staging_before_main() -> None:
+def test_staging_remains_mandatory_as_a_digest_gate_not_a_branch_gate() -> None:
+    """Retiring the branch hop must not have retired the staging requirement.
+
+    This is the load-bearing property of the whole change. `dev` used to make
+    staging unskippable by topology: nothing reached `main` without passing
+    through the branch staging deployed from. With one trunk, the ONLY thing
+    standing between a merge and production is the authorization step refusing
+    a digest that carries no staging acceptance document — so that refusal has
+    to be checked directly, not assumed from the pipeline's shape.
+    """
+
+    promotion = _read(".github/workflows/release-promotion.yml")
+    evidence = _read("scripts/release_candidate_evidence.py")
+
+    # The authorization cannot be dispatched without naming a real staging run,
+    # and that run is verified to be the staging workflow, successful, and ours.
+    assert "staging_deployment_run_id:" in promotion
+    assert "required: true" in promotion
+    assert '[stagingId, "Deploy main to staging", "main", "workflow_run"]' in promotion
+    assert 'run.conclusion !== "success"' in promotion
+    assert "run.head_repository?.full_name !== expectedRepository" in promotion
+
+    # Exactly one acceptance document, downloaded from that exact run, is the
+    # input to authorization. "Exactly one" matters: a zero-document path would
+    # otherwise authorize an unstaged digest silently.
+    assert "pattern: staging-acceptance-*" in promotion
+    assert "run-id: ${{ inputs.staging_deployment_run_id }}" in promotion
+    assert 'test "${#acceptance_files[@]}" -eq 1' in promotion
+    assert "Expected exactly one staging acceptance document." in promotion
+    assert "--staging " in promotion
+    assert "--expected-staging-deployment-id" in promotion
+
+    # And the verifier itself requires the staging record, so the requirement
+    # does not live only in YAML that a future edit could drop.
+    assert "authorize-production" in evidence
+    assert "staging" in evidence
+
+    # The production deploy accepts nothing but that typed authorization.
+    production = _read(".github/workflows/production-deploy.yml")
+    assert "verify-production" in production
+    assert 'run.name !== "Promote staged digest for production"' in production
+
+
+def test_agents_guidance_requires_staging_before_production() -> None:
     guidance = " ".join(_read("AGENTS.md").split())
 
+    assert "`main` is the single release trunk" in guidance
+    assert (
+        "no long-lived `dev` branch and no branch-to-branch promotion hop" in guidance
+    )
     assert "explicit one-time candidate build" in guidance
     assert "immutable candidate digest -> staging deployment and acceptance" in guidance
-    assert "select the exact validated `origin/dev` SHA" in guidance
+    assert "select the exact validated `origin/main` SHA" in guidance
     assert "open rolling version-bump pull request does not block" in guidance
     assert "Deploy that exact OCI" in guidance
-    assert "A dev image is staging-only" in guidance
+    # The removal must be stated as a removed merge, not a removed gate.
+    assert "Staging is still mandatory" in guidance
+    assert "DIGEST gate rather than a branch gate" in guidance
+    assert "refuses any digest without a matching staging acceptance" in guidance
     assert "must never receive the `latest` tag" in guidance
-    assert "one-time bootstrap promotion" in guidance
-    assert "cannot dispatch a new workflow" in guidance
-    assert "Require the resulting `main` CI" in guidance
+    assert "Require the exact candidate `main` commit's CI" in guidance
     assert "source pull requests do not edit `VERSION`" in guidance
     assert "automation owns the separate rolling" in guidance
 
@@ -211,7 +306,8 @@ def test_staging_promotion_runbook_records_activation_and_failure_contracts() ->
     assert "release-candidate-evidence" in runbook
     assert "staging-acceptance-<source-sha>" in runbook
     assert "builds only on a GitHub-hosted runner" in runbook
-    assert "## One-time workflow bootstrap" in runbook
+    assert "## One-time workflow bootstrap" not in runbook
+    assert "### One-time workflow bootstrap" in runbook
     assert "workflow_dispatch" in runbook
     assert "Do not fabricate an" in runbook
     assert "Production requires a backup by default" in runbook
@@ -219,9 +315,25 @@ def test_staging_promotion_runbook_records_activation_and_failure_contracts() ->
     assert "Do not edit `VERSION` in the source pull request" in runbook
     assert "An open rolling version-bump pull request does not block" in runbook
     assert "Open pull requests, including rolling version-bump pull requests" in runbook
-    assert (
-        "A failed staging deployment never authorizes promotion to `main`." in runbook
-    )
+    assert "A failed staging deployment never authorizes a production digest" in runbook
+
+
+def test_runbook_explains_that_staging_moved_from_branch_gate_to_digest_gate() -> None:
+    """The reader has to be told what did NOT change, or they will assume it did.
+
+    "We removed the dev branch" reads, to the next person picking up a release,
+    as "staging is optional now". The runbook has to close that reading in the
+    same place it announces the removal.
+    """
+
+    runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
+    header = runbook[: runbook.index("## Release sequence")]
+
+    assert "There is no `dev` branch and no branch-to-branch promotion" in header
+    assert "Staging did not become optional" in header
+    assert "digest gate" in header
+    assert "What was removed is the merge, not the proof." in header
+    assert "no post-release branch reconciliation step" in runbook
 
 
 def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None:
@@ -237,7 +349,6 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
         "const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;"
         in workflow
     )
-    assert '[stagingId, "Deploy dev to staging", "main", "workflow_run"]' in workflow
     assert "run.head_repository?.full_name !== expectedRepository" in workflow
     assert "run.head_repository.full_name !== context.repo.repo" not in workflow
     assert "docker buildx imagetools create" in workflow
@@ -248,6 +359,24 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
     assert "docker/build-push-action" not in workflow
     assert "docker build " not in workflow
     assert "self-hosted" not in workflow
+
+
+def test_promotion_still_requires_the_candidate_to_be_an_ancestor_of_main() -> None:
+    """One trunk does not make the ancestry check redundant.
+
+    The candidate is a specific SHA; `main` keeps moving while a release is in
+    flight. Without the ancestry check, a release_sha that had been rewritten or
+    that simply does not contain the built candidate would still authorize the
+    candidate's digest, and the recorded release revision would name a tree the
+    running image was never built from.
+    """
+
+    workflow = _read(".github/workflows/release-promotion.yml")
+
+    assert 'git merge-base --is-ancestor "$source_revision" "$RELEASE_SHA"' in workflow
+    assert "Staged source revision is not an ancestor of main." in workflow
+    assert "--source-revision-is-ancestor" in workflow
+    assert "Refusing stale production promotion" in workflow
 
 
 def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> None:
@@ -280,22 +409,33 @@ def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> No
 
 
 def test_runbook_records_the_merge_method_per_pull_request_kind() -> None:
-    """Squash-merging a promotion stops main from being an ancestor of dev.
+    """Batch branches keep a merge commit; everything else squashes.
 
-    The next promotion opened with head=dev then conflicts on version metadata,
-    which is what produced the repeated reconciliation commits this rule ends.
+    The old two-trunk rule (promotion and reconciliation as merge commits) is
+    gone with the branch it protected, but the batch-branch case survives on its
+    own reason: `migration_sequence_gate.py` reads the individual commits, and a
+    squash destroys the ordering it inspects.
     """
 
     runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
 
     assert "## Merge methods" in runbook
-    assert "| Promotion, `dev` into `main` | **Merge commit** |" in runbook
-    assert "| Reconciliation, `main` into `dev` | **Merge commit** |" in runbook
-    assert "| Feature or fix into `dev` | Squash |" in runbook
-    assert "git merge-base --is-ancestor origin/main origin/dev" in runbook
+    assert "| Feature or fix into `main` | Squash |" in runbook
+    assert "| Rolling version bump into `main` | Squash |" in runbook
+    assert (
+        "| `integration/**` or `consolidate/**` batch into `main` | Merge commit |"
+        in runbook
+    )
+    assert "migration_sequence_gate.py" in runbook
+    # The retired rule stays explained so it is not reintroduced by habit, and
+    # names the condition that would make it correct again.
+    assert (
+        "If a\nlong-lived branch is ever reintroduced, restore the merge-commit rule"
+        in runbook
+    )
 
 
-def test_runbook_explains_why_dev_requires_no_approving_review() -> None:
+def test_runbook_explains_why_main_requires_no_approving_review() -> None:
     """The rule was added and reverted within an hour on 2026-07-31.
 
     Single-account automation cannot satisfy a review requirement: bump and
@@ -313,33 +453,13 @@ def test_runbook_explains_why_dev_requires_no_approving_review() -> None:
     assert "permanently unmergeable" in runbook
 
 
-def test_runbook_requires_pull_request_sync_after_a_promotion() -> None:
-    """The promotion merge commit exists only on main, leaving dev behind.
+def test_runbook_keeps_the_delete_branch_on_merge_lesson() -> None:
+    """The instance is gone; the rule is not.
 
-    Ancestry therefore breaks again the moment a promotion lands, and the next
-    one re-enters the reconciliation path the merge-method rule exists to
-    remove. Observed live on 2026-07-31 promoting 7.77.3.
-    """
-
-    runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
-
-    assert "Synchronize `dev` after a promotion" in runbook
-    # The step belongs in the numbered sequence, not only in a later section,
-    # because that is what someone actually follows during a release.
-    sequence = runbook[
-        runbook.index("## Promotion sequence") : runbook.index("## Merge methods")
-    ]
-    assert "zero-file pull request" in sequence
-    assert "gh pr create --base dev" in runbook
-    assert "rejects even a non-force fast-forward" in runbook
-
-
-def test_runbook_warns_that_merging_a_promotion_deletes_dev() -> None:
-    """delete_branch_on_merge deletes the head branch, and a promotion's head is dev.
-
-    Hit on 2026-07-31: merging the promotion removed `dev` outright. Branch
-    protection prevents it now, so this records why that protection exists and
-    must not be removed.
+    `delete_branch_on_merge` deleted `dev` outright on 2026-07-31 because a
+    promotion's head was a long-lived branch. With one trunk every merged head
+    is a topic branch, so the trap cannot fire today — which is exactly when a
+    warning gets deleted and the next long-lived branch rediscovers it.
     """
 
     runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
@@ -349,25 +469,24 @@ def test_runbook_warns_that_merging_a_promotion_deletes_dev() -> None:
     # gh's --delete-branch governs only the local branch; the remote deletion
     # comes from the repository setting. Mistaking the two is the whole trap.
     assert "--delete-branch" in runbook
-    # Recreating at the former head would leave the branches diverged again.
     assert "not at its own former head" in runbook
 
 
-def test_dev_first_gate_refuses_pull_requests_that_bypass_staging() -> None:
-    workflow = _read(".github/workflows/dev-first-gate.yml")
+def test_hotfixes_have_no_pipeline_shortcut_left() -> None:
+    """`dev-first:override` was the escape hatch; removing the gate removes it.
 
-    assert yaml.safe_load(workflow)
-    assert "branches: [main]" in workflow
+    A retired label that is still described somewhere invites someone to reach
+    for it during an incident and conclude the pipeline is broken when nothing
+    honours it. The only surviving production exception is the backup one, and
+    it shortens the deploy rather than the pipeline.
+    """
 
-    # Exactly these heads reach main. `dev` is matched exactly, so a branch
-    # merely starting with "dev" (develop, dev-experiment) is still refused.
-    assert "dev|agent/promote-*|agent/reconcile-*|promote/*|reconcile/*)" in workflow
+    runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
+    guidance = _read("AGENTS.md")
 
-    # A production incident must never be blocked outright, and the escape
-    # hatch has to be visible rather than silent.
-    assert "dev-first:override" in workflow
-    assert "::warning::Dev-first gate overridden" in workflow
-
-    # The failure has to teach the flow; a bare non-zero exit does not.
-    assert "gh pr edit ${PR_NUMBER} --base dev" in workflow
-    assert "docs/runbooks/STAGING_PROMOTION.md" in workflow
+    assert "## Hotfixes" in runbook
+    assert "The `dev-first:override` label no longer exists" in runbook
+    assert "It shortens the deploy, not the pipeline." in runbook
+    assert "dev-first:override" not in guidance
+    for path in RELEASE_CHAIN:
+        assert "dev-first" not in _read(path)

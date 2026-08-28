@@ -71,7 +71,11 @@ def test_deploy_requires_exact_branch_github_evidence_before_database_work() -> 
     assert "production:dotmac-sub-prod)" in deploy
     assert 'GITHUB_RELEASE_BRANCH="main"' in deploy
     assert "staging:dotmac-sub-staging)" in deploy
-    assert 'GITHUB_RELEASE_BRANCH="dev"' in deploy
+    # Both environments release from the single `main` trunk. The branch
+    # dimension collapsed when the `dev` hop was retired; the environments stay
+    # separated by digest and by host contract, not by branch.
+    assert 'GITHUB_RELEASE_BRANCH="dev"' not in deploy
+    assert deploy.count('GITHUB_RELEASE_BRANCH="main"') == 2
     assert '"${REPO_DIR}/scripts/verify_github_release.py"' in deploy
     assert deploy.index('scripts/verify_github_release.py"') < deploy.index(
         "Backing up database before migrations"
