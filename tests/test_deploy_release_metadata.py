@@ -143,7 +143,7 @@ exit 0
 """,
     )
     nginx_config = (
-        "upstream dotmac_sub_app {\n  server 127.0.0.1:18001 backup;\n}"
+        "upstream dotmac_sub_app {\n  server 127.0.0.1:18002 backup;\n}"
         if proxy_ready
         else "upstream dotmac_sub_app {\n  server 127.0.0.1:8001;\n}"
     )
@@ -381,7 +381,7 @@ def test_deploy_reports_candidate_before_health_failure_rollback(
     assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
     commands = docker_log.read_text().splitlines()
     candidate_command = next(
-        command for command in commands if "127.0.0.1:18001:8001" in command
+        command for command in commands if "127.0.0.1:18002:8001" in command
     )
     diagnostic_logs = commands.index("logs --tail 200 dotmac_sub_app_candidate")
     rollback_cleanup = commands.index(
@@ -422,7 +422,7 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
     candidate = next(
         index
         for index, command in enumerate(commands)
-        if "127.0.0.1:18001:8001" in command
+        if "127.0.0.1:18002:8001" in command
     )
     candidate_command = commands[candidate]
     recreate = next(
@@ -448,7 +448,7 @@ def test_deploy_rejects_unavailable_manifest_pin_before_candidate(
     )
     commands = docker_log.read_text().splitlines()
     assert any("scripts.integrations.verify_manifest_pins" in item for item in commands)
-    assert not any("127.0.0.1:18001:8001" in item for item in commands)
+    assert not any("127.0.0.1:18002:8001" in item for item in commands)
 
 
 def test_deploy_rejects_unready_crm_ticket_cutover_before_candidate(
@@ -467,7 +467,7 @@ def test_deploy_rejects_unready_crm_ticket_cutover_before_candidate(
     assert any(
         "scripts.integrations.verify_crm_ticket_readiness" in item for item in commands
     )
-    assert not any("127.0.0.1:18001:8001" in item for item in commands)
+    assert not any("127.0.0.1:18002:8001" in item for item in commands)
 
 
 def test_deploy_refuses_replacement_without_proxy_handoff(

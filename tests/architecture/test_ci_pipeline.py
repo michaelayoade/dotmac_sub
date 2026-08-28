@@ -465,7 +465,11 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
 
     commercial_bootstrap = "scripts/bootstrap_commercial_module_prereqs.py"
     dispatcher_bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
+    ci_test_bootstrap = "scripts.ci.bootstrap_test_database_prereqs"
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    ci_test_bootstrap_source = (
+        ROOT / "scripts/ci/bootstrap_test_database_prereqs.py"
+    ).read_text(encoding="utf-8")
     ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
     e2e_gate = (ROOT / ".github/workflows/e2e-gate.yml").read_text(encoding="utf-8")
@@ -475,14 +479,23 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
             "test-integration:"
         )
     ]
-    assert 'BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}"' in helper
-    assert commercial_bootstrap in helper
-    assert dispatcher_bootstrap in helper
-    assert helper.index("parse_test_database_target") < helper.index(
-        commercial_bootstrap
-    )
-    assert helper.index(commercial_bootstrap) < helper.index(dispatcher_bootstrap)
+    assert ci_test_bootstrap in helper
+    assert helper.index("parse_test_database_target") < helper.index(ci_test_bootstrap)
+    assert "BOOTSTRAP_DATABASE_URL" not in helper
     assert "postgresql://" not in helper
+    assert "bootstrap_commercial_module_prereqs" in ci_test_bootstrap_source
+    assert "bootstrap_outbox_dispatcher_roles" in ci_test_bootstrap_source
+    assert "_bootstrap_test_target(target.url, label=target.database_name)" in (
+        ci_test_bootstrap_source
+    )
+    assert (
+        '_bootstrap_outbox_url(\n        target.url.set(database="template1")'
+        in ci_test_bootstrap_source
+    )
+    assert (
+        "bootstrap_commercial_module_prereqs(\n            target.url.set"
+        not in ci_test_bootstrap_source
+    )
 
     integration = makefile[
         makefile.index("test-integration:") : makefile.index("INTEGRATION_SHARD ?=")
@@ -522,6 +535,8 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
         )
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
         assert 'echo "$BOOTSTRAP_DATABASE_URL"' not in workflow_step
+
+    assert f"{dispatcher_bootstrap} --repair" in ci_migration
 
     assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow

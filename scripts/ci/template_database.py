@@ -61,6 +61,9 @@ from psycopg import sql
 from sqlalchemy.engine import URL
 
 from alembic import command
+from scripts.bootstrap_outbox_dispatcher_roles import (
+    bootstrap as bootstrap_outbox_dispatcher_roles,
+)
 from scripts.ci.migrated_test_database import (
     ALEMBIC_CONFIG_PATH,
     REPOSITORY_ROOT,
@@ -240,6 +243,21 @@ def _alembic_target(url: URL) -> Iterator[None]:
             os.environ["DATABASE_URL"] = previous_env
 
 
+def _psycopg_url(url: URL) -> str:
+    return url.set(drivername="postgresql").render_as_string(hide_password=False)
+
+
+def bootstrap_database_local_prerequisites(url: URL) -> None:
+    """Apply database-local migration prerequisites to a fresh test database."""
+
+    with psycopg.connect(_psycopg_url(url), autocommit=False) as conn:
+        result = bootstrap_outbox_dispatcher_roles(conn, dry_run=False, repair=True)
+    if result != 0:
+        raise RuntimeError(
+            "failed to bootstrap outbox dispatcher prerequisites for template database"
+        )
+
+
 def upgrade_to(url: URL, revision: str) -> None:
     """Run the real Alembic chain against `url` up to `revision`."""
 
@@ -264,6 +282,7 @@ def create_template(base: URL, revision: str) -> URL:
 
     target = base.set(database=name)
     try:
+        bootstrap_database_local_prerequisites(target)
         # `alembic/env.py` builds its engine with `poolclass=pool.NullPool`, so
         # the migration connection is closed rather than parked in a pool when
         # the upgrade returns. `seal_template` does not rely on that being true.

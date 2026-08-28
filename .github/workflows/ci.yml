@@ -745,7 +745,7 @@ jobs:
           docker run --rm $common_args dotmac-sub:ci sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
           docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
