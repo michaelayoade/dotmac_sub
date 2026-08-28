@@ -485,7 +485,17 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
     assert "postgresql://" not in helper
     assert "bootstrap_commercial_module_prereqs" in ci_test_bootstrap_source
     assert "bootstrap_outbox_dispatcher_roles" in ci_test_bootstrap_source
-    assert 'target.url.set(database="template1")' in ci_test_bootstrap_source
+    assert "_bootstrap_test_target(target.url, label=target.database_name)" in (
+        ci_test_bootstrap_source
+    )
+    assert (
+        '_bootstrap_outbox_url(\n        target.url.set(database="template1")'
+        in ci_test_bootstrap_source
+    )
+    assert (
+        "bootstrap_commercial_module_prereqs(\n            target.url.set"
+        not in ci_test_bootstrap_source
+    )
 
     integration = makefile[
         makefile.index("test-integration:") : makefile.index("INTEGRATION_SHARD ?=")
