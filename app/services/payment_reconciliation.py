@@ -64,11 +64,14 @@ from app.services.topup_intents import (
     GatewayTopupIntentFlow,
     GatewayTopupObservationSource,
     RecordGatewayTopupObservationCommand,
+    RecordGatewayTopupReconciliationAttemptCommand,
     TopupIntentCompletionSource,
     TopupIntentError,
+    TopupIntentReconciliationAttemptResult,
     TopupIntentStatus,
     lock_topup_intent_scope,
     stage_gateway_topup_observation,
+    stage_gateway_topup_reconciliation_attempt,
     stage_topup_intent_completion,
 )
 from app.services.topup_intents import (
@@ -80,11 +83,14 @@ logger = logging.getLogger(__name__)
 RECONCILIATION_SCOPE = "topup-payment:reconcile"
 VERIFIED_SETTLEMENT_SCOPE = "topup-payment:reconcile-verified"
 GATEWAY_OBSERVATION_SCOPE = "topup-payment:reconcile-observation"
+RECONCILIATION_ATTEMPT_SCOPE = "topup-payment:reconcile-attempt"
 _TERMINAL_RECOVERY_STATUSES = (
     TopupIntentStatus.failed,
     TopupIntentStatus.abandoned,
+    TopupIntentStatus.canceled,
     TopupIntentStatus.expired,
 )
+_TERMINAL_LANE_PERCENT = 20
 
 _VERIFIED_SETTLEMENT_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_reconciliation",
@@ -95,6 +101,11 @@ _GATEWAY_OBSERVATION_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_reconciliation",
     concern="stranded top-up reconciliation",
     name="record_reconciled_gateway_observation",
+)
+_RECONCILIATION_ATTEMPT_COMMAND = OwnerCommandDefinition(
+    owner="financial.payment_reconciliation",
+    concern="stranded top-up reconciliation",
+    name="claim_topup_reconciliation_attempt",
 )
 
 
@@ -152,6 +163,7 @@ class ReconciledTopupResult:
 
 @dataclass(frozen=True, slots=True)
 class TopupReconciliationSummary:
+    selected: int = 0
     checked: int = 0
     checked_pending: int = 0
     checked_terminal: int = 0
@@ -160,12 +172,19 @@ class TopupReconciliationSummary:
     expired: int = 0
     failed: int = 0
     abandoned: int = 0
+    unchanged: int = 0
     errors: int = 0
+    pending_due_remaining: int = 0
+    terminal_due_remaining: int = 0
+    outside_window: int = 0
+    saturated: bool = False
+    partial: bool = False
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, int | bool]:
         """Serialize the typed result at the Celery transport boundary."""
 
         return {
+            "selected": self.selected,
             "checked": self.checked,
             "checked_pending": self.checked_pending,
             "checked_terminal": self.checked_terminal,
@@ -174,7 +193,13 @@ class TopupReconciliationSummary:
             "expired": self.expired,
             "failed": self.failed,
             "abandoned": self.abandoned,
+            "unchanged": self.unchanged,
             "errors": self.errors,
+            "pending_due_remaining": self.pending_due_remaining,
+            "terminal_due_remaining": self.terminal_due_remaining,
+            "outside_window": self.outside_window,
+            "saturated": self.saturated,
+            "partial": self.partial,
         }
 
 
@@ -182,20 +207,50 @@ class TopupReconciliationSummary:
 class TopupReconciliationBacklog:
     """Read-only projection of gateway intents against reconciliation policy."""
 
-    pending: int
-    eligible: int
-    outside_window: int
+    pending_total: int
+    pending_fresh: int
+    pending_due: int
+    pending_cooling_down: int
+    pending_outside_window: int
+    terminal_recovery_total: int
+    terminal_recovery_due: int
+    terminal_recovery_cooling_down: int
+    terminal_recovery_outside_window: int
     oldest_pending_at: datetime | None
+    oldest_pending_due_created_at: datetime | None
+    oldest_terminal_due_created_at: datetime | None
     stale_before: datetime
     oldest_eligible_at: datetime
-    pending_total: int = 0
-    pending_eligible: int = 0
-    pending_outside_window: int = 0
-    terminal_recovery_total: int = 0
-    terminal_recovery_due: int = 0
-    terminal_recovery_outside_window: int = 0
-    terminal_recovery_cooling_down: int = 0
-    oldest_due_terminal_at: datetime | None = None
+
+    @property
+    def pending(self) -> int:
+        """Compatibility alias for the complete pending population."""
+
+        return self.pending_total
+
+    @property
+    def pending_eligible(self) -> int:
+        """Compatibility alias for pending work due now."""
+
+        return self.pending_due
+
+    @property
+    def eligible(self) -> int:
+        """All automatic reconciliation work due now."""
+
+        return self.pending_due + self.terminal_recovery_due
+
+    @property
+    def outside_window(self) -> int:
+        """All unresolved work older than the automatic retry window."""
+
+        return self.pending_outside_window + self.terminal_recovery_outside_window
+
+    @property
+    def oldest_due_terminal_at(self) -> datetime | None:
+        """Compatibility alias with its historical name."""
+
+        return self.oldest_terminal_due_created_at
 
 
 def _error(
@@ -290,6 +345,27 @@ def _next_gateway_reconcile_at(
     }:
         return observed_at + timedelta(minutes=unavailable_retry_minutes)
     return observed_at + timedelta(minutes=pending_retry_minutes)
+
+
+def _attempt_retry_at(
+    db: Session,
+    *,
+    candidate: TopupReconciliationCandidate,
+    attempted_at: datetime,
+) -> datetime:
+    """Lease one selected row long enough for this run to finish safely."""
+
+    if candidate.status in _TERMINAL_RECOVERY_STATUSES:
+        retry_hours = _resolve_reconciliation_int_setting(
+            db,
+            "topup_reconciliation_terminal_retry_hours",
+        )
+        return attempted_at + timedelta(hours=retry_hours)
+    retry_minutes = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_pending_retry_minutes",
+    )
+    return attempted_at + timedelta(minutes=retry_minutes)
 
 
 def _target_invoice_id(intent: TopupIntent) -> UUID | None:
@@ -673,6 +749,57 @@ def record_reconciled_gateway_observation(
     )
 
 
+def _stage_topup_reconciliation_attempt(
+    db: Session,
+    *,
+    candidate: TopupReconciliationCandidate,
+    attempted_at: datetime,
+    next_reconcile_at: datetime,
+) -> TopupIntentReconciliationAttemptResult:
+    try:
+        return stage_gateway_topup_reconciliation_attempt(
+            db,
+            RecordGatewayTopupReconciliationAttemptCommand(
+                intent_id=candidate.intent_id,
+                expected_provider_type=candidate.provider_type.value,
+                expected_reference=candidate.reference,
+                expected_status=candidate.status,
+                attempted_at=attempted_at,
+                next_reconcile_at=next_reconcile_at,
+            ),
+        )
+    except TopupIntentError as exc:
+        raise _error(
+            "attempt_claim_rejected",
+            exc.message,
+            intent_id=str(candidate.intent_id),
+            topup_error_code=exc.code,
+        ) from exc
+
+
+def claim_topup_reconciliation_attempt(
+    db: Session,
+    *,
+    candidate: TopupReconciliationCandidate,
+    attempted_at: datetime,
+    next_reconcile_at: datetime,
+    context: CommandContext,
+) -> TopupIntentReconciliationAttemptResult:
+    """Commit the retry lease before making an external gateway call."""
+
+    return execute_owner_command(
+        db,
+        definition=_RECONCILIATION_ATTEMPT_COMMAND,
+        context=context,
+        operation=lambda: _stage_topup_reconciliation_attempt(
+            db,
+            candidate=candidate,
+            attempted_at=attempted_at,
+            next_reconcile_at=next_reconcile_at,
+        ),
+    )
+
+
 def _candidate_context(
     context: CommandContext,
     candidate: TopupReconciliationCandidate,
@@ -691,6 +818,133 @@ def _candidate_context(
             f"topup-reconciliation-{candidate.intent_id}-{idempotency_suffix}"
         ),
     )
+
+
+def _provider_lane_candidates(
+    db: Session,
+    *,
+    provider_type: PaymentProviderType,
+    statuses: tuple[TopupIntentStatus, ...],
+    observed_at: datetime,
+    oldest: datetime,
+    stale_before: datetime | None,
+    limit: int,
+) -> tuple[TopupReconciliationCandidate, ...]:
+    query = (
+        select(
+            TopupIntent.id,
+            TopupIntent.provider_type,
+            TopupIntent.reference,
+            TopupIntent.status,
+        )
+        .where(TopupIntent.status.in_(tuple(status.value for status in statuses)))
+        .where(TopupIntent.completed_payment_id.is_(None))
+        .where(TopupIntent.provider_type == provider_type.value)
+        .where(TopupIntent.created_at > oldest)
+        .where(_gateway_reconcile_due(observed_at))
+    )
+    if stale_before is not None:
+        query = query.where(TopupIntent.created_at < stale_before)
+    rows = db.execute(
+        query.order_by(
+            TopupIntent.gateway_last_reconcile_attempt_at.is_not(None).asc(),
+            TopupIntent.gateway_last_reconcile_attempt_at.asc(),
+            TopupIntent.created_at.asc(),
+            TopupIntent.id.asc(),
+        ).limit(limit)
+    ).all()
+    return tuple(
+        TopupReconciliationCandidate(
+            intent_id=row.id,
+            provider_type=parse_supported_provider_type(row.provider_type),
+            reference=row.reference,
+            status=TopupIntentStatus(row.status),
+        )
+        for row in rows
+    )
+
+
+def _provider_reconciliation_order(
+    db: Session,
+) -> tuple[PaymentProviderType, ...]:
+    """Start with the provider least recently served by a committed claim."""
+
+    rows = db.execute(
+        select(
+            TopupIntent.provider_type,
+            func.max(TopupIntent.gateway_last_reconcile_attempt_at).label(
+                "last_attempt_at"
+            ),
+        )
+        .where(
+            TopupIntent.provider_type.in_(
+                tuple(provider.value for provider in SUPPORTED_PROVIDER_TYPES)
+            )
+        )
+        .where(TopupIntent.gateway_last_reconcile_attempt_at.is_not(None))
+        .group_by(TopupIntent.provider_type)
+    ).all()
+    last_attempt_by_provider = {
+        parse_supported_provider_type(row.provider_type): _as_utc(row.last_attempt_at)
+        for row in rows
+        if row.last_attempt_at is not None
+    }
+    stable_order = {
+        provider_type: position
+        for position, provider_type in enumerate(SUPPORTED_PROVIDER_TYPES)
+    }
+    never_attempted = datetime.min.replace(tzinfo=UTC)
+    return tuple(
+        sorted(
+            SUPPORTED_PROVIDER_TYPES,
+            key=lambda provider_type: (
+                provider_type in last_attempt_by_provider,
+                last_attempt_by_provider.get(provider_type, never_attempted),
+                stable_order[provider_type],
+            ),
+        )
+    )
+
+
+def _interleaved_lane_candidates(
+    db: Session,
+    *,
+    statuses: tuple[TopupIntentStatus, ...],
+    observed_at: datetime,
+    oldest: datetime,
+    stale_before: datetime | None,
+    limit: int,
+) -> tuple[TopupReconciliationCandidate, ...]:
+    """Interleave queues from the least recently served provider first."""
+
+    provider_rows = tuple(
+        _provider_lane_candidates(
+            db,
+            provider_type=provider_type,
+            statuses=statuses,
+            observed_at=observed_at,
+            oldest=oldest,
+            stale_before=stale_before,
+            limit=limit,
+        )
+        for provider_type in _provider_reconciliation_order(db)
+    )
+    interleaved: list[TopupReconciliationCandidate] = []
+    for position in range(limit):
+        for rows in provider_rows:
+            if position < len(rows):
+                interleaved.append(rows[position])
+                if len(interleaved) == limit:
+                    return tuple(interleaved)
+    return tuple(interleaved)
+
+
+def _lane_capacities(batch_size: int) -> tuple[int, int]:
+    """Reserve both lanes while leaving most capacity for customer payments."""
+
+    terminal = max(1, batch_size * _TERMINAL_LANE_PERCENT // 100)
+    terminal = min(terminal, batch_size - 1)
+    return batch_size - terminal, terminal
 
 
 def _reconciliation_candidates(
@@ -712,68 +966,32 @@ def _reconciliation_candidates(
     )
     stale_before = observed_at - timedelta(minutes=stale_minutes)
     oldest = observed_at - timedelta(days=max_age_days)
-    supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
-    common_filters = (
-        TopupIntent.completed_payment_id.is_(None),
-        TopupIntent.provider_type.in_(supported_values),
-        TopupIntent.created_at > oldest,
-        _gateway_reconcile_due(observed_at),
+    pending_rows = _interleaved_lane_candidates(
+        db,
+        statuses=(TopupIntentStatus.pending,),
+        observed_at=observed_at,
+        oldest=oldest,
+        stale_before=stale_before,
+        limit=batch_size,
     )
-    pending_rows = db.execute(
-        select(
-            TopupIntent.id,
-            TopupIntent.provider_type,
-            TopupIntent.reference,
-            TopupIntent.status,
-        )
-        .where(TopupIntent.status == TopupIntentStatus.pending.value)
-        .where(*common_filters)
-        .where(TopupIntent.created_at < stale_before)
-        .order_by(
-            func.coalesce(
-                TopupIntent.gateway_next_reconcile_at, TopupIntent.created_at
-            ),
-            TopupIntent.created_at.asc(),
-            TopupIntent.id.asc(),
-        )
-        .limit(batch_size)
-    ).all()
-    remaining = batch_size - len(pending_rows)
-    rows = list(pending_rows)
-    if remaining > 0:
-        rows.extend(
-            db.execute(
-                select(
-                    TopupIntent.id,
-                    TopupIntent.provider_type,
-                    TopupIntent.reference,
-                    TopupIntent.status,
-                )
-                .where(
-                    TopupIntent.status.in_(
-                        tuple(status.value for status in _TERMINAL_RECOVERY_STATUSES)
-                    )
-                )
-                .where(*common_filters)
-                .order_by(
-                    func.coalesce(
-                        TopupIntent.gateway_next_reconcile_at, TopupIntent.created_at
-                    ),
-                    TopupIntent.created_at.asc(),
-                    TopupIntent.id.asc(),
-                )
-                .limit(remaining)
-            ).all()
-        )
-    return tuple(
-        TopupReconciliationCandidate(
-            intent_id=row.id,
-            provider_type=parse_supported_provider_type(row.provider_type),
-            reference=row.reference,
-            status=TopupIntentStatus(row.status),
-        )
-        for row in rows
+    terminal_rows = _interleaved_lane_candidates(
+        db,
+        statuses=_TERMINAL_RECOVERY_STATUSES,
+        observed_at=observed_at,
+        oldest=oldest,
+        stale_before=None,
+        limit=batch_size,
     )
+
+    pending_capacity, terminal_capacity = _lane_capacities(batch_size)
+    pending_count = min(len(pending_rows), pending_capacity)
+    terminal_count = min(len(terminal_rows), terminal_capacity)
+    remaining = batch_size - pending_count - terminal_count
+    pending_extra = min(len(pending_rows) - pending_count, remaining)
+    pending_count += pending_extra
+    remaining -= pending_extra
+    terminal_count += min(len(terminal_rows) - terminal_count, remaining)
+    return pending_rows[:pending_count] + terminal_rows[:terminal_count]
 
 
 def _count_reconcilable(
@@ -793,6 +1011,7 @@ def topup_reconciliation_backlog(
     db: Session,
     *,
     observed_at: datetime,
+    provider_types: tuple[PaymentProviderType, ...] | None = None,
 ) -> TopupReconciliationBacklog:
     """Project gateway reconciliation work without deciding money consequences."""
 
@@ -807,7 +1026,10 @@ def topup_reconciliation_backlog(
     )
     stale_before = observed_at - timedelta(minutes=stale_minutes)
     oldest_eligible_at = observed_at - timedelta(days=max_age_days)
-    supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
+    selected_providers = (
+        SUPPORTED_PROVIDER_TYPES if provider_types is None else provider_types
+    )
+    supported_values = tuple(item.value for item in selected_providers)
     common = (
         TopupIntent.completed_payment_id.is_(None),
         TopupIntent.provider_type.in_(supported_values),
@@ -822,14 +1044,28 @@ def topup_reconciliation_backlog(
         ),
         *common,
     )
-    pending, oldest_pending_at = _count_reconcilable(db, filters=pending_base)
-    pending_eligible, _oldest_pending_eligible_at = _count_reconcilable(
+    pending_total, oldest_pending_at = _count_reconcilable(db, filters=pending_base)
+    pending_fresh, _ = _count_reconcilable(
+        db,
+        filters=(*pending_base, TopupIntent.created_at >= stale_before),
+    )
+    pending_due, oldest_pending_due_created_at = _count_reconcilable(
         db,
         filters=(
             *pending_base,
             TopupIntent.created_at < stale_before,
             TopupIntent.created_at > oldest_eligible_at,
             _gateway_reconcile_due(observed_at),
+        ),
+    )
+    pending_cooling_down, _ = _count_reconcilable(
+        db,
+        filters=(
+            *pending_base,
+            TopupIntent.created_at < stale_before,
+            TopupIntent.created_at > oldest_eligible_at,
+            TopupIntent.gateway_next_reconcile_at.is_not(None),
+            TopupIntent.gateway_next_reconcile_at > observed_at,
         ),
     )
     pending_outside_window, _ = _count_reconcilable(
@@ -839,14 +1075,8 @@ def topup_reconciliation_backlog(
             TopupIntent.created_at <= oldest_eligible_at,
         ),
     )
-    terminal_recovery_total, _ = _count_reconcilable(
-        db,
-        filters=(
-            *terminal_base,
-            TopupIntent.created_at > oldest_eligible_at,
-        ),
-    )
-    terminal_recovery_due, oldest_due_terminal_at = _count_reconcilable(
+    terminal_recovery_total, _ = _count_reconcilable(db, filters=terminal_base)
+    terminal_recovery_due, oldest_terminal_due_created_at = _count_reconcilable(
         db,
         filters=(
             *terminal_base,
@@ -861,31 +1091,30 @@ def topup_reconciliation_backlog(
             TopupIntent.created_at <= oldest_eligible_at,
         ),
     )
-    terminal_recovery_cooling_down = db.scalar(
-        select(func.count(TopupIntent.id)).where(
+    terminal_recovery_cooling_down, _ = _count_reconcilable(
+        db,
+        filters=(
             *terminal_base,
             TopupIntent.created_at > oldest_eligible_at,
             TopupIntent.gateway_next_reconcile_at.is_not(None),
             TopupIntent.gateway_next_reconcile_at > observed_at,
-        )
+        ),
     )
-    eligible = pending_eligible + terminal_recovery_due
-    outside_window = pending_outside_window + int(terminal_recovery_outside_window or 0)
     return TopupReconciliationBacklog(
-        pending=int(pending or 0),
-        eligible=eligible,
-        outside_window=outside_window,
-        oldest_pending_at=oldest_pending_at,
-        stale_before=stale_before,
-        oldest_eligible_at=oldest_eligible_at,
-        pending_total=int(pending or 0),
-        pending_eligible=pending_eligible,
+        pending_total=pending_total,
+        pending_fresh=pending_fresh,
+        pending_due=pending_due,
+        pending_cooling_down=pending_cooling_down,
         pending_outside_window=pending_outside_window,
         terminal_recovery_total=terminal_recovery_total,
         terminal_recovery_due=terminal_recovery_due,
         terminal_recovery_outside_window=terminal_recovery_outside_window,
-        terminal_recovery_cooling_down=int(terminal_recovery_cooling_down or 0),
-        oldest_due_terminal_at=oldest_due_terminal_at,
+        terminal_recovery_cooling_down=terminal_recovery_cooling_down,
+        oldest_pending_at=oldest_pending_at,
+        oldest_pending_due_created_at=oldest_pending_due_created_at,
+        oldest_terminal_due_created_at=oldest_terminal_due_created_at,
+        stale_before=stale_before,
+        oldest_eligible_at=oldest_eligible_at,
     )
 
 
@@ -901,18 +1130,52 @@ def reconcile_pending_topups(
     candidates = _reconciliation_candidates(db, observed_at=observed_at)
     db_session_adapter.release_read_transaction(db)
 
-    checked_pending = sum(
-        1 for candidate in candidates if candidate.status is TopupIntentStatus.pending
-    )
-    checked_terminal = len(candidates) - checked_pending
-    recovered = linked = expired = failed = abandoned = errors = 0
+    checked = checked_pending = checked_terminal = 0
+    recovered = linked = expired = failed = abandoned = unchanged = errors = 0
+    previous_attempted_at: datetime | None = None
     for candidate in candidates:
         try:
+            attempted_at = datetime.now(UTC)
+            if (
+                previous_attempted_at is not None
+                and attempted_at <= previous_attempted_at
+            ):
+                attempted_at = previous_attempted_at + timedelta(microseconds=1)
+            previous_attempted_at = attempted_at
+            next_reconcile_at = _attempt_retry_at(
+                db,
+                candidate=candidate,
+                attempted_at=attempted_at,
+            )
+            db_session_adapter.release_read_transaction(db)
+            claim = claim_topup_reconciliation_attempt(
+                db,
+                candidate=candidate,
+                attempted_at=attempted_at,
+                next_reconcile_at=next_reconcile_at,
+                context=_candidate_context(
+                    context,
+                    candidate,
+                    scope=RECONCILIATION_ATTEMPT_SCOPE,
+                    reason="Claim one due gateway reconciliation attempt",
+                    idempotency_suffix=(
+                        f"attempt-{int(attempted_at.timestamp() * 1_000_000)}"
+                    ),
+                ),
+            )
+            if not claim.claimed:
+                continue
+            checked += 1
+            if candidate.status is TopupIntentStatus.pending:
+                checked_pending += 1
+            else:
+                checked_terminal += 1
             observation = payment_gateway_adapter.observe_verification(
                 db,
                 provider_type=candidate.provider_type.value,
                 reference=candidate.reference,
             )
+            observation_at = max(datetime.now(UTC), attempted_at)
             db_session_adapter.release_read_transaction(db)
             if observation.outcome is PaymentGatewayVerificationOutcome.succeeded:
                 if observation.transaction is None:
@@ -926,7 +1189,7 @@ def reconcile_pending_topups(
                     ReconcileVerifiedTopupCommand(
                         candidate=candidate,
                         transaction=observation.transaction,
-                        observed_at=observed_at,
+                        observed_at=observation_at,
                     ),
                     context=_candidate_context(
                         context,
@@ -941,7 +1204,7 @@ def reconcile_pending_topups(
                     ReconcileGatewayObservationCommand(
                         candidate=candidate,
                         observation=observation,
-                        observed_at=observed_at,
+                        observed_at=observation_at,
                         source=GatewayTopupObservationSource.gateway_reconciliation,
                     ),
                     context=_candidate_context(
@@ -951,7 +1214,7 @@ def reconcile_pending_topups(
                         reason="Project normalized stranded top-up observation",
                         idempotency_suffix=(
                             f"{observation.outcome.value}-"
-                            f"{int(observed_at.timestamp())}"
+                            f"{int(observation_at.timestamp() * 1_000_000)}"
                         ),
                     ),
                 )
@@ -981,9 +1244,22 @@ def reconcile_pending_topups(
             failed += 1
         elif result.disposition is TopupReconciliationDisposition.abandoned:
             abandoned += 1
+        elif result.disposition is TopupReconciliationDisposition.unchanged:
+            unchanged += 1
+
+    backlog = topup_reconciliation_backlog(db, observed_at=observed_at)
+    batch_size = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_batch_size",
+    )
+    db_session_adapter.release_read_transaction(db)
+    due_remaining = backlog.pending_due + backlog.terminal_recovery_due
+    saturated = len(candidates) >= batch_size and due_remaining > 0
+    partial = errors > 0 or due_remaining > 0
 
     summary = TopupReconciliationSummary(
-        checked=len(candidates),
+        selected=len(candidates),
+        checked=checked,
         checked_pending=checked_pending,
         checked_terminal=checked_terminal,
         recovered=recovered,
@@ -991,12 +1267,20 @@ def reconcile_pending_topups(
         expired=expired,
         failed=failed,
         abandoned=abandoned,
+        unchanged=unchanged,
         errors=errors,
+        pending_due_remaining=backlog.pending_due,
+        terminal_due_remaining=backlog.terminal_recovery_due,
+        outside_window=backlog.outside_window,
+        saturated=saturated,
+        partial=partial,
     )
     logger.info(
-        "Top-up reconciliation completed: checked=%d checked_pending=%d "
+        "Top-up reconciliation completed: selected=%d checked=%d checked_pending=%d "
         "checked_terminal=%d recovered=%d linked=%d expired=%d failed=%d "
-        "abandoned=%d errors=%d",
+        "abandoned=%d unchanged=%d errors=%d pending_due_remaining=%d "
+        "terminal_due_remaining=%d outside_window=%d saturated=%s partial=%s",
+        summary.selected,
         summary.checked,
         summary.checked_pending,
         summary.checked_terminal,
@@ -1005,6 +1289,12 @@ def reconcile_pending_topups(
         summary.expired,
         summary.failed,
         summary.abandoned,
+        summary.unchanged,
         summary.errors,
+        summary.pending_due_remaining,
+        summary.terminal_due_remaining,
+        summary.outside_window,
+        summary.saturated,
+        summary.partial,
     )
     return summary
