@@ -757,7 +757,7 @@ def sales_order_performance_export(
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_revenue_report_data(db)
+    report_data = web_reports_service.get_revenue_report_data(db=db)
 
     context = {
         "request": request,
@@ -765,14 +765,14 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "total_revenue": report_data["total_revenue"],
-        "revenue_growth": report_data["revenue_growth"],
-        "recurring_revenue": report_data["recurring_revenue"],
-        "outstanding_amount": report_data["outstanding_amount"],
-        "outstanding_count": report_data["outstanding_count"],
-        "collection_rate": report_data["collection_rate"],
-        "recent_payments": report_data["recent_payments"],
-        "revenue_data": report_data["revenue_data"],
+        "total_revenue": report_data.total_revenue,
+        "revenue_growth": report_data.revenue_growth,
+        "recurring_revenue": report_data.recurring_revenue,
+        "outstanding_amount": report_data.outstanding_amount,
+        "outstanding_count": report_data.outstanding_count,
+        "collection_rate": report_data.collection_rate,
+        "recent_payments": report_data.recent_payments,
+        "revenue_chart": report_data.revenue_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/revenue.html", context)
@@ -888,7 +888,7 @@ def reports_subscribers_export(
 def reports_churn(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_churn_report_data(db)
+    report_data = web_reports_service.get_churn_report_data(db=db)
 
     context = {
         "request": request,
@@ -896,14 +896,14 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "churn_kpis": report_data["churn_kpis"],
-        "churn_rate": report_data["churn_rate"],
-        "retention_rate": report_data["retention_rate"],
-        "cancelled_count": report_data["cancelled_count"],
-        "at_risk_count": report_data["at_risk_count"],
-        "churn_reasons": report_data["churn_reasons"],
-        "churn_data": report_data["churn_data"],
-        "recent_cancellations": report_data["recent_cancellations"],
+        "churn_kpis": report_data.churn_kpis,
+        "churn_rate": report_data.churn_rate,
+        "retention_rate": report_data.retention_rate,
+        "cancelled_count": report_data.cancelled_count,
+        "at_risk_count": report_data.at_risk_count,
+        "churn_reasons": report_data.churn_reasons,
+        "recent_cancellations": report_data.recent_cancellations,
+        "churn_chart": report_data.churn_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/churn.html", context)
@@ -937,23 +937,25 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "total_olts": report_data["total_olts"],
-        "active_olts": report_data["active_olts"],
-        "total_onts": report_data["total_onts"],
-        "connected_onts": report_data["connected_onts"],
-        "ip_pool_usage": report_data["ip_pool_usage"],
-        "used_ips": report_data["used_ips"],
-        "total_ips": report_data["total_ips"],
-        "active_vlans": report_data["active_vlans"],
-        "pon_capacity": report_data["pon_capacity"],
-        "pon_utilization": report_data["pon_utilization"],
-        "total_fiber_strands": report_data["total_fiber_strands"],
-        "available_fiber_strands": report_data["available_fiber_strands"],
-        "total_fdh": report_data["total_fdh"],
-        "splitter_capacity": report_data["splitter_capacity"],
-        "olts": report_data["olts"],
-        "ip_pools": report_data["pool_data"],
-        "recent_ont_activity": report_data["recent_ont_activity"],
+        "total_olts": report_data.total_olts,
+        "active_olts": report_data.active_olts,
+        "total_onts": report_data.total_onts,
+        "connected_onts": report_data.connected_onts,
+        "ip_pool_usage": report_data.ip_pool_usage,
+        "used_ips": report_data.used_ips,
+        "total_ips": report_data.total_ips,
+        "active_vlans": report_data.active_vlans,
+        "pon_capacity": report_data.pon_capacity,
+        "pon_utilization": report_data.pon_utilization,
+        "total_fiber_strands": report_data.total_fiber_strands,
+        "available_fiber_strands": report_data.available_fiber_strands,
+        "total_fdh": report_data.total_fdh,
+        "splitter_capacity": report_data.splitter_capacity,
+        "olts": report_data.olts,
+        "ip_pools": report_data.pool_data,
+        "recent_ont_activity": report_data.recent_ont_activity,
+        "device_health_chart": report_data.device_health_chart,
+        "ip_pool_chart": report_data.ip_pool_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/network.html", context)
@@ -965,7 +967,9 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
 )
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
-    content = web_reports_service.build_network_export_csv(report_data, hours=hours)
+    content = web_reports_service.build_network_export_csv(
+        data=report_data, hours=hours
+    )
     return Response(
         content,
         media_type="text/csv",
@@ -1892,7 +1896,17 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_revenue_categories_data(db)
+    status_code = 200
+    try:
+        data = web_reports_ext_service.get_revenue_categories_data(db=db)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "Revenue category report projection is unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        db.rollback()
+        data = web_reports_ext_service.RevenueCategoriesReportData.unavailable()
+        status_code = 503
     ctx = _base_context(
         request,
         db,
@@ -1900,8 +1914,17 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
         "Revenue by Category",
         "Income breakdown by service type",
     )
-    ctx.update(data)
-    return templates.TemplateResponse("admin/reports/revenue_categories.html", ctx)
+    ctx.update(
+        {
+            "categories": data.categories,
+            "category_count": data.category_count,
+            "total_revenue": data.total_revenue,
+            "revenue_mix_chart": data.revenue_mix_chart,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/reports/revenue_categories.html", ctx, status_code=status_code
+    )
 
 
 @router.get(

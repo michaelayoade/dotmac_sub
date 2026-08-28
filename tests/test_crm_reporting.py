@@ -16,6 +16,7 @@ from app.models.provisioning import (
 from app.models.subscriber import SubscriberStatus
 from app.services import crm_reporting, provisioning_managers, web_reports
 from app.services.sot_registry.registry import registry_validation_errors
+from app.services.ui_contracts import ChartProjection
 from app.web.admin import reports as report_routes
 
 
@@ -104,19 +105,18 @@ def test_network_report_uses_uncapped_counts_and_observed_ont_status(db_session)
 
     report = web_reports.get_network_report_data(db_session)
 
-    assert report["total_olts"] == 101
-    assert report["active_olts"] == 101
-    assert report["total_onts"] == 2
-    assert report["connected_onts"] == 1
-    assert all(
-        isinstance(item, crm_reporting.NetworkOltFacts) for item in report["olts"]
-    )
-    assert any(item.mgmt_ip == "10.0.0.1" for item in report["olts"])
+    assert report.total_olts == 101
+    assert report.active_olts == 101
+    assert report.total_onts == 2
+    assert report.connected_onts == 1
+    assert all(isinstance(item, crm_reporting.NetworkOltFacts) for item in report.olts)
+    assert any(item.mgmt_ip == "10.0.0.1" for item in report.olts)
     assert all(
         isinstance(item, crm_reporting.NetworkOntFacts)
-        for item in report["recent_ont_activity"]
+        for item in report.recent_ont_activity
     )
-    assert sum(item.is_online for item in report["recent_ont_activity"]) == 1
+    assert sum(item.is_online for item in report.recent_ont_activity) == 1
+    assert report.device_health_chart.is_present
 
 
 def test_network_route_wires_all_infrastructure_capacity_metrics(
@@ -124,25 +124,28 @@ def test_network_route_wires_all_infrastructure_capacity_metrics(
 ):
     import app.web.admin as admin_web
 
-    report_data = {
-        "total_olts": 2,
-        "active_olts": 1,
-        "total_onts": 8,
-        "connected_onts": 7,
-        "ip_pool_usage": 25.0,
-        "used_ips": 64,
-        "total_ips": 256,
-        "active_vlans": 4,
-        "pon_capacity": 128,
-        "pon_utilization": 6.25,
-        "total_fiber_strands": 48,
-        "available_fiber_strands": 12,
-        "total_fdh": 3,
-        "splitter_capacity": 64,
-        "olts": [],
-        "pool_data": [],
-        "recent_ont_activity": [],
-    }
+    report_data = web_reports.NetworkReportData(
+        total_olts=2,
+        active_olts=1,
+        total_onts=8,
+        connected_onts=7,
+        ip_pool_usage=25.0,
+        used_ips=64,
+        total_ips=256,
+        active_vlans=4,
+        pon_capacity=128,
+        pon_utilization=6.25,
+        total_fiber_strands=48,
+        available_fiber_strands=12,
+        total_fdh=3,
+        splitter_capacity=64,
+        olts=(),
+        pool_data=(),
+        recent_ont_activity=(),
+        fiber_status={},
+        device_health_chart=ChartProjection.empty("No inventory."),
+        ip_pool_chart=ChartProjection.empty("No pools."),
+    )
     monkeypatch.setattr(
         web_reports, "get_network_report_data", lambda **_kwargs: report_data
     )
@@ -166,8 +169,10 @@ def test_network_route_wires_all_infrastructure_capacity_metrics(
         "available_fiber_strands",
         "total_fdh",
         "splitter_capacity",
+        "device_health_chart",
+        "ip_pool_chart",
     ):
-        assert context[key] == report_data[key]
+        assert context[key] == getattr(report_data, key)
 
 
 def test_online_activity_maps_the_internal_api_contract(monkeypatch, db_session):
@@ -230,7 +235,7 @@ def test_churn_reasons_come_from_native_subscription_cancellation(
 
     report = web_reports.get_churn_report_data(db_session)
 
-    assert report["churn_reasons"] == {"Moved away": 1}
+    assert report.churn_reasons == {"Moved away": 1}
 
 
 def test_churn_export_uses_complete_cohort_and_strict_active_retention(
