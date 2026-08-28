@@ -690,7 +690,7 @@ jobs:
     steps:
       - name: Docker validation not required
         if: needs.changes.outputs.docs-only == 'true' || github.event_name == 'push'
-        run: echo "Docker validation runs before merge; branch pushes use the sole GHCR publisher."
+        run: echo "Docker validation runs before merge; branch pushes defer publication to the explicit candidate workflow."
 
       - uses: actions/checkout@v4
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
