@@ -25,11 +25,14 @@ INTEGRATION_ROOT = REPOSITORY_ROOT / "tests" / "integration"
 
 CLONING_FIXTURES = frozenset({"cloned_database"})
 
-#: Fixtures that build a database by REPLAYING the chain from empty. Named
-#: rather than pattern-matched: a fixture earns this status by actually doing
-#: the work, and a new one has to be added here deliberately.
+#: Fixtures that identify a test which REPLAYS the chain from an empty
+#: database. Some create the empty database and let the test drive Alembic;
+#: others also perform the upgrade. Named rather than pattern-matched: a new
+#: fixture has to be added here deliberately, and the conversion arithmetic
+#: below makes every entry load-bearing.
 CHAIN_REPLAYING_FIXTURES = frozenset(
     {
+        "fresh_migration_database",
         "freshly_migrated_database",
         "isolated_migration_database",
         "isolated_database",
@@ -166,54 +169,64 @@ def test_the_sla_module_still_proves_both_migration_directions() -> None:
     assert "test_existing_policy_table_gains_family_identity_constraints" in fresh
 
 
-def test_the_sla_module_splits_exactly_three_fresh_chains_from_thirteen_clones() -> (
-    None
-):
-    """The conversion's arithmetic, pinned.
+def test_each_converted_module_pins_its_fresh_and_cloned_proof_arithmetic() -> None:
+    """A behaviour test drifting back to fresh replay is a CI regression.
 
-    Sixteen tests, three replaying the chain and thirteen cloning ONE template.
-    Pinned as exact counts rather than "at least one", because the whole
-    argument for the change is that the chain runs four times instead of
-    sixteen. A test drifting from clone to fresh chain costs ~50 s and would
-    otherwise be invisible in review.
+    Exact counts also make every chain-replaying fixture name above
+    load-bearing: removing ``fresh_migration_database`` changes the measured
+    split for both new conversion files and fails this guard.
     """
 
-    path = INTEGRATION_ROOT / "test_sla_policy_versions_postgres.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    tests = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("test_")
-    ]
-    fresh = [
-        node
-        for node in tests
-        if {argument.arg for argument in node.args.args} & CHAIN_REPLAYING_FIXTURES
-    ]
-    cloning = [
-        node
-        for node in tests
-        if {argument.arg for argument in node.args.args} & CLONING_FIXTURES
-    ]
-    assert len(tests) == 16, f"expected 16 tests, found {len(tests)}"
-    assert len(fresh) == 3, sorted(node.name for node in fresh)
-    assert len(cloning) == 13, sorted(node.name for node in cloning)
-    assert not {node.name for node in fresh} & {node.name for node in cloning}
-
-
-def test_the_sla_module_clones_from_a_single_revision_target() -> None:
-    """Thirteen clones must share ONE template, or the saving does not exist."""
-
-    path = INTEGRATION_ROOT / "test_sla_policy_versions_postgres.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    targets = {
-        node.args[0].value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "cloned_database"
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
+    expected = {
+        "test_sla_policy_versions_postgres.py": (16, 3, 13),
+        "test_migrations_512_setting_value_type.py": (4, 2, 2),
+        "test_lifecycle_evidence_authority_migration.py": (5, 1, 4),
     }
-    assert targets == {"heads"}, f"clones span several templates: {sorted(targets)}"
+    for name, wanted in expected.items():
+        path = INTEGRATION_ROOT / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tests = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+        ]
+        fresh = [
+            node
+            for node in tests
+            if {argument.arg for argument in node.args.args} & CHAIN_REPLAYING_FIXTURES
+        ]
+        cloning = [
+            node
+            for node in tests
+            if {argument.arg for argument in node.args.args} & CLONING_FIXTURES
+        ]
+        actual = (len(tests), len(fresh), len(cloning))
+        assert actual == wanted, f"{name}: expected {wanted}, found {actual}"
+        assert not {node.name for node in fresh} & {node.name for node in cloning}, (
+            f"{name}: one test cannot be both a fresh replay and a clone"
+        )
+
+
+def test_each_converted_module_clones_one_shared_head_template() -> None:
+    """A second target would replay another full chain and erase the saving."""
+
+    for name in (
+        "test_sla_policy_versions_postgres.py",
+        "test_migrations_512_setting_value_type.py",
+        "test_lifecycle_evidence_authority_migration.py",
+    ):
+        path = INTEGRATION_ROOT / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        targets = {
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "cloned_database"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        }
+        assert targets == {"heads"}, (
+            f"{name}: clones span several templates: {sorted(targets)}"
+        )
