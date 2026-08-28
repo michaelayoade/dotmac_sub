@@ -504,6 +504,27 @@ class RecordGatewayTopupObservationCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordGatewayTopupReconciliationAttemptCommand:
+    """Durable scheduler claim recorded before external gateway I/O."""
+
+    intent_id: UUID
+    expected_provider_type: str
+    expected_reference: str
+    expected_status: TopupIntentStatus
+    attempted_at: datetime
+    next_reconcile_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TopupIntentReconciliationAttemptResult:
+    """Whether a due candidate was still current and was claimed."""
+
+    intent_id: UUID
+    status: TopupIntentStatus
+    claimed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TopupIntentProjectionResult:
     """Immutable participant result for completion or expiry projection."""
 
@@ -1030,6 +1051,74 @@ def stage_topup_intent_failure(
         status=TopupIntentStatus.failed,
         payment_id=intent.completed_payment_id,
         changed=True,
+    )
+
+
+def stage_gateway_topup_reconciliation_attempt(
+    db: Session,
+    command: RecordGatewayTopupReconciliationAttemptCommand,
+) -> TopupIntentReconciliationAttemptResult:
+    """Advance a due intent before I/O so every failure path rotates fairly."""
+
+    attempted_at = _as_utc(command.attempted_at)
+    next_reconcile_at = _as_utc(command.next_reconcile_at)
+    if attempted_at is None or next_reconcile_at is None:
+        raise _error(
+            "reconciliation_attempt_time_invalid",
+            "Reconciliation attempt and retry times are required",
+        )
+    if next_reconcile_at <= attempted_at:
+        raise _error(
+            "reconciliation_retry_time_invalid",
+            "Reconciliation retry time must follow the attempt time",
+        )
+
+    intent = lock_topup_intent_scope(db, command.intent_id)
+    try:
+        status = TopupIntentStatus(intent.status)
+    except ValueError as exc:
+        raise _error(
+            "status_invalid",
+            "Top-up intent has an unsupported lifecycle status",
+            intent_id=str(intent.id),
+            status=intent.status,
+        ) from exc
+    if intent.provider_type != command.expected_provider_type:
+        raise _error(
+            "provider_mismatch",
+            "Reconciliation candidate provider changed before its attempt",
+            intent_id=str(intent.id),
+        )
+    if intent.reference != command.expected_reference:
+        raise _error(
+            "reference_mismatch",
+            "Reconciliation candidate reference changed before its attempt",
+            intent_id=str(intent.id),
+        )
+
+    current_due_at = _as_utc(intent.gateway_next_reconcile_at)
+    still_due = current_due_at is None or current_due_at <= attempted_at
+    if (
+        intent.completed_payment_id is not None
+        or status is not command.expected_status
+        or not still_due
+    ):
+        return TopupIntentReconciliationAttemptResult(
+            intent_id=intent.id,
+            status=status,
+            claimed=False,
+        )
+
+    intent.gateway_last_reconcile_attempt_at = attempted_at
+    intent.gateway_next_reconcile_at = next_reconcile_at
+    intent.gateway_reconcile_attempt_count = (
+        int(intent.gateway_reconcile_attempt_count or 0) + 1
+    )
+    db.add(intent)
+    return TopupIntentReconciliationAttemptResult(
+        intent_id=intent.id,
+        status=status,
+        claimed=True,
     )
 
 

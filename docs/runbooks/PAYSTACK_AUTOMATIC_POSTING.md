@@ -12,15 +12,15 @@ invoice, subscription, or access state.
 - `financial.payment_webhooks` owns signed webhook ingress and dispatches the
   normalized observation to the canonical settlement owners.
 - `financial.payment_reconciliation` owns the bounded scheduled fallback and its
-  reconcilable-intent backlog projection. Its candidate policy uses a
-  pending-first lane and a terminal late-success recovery lane; terminal rows
-  may consume only leftover batch capacity after their retry cooldown is due.
+  reconcilable-intent backlog, progress, and age projection. Its candidate
+  policy reserves bounded capacity for both stale pending customer payments and
+  terminal late-success recovery. Unused capacity flows to the other lane, and
+  supported providers are interleaved within each lane starting with the least
+  recently served provider.
 - `financial.topup_intents` owns lifecycle transitions and the shared
-  customer/admin blocker and retry projection, including typed gateway
-  observation progress (`gateway_last_observed_at`, `gateway_last_outcome`,
-  `gateway_last_reason_code`, `gateway_next_reconcile_at`, and
-  `gateway_observation_count`). Provider adapters only normalize observations
-  and never mutate intent state.
+  customer/admin blocker and retry projection, including separate typed gateway
+  attempt and observation progress plus the next reconciliation time. Provider
+  adapters only normalize observations and never mutate intent state.
 - `financial.account_credit_deposits` owns account-credit deposit settlement.
   The requested deposit is the authorized customer credit; the provider gross
   and fee remain explicit settlement facts.
@@ -53,13 +53,47 @@ late success can complete those states. Provider transaction identity and existi
 payment/event idempotency constraints ensure webhook and reconciliation replay
 settle exactly once.
 
-The scheduled fallback must not use one oldest-first queue for both pending
-customer payments and terminal late-success audit. Pending unresolved gateway
-intents are checked first once they are stale. Terminal failed, abandoned, and
-expired intents are checked only when `gateway_next_reconcile_at` is due, using
-the configured terminal retry interval. Non-success observations update the typed
-progress fields while preserving the existing `metadata.gateway_verification`
-evidence for compatibility.
+## Bounded queue and progress semantics
+
+The scheduled fallback must not use one oldest-first queue for both customer
+payments and terminal late-success recovery. It uses these separate lanes:
+
+- pending intents are eligible only after the stale threshold, inside the
+  maximum-age window, and when their next reconciliation time is due;
+- failed, abandoned, canceled, and expired intents are eligible for late-success
+  recovery inside the maximum-age window when their terminal retry is due.
+
+The configured batch size has a minimum of two. When both lanes are due, each
+receives reserved capacity so neither lane can starve the other. A lane that
+cannot use its reservation yields that capacity to the other lane. Within each
+lane, supported payment providers are interleaved before due intents are
+selected. The provider with the oldest committed attempt starts each lane, so
+starting priority rotates across runs even when a lane has only one reserved
+slot and one provider backlog cannot monopolize it.
+
+Every successfully claimed intent commits typed attempt count/time and its next
+eligible time before the provider call begins. A candidate that loses a
+concurrent atomic claim is selected but not checked and performs no provider
+I/O; that transient gap is expected because the winning worker owns the attempt.
+A provider timeout, normalization failure, or rejected financial consequence
+therefore remains visible as an attempted repair and cannot leave the same
+oldest row pinned at the front of every run.
+Normalized provider observations update separate observation count/time,
+outcome, and safe reason evidence. The existing
+`metadata.gateway_verification` value remains compatibility evidence; it is not
+the scheduling cursor.
+
+The read-only backlog is an exhaustive partition of supported unresolved
+gateway intents at one observation time:
+
+- pending: fresh, due, cooling down, or outside the automatic window;
+- terminal late-success recovery: due, cooling down, or outside the automatic
+  window.
+
+The projection reports lifecycle-lane counts, oldest due age, and attempt
+progress. A successful task heartbeat, `errors=0`, or a full checked batch is
+not proof of health when oldest due age is increasing, checked work is not
+advancing, or selected-to-checked gaps persist beyond concurrent claim races.
 
 The production Paystack webhook URL is:
 
@@ -108,16 +142,22 @@ Do not use a fabricated signature or replay a captured production payload.
    - a recent signed webhook receipt exists;
    - the reconciliation runner has a recent heartbeat and result;
    - the result has no rejected candidates;
-   - no eligible pending intents remain;
-   - terminal recovery work is either due and bounded or cooling down;
-   - no intents are stranded outside the automatic reconciliation window.
+   - checked and durable attempt progress agree; any selected-to-checked gap is
+     transient and explained by another worker's successful claim;
+   - checked-pending and checked-terminal evidence confirms both due lanes are
+     advancing when both have work;
+   - oldest due pending and terminal age is not increasing across healthy runs;
+   - cooling-down work has a future next reconciliation time;
+   - no pending or terminal intents are stranded outside the automatic window.
 5. Verify the canonical payment records preserve the provider gross and fee,
    while account credit equals the authorized deposit amount.
 6. Verify allocation, balance, and access changes are traceable to their named
    owners and were not written directly by the webhook adapter.
 
 A `partial` reconciliation result is not success. Investigate its rejection
-evidence even when the Celery task completed without raising an exception.
+evidence even when the Celery task completed without raising an exception. A
+nominally successful saturated run also requires follow-up when due counts or
+oldest due age do not decrease across runs.
 
 ## Reconcile a stranded payment
 
@@ -131,9 +171,9 @@ idempotent across webhook delivery and scheduled recovery: replaying the same
 provider transaction must reuse the canonical settlement rather than create
 duplicate money.
 
-Intents outside the configured automatic maximum-age window require explicit
-finance review. The operational evidence reports them separately so they are
-not mistaken for an empty or healthy queue.
+Pending and terminal intents outside the configured automatic maximum-age
+window require explicit finance review. The operational evidence reports them
+separately so they are not mistaken for an empty or healthy queue.
 
 ## Incident evidence
 
@@ -143,6 +183,8 @@ Record only non-secret evidence:
 - observed gross, fee, net, currency, and provider outcome;
 - signed webhook receipt time, if present;
 - reconciliation heartbeat and structured result;
+- pending and terminal partition counts, oldest due ages, and selected/checked
+  plus durable attempt progress;
 - canonical payment and intent identifiers;
 - owner outcome or domain rejection code.
 

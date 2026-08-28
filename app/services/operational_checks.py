@@ -87,6 +87,35 @@ def _task_result(task_name: str) -> tuple[dict[str, Any], datetime | None]:
     return result, _parse_datetime(result.get("at"))
 
 
+def _result_counter(detail: dict[str, Any], key: str) -> int:
+    value = detail.get(key)
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _result_flag(detail: dict[str, Any], key: str) -> bool:
+    value = detail.get(key)
+    return value is True or (
+        isinstance(value, int) and not isinstance(value, bool) and value == 1
+    )
+
+
+def _age_label(value: datetime | None, *, now: datetime) -> str:
+    observed_at = _parse_datetime(value)
+    if observed_at is None:
+        return "none"
+    seconds = max((now - observed_at).total_seconds(), 0.0)
+    if seconds >= 86400:
+        return f"{seconds / 86400:.1f} days"
+    if seconds >= 3600:
+        return f"{seconds / 3600:.1f} hours"
+    return f"{int(seconds // 60)} minutes"
+
+
 def bandwidth_poller_snapshot() -> dict[str, Any] | None:
     from app.services.poller_health import load_poller_health
 
@@ -450,16 +479,37 @@ def paystack_payment_check(
             last_success is None or (now - last_success).total_seconds() > interval * 2
         )
     )
-    backlog = topup_reconciliation_backlog(db, observed_at=now)
+    backlog = topup_reconciliation_backlog(
+        db,
+        observed_at=now,
+        provider_types=(PaymentProviderType.paystack,),
+    )
     webhook_at = _latest_paystack_webhook_at(db)
     if webhook_at is not None and webhook_at.tzinfo is None:
         webhook_at = webhook_at.replace(tzinfo=UTC)
-    errors = int(detail.get("errors") or 0)
-    checked = int(detail.get("checked") or 0)
-    recovered = int(detail.get("recovered") or 0)
-    stale_backlog = backlog.eligible + backlog.outside_window
+    result_status = str(result.get("status") or "").strip().lower()
+    selected = _result_counter(detail, "selected")
+    checked = _result_counter(detail, "checked")
+    unchanged = _result_counter(detail, "unchanged")
+    errors = _result_counter(detail, "errors")
+    pending_due_remaining = _result_counter(detail, "pending_due_remaining")
+    terminal_due_remaining = _result_counter(detail, "terminal_due_remaining")
+    last_outside_window = _result_counter(detail, "outside_window")
+    saturated = _result_flag(detail, "saturated")
+    partial_result = bool(
+        result_status == "partial"
+        or _result_flag(detail, "partial")
+        or saturated
+        or errors
+    )
+    failed_result = result_status in {"error", "failed", "timeout"}
+    outside_window = (
+        backlog.pending_outside_window + backlog.terminal_recovery_outside_window
+    )
+    due_backlog = backlog.pending_due + backlog.terminal_recovery_due
+    unresolved_backlog = due_backlog + outside_window
     webhook_missing_with_backlog = bool(
-        installed and webhook_at is None and stale_backlog
+        installed and webhook_at is None and unresolved_backlog
     )
     needs_attention = bool(
         installed
@@ -467,8 +517,10 @@ def paystack_payment_check(
             not executable
             or not schedule_enabled
             or runner_stale
-            or errors
-            or backlog.outside_window
+            or failed_result
+            or partial_result
+            or backlog.pending_due
+            or outside_window
             or webhook_missing_with_backlog
         )
     )
@@ -477,10 +529,19 @@ def paystack_payment_check(
         last_result = "Paystack is not installed; no automatic posting is expected."
     elif not result:
         last_result = "No reconciliation execution result has been recorded."
+    elif failed_result:
+        last_result = (
+            "The last reconciliation execution failed; result counters are not "
+            "treated as successful evidence."
+        )
     else:
         last_result = (
-            f"Reconciliation checked {checked}, recovered {recovered}, and "
-            f"rejected {errors}; {stale_backlog} stale intent(s) remain."
+            f"Reconciliation selected {selected}, checked {checked}, left "
+            f"{unchanged} unchanged, and encountered {errors} error(s); the last "
+            "run left "
+            f"{pending_due_remaining} pending and {terminal_due_remaining} "
+            f"terminal attempt(s) due, with {last_outside_window} outside the "
+            "automatic window."
         )
     webhook_evidence = (
         f"Last signature-verified Paystack webhook: {webhook_at.isoformat()}."
@@ -492,6 +553,17 @@ def paystack_payment_check(
         if last_success
         else "No successful reconciliation execution has been recorded."
     )
+    backlog_evidence = (
+        "Paystack reconciliation backlog: "
+        f"pending due={backlog.pending_due} "
+        f"(oldest age {_age_label(backlog.oldest_pending_due_created_at, now=now)}), "
+        f"cooling={backlog.pending_cooling_down}, fresh={backlog.pending_fresh}, "
+        f"outside-window={backlog.pending_outside_window}; terminal due="
+        f"{backlog.terminal_recovery_due} "
+        f"(oldest age {_age_label(backlog.oldest_terminal_due_created_at, now=now)}), "
+        f"cooling={backlog.terminal_recovery_cooling_down}, "
+        f"outside-window={backlog.terminal_recovery_outside_window}."
+    )
     if not installed:
         next_step = "Install Paystack before configuring automatic posting."
     elif not executable:
@@ -500,17 +572,31 @@ def paystack_payment_check(
         )
     elif not schedule_enabled or runner_stale:
         next_step = "Repair the reconciliation schedule or billing worker before taking payments."
+    elif failed_result:
+        next_step = (
+            "Inspect the failed reconciliation task and restore the billing worker "
+            "or provider path."
+        )
     elif webhook_missing_with_backlog:
         next_step = (
             f"Set the Paystack live webhook URL to POST {PAYSTACK_WEBHOOK_PATH}, "
             "then confirm a signature-verified receipt appears."
         )
-    elif errors:
+    elif outside_window:
         next_step = (
-            "Inspect and repair the rejected intents; the runner itself is executing."
+            "Reconcile Paystack intents outside the automatic retry window "
+            "through the canonical finance owner."
         )
-    elif backlog.outside_window:
-        next_step = "Reconcile intents outside the automatic retry window explicitly."
+    elif partial_result:
+        next_step = (
+            "Inspect the partial reconciliation result and due intents; the runner "
+            "completed but did not clear its bounded work."
+        )
+    elif backlog.pending_due:
+        next_step = (
+            "Inspect the due pending Paystack intents if the next scheduled run does "
+            "not clear them."
+        )
     else:
         next_step = "No operator action is required."
     observations = [value for value in (result_at, webhook_at) if value is not None]
@@ -527,7 +613,10 @@ def paystack_payment_check(
         expected=expected,
         last_result=last_result,
         observed_at=observed_at,
-        evidence=f"{binding_evidence} {webhook_evidence} {runner_evidence}",
+        evidence=(
+            f"{binding_evidence} {webhook_evidence} {runner_evidence} "
+            f"{backlog_evidence}"
+        ),
         impact=(
             "Stale successful charges can remain absent from customer accounts until "
             "a verified webhook or successful reconciliation commits settlement."
