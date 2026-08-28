@@ -3,19 +3,25 @@
 **Status:** Build-once candidate, digest-bound staging, production promotion,
 production verification, backup enforcement, and publisher cutover implemented
 
+**Amended 2026-08-28:** the release source branch changed from `dev` to `main`
+when the dev-first hop was retired. Nothing else in this decision changed: the
+image is still built once from an explicitly selected green SHA, staging still
+accepts that exact digest, and production eligibility is still derived from the
+recorded staging acceptance. The branch was the transport, not the guarantee.
+
 **Owner:** Dotmac Sub release control plane
 
 ## Decision
 
 The standard release path will build one immutable application image from the
-final, green `dev` release candidate. Staging will accept that exact OCI digest.
-After promotion, production eligibility will be derived from green `main` CI,
-Git-tree equality, ancestry, and the recorded staging acceptance. Registry-side
+final, green `main` release candidate. Staging will accept that exact OCI
+digest. Production eligibility will be derived from green `main` CI, Git-tree
+equality, ancestry, and the recorded staging acceptance. Registry-side
 tagging may add version or `latest` aliases, but it must not create a second
 application image.
 
 The active candidate path uses the contracts through
-`scripts/release_candidate_evidence.py`. The exact intended green `dev` commit
+`scripts/release_candidate_evidence.py`. The exact intended green `main` commit
 is selected manually by full SHA, built once, and recorded as a digest-bound
 artifact. The same Docker build derives a canonical product manifest from the
 image's exact `SUB_ASSEMBLY` and `VERSION` and stores it inside the image, so the
@@ -26,14 +32,14 @@ pull request is not deployment authority for an already-selected candidate;
 version metadata and semver aliases are separate from digest eligibility.
 Staging consumes and records that digest. The production authorization is
 recorded separately after the staged tree reaches green `main`. The application
-publisher no longer rebuilds on `dev` or `main`; only the independent pinned
+publisher no longer rebuilds on `main`; only the independent pinned
 GenieACS runtime remains in `ghcr.yml`.
 
 The release freeze is merge control, not deployment authority. While a
 candidate, staging deployment, production authorization, or production
-deployment workflow is queued or running, pull requests into `dev` must not
+deployment workflow is queued or running, pull requests into `main` must not
 merge. Branch pushes, pull request creation, and pull request updates remain
-open. The freeze prevents `dev` from moving underneath an in-flight candidate;
+open. The freeze prevents `main` from moving underneath an in-flight candidate;
 the selected SHA and OCI digest remain the facts that deployment consumes.
 
 ## Ownership and authoritative evidence
@@ -69,7 +75,7 @@ equal the source tree and whose ancestry must contain the source commit.
 
 The control plane derives these states from evidence rather than mutable tags:
 
-1. **Built:** exact `dev` source CI is green, one OCI digest exists, and its
+1. **Built:** exact `main` source CI is green, one OCI digest exists, and its
    embedded product manifest verifies against the image's assembly and version.
 2. **Staging accepted:** the staging deployment succeeded for the same source
    commit, source tree, and OCI digest.
@@ -129,7 +135,7 @@ not an input to the release-control decision.
 
 ### New owner and paths
 
-- The explicit release-candidate workflow selects the exact current `dev`
+- The explicit release-candidate workflow selects the exact current `main`
   tip intended for release and builds the application image once.
 - A staging deployment record will bind acceptance to the immutable digest.
 - The promotion workflow proves main tree equality, ancestry, main CI, and
@@ -158,12 +164,12 @@ Cutover requires all of the following:
 - the production verifier approves the separated source/release evidence;
 - backup-policy tests prove staging skip, production default, and hotfix
   fail-closed behavior; and
-- architecture tests prevent ordinary dev/main pushes from restoring duplicate
+- architecture tests prevent ordinary `main` pushes from restoring duplicate
   application builds or host-side test execution.
 
 ### Fallback retirement
 
-Ordinary application publishing from dev/main pushes, intermediate staging
+Ordinary application publishing from `main` pushes, intermediate staging
 triggers, and the generic production backup skip are retired. The emergency
 path remains explicit, attributable, digest-pinned, and subject to the same
 staging and production evidence rules.

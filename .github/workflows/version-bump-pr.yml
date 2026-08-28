@@ -3,7 +3,7 @@ name: Version Bump PR
 on:
   pull_request:
     types: [closed]
-    branches: [main, dev]
+    branches: [main]
 
 permissions:
   contents: write

@@ -319,7 +319,7 @@ def test_the_changes_job_exposes_no_unconsumed_output(
 # Integration-shard scheduling history is shared state
 # --------------------------------------------------------------------------
 
-DURATIONS_CACHE_PREFIX = "integration-test-durations-v2-dev-"
+DURATIONS_CACHE_PREFIX = "integration-test-durations-v2-main-"
 
 
 def _steps(workflow: dict[str, Any], job: str) -> list[dict[str, Any]]:
@@ -338,7 +338,7 @@ def _cache_steps(workflow: dict[str, Any], action: str) -> list[dict[str, Any]]:
     return found
 
 
-def test_integration_durations_are_restored_only_from_dev(
+def test_integration_durations_are_restored_only_from_main(
     workflow: dict[str, Any],
 ) -> None:
     """Reading someone else's branch timings would import their imbalance."""
@@ -349,11 +349,11 @@ def test_integration_durations_are_restored_only_from_dev(
     assert keys, "the restore step declares no restore-keys"
     for key in keys:
         assert key.startswith(DURATIONS_CACHE_PREFIX), (
-            f"restore key {key!r} can match history from outside dev"
+            f"restore key {key!r} can match history from outside main"
         )
 
 
-def test_only_a_push_to_dev_may_publish_integration_durations(
+def test_only_a_push_to_main_may_publish_integration_durations(
     workflow: dict[str, Any],
 ) -> None:
     """A pull request must measure itself and throw the numbers away.
@@ -366,7 +366,7 @@ def test_only_a_push_to_dev_may_publish_integration_durations(
     saves = _cache_steps(workflow, "save")
     assert len(saves) == 1, "expected exactly one duration publish step"
     condition = str(saves[0]["if"])
-    assert "github.ref == 'refs/heads/dev'" in condition, condition
+    assert "github.ref == 'refs/heads/main'" in condition, condition
     assert "github.event_name == 'push'" in condition, condition
     assert "needs.integration-shards.result == 'success'" in condition, condition
 

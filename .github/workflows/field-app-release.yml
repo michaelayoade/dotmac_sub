@@ -39,7 +39,7 @@ on:
     tags:
       - "field-mobile-v*"
   pull_request:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
     paths:
       - '.github/workflows/field-app-release.yml'
       - 'field_mobile/brand.json'

@@ -3,12 +3,12 @@ name: CI
 on:
   # `integration/**` and `consolidate/**` carry multi-PR batches. Without these
   # targets, a PR INTO a batch branch runs no tests at all, and the whole batch
-  # meets CI for the first time at its merge to dev — exactly the risk these
+  # meets CI for the first time at its merge to main — exactly the risk these
   # branch families exist to contain.
   push:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   pull_request:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   # A required check that never reports deadlocks the merge queue: GitHub waits
   # forever for a context that no run will ever produce. Every required context
   # in this file must therefore be reachable from `merge_group`.
@@ -352,13 +352,13 @@ jobs:
       # than the days-long authoring-to-merge gap this gate was written for, so
       # their parents are the most likely to be stale by merge time. A stale
       # parent merges cleanly and fails at deploy, so the report has to be
-      # blocking exactly when the batch lands. Regular dev pull requests keep
+      # blocking exactly when the batch lands. Regular main pull requests keep
       # reporting only, so the shadow-phase numbers stay comparable.
       - name: Check migration chains onto the base head
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          BASE="${{ github.base_ref || 'dev' }}"
+          BASE="${{ github.base_ref || 'main' }}"
           git fetch origin "$BASE" --depth=0 || true
           case "$HEAD_REF" in
             integration/*|consolidate/*) MODE="" ;;
@@ -549,7 +549,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Restore ONLY from `dev`. Scheduling history is shared state: a pull
+      # Restore ONLY from `main`. Scheduling history is shared state: a pull
       # request that seeded it could reshape every other run's shards, and a
       # slow or broken branch would poison the balance for everyone. Reads are
       # therefore taken from the trusted branch, and the matching save step
@@ -558,13 +558,13 @@ jobs:
       # A cache miss is not a failure. The selector falls back to a
       # conservative per-file estimate and still partitions every file exactly
       # once -- balance degrades, coverage does not.
-      - name: Restore integration-test durations from dev
+      - name: Restore integration-test durations from main
         uses: actions/cache/restore@v4
         with:
           path: .ci-cache/integration-test-durations.json
-          key: integration-test-durations-v2-dev-${{ github.run_id }}
+          key: integration-test-durations-v2-main-${{ github.run_id }}
           restore-keys: |
-            integration-test-durations-v2-dev-
+            integration-test-durations-v2-main-
 
       - name: Run integration-test shard
         env:
@@ -605,7 +605,7 @@ jobs:
         run: test "$INTEGRATION_RESULT" = "success"
 
       # Publishing is gated on the TRUSTED BRANCH, not merely on the event
-      # type: only a green push to `dev` may rewrite the shared scheduling
+      # type: only a green push to `main` may rewrite the shared scheduling
       # history. A pull request measures itself and throws the numbers away.
       # This step is inside the existing gate job rather than a new one so it
       # cannot run before every shard has passed.
@@ -614,7 +614,7 @@ jobs:
           needs.changes.outputs.postgresql-required == 'true'
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
-          && github.ref == 'refs/heads/dev'
+          && github.ref == 'refs/heads/main'
         uses: actions/checkout@v4
 
       - name: Download integration-test duration data
@@ -622,7 +622,7 @@ jobs:
           needs.changes.outputs.postgresql-required == 'true'
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
-          && github.ref == 'refs/heads/dev'
+          && github.ref == 'refs/heads/main'
         uses: actions/download-artifact@v4
         with:
           pattern: integration-durations-*
@@ -634,7 +634,7 @@ jobs:
           needs.changes.outputs.postgresql-required == 'true'
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
-          && github.ref == 'refs/heads/dev'
+          && github.ref == 'refs/heads/main'
         run: >-
           python3 scripts/ci/merge_test_durations.py
           --input-dir "$RUNNER_TEMP/integration-durations"
@@ -645,11 +645,11 @@ jobs:
           needs.changes.outputs.postgresql-required == 'true'
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
-          && github.ref == 'refs/heads/dev'
+          && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: .ci-cache/integration-test-durations.json
-          key: integration-test-durations-v2-dev-${{ github.run_id }}
+          key: integration-test-durations-v2-main-${{ github.run_id }}
 
   integration-test:
     name: Integration Tests (PostgreSQL)
