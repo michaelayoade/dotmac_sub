@@ -27,11 +27,17 @@ candidate receives only its immutable digest; `latest` is attached solely by
 `Promote staged digest for production`, after staging acceptance. The BuildKit
 cache scope `dotmac-sub-application` is shared by pre-merge validation and
 publication so unchanged layers are reused without unrelated builds
-overwriting the cache history.
+overwriting the cache history. Docker validation starts after change
+classification and runs alongside the test gates. It is independent evidence,
+so it may be green while another required context is red; branch protection
+still requires the complete set before merge.
 
-Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It pulls
-the immutable `sha-<commit>` image published by CI, rather than rebuilding it,
-and is not a per-change merge gate.
+Browser E2E remains nightly and manually dispatchable in `e2e.yml` and is not
+a per-change merge gate. Its current image reference is `sha-<short-commit>`,
+but no active publisher creates that tag: release candidates publish
+`candidate-<full-commit>` and `ghcr.yml` publishes only GenieACS. E2E image
+resolution therefore remains a known follow-up until the consumer and
+publisher contracts are aligned.
 
 ## Dependency reuse
 

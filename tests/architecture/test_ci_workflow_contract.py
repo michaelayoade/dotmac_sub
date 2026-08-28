@@ -17,6 +17,7 @@ shipped script did something else entirely.
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import sys
@@ -32,6 +33,13 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/ci.yml"
 #: Aggregate jobs whose GitHub contexts are required for merge. Each must report
 #: on every run, including one where the PostgreSQL lane is skipped.
 REQUIRED_AGGREGATE_JOBS = ("integration-run", "integration-test", "test")
+REQUIRED_CI_EVENTS = {
+    "push",
+    "pull_request",
+    "merge_group",
+    "workflow_dispatch",
+    "schedule",
+}
 
 
 def _workflow() -> dict[str, Any]:
@@ -501,4 +509,90 @@ def test_docker_build_still_reports_on_every_run(workflow: dict[str, Any]) -> No
     assert len(guarded) == len(job["steps"]), (
         "every docker-build step must guard itself, since the job no longer "
         "does it for them"
+    )
+
+
+def _docker_reporting_contract_violations(workflow: dict[str, Any]) -> list[str]:
+    """Return defects that can make the stable Docker context disappear."""
+
+    violations: list[str] = []
+    triggers = workflow[True] if True in workflow else workflow["on"]
+    missing_events = REQUIRED_CI_EVENTS - set(triggers)
+    if missing_events:
+        violations.append(
+            f"CI is missing Docker-relevant events: {sorted(missing_events)}"
+        )
+
+    job = workflow["jobs"]["docker-build"]
+    if job.get("name") != "Docker Build & Health Check":
+        violations.append("Docker required-context name changed")
+    condition = str(job.get("if", ""))
+    if "docs-only" in condition or "github.event_name" in condition:
+        violations.append("Docker job must not disappear for a change or event class")
+
+    no_op_steps = [
+        step
+        for step in job.get("steps", [])
+        if step.get("name") == "Docker validation not required"
+    ]
+    if len(no_op_steps) != 1:
+        violations.append("Docker context needs exactly one explicit no-op step")
+    else:
+        no_op_condition = str(no_op_steps[0].get("if", ""))
+        if "needs.changes.outputs.docs-only == 'true'" not in no_op_condition:
+            violations.append("Docker no-op must cover documentation-only changes")
+        if "github.event_name == 'push'" not in no_op_condition:
+            violations.append("Docker no-op must cover branch pushes")
+    return violations
+
+
+def test_docker_context_reports_for_every_main_trunk_event(
+    workflow: dict[str, Any],
+) -> None:
+    """The main-only topology changes branches, never the required context."""
+
+    assert not _docker_reporting_contract_violations(workflow)
+
+
+@pytest.mark.parametrize(
+    ("defect", "expected_violation"),
+    [
+        ("event_gate", "Docker job must not disappear for a change or event class"),
+        ("missing_merge_group", "CI is missing Docker-relevant events"),
+        ("renamed_context", "Docker required-context name changed"),
+        ("missing_docs_no_op", "Docker no-op must cover documentation-only changes"),
+        ("missing_push_no_op", "Docker no-op must cover branch pushes"),
+    ],
+)
+def test_docker_reporting_guard_is_sensitive(
+    workflow: dict[str, Any], defect: str, expected_violation: str
+) -> None:
+    """Each event/context/no-op assertion rejects its documented defect."""
+
+    planted = copy.deepcopy(workflow)
+    job = planted["jobs"]["docker-build"]
+    if defect == "event_gate":
+        job["if"] += " && github.event_name == 'pull_request'"
+    elif defect == "missing_merge_group":
+        triggers = planted[True] if True in planted else planted["on"]
+        del triggers["merge_group"]
+    elif defect == "renamed_context":
+        job["name"] = "Docker"
+    elif defect in {"missing_docs_no_op", "missing_push_no_op"}:
+        no_op = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Docker validation not required"
+        )
+        no_op["if"] = (
+            "github.event_name == 'push'"
+            if defect == "missing_docs_no_op"
+            else "needs.changes.outputs.docs-only == 'true'"
+        )
+    else:  # pragma: no cover - parametrization owns this vocabulary
+        raise AssertionError(f"unknown planted defect: {defect}")
+
+    assert any(
+        expected_violation in violation
+        for violation in _docker_reporting_contract_violations(planted)
     )
