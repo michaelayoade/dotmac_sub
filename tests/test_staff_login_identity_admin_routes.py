@@ -1,9 +1,11 @@
 """Typed adapter coverage for administrative staff recovery routes."""
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 from starlette.requests import Request
 
+import app.web.admin as web_admin
 from app.services import staff_provisioning, web_system_user_edit
 from app.web.admin import system as admin_system
 
@@ -117,3 +119,43 @@ def test_staff_edit_form_carries_field_technician_access() -> None:
 
     assert parsed.field_technician_access is True
     assert command.field_technician_access is True
+
+
+def test_staff_edit_page_carries_field_technician_access(monkeypatch) -> None:
+    user_id = uuid4()
+    profile_id = uuid4()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        admin_system.web_system_profiles_service,
+        "get_user_edit_data",
+        lambda _db, _user_id: {
+            "user": SimpleNamespace(id=user_id),
+            "roles": [],
+            "current_role_ids": set(),
+            "managed_role_ids": set(),
+            "all_permissions": [],
+            "direct_permission_ids": set(),
+            "field_technician_profile_id": profile_id,
+            "field_technician_access": True,
+        },
+    )
+    monkeypatch.setattr(admin_system, "_system_user_audit_items", lambda *_a: [])
+    monkeypatch.setattr(web_admin, "get_sidebar_stats", lambda _db: {})
+
+    def template_response(template, context, status_code=200):
+        captured["template"] = template
+        captured["context"] = context
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(admin_system.templates, "TemplateResponse", template_response)
+    request = _request(f"/admin/system/users/{user_id}/edit")
+    request.state.auth = {}
+
+    response = admin_system.user_edit(request, str(user_id), db=object())
+
+    context = captured["context"]
+    assert response.status_code == 200
+    assert captured["template"] == "admin/system/users/edit.html"
+    assert context["field_technician_access"] is True
+    assert context["field_technician_profile_id"] == profile_id

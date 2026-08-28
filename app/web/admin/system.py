@@ -2162,6 +2162,8 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
         "managed_role_ids": edit_data["managed_role_ids"],
         "all_permissions": edit_data["all_permissions"],
         "direct_permission_ids": edit_data["direct_permission_ids"],
+        "field_technician_profile_id": edit_data["field_technician_profile_id"],
+        "field_technician_access": edit_data["field_technician_access"],
         "audit_items": _system_user_audit_items(db, user_id),
         "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
         "can_update_password": web_system_common_service.is_admin_request(request),
