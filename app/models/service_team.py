@@ -421,6 +421,77 @@ class ServiceTeamExternalReference(Base):
     team = relationship("ServiceTeam", back_populates="external_references")
 
 
+class ServiceTeamDepartmentMembershipSource(Base):
+    """Tracks one externally managed department membership for one staff user."""
+
+    __tablename__ = "service_team_department_membership_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "account_scope",
+            "external_employee_id",
+            name="uq_service_team_department_membership_source_employee",
+        ),
+        Index(
+            "ix_service_team_department_membership_source_member",
+            "member_id",
+        ),
+        Index(
+            "ix_service_team_department_membership_source_team_active",
+            "team_id",
+            "is_active",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    account_scope: Mapped[str] = mapped_column(String(120), nullable=False)
+    external_employee_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    employee_code: Mapped[str | None] = mapped_column(String(80))
+    external_department_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    department_code: Mapped[str | None] = mapped_column(String(80))
+    department_name: Mapped[str | None] = mapped_column(String(200))
+    system_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("system_users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parties.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_teams.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_team_members.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    user = relationship("SystemUser")
+    person = relationship("Party")
+    team = relationship("ServiceTeam")
+    member = relationship("ServiceTeamMember")
+
+
 class ServiceTeamRoutingPolicy(Base):
     """A domain-owned route key selects an exact team; capability is eligibility."""
 

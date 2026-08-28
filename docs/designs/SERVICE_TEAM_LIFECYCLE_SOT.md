@@ -25,6 +25,10 @@ returned team scope.
 
 External workforce or CRM systems are observations. They never define local
 team identity, membership, responsibility, or access.
+An approved ERP department sync request may move only the tracked ERP-managed
+membership for one staff user. It must resolve the ERP department through an
+active `ServiceTeamExternalReference`; it never creates teams from ERP names or
+removes unrelated manual memberships.
 
 ## Data contract
 
@@ -45,6 +49,10 @@ and lifecycle timestamps. The following facts are composed:
 - `ServiceTeamExternalReference` records provider, account scope, external
   identifier, provenance, observation time, and lifecycle. Many observations
   may refer to one team; no observation is a local identity.
+- `ServiceTeamDepartmentMembershipSource` records the one ERP-managed
+  department membership source for an employee, including provider, account
+  scope, employee identifier, department identifier, local staff principal,
+  Party-backed membership row, observation time, and lifecycle.
 - `ServiceTeamRoutingPolicy` records a domain, route key, exact team, optional
   typed team scope, priority, and lifecycle. Code-consumed domain/route pairs
   are registered with a contract owner, version, and required capability;
