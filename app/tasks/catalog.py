@@ -39,6 +39,7 @@ class ExpiryReminderCandidate:
 
     subscription: "Subscription"
     boundary: datetime
+    boundary_key: str
     source: str
 
 
@@ -155,7 +156,7 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         for candidate in expiring:
             sub = candidate.subscription
             boundary = candidate.boundary
-            boundary_key = _reminder_boundary_key(boundary)
+            boundary_key = candidate.boundary_key
             try:
                 if sub.subscriber_id in suppressed_subscriber_ids:
                     suppressed += 1
@@ -237,10 +238,12 @@ def _expiry_reminder_candidates(
             boundary = next_billing_at
         if boundary is None or boundary <= now or boundary > cutoff:
             continue
+        boundary_key = _reminder_boundary_key(boundary)
         candidates.append(
             ExpiryReminderCandidate(
                 subscription=subscription,
                 boundary=boundary,
+                boundary_key=boundary_key,
                 source=source,
             )
         )

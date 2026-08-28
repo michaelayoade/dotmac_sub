@@ -1061,7 +1061,11 @@ def prepare_async_intake(db: Session, request: AiIntakeRequest) -> AiIntakeOutco
             channel=channel,
             reason=AiIntakeReason.active_owner,
         )
-    if not request.created_conversation and not request.awaiting_follow_up:
+    if (
+        not request.created_conversation
+        and not request.awaiting_follow_up
+        and not request.active_ai_session
+    ):
         return _skipped_outcome(
             started=started,
             channel=channel,
@@ -1136,7 +1140,11 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
             channel=channel,
             reason=AiIntakeReason.active_owner,
         )
-    if not request.created_conversation and not request.awaiting_follow_up:
+    if (
+        not request.created_conversation
+        and not request.awaiting_follow_up
+        and not request.active_ai_session
+    ):
         return _skipped_outcome(
             started=started,
             channel=channel,

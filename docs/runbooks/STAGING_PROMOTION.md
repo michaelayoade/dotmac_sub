@@ -42,10 +42,20 @@ What was removed is the merge, not the proof.
    application behaviour only — it does not exercise network equipment.** See
    "What staging acceptance does not cover" below.
 6. Dispatch `Promote staged digest for production` on `main` with the candidate
-   build run, the staging run, and the full main SHA. It proves tree equality
-   and ancestry, records typed authorization, and attaches the version and
-   `latest` aliases to the staged digest without rebuilding. A candidate that
-   never reached staging has no acceptance document and is refused here.
+   build run, the staging run, and the **staged release SHA** (`staged_release_sha`
+   — the commit the candidate was built from, NOT whatever `main` happens to be
+   now). It proves tree equality and ancestry, records typed authorization, and
+   attaches the version and `latest` aliases to the staged digest without
+   rebuilding. A candidate that never reached staging has no acceptance
+   document and is refused here.
+
+   **`main` is allowed to have moved on.** The workflow separates two
+   identities: the *authorizing* `main` tip, which supplies the workflow and
+   verifier code, and the *staged release*, which supplies the tree, digest and
+   VERSION actually deployed. Only the second is released; the first merely has
+   to still contain it. Requiring them to be the same commit is what previously
+   forced a rebuild and a fresh staging cycle every time anything landed on
+   `main` — which a version-bump pull request does after every merge.
 7. Dispatch `Deploy authorized digest to production` only after Michael names
    `dotmac-sub-prod`, supplies the authorization run ID, and the protected
    production environment approves it. The default path takes a backup.
@@ -358,5 +368,11 @@ existing staging backup files are unchanged.
   staging adapter supplies only the staging-specific backup and proxy opt-outs.
 - A failed staging deployment never authorizes a production digest: the
   authorization step requires a staging acceptance document and finds none.
+- Production refuses any deploy that is not a descendant of the revision
+  already running, before the database backup or migrations. A deliberate
+  rollback requires a typed authorization naming the exact
+  `from_revision`/`to_revision` transition plus a change reference and reason;
+  there is no boolean override, and a document written for a different
+  transition is refused rather than reused.
 - Production deploys only a typed, authorized digest. The self-hosted production
   job runs bounded operational checks and no repository test suite.

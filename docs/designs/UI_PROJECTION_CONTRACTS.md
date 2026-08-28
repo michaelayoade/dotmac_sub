@@ -1,6 +1,6 @@
 # UI Projection Contracts
 
-**Owner:** `app/services/ui_contracts.py` (State, KPI, Action) + `app/services/list_query.py` (List)
+**Owner:** `app/services/ui_contracts.py` (State, KPI, Action, Chart) + `app/services/list_query.py` (List)
 **Status:** Foundation — additive; portals adopt incrementally
 **Implements the shapes named in:** `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`
 
@@ -16,7 +16,7 @@ These contracts give every read/context owner one standard shape to return and
 every template one standard shape to render, so a fix made once is the same
 everywhere and the presentation layer can only *project* what the owner decided.
 
-## The four contracts
+## The five contracts
 
 | Contract | Lives in | Answers |
 | --- | --- | --- |
@@ -24,9 +24,20 @@ everywhere and the presentation layer can only *project* what the owner decided.
 | **State** | `ui_contracts.StateValue` | is this value present, stale, unknown, unavailable, or not-applicable — so unknown never renders as zero |
 | **KPI** | `ui_contracts.Kpi` | a headline number, its state + freshness, its semantic tone, and the exact cohort URL that produced it |
 | **Action** | `ui_contracts.Action` | is this action allowed (and why not), which permission it needs, and — for destructive/financial actions — its preview URL and impact count |
+| **Chart** | `ui_contracts.ChartProjection` / `ChartSeries` | is authoritative chart data present, genuinely empty, or unavailable, and which labels and numeric series may be rendered |
 
-The **List** contract already existed and is unchanged; this work adds the other
-three, which had no standard shape.
+The **List** contract already existed and is unchanged; the remaining contracts
+standardize presentation state that otherwise drifts across surfaces.
+
+### Chart — `ChartProjection`
+
+`present` carries non-empty labels, one or more equally sized numeric
+`ChartSeries`, and optional freshness. `empty` means the owner completed the
+read and found no qualifying observations; `unavailable` means the read could
+not be completed. Both absent states carry a user-facing message and no data.
+Templates always render the chart card and display the supplied empty or
+unavailable state instead of hiding the section or interpreting zero-valued
+series as a failed read.
 
 ### State — `StateValue`
 

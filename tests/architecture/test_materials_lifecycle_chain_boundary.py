@@ -65,7 +65,9 @@ def test_payables_settlement_is_observed_never_decided():
 def test_projection_handler_routes_the_chain():
     src = _source("app/services/events/handlers/materials_lifecycle_projection.py")
     assert "EventType.field_material_request_approved" in src
+    assert "EventType.vendor_project_completed" in src
     assert "EventType.vendor_purchase_invoice_approved" in src
+    assert "consume_project_completed" in src
     assert "_owner_session(" in src
     assert "except Exception" not in src
     dispatcher = _source("app/services/events/dispatcher.py")

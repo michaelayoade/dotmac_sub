@@ -428,6 +428,22 @@ def test_clear_reply_after_follow_up_can_classify(db_session, monkeypatch):
     assert outcome.status is AiIntakeStatus.classified
 
 
+def test_active_ai_session_keeps_existing_conversation_eligible(db_session):
+    _config(db_session)
+
+    outcome = ai_intake.prepare_async_intake(
+        db_session,
+        _request(
+            created_conversation=False,
+            active_ai_session=True,
+            inbound_message_id="wamid-active-ai-session",
+        ),
+    )
+
+    assert outcome.status is AiIntakeStatus.classifying
+    assert outcome.reason is AiIntakeReason.classified
+
+
 def test_gateway_failure_returns_fallback_metadata(db_session, monkeypatch):
     _config(db_session)
     gateway = _Gateway(error=AIClientError("provider unavailable"))

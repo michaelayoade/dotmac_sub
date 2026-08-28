@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, empty_state, action_button, metric_row, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, report_chart_card, data_table, table_head, table_row, empty_state, action_button, metric_row, animation_styles %}
 
 {% block title %}Revenue Report - Admin{% endblock %}
 
@@ -45,33 +45,20 @@
     </div>
 
     {# Revenue Trend Chart #}
-    {% set has_revenue_chart = revenue_data and ((revenue_data.revenue|sum) > 0 or (revenue_data.collected|sum) > 0) %}
-    {% if has_revenue_chart %}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
-    {% call card("Revenue Trend", color="teal") %}
-        <div class="chart-container" style="min-height: 280px;">
-            <canvas id="revenue-chart"></canvas>
-        </div>
+    {% call report_chart_card("Revenue Trend", revenue_chart, "revenue-chart", color="teal", min_height=280) %}
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             const ctx = document.getElementById('revenue-chart');
             if (!ctx) return;
             const chartData = {
-                labels: {{ revenue_data["labels"] | tojson | safe }},
+                labels: {{ revenue_chart.labels | tojson | safe }},
                 datasets: [
                     {
                         label: 'Collections',
-                        data: {{ revenue_data["revenue"] | tojson | safe }},
+                        data: {{ revenue_chart.series[0].values | tojson | safe }},
                         borderColor: '#14b8a6',
                         backgroundColor: 'rgba(20, 184, 166, 0.1)',
-                        fill: true,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Collected',
-                        data: {{ revenue_data["collected"] | tojson | safe }},
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
                         fill: true,
                         tension: 0.4
                     }
@@ -83,7 +70,6 @@
         </script>
     {% endcall %}
     </div>
-    {% endif %}
 
     {# Recent Payments #}
     <div class="animate-fade-in-up" style="animation-delay: 150ms;">

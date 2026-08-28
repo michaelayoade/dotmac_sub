@@ -23,7 +23,9 @@ SERVICE_READINESS_WORKFLOWS = {
 def _service_readiness_block(source: str, *, database: str, redis: str) -> str:
     start_marker = (
         "          for i in $(seq 1 30); do\n"
-        f"            docker exec {database} pg_isready -U postgres"
+        "            [ \"$(docker inspect --format='{{if .State.Health}}"
+        "{{.State.Health.Status}}{{else}}none{{end}}' " + database + ')"'
+        ' = "healthy" ] && break'
     )
     redis_failure_marker = (
         f"          if ! docker exec {redis} redis-cli ping >/dev/null 2>&1; then\n"
@@ -46,7 +48,9 @@ def _assert_service_readiness_blocks_match(blocks: tuple[str, ...]) -> None:
 def _assert_service_readiness_fails_closed(block: str) -> None:
     database_failure = block[
         block.index(
-            "          if ! docker exec DATABASE_SERVICE pg_isready -U postgres"
+            "          if [ \"$(docker inspect --format='{{if .State.Health}}"
+            "{{.State.Health.Status}}{{else}}none{{end}}' DATABASE_SERVICE)\""
+            ' != "healthy" ] || ! docker exec DATABASE_SERVICE pg_isready'
         ) : block.index("          fi\n")
     ]
     redis_failure_start = block.index(

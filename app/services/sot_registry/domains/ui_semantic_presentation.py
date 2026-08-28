@@ -28,12 +28,13 @@ DOMAIN = DomainSOT(
                 "UI value availability and freshness contract",
                 "UI KPI exact-cohort contract",
                 "UI action eligibility and confirmation contract",
+                "UI chart availability and series contract",
             ),
             depends_on=("ui.status_presentation",),
             notes=(
-                "Transport-neutral StateValue, Kpi, and Action shapes. Domain "
-                "read and command owners supply the facts and decisions; "
-                "templates and clients render them without deriving meaning."
+                "Transport-neutral StateValue, Kpi, Action, and ChartProjection "
+                "shapes. Domain read and command owners supply the facts and "
+                "decisions; templates and clients render them without deriving meaning."
             ),
             contract=ServiceContract(
                 concerns=tuple(
@@ -46,6 +47,7 @@ DOMAIN = DomainSOT(
                         "UI value availability and freshness contract",
                         "UI KPI exact-cohort contract",
                         "UI action eligibility and confirmation contract",
+                        "UI chart availability and series contract",
                     )
                 ),
                 authoritative_inputs=(
@@ -54,7 +56,8 @@ DOMAIN = DomainSOT(
                         owner="ui.projection_contracts",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "StateKind, StateValue, Kpi, and Action typed invariants"
+                            "StateKind, StateValue, Kpi, Action, ChartStateKind, "
+                            "ChartSeries, and ChartProjection typed invariants"
                         ),
                     ),
                 ),
@@ -86,12 +89,14 @@ DOMAIN = DomainSOT(
                         "adoption tests."
                     ),
                     cutover_gate=(
-                        "Adopted projections return StateValue, Kpi, and Action "
-                        "objects without template-side decision logic."
+                        "Adopted projections return StateValue, Kpi, Action, and "
+                        "ChartProjection objects without template-side decision "
+                        "logic."
                     ),
                     fallback_retirement=(
                         "Adopted templates no longer derive unknown/stale state, "
-                        "KPI cohorts, eligibility, or confirmation requirements."
+                        "KPI cohorts, eligibility, chart availability, or "
+                        "confirmation requirements."
                     ),
                 ),
                 steward="platform UI",

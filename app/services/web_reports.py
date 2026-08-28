@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -22,9 +23,10 @@ from app.services import crm_reporting as crm_reporting_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
-from app.services.ui_contracts import Kpi, StateValue
+from app.services.ui_contracts import ChartProjection, ChartSeries, Kpi, StateValue
 
 if TYPE_CHECKING:
+    from app.models.billing import Payment
     from app.models.provisioning import InstallAppointment
     from app.services.provisioning_managers import TechnicianReportRow
 
@@ -40,44 +42,54 @@ class RecentSubscriberReportRow:
     derived_status: AccountStatus
 
 
-class NetworkPoolReportRow(TypedDict):
+@dataclass(frozen=True, slots=True)
+class NetworkPoolReportRow:
     name: str
     cidr: str
     used_count: int
     total_count: int
 
 
-class NetworkReportData(TypedDict):
-    olts: list[crm_reporting_service.NetworkOltFacts]
+@dataclass(frozen=True, slots=True)
+class NetworkReportData:
+    olts: tuple[crm_reporting_service.NetworkOltFacts, ...]
     total_olts: int
     active_olts: int
     total_onts: int
     connected_onts: int
-    recent_ont_activity: list[crm_reporting_service.NetworkOntFacts]
-    pool_data: list[NetworkPoolReportRow]
+    recent_ont_activity: tuple[crm_reporting_service.NetworkOntFacts, ...]
+    pool_data: tuple[NetworkPoolReportRow, ...]
     used_ips: int
     total_ips: int
     ip_pool_usage: float
     active_vlans: int
     pon_capacity: int
     pon_utilization: float
-    fiber_status: dict[str, int]
+    fiber_status: Mapping[str, int]
     total_fiber_strands: int
     available_fiber_strands: int
     total_fdh: int
     splitter_capacity: int
+    device_health_chart: ChartProjection
+    ip_pool_chart: ChartProjection
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueReportData:
+    total_revenue: Decimal
+    revenue_growth: float | None
+    recurring_revenue: Decimal
+    outstanding_amount: Decimal
+    outstanding_count: int
+    collection_rate: float
+    recent_payments: tuple[Payment, ...]
+    revenue_chart: ChartProjection
 
 
 class CustomerGrowthSeries(TypedDict):
     labels: list[str]
     total: list[int]
     new: list[int]
-
-
-class ChurnSeries(TypedDict):
-    labels: list[str]
-    rate: list[float]
-    count: list[int]
 
 
 class RegionalSubscriberReportRow(TypedDict):
@@ -113,15 +125,16 @@ class SubscriberReportData(TypedDict):
     regional_breakdown: list[RegionalSubscriberReportRow]
 
 
-class ChurnReportData(TypedDict):
-    churn_kpis: dict[str, Kpi]
+@dataclass(frozen=True, slots=True)
+class ChurnReportData:
+    churn_kpis: Mapping[str, Kpi]
     churn_rate: float
     retention_rate: float
     cancelled_count: int
     at_risk_count: int
-    churn_reasons: dict[str, int]
-    churn_data: ChurnSeries
-    recent_cancellations: list[Subscriber]
+    churn_reasons: Mapping[str, int]
+    recent_cancellations: tuple[Subscriber, ...]
+    churn_chart: ChartProjection
 
 
 class TechnicianReportData(TypedDict):
@@ -160,79 +173,121 @@ def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
 
 
 def get_network_report_data(db: Session, hours: int | None = None) -> NetworkReportData:
-    facts = crm_reporting_service.network_infrastructure_facts(db, hours=hours)
-    pool_data: list[NetworkPoolReportRow] = [
-        {
-            "name": pool.name,
-            "cidr": pool.cidr,
-            "used_count": pool.used_count,
-            "total_count": pool.total_count,
-        }
+    facts = crm_reporting_service.network_infrastructure_facts(db=db, hours=hours)
+    as_of = datetime.now(UTC)
+    pool_data = tuple(
+        NetworkPoolReportRow(
+            name=pool.name,
+            cidr=pool.cidr,
+            used_count=pool.used_count,
+            total_count=pool.total_count,
+        )
         for pool in facts.pools
-    ]
+    )
     fiber_status = dict(facts.fiber_status)
     total_fiber_strands = sum(fiber_status.values())
     available_fiber_strands = fiber_status.get("available", 0)
+    device_health_chart = (
+        ChartProjection.present(
+            labels=(
+                "Online OLTs",
+                "Offline OLTs",
+                "Connected ONTs",
+                "Disconnected ONTs",
+            ),
+            series=(
+                ChartSeries(
+                    label="Devices",
+                    values=(
+                        facts.active_olts,
+                        facts.total_olts - facts.active_olts,
+                        facts.connected_onts,
+                        facts.total_onts - facts.connected_onts,
+                    ),
+                ),
+            ),
+            as_of=as_of,
+        )
+        if facts.total_olts or facts.total_onts
+        else ChartProjection.empty("No OLT or ONT inventory is available.")
+    )
+    ip_pool_chart = (
+        ChartProjection.present(
+            labels=tuple(pool.name for pool in facts.pools),
+            series=(
+                ChartSeries(
+                    label="Utilization",
+                    values=tuple(
+                        round(pool.used_count / pool.total_count * 100, 2)
+                        if pool.total_count
+                        else 0
+                        for pool in facts.pools
+                    ),
+                ),
+            ),
+            as_of=as_of,
+        )
+        if facts.pools
+        else ChartProjection.empty("No IP pools are configured.")
+    )
 
-    return {
-        "olts": list(facts.olts),
-        "total_olts": facts.total_olts,
-        "active_olts": facts.active_olts,
-        "total_onts": facts.total_onts,
-        "connected_onts": facts.connected_onts,
-        "recent_ont_activity": list(facts.recent_ont_activity),
-        "pool_data": pool_data,
-        "used_ips": facts.used_ips,
-        "total_ips": facts.total_ips,
-        "ip_pool_usage": (
+    return NetworkReportData(
+        olts=tuple(facts.olts),
+        total_olts=facts.total_olts,
+        active_olts=facts.active_olts,
+        total_onts=facts.total_onts,
+        connected_onts=facts.connected_onts,
+        recent_ont_activity=tuple(facts.recent_ont_activity),
+        pool_data=pool_data,
+        used_ips=facts.used_ips,
+        total_ips=facts.total_ips,
+        ip_pool_usage=(
             facts.used_ips / facts.total_ips * 100 if facts.total_ips > 0 else 0
         ),
-        "active_vlans": facts.active_vlans,
-        "pon_capacity": facts.pon_capacity,
-        "pon_utilization": (
+        active_vlans=facts.active_vlans,
+        pon_capacity=facts.pon_capacity,
+        pon_utilization=(
             facts.total_onts / facts.pon_capacity * 100 if facts.pon_capacity else 0
         ),
-        "fiber_status": fiber_status,
-        "total_fiber_strands": total_fiber_strands,
-        "available_fiber_strands": available_fiber_strands,
-        "total_fdh": facts.total_fdh,
-        "splitter_capacity": facts.splitter_capacity,
-    }
+        fiber_status=fiber_status,
+        total_fiber_strands=total_fiber_strands,
+        available_fiber_strands=available_fiber_strands,
+        total_fdh=facts.total_fdh,
+        splitter_capacity=facts.splitter_capacity,
+        device_health_chart=device_health_chart,
+        ip_pool_chart=ip_pool_chart,
+    )
 
 
 def build_network_export_csv(data: NetworkReportData, hours: int | None = None) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
-    writer.writerow(["total_olts", data["total_olts"]])
-    writer.writerow(["active_olts", data["active_olts"]])
-    writer.writerow(["total_onts", data["total_onts"]])
-    writer.writerow(["connected_onts", data["connected_onts"]])
-    writer.writerow(["used_ips", data["used_ips"]])
-    writer.writerow(["total_ips", data["total_ips"]])
-    writer.writerow(["ip_pool_usage_percent", f"{data['ip_pool_usage']:.2f}"])
-    writer.writerow(["active_vlans", data["active_vlans"]])
-    writer.writerow(["pon_capacity", data["pon_capacity"]])
-    writer.writerow(["pon_utilization_percent", f"{data['pon_utilization']:.2f}"])
-    writer.writerow(["total_fiber_strands", data["total_fiber_strands"]])
-    writer.writerow(["available_fiber_strands", data["available_fiber_strands"]])
-    writer.writerow(["active_fdh", data["total_fdh"]])
-    writer.writerow(["splitter_output_capacity", data["splitter_capacity"]])
+    writer.writerow(["total_olts", data.total_olts])
+    writer.writerow(["active_olts", data.active_olts])
+    writer.writerow(["total_onts", data.total_onts])
+    writer.writerow(["connected_onts", data.connected_onts])
+    writer.writerow(["used_ips", data.used_ips])
+    writer.writerow(["total_ips", data.total_ips])
+    writer.writerow(["ip_pool_usage_percent", f"{data.ip_pool_usage:.2f}"])
+    writer.writerow(["active_vlans", data.active_vlans])
+    writer.writerow(["pon_capacity", data.pon_capacity])
+    writer.writerow(["pon_utilization_percent", f"{data.pon_utilization:.2f}"])
+    writer.writerow(["total_fiber_strands", data.total_fiber_strands])
+    writer.writerow(["available_fiber_strands", data.available_fiber_strands])
+    writer.writerow(["active_fdh", data.total_fdh])
+    writer.writerow(["splitter_output_capacity", data.splitter_capacity])
     writer.writerow(["report_window_hours", hours or ""])
     writer.writerow([])
     writer.writerow(["pool_name", "cidr", "used_count", "total_count", "usage_percent"])
-    for pool in data["pool_data"]:
-        usage = (
-            (pool["used_count"] / pool["total_count"] * 100)
-            if pool["total_count"]
-            else 0
-        )
+    for pool in data.pool_data:
+        usage = pool.used_count / pool.total_count * 100 if pool.total_count else 0
         writer.writerow(
             [
-                pool["name"],
-                pool["cidr"],
-                pool["used_count"],
-                pool["total_count"],
+                pool.name,
+                pool.cidr,
+                pool.used_count,
+                pool.total_count,
                 f"{usage:.2f}",
             ]
         )
@@ -449,7 +504,7 @@ def _percent_change(
     return round(((current_value - previous_value) / previous_value) * 100, 1)
 
 
-def get_revenue_report_data(db: Session) -> dict:
+def get_revenue_report_data(db: Session) -> RevenueReportData:
     """Compose the revenue report from the billing reporting read owners.
 
     All figures (payments-basis revenue, outstanding receivables, total
@@ -458,11 +513,11 @@ def get_revenue_report_data(db: Session) -> dict:
     """
     from app.services.billing import reporting as billing_reporting
 
-    revenue = billing_reporting.get_payments_revenue_summary(db)
-    outstanding = billing_reporting.get_outstanding_receivables(db)
-    total_invoiced = billing_reporting.get_total_invoiced(db)
+    revenue = billing_reporting.get_payments_revenue_summary(db=db)
+    outstanding = billing_reporting.get_outstanding_receivables(db=db)
+    total_invoiced = billing_reporting.get_total_invoiced(db=db)
     try:
-        recurring_revenue = billing_reporting.get_recurring_revenue(db)
+        recurring_revenue = billing_reporting.get_recurring_revenue(db=db)
     except Exception:
         logger.debug("Failed to compute recurring revenue", exc_info=True)
         recurring_revenue = Decimal("0")
@@ -479,23 +534,32 @@ def get_revenue_report_data(db: Session) -> dict:
         offset=0,
     )
     collection_rate = (
-        (float(revenue["total"]) / float(total_invoiced) * 100) if total_invoiced else 0
+        (float(revenue.total) / float(total_invoiced) * 100) if total_invoiced else 0
     )
-    revenue_growth = _percent_change(
-        revenue["current_month"], revenue["previous_month"]
-    )
-    if revenue_growth is None and revenue["current_month"]:
+    revenue_growth = _percent_change(revenue.current_month, revenue.previous_month)
+    if revenue_growth is None and revenue.current_month:
         revenue_growth = 0.0
-    return {
-        "total_revenue": revenue["total"],
-        "revenue_growth": revenue_growth,
-        "recurring_revenue": recurring_revenue,
-        "outstanding_amount": outstanding["amount"],
-        "outstanding_count": outstanding["count"],
-        "collection_rate": collection_rate,
-        "recent_payments": recent_payments,
-        "revenue_data": revenue["monthly"],
-    }
+    revenue_chart = (
+        ChartProjection.present(
+            labels=revenue.monthly.labels,
+            series=(ChartSeries(label="Collections", values=revenue.monthly.values),),
+            as_of=datetime.now(UTC),
+        )
+        if revenue.monthly.observation_count
+        else ChartProjection.empty(
+            "No successful collections were recorded in the last six months."
+        )
+    )
+    return RevenueReportData(
+        total_revenue=revenue.total,
+        revenue_growth=revenue_growth,
+        recurring_revenue=recurring_revenue,
+        outstanding_amount=outstanding.amount,
+        outstanding_count=outstanding.count,
+        collection_rate=collection_rate,
+        recent_payments=tuple(recent_payments),
+        revenue_chart=revenue_chart,
+    )
 
 
 def _subscriber_growth_percent(db: Session) -> float | None:
@@ -806,9 +870,9 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
     owned by app.services.subscriber_growth; this function assembles and
     presents.
     """
-    summary = subscriber_growth.churn_summary(db)
-    total_subscribers = summary["total"]
-    at_risk_count = summary["at_risk_count"]
+    summary = subscriber_growth.churn_summary(db=db)
+    total_subscribers = summary.total
+    at_risk_count = summary.at_risk_count
     # KPI-parity: the Cancellations tile drills into the strict
     # ``status=canceled`` customer cohort, and that list (_load_report_subscribers)
     # filters strictly on ``Subscriber.status``.
@@ -886,20 +950,34 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
             tone=StatusTone.positive,
         ),
     }
-    churn_reasons = dict(crm_reporting_service.subscription_churn_reason_counts(db))
-    return {
-        "churn_kpis": churn_kpis,
-        "churn_rate": churn_rate,
-        "retention_rate": retention_rate,
-        "cancelled_count": cancelled_count,
-        "at_risk_count": at_risk_count,
-        "churn_reasons": churn_reasons,
-        "churn_data": cast(
-            ChurnSeries,
-            subscriber_growth.monthly_churn_series(db),
+    churn_reasons = dict(crm_reporting_service.subscription_churn_reason_counts(db=db))
+    monthly_churn = subscriber_growth.monthly_churn_series(db=db)
+    churn_chart = (
+        ChartProjection.present(
+            labels=monthly_churn.labels,
+            series=(
+                ChartSeries(label="Churn rate", values=monthly_churn.rates),
+                ChartSeries(label="Cancellations", values=monthly_churn.counts),
+            ),
+            as_of=datetime.now(UTC),
+        )
+        if any(monthly_churn.counts)
+        else ChartProjection.empty(
+            "No cancellations were recorded in the last six months."
+        )
+    )
+    return ChurnReportData(
+        churn_kpis=churn_kpis,
+        churn_rate=churn_rate,
+        retention_rate=retention_rate,
+        cancelled_count=cancelled_count,
+        at_risk_count=at_risk_count,
+        churn_reasons=churn_reasons,
+        recent_cancellations=tuple(
+            subscriber_growth.recent_cancellations(db=db, limit=10)
         ),
-        "recent_cancellations": subscriber_growth.recent_cancellations(db, limit=10),
-    }
+        churn_chart=churn_chart,
+    )
 
 
 def build_churn_export_csv(db: Session, days: int | None = None) -> str:

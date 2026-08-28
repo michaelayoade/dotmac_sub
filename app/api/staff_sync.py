@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.system_user import SystemUser
-from app.services import staff_provisioning
+from app.services import service_team_lifecycle, staff_provisioning
 from app.services.auth_dependencies import require_permission
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
@@ -20,6 +21,8 @@ from app.services.owner_commands import CommandContext
 router = APIRouter(prefix="/staff-accounts", tags=["staff-sync"])
 
 RoleName = Annotated[str, Field(min_length=1, max_length=120)]
+ERP_DEPARTMENT_SYNC_SCOPE = "operations:service_team:membership"
+DEFAULT_ERP_ACCOUNT_SCOPE = "default"
 IdempotencyKey = Annotated[
     str | None,
     Header(alias="Idempotency-Key", min_length=1, max_length=200),
@@ -39,6 +42,20 @@ class StaffAccountRolesUpdate(BaseModel):
     roles: list[RoleName] = Field(min_length=1, max_length=20)
 
 
+class ErpDepartmentReference(BaseModel):
+    department_id: str = Field(min_length=1, max_length=200)
+    department_code: str | None = Field(default=None, max_length=80)
+    department_name: str | None = Field(default=None, max_length=200)
+
+
+class StaffAccountErpDepartmentUpdate(BaseModel):
+    erp_employee_id: str = Field(min_length=1, max_length=200)
+    employee_code: str | None = Field(default=None, max_length=80)
+    erp_organization_id: UUID | None = None
+    account_scope: str | None = Field(default=None, max_length=120)
+    department: ErpDepartmentReference | None = None
+
+
 class StaffAccountRead(BaseModel):
     id: UUID
     email: str
@@ -48,6 +65,18 @@ class StaffAccountRead(BaseModel):
     created: bool = False
     changed: bool = False
     invite_requested: bool = False
+
+
+class StaffAccountErpDepartmentRead(BaseModel):
+    user_id: UUID
+    erp_employee_id: str
+    account_scope: str
+    service_team_id: UUID | None
+    previous_service_team_id: UUID | None
+    member_id: UUID | None
+    operation: str
+    changed: bool
+    replayed: bool
 
 
 def _actor(auth: dict) -> str:
@@ -63,27 +92,42 @@ def _context(
     *,
     reason: str,
     idempotency_key: str,
+    scope: str = staff_provisioning.STAFF_ASSIGN_SCOPE,
 ) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
         command_id=command_id,
         correlation_id=command_id,
         actor=_actor(auth),
-        scope=staff_provisioning.STAFF_ASSIGN_SCOPE,
+        scope=scope,
         reason=reason,
         idempotency_key=idempotency_key,
     )
 
 
 def _domain_error(exc: DomainError) -> HTTPException:
-    if exc.code.endswith(".unknown_roles") or exc.code.endswith(".invalid_command"):
+    if (
+        exc.code.endswith(".unknown_roles")
+        or exc.code.endswith(".invalid_command")
+        or exc.code
+        in {
+            "service_team_invalid",
+            "service_team_erp_department_unmapped",
+            "service_team_staff_identity_unbound",
+            "service_team_staff_identity_invalid",
+        }
+    ):
         status_code = 422
-    elif exc.code.endswith(".staff_account_not_found"):
+    elif exc.code.endswith(".staff_account_not_found") or exc.code in {
+        "service_team_not_found",
+        "service_team_staff_not_found",
+    }:
         status_code = 404
     elif (
         exc.code.endswith(".identity_conflict")
         or exc.code.endswith(".active_caller_transaction")
         or exc.code.endswith(".last_admin_required")
+        or exc.code == "service_team_erp_employee_identity_conflict"
     ):
         status_code = 409
     else:
@@ -119,6 +163,15 @@ def _from_user(db: Session, user: SystemUser) -> StaffAccountRead:
     )
 
 
+def _erp_account_scope(payload: StaffAccountErpDepartmentUpdate) -> str:
+    account_scope = str(payload.account_scope or "").strip()
+    if account_scope:
+        return account_scope
+    if payload.erp_organization_id is not None:
+        return str(payload.erp_organization_id)
+    return DEFAULT_ERP_ACCOUNT_SCOPE
+
+
 @router.post("", response_model=StaffAccountRead)
 def create_staff_account(
     payload: StaffAccountCreate,
@@ -151,6 +204,71 @@ def create_staff_account(
     except DomainError as exc:
         raise _domain_error(exc) from exc
     return _from_outcome(result)
+
+
+@router.put("/{user_id}/erp-department", response_model=StaffAccountErpDepartmentRead)
+def sync_staff_erp_department(
+    user_id: str,
+    payload: StaffAccountErpDepartmentUpdate,
+    auth: dict = Depends(require_permission(ERP_DEPARTMENT_SYNC_SCOPE)),
+    db: Session = Depends(get_db),
+    idempotency_key: IdempotencyKey = None,
+) -> StaffAccountErpDepartmentRead:
+    """Assign, transfer, or remove the ERP-managed service-team membership."""
+
+    try:
+        normalized_user_id = coerce_uuid(user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Staff account not found") from exc
+    account_scope = _erp_account_scope(payload)
+    department = (
+        service_team_lifecycle.ErpDepartmentMembershipDepartment(
+            department_id=payload.department.department_id,
+            department_code=payload.department.department_code,
+            department_name=payload.department.department_name,
+        )
+        if payload.department is not None
+        else None
+    )
+    department_key = payload.department.department_id if payload.department else "none"
+    try:
+        result = service_team_lifecycle.sync_erp_department_membership(
+            db,
+            service_team_lifecycle.SyncErpDepartmentMembership(
+                context=_context(
+                    auth,
+                    reason="ERP HR department/service-team membership reconciliation",
+                    idempotency_key=(
+                        idempotency_key
+                        or (
+                            f"erp-department:{normalized_user_id}:"
+                            f"{payload.erp_employee_id}:{account_scope}:"
+                            f"{department_key}"
+                        )
+                    ),
+                    scope=ERP_DEPARTMENT_SYNC_SCOPE,
+                ),
+                system_user_id=normalized_user_id,
+                account_scope=account_scope,
+                erp_employee_id=payload.erp_employee_id,
+                employee_code=payload.employee_code,
+                department=department,
+                observed_at=datetime.now(UTC),
+            ),
+        )
+    except DomainError as exc:
+        raise _domain_error(exc) from exc
+    return StaffAccountErpDepartmentRead(
+        user_id=result.system_user_id,
+        erp_employee_id=result.erp_employee_id,
+        account_scope=result.account_scope,
+        service_team_id=result.team_id,
+        previous_service_team_id=result.previous_team_id,
+        member_id=result.member_id,
+        operation=result.operation,
+        changed=not result.replayed,
+        replayed=result.replayed,
+    )
 
 
 @router.get("", response_model=StaffAccountRead)

@@ -1883,7 +1883,9 @@ DOMAIN = DomainSOT(
                 "coordinator transaction. Canonical reseller and fallback "
                 "Subscriber initialization, portal identity and credential "
                 "bootstrap, assignment-owner grants, audit, and events commit "
-                "atomically. Invitations are deduplicated event consequences; "
+                "atomically. Customer and reseller contact emails may overlap; "
+                "only the local credential username is globally unique. "
+                "Invitations are deduplicated event consequences; "
                 "reset capabilities are minted only at transport time for the "
                 "exact principal and never persisted in the outbox."
             ),

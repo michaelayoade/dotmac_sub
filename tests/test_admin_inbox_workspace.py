@@ -206,7 +206,10 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'role="dialog"' in Path("templates/admin/inbox/_overlays.html").read_text()
     assert "@input.debounce.300ms" in sidebar
     assert "/admin/inbox/presence" in sidebar
-    assert "Only online agents receive auto-assigned inbox conversations." in sidebar
+    assert (
+        "Only online agents with recent presence evidence receive auto-assigned "
+        "inbox conversations." in sidebar
+    )
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
     assert sidebar.count('name="inbox-filter-section"') == 2
@@ -815,7 +818,11 @@ def test_manager_dashboard_projects_presence_load_status_and_channels(db_session
     db_session.flush()
     db_session.add_all(
         [
-            InboxAgentPresence(person_id=user.id, status="online"),
+            InboxAgentPresence(
+                person_id=user.id,
+                status="online",
+                last_seen_at=datetime.now(UTC),
+            ),
             InboxConversationAssignment(
                 conversation_id=assigned.id,
                 service_team_id=team.id,

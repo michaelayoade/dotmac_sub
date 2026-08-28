@@ -95,6 +95,7 @@ def test_bundle_rejects_unknown_fields_that_could_smuggle_row_data() -> None:
 def test_bundle_accepts_host_and_composed_module_revision_ids() -> None:
     revisions = (
         "559_upcoming_charges_indexes",
+        "567_inbox_agent_analytics_indexes",
         "558_receivable_projection",
         "557_outbox_relay_prereq",
         "bi_0001_billing",

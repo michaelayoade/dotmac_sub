@@ -29,7 +29,7 @@ from app.models.billing import (
     PaymentMethod,
     PaymentStatus,
 )
-from app.models.catalog import Subscription
+from app.models.catalog import ServiceType, Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import display_format, settings_spec
@@ -1769,7 +1769,37 @@ def _report_month_starts(months: int = 6) -> list[datetime]:
     return starts
 
 
-def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
+@dataclass(frozen=True, slots=True)
+class MonthlyPaymentsRevenueSeries:
+    labels: tuple[str, ...]
+    values: tuple[float, ...]
+    observation_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentsRevenueSummary:
+    total: Decimal
+    current_month: Decimal
+    previous_month: Decimal
+    monthly: MonthlyPaymentsRevenueSeries
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueByServiceTypeRow:
+    service_type: ServiceType | None
+    invoice_count: int
+    total: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class OutstandingReceivablesSummary:
+    amount: Decimal
+    count: int
+
+
+def get_payments_revenue_summary(
+    db: Session, *, months: int = 6
+) -> PaymentsRevenueSummary:
     """Collections (payments received): lifetime, current/previous month, series.
 
     Finance decision (Michael, 2026-07-16): figures labelled "Revenue" use the
@@ -1785,8 +1815,12 @@ def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
         else current_start.replace(month=current_start.month - 1)
     )
 
-    def _paid_between(start: datetime | None, end: datetime | None) -> Decimal:
-        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+    def _paid_between(
+        start: datetime | None, end: datetime | None
+    ) -> tuple[Decimal, int]:
+        stmt = select(
+            func.coalesce(func.sum(Payment.amount), 0), func.count(Payment.id)
+        ).where(
             Payment.is_active.is_(True),
             Payment.status == PaymentStatus.succeeded,
         )
@@ -1794,25 +1828,36 @@ def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
             stmt = stmt.where(Payment.paid_at >= start)
         if end is not None:
             stmt = stmt.where(Payment.paid_at < end)
-        return db.scalar(stmt) or Decimal("0")
+        amount, count = db.execute(stmt).one()
+        return amount or Decimal("0"), int(count or 0)
 
     starts = _report_month_starts(months)
     labels: list[str] = []
     series: list[float] = []
+    observation_count = 0
     for idx, start in enumerate(starts):
         end = starts[idx + 1] if idx + 1 < len(starts) else now
+        amount, count = _paid_between(start, end)
         labels.append(start.strftime("%b"))
-        series.append(float(_paid_between(start, end)))
+        series.append(float(amount))
+        observation_count += count
 
-    return {
-        "total": _paid_between(None, None),
-        "current_month": _paid_between(current_start, now),
-        "previous_month": _paid_between(previous_start, current_start),
-        "monthly": {"labels": labels, "revenue": series, "collected": list(series)},
-    }
+    total, _ = _paid_between(None, None)
+    current_month, _ = _paid_between(current_start, now)
+    previous_month, _ = _paid_between(previous_start, current_start)
+    return PaymentsRevenueSummary(
+        total=total,
+        current_month=current_month,
+        previous_month=previous_month,
+        monthly=MonthlyPaymentsRevenueSeries(
+            labels=tuple(labels),
+            values=tuple(series),
+            observation_count=observation_count,
+        ),
+    )
 
 
-def get_outstanding_receivables(db: Session) -> dict:
+def get_outstanding_receivables(db: Session) -> OutstandingReceivablesSummary:
     """Open receivables: balance due and invoice count for collectible statuses."""
     row = db.execute(
         select(
@@ -1830,10 +1875,10 @@ def get_outstanding_receivables(db: Session) -> dict:
             Invoice.balance_due > 0,
         )
     ).one()
-    return {
-        "amount": row.amount or Decimal("0"),
-        "count": int(row._mapping["count"] or 0),
-    }
+    return OutstandingReceivablesSummary(
+        amount=row.amount or Decimal("0"),
+        count=int(row._mapping["count"] or 0),
+    )
 
 
 def get_total_invoiced(db: Session) -> Decimal:
@@ -1894,7 +1939,7 @@ def get_revenue_by_offer(
     ]
 
 
-def get_revenue_by_service_type(db: Session) -> list[dict]:
+def get_revenue_by_service_type(db: Session) -> tuple[RevenueByServiceTypeRow, ...]:
     """Invoice-line revenue and distinct invoice count per offer service type."""
     from app.models.billing import InvoiceLine
     from app.models.catalog import CatalogOffer
@@ -1915,10 +1960,14 @@ def get_revenue_by_service_type(db: Session) -> list[dict]:
         .group_by(CatalogOffer.service_type)
         .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
     )
-    return [
-        {"service_type": r[0], "invoice_count": r[1], "total": r[2]}
+    return tuple(
+        RevenueByServiceTypeRow(
+            service_type=r[0],
+            invoice_count=int(r[1] or 0),
+            total=r[2] or Decimal("0"),
+        )
         for r in db.execute(stmt).all()
-    ]
+    )
 
 
 def get_customer_statement_totals(db: Session, *, limit: int = 200) -> list[dict]:

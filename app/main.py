@@ -604,6 +604,25 @@ def _prewarm_admin_dashboard() -> None:
         raise RuntimeError("dashboard cache prewarm failed")
 
 
+def _hydrate_payment_webhook_ingress_policies() -> None:
+    from app.services.integrations.payment_capability import (
+        hydrate_webhook_ingress_policies,
+    )
+
+    db = SessionLocal()
+    try:
+        published = hydrate_webhook_ingress_policies(db)
+        logger.info(
+            "payment_webhook_ingress_policies_hydrated",
+            extra={
+                "event": "payment_webhook_ingress_policies_hydrated",
+                "published": published,
+            },
+        )
+    finally:
+        db.close()
+
+
 async def _run_deferred_startup() -> None:
     """Run slow, idempotent, non-fatal startup work in worker threads so it
     never blocks the event loop (single-worker safe) or delays serving.
@@ -612,6 +631,7 @@ async def _run_deferred_startup() -> None:
     inline kept the app dead to health checks for minutes after every restart.
     The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
     for fn, step in (
+        (_hydrate_payment_webhook_ingress_policies, "payment_webhook_ingress_policy"),
         (_prewarm_admin_dashboard, "dashboard_prewarm"),
         (_seed_startup_settings, "seed"),
         (_warn_on_scheduler_registry_drift, "scheduler_drift"),
@@ -1299,6 +1319,12 @@ _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/webhooks/",
 )
 _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_PAYMENT_PROVIDER_WEBHOOK_PATHS = {
+    "/api/v1/payment-events/paystack": "paystack",
+    "/payment-events/paystack": "paystack",
+    "/api/v1/payment-events/flutterwave": "flutterwave",
+    "/payment-events/flutterwave": "flutterwave",
+}
 _API_SYNC_FEED_PATHS = frozenset(
     {
         "/api/v1/billing-accounts/sync",
@@ -1423,8 +1449,52 @@ async def login_rate_limit_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
+async def payment_provider_webhook_rate_limit_middleware(request: Request, call_next):
+    """Give signed provider ingress a bounded lane independent of API sync traffic."""
+
+    provider = _PAYMENT_PROVIDER_WEBHOOK_PATHS.get(request.url.path)
+    if request.method != "POST" or provider is None:
+        return await call_next(request)
+
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    from app.services.integrations.payment_capability import (
+        effective_webhook_ingress_policy,
+    )
+    from app.services.rate_limiter_adapter import allow_operation
+
+    policy = effective_webhook_ingress_policy(provider)
+    if not policy.enabled:
+        return await call_next(request)
+    ip_address = _client_ip(request)
+    decision = allow_operation(
+        f"payment-provider-webhook:{provider}:{ip_address}",
+        limit=policy.requests_per_window,
+        window_seconds=policy.window_seconds,
+    )
+    outcome = "admitted" if decision.allowed else "limited"
+    try:
+        from app.metrics import PAYMENT_PROVIDER_WEBHOOK_INGRESS
+
+        PAYMENT_PROVIDER_WEBHOOK_INGRESS.labels(provider, outcome).inc()
+    except Exception:
+        logger.debug("payment_provider_webhook_metric_failed", exc_info=True)
+    if decision.allowed:
+        return await call_next(request)
+
+    retry_after = decision.retry_after_seconds or policy.window_seconds
+    return _JSONResponse(
+        {"detail": "Payment webhook ingress limit reached. Please retry shortly."},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+@app.middleware("http")
 async def api_sync_pressure_guard_middleware(request: Request, call_next):
     """Throttle API sync bursts before downstream handlers can acquire DB sessions."""
+    if request.url.path in _PAYMENT_PROVIDER_WEBHOOK_PATHS:
+        return await call_next(request)
     if not _env_bool("API_SYNC_PRESSURE_GUARD_ENABLED", True):
         return await call_next(request)
 

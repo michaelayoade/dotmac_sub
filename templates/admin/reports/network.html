@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, report_chart_card %}
 
 {% block title %}Network Usage Report - Admin{% endblock %}
 
@@ -77,54 +77,40 @@
 
     <!-- Network Overview Charts -->
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <!-- Device Status Doughnut -->
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Device Health Overview</h2>
-            </div>
-            <div class="p-6">
-                <div class="chart-container" style="min-height: 220px;">
-                    <canvas id="device-health-chart"></canvas>
-                </div>
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('device-health-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: ['Online OLTs', 'Offline OLTs', 'Connected ONTs', 'Disconnected ONTs'],
-                        values: [{{ active_olts | default(0) }}, {{ (total_olts | default(0)) - (active_olts | default(0)) }}, {{ connected_onts | default(0) }}, {{ (total_onts | default(0)) - (connected_onts | default(0)) }}],
-                        colors: ['#10b981', '#ef4444', '#06b6d4', '#f59e0b']
-                    };
-                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
-                    DotmacCharts.registerChart('device-health-chart', chart);
-                });
-                </script>
-            </div>
-        </div>
-        <!-- IP Pool Usage Chart -->
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">IP Pool Utilization</h2>
-            </div>
-            <div class="p-6">
-                <div class="chart-container" style="min-height: 220px;">
-                    <canvas id="ip-pool-chart"></canvas>
-                </div>
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('ip-pool-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: ['Used IPs', 'Available IPs'],
-                        values: [{{ used_ips | default(0) }}, {{ (total_ips | default(0)) - (used_ips | default(0)) }}],
-                        colors: ['#206a07', '#e2e8f0']
-                    };
-                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
-                    DotmacCharts.registerChart('ip-pool-chart', chart);
-                });
-                </script>
-            </div>
-        </div>
+        {% call report_chart_card("Device Health Overview", device_health_chart, "device-health-chart", color="teal", min_height=220) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('device-health-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ device_health_chart.labels | tojson | safe }},
+                values: {{ device_health_chart.series[0].values | tojson | safe }},
+                colors: ['#10b981', '#ef4444', '#06b6d4', '#f59e0b']
+            };
+            const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+            DotmacCharts.registerChart('device-health-chart', chart);
+        });
+        </script>
+        {% endcall %}
+
+        {% call report_chart_card("IP Pool Utilization", ip_pool_chart, "ip-pool-chart", color="cyan", min_height=220) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('ip-pool-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ ip_pool_chart.labels | tojson | safe }},
+                datasets: [{
+                    label: 'Utilization %',
+                    data: {{ ip_pool_chart.series[0].values | tojson | safe }},
+                    backgroundColor: '#0891b2'
+                }]
+            };
+            const chart = DotmacCharts.createBarChart(ctx, chartData, {});
+            DotmacCharts.registerChart('ip-pool-chart', chart);
+        });
+        </script>
+        {% endcall %}
     </div>
 
     <!-- Device Status -->

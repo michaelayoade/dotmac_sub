@@ -84,6 +84,16 @@ def list_receipts(
     )
 
 
+def list_recent_receipts_for_capability(
+    db: Session, *, capability_binding_id: UUID, limit: int = 20
+) -> list[IntegrationInbox]:
+    return list_receipts(
+        db,
+        capability_binding_id=capability_binding_id,
+        limit=limit,
+    )
+
+
 def receive_verified(
     db: Session,
     *,

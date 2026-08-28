@@ -902,6 +902,7 @@ from app.models.service_team import (  # noqa: F401
     ServiceTeamCapability,
     ServiceTeamCapabilityDefinition,
     ServiceTeamCapabilityKey,
+    ServiceTeamDepartmentMembershipSource,
     ServiceTeamExternalReference,
     ServiceTeamMember,
     ServiceTeamMemberResponsibility,

@@ -7,6 +7,7 @@ owner for routing, queueing, assignment, outbound delivery, and human takeover.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from string import Template
@@ -92,6 +93,28 @@ SUPPORTED_RULE_ACTIONS = frozenset(
         "respond",
         "handoff",
         "mark_resolved",
+    }
+)
+ACCOUNT_BOUND_INTENTS = frozenset(
+    {
+        "billing_issue",
+        "payment_confirmation",
+        "subscription_renewal",
+        "plan_change",
+        "account_access",
+    }
+)
+ACCOUNT_BOUND_CATEGORIES = frozenset(
+    {
+        "payment_not_reflected",
+        "invoice_request",
+        "subscription_expired",
+        "renewal_request",
+        "plan_change_request",
+        "login_problem",
+        "account_information",
+        "other_billing_issue",
+        "payment_confirmation",
     }
 )
 
@@ -331,19 +354,6 @@ def run_conversational_turn(
             ),
         )
 
-    max_turns = _bounded_int(
-        policy.get("max_turns"), default=session.max_turns, low=1, high=10
-    )
-    if state.turn_count > max_turns:
-        return _handoff_decision(
-            policy,
-            state,
-            reason="turn_limit",
-            response=_handoff_response(
-                policy,
-                default="I will pass the details I have collected to the support team.",
-            ),
-        )
     if session.expires_at is not None and session.expires_at <= now:
         return _handoff_decision(
             policy,
@@ -363,18 +373,48 @@ def run_conversational_turn(
         tool_mode=tool_mode,
     )
 
-    if _requires_identity_before_tools(state, policy):
-        requested = _next_identifier_to_request(state, policy)
-        if requested is not None:
+    max_turns = _bounded_int(
+        policy.get("max_turns"), default=session.max_turns, low=1, high=10
+    )
+    if state.turn_count > max_turns:
+        if _should_retry_missing_identifier_response(state, policy, facts):
+            requested = _requested_identifier_label(state, policy)
             state.missing_facts = _with_unique(state.missing_facts, requested)
             state.already_requested_fields = _with_unique(
                 state.already_requested_fields, requested
             )
             state.clarification_count += 1
+            _record_missing_identifier_retry(state)
             return ConversationEngineDecision(
                 action="respond",
                 state=state,
-                response_text=_identifier_question(requested),
+                response_text=_identifier_retry_question(requested),
+                metadata={"reason": "identifier_reply_missing_value"},
+            )
+        return _handoff_decision(
+            policy,
+            state,
+            reason="turn_limit",
+            response=_handoff_response(
+                policy,
+                default=_turn_limit_handoff_response(state, policy),
+            ),
+        )
+
+    if _requires_identity_before_tools(state, policy):
+        requested_identifier = _next_identifier_to_request(state, policy)
+        if requested_identifier is not None:
+            state.missing_facts = _with_unique(
+                state.missing_facts, requested_identifier
+            )
+            state.already_requested_fields = _with_unique(
+                state.already_requested_fields, requested_identifier
+            )
+            state.clarification_count += 1
+            return ConversationEngineDecision(
+                action="respond",
+                state=state,
+                response_text=_identifier_question(requested_identifier),
                 metadata={"reason": "missing_customer_identifier"},
             )
         return _handoff_decision(
@@ -538,6 +578,31 @@ def extract_facts(text: str) -> dict[str, object]:
         facts["connectivity_problem"] = True
     if "slow" in lowered:
         facts["slow_internet"] = True
+    if any(
+        item in lowered
+        for item in (
+            "suspend",
+            "suspended",
+            "suspending",
+            "disconnect",
+            "disconnected",
+            "barred",
+        )
+    ):
+        facts["account_status_problem"] = True
+    if any(
+        item in lowered
+        for item in (
+            "outstanding bill",
+            "outstanding balance",
+            "what bill",
+            "which bill",
+            "why are you charging",
+        )
+    ):
+        facts["billing_dispute"] = True
+    if "office account" in lowered or "company account" in lowered:
+        facts["organization_account"] = True
     if "restart" in lowered or "reboot" in lowered:
         facts["router_restarted"] = True
     outage_context = OUTAGE_CONTEXT_RE.search(value)
@@ -873,9 +938,82 @@ def _requires_identity_before_tools(
     state: ConversationalState, policy: dict[str, object]
 ) -> bool:
     return (
-        _technical_issue(state)
+        _account_context_required(state)
         and not state.subscriber_id
         and bool(policy.get("require_identity_before_tools", True))
+    )
+
+
+def _should_retry_missing_identifier_response(
+    state: ConversationalState,
+    policy: dict[str, object],
+    latest_facts: dict[str, object],
+) -> bool:
+    if not _requires_identity_before_tools(state, policy):
+        return False
+    if _latest_reply_supplied_identifier(latest_facts, policy):
+        return False
+    if not _identifier_was_requested(state, policy):
+        return False
+    return _missing_identifier_retry_count(state) < 1
+
+
+def _latest_reply_supplied_identifier(
+    latest_facts: dict[str, object], policy: dict[str, object]
+) -> bool:
+    permitted = set(_permitted_identifiers(policy))
+    return any(
+        latest_facts.get(identifier)
+        for identifier in ("registered_phone", "registered_email", "portal_id")
+        if identifier in permitted
+    )
+
+
+def _identifier_was_requested(
+    state: ConversationalState, policy: dict[str, object]
+) -> bool:
+    requested = set(state.already_requested_fields)
+    if CUSTOMER_IDENTIFIER_REQUEST in requested:
+        return True
+    return any(identifier in requested for identifier in _permitted_identifiers(policy))
+
+
+def _requested_identifier_label(
+    state: ConversationalState, policy: dict[str, object]
+) -> str:
+    if CUSTOMER_IDENTIFIER_REQUEST in state.already_requested_fields:
+        return CUSTOMER_IDENTIFIER_REQUEST
+    for identifier in _permitted_identifiers(policy):
+        if identifier in state.already_requested_fields:
+            return identifier
+    return CUSTOMER_IDENTIFIER_REQUEST
+
+
+def _missing_identifier_retry_count(state: ConversationalState) -> int:
+    value = state.collected_facts.get("missing_identifier_retry_count")
+    if not isinstance(value, int | str):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_missing_identifier_retry(state: ConversationalState) -> None:
+    state.collected_facts["missing_identifier_retry_count"] = (
+        _missing_identifier_retry_count(state) + 1
+    )
+
+
+def _account_context_required(state: ConversationalState) -> bool:
+    return (
+        _technical_issue(state)
+        or (state.current_intent or "") in ACCOUNT_BOUND_INTENTS
+        or (state.category or "") in ACCOUNT_BOUND_CATEGORIES
+        or bool(
+            state.collected_facts.get("account_status_problem")
+            or state.collected_facts.get("billing_dispute")
+        )
     )
 
 
@@ -918,12 +1056,18 @@ def _configured_troubleshooting_decision(
     for raw in rules:
         if not isinstance(raw, dict):
             continue
+        if raw.get("enabled") is False:
+            continue
         condition = raw.get("condition")
         if not isinstance(condition, dict):
             continue
+        action = str(raw.get("action") or "").strip()
+        if state.turn_count <= 1 and _handoff_rule_matches_first_turn(
+            action, condition
+        ):
+            continue
         if not _condition_matches(state, condition):
             continue
-        action = str(raw.get("action") or "").strip()
         if action in {"execute_tool", "invoke_tool"}:
             tool_key = str(raw.get("tool") or "").strip()
             if not tool_key:
@@ -994,6 +1138,16 @@ def _configured_troubleshooting_decision(
                 ),
             )
     return None
+
+
+def _handoff_rule_matches_first_turn(
+    action: str, condition: dict[str, object] | Mapping[str, object]
+) -> bool:
+    if action != "handoff":
+        return False
+    if str(condition.get("type") or "").strip() != "turn_count":
+        return False
+    return _compare_number(1, dict(condition))
 
 
 def _condition_matches(
@@ -1248,6 +1402,30 @@ def _identifier_question(identifier_type: str) -> str:
     if identifier_type == "registered_phone":
         return "Please send the registered phone number on the account."
     return "Please send your Portal ID or account number so I can identify the service."
+
+
+def _identifier_retry_question(identifier_type: str) -> str:
+    if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
+        return (
+            "I still need the registered phone number, registered email, or "
+            "Portal ID on the account. Please send one of those details."
+        )
+    if identifier_type == "registered_email":
+        return "I still need the registered email on the account."
+    if identifier_type == "registered_phone":
+        return "I still need the registered phone number on the account."
+    return "I still need the Portal ID or account number for the service."
+
+
+def _turn_limit_handoff_response(
+    state: ConversationalState, policy: dict[str, object]
+) -> str:
+    if _requires_identity_before_tools(state, policy) and not state.subscriber_id:
+        return (
+            "I could not safely identify the account from the details provided. "
+            "I will pass this to the support team."
+        )
+    return "I will pass the details I have collected to the support team."
 
 
 def _next_identifier_to_request(

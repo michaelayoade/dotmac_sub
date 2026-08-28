@@ -19,13 +19,17 @@ ticket / project / project task requires material
 vendor invoice approved                   [operations.vendor_purchase_invoice_records]
   -> ERP payables export                  [receipted consumer -> durable outbox]
   -> ERP payables observation             [polling projection + observed output]
+vendor project completed                  [operations.vendor_project_lifecycle]
+  -> PO-backed ERP payables export        [receipted consumer -> durable outbox]
+  -> ERP payables observation             [polling projection + observed output]
 ```
 
 Typed outputs stage atomically with each owning transition:
 `field_material_request.approved` / `.fulfilled`,
-`field_material.consumption_recorded`, `vendor_purchase_invoice.approved` /
-`.payment_observed`. The `MaterialsLifecycleProjectionHandler` delivers the
-approval outputs to receipted consumers (`events.owner_outputs`), so each
+`field_material.consumption_recorded`, `vendor_project.completed`,
+`vendor_purchase_invoice.approved` / `.payment_observed`. The
+`MaterialsLifecycleProjectionHandler` delivers the completion and approval
+outputs to receipted consumers (`events.owner_outputs`), so each
 ERP-transport enqueue commits atomically with its unique
 `(consumer, event_id)` receipt — replacing the previous swallowed
 best-effort enqueue whose only trace was a metadata breadcrumb.
@@ -57,6 +61,15 @@ best-effort enqueue whose only trace was a metadata breadcrumb.
   observations (`refresh_material_request_statuses`,
   `refresh_purchase_invoice_statuses`) — legitimate observation of
   ERP-owned reality, not drift repair.
+- Vendor project completion is the automatic payables determinant for PO-backed
+  vendor work. The consumer creates one system-approved vendor purchase invoice
+  from the approved quote when no active vendor invoice already exists, then
+  enqueues the ERP purchase-invoice request against
+  `installation_projects.procurement_order_reference`. Existing draft or
+  submitted vendor invoices are not overwritten; staff can resolve them through
+  the normal review path. The ERP payload carries the configured
+  `vendor_purchase_invoice_erp_tax_profile` so ERP applies the same purchase
+  invoice tax profile operators select when invoicing manually from a PO.
 - The material-request detail page shows the current single-writer owner,
   durable outbox state, attempt count, last error, ERP reference, and observed
   outcome. Pending deliveries retry automatically with their stable

@@ -124,6 +124,7 @@ _REPAIR = OwnerCommandDefinition(
 
 _MAX_IDEMPOTENCY_LENGTH = 160
 _MAX_READBACK_ATTEMPTS = 3
+SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS = 120
 
 
 class OntConfigurationSection(StrEnum):
@@ -296,6 +297,23 @@ class OntServiceConfigurationProjection:
     next_action: OntConfigurationNextAction
     current_events: tuple[ConfigurationEventView, ...]
     historical_events: tuple[ConfigurationEventView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OntServiceConfigurationEligibility:
+    """Owner-backed capability disclosure for the admin Configure tab."""
+
+    routed_wan_configurable: bool
+    bridge_mode_configurable: bool
+    nat_toggle_configurable: bool
+    nat_default_enabled: bool
+    lan_dhcp_configurable: bool
+    retain_config_on_move_supported: bool
+    routed_wan_message: str
+    bridge_mode_message: str
+    nat_message: str
+    lan_dhcp_message: str
+    move_message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1219,6 +1237,29 @@ def _lan_connection_request_pending(
     )
 
 
+def _lan_connection_request_drain_still_pending(
+    *,
+    revision: OntServiceConfigurationRevision,
+    waiting_reason: str | None,
+    result: ReconcileResult,
+) -> bool:
+    failure = result.failure
+    if (
+        not _force_lan_delivery(revision)
+        or waiting_reason != "awaiting_acs_task_drain"
+        or failure is None
+    ):
+        return False
+    if failure.reason == "acs_cr_failed":
+        return True
+    if failure.reason != "blocked_out_of_sync":
+        return False
+    message = str(failure.message or "").lower()
+    return (
+        "connection request failed" in message or "setparametervalues queued" in message
+    )
+
+
 def _lan_exact_readback_available(
     revision: OntServiceConfigurationRevision, result: ReconcileResult
 ) -> bool:
@@ -1304,6 +1345,7 @@ def _execution_locked(
             message="Configuration was superseded before device delivery.",
         )
     assert assignment is not None and revision is not None
+    prior_waiting_reason = head.waiting_reason
     head.phase = OntServiceConfigurationPhase.applying
     revision.phase = OntServiceConfigurationPhase.applying
     head.waiting_reason = None
@@ -1326,7 +1368,7 @@ def _execution_locked(
             operation_id=operation.id,
         ),
         readback_only=command.verification_attempt > 0,
-        timeout_sec=120,
+        timeout_sec=SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS,
     )
     delivered_without_readback = (
         result.success
@@ -1413,7 +1455,13 @@ def _execution_locked(
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
         )
-        lan_cr_pending = _lan_connection_request_pending(revision, result)
+        lan_cr_pending = _lan_connection_request_pending(
+            revision, result
+        ) or _lan_connection_request_drain_still_pending(
+            revision=revision,
+            waiting_reason=prior_waiting_reason,
+            result=result,
+        )
         if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
@@ -1478,6 +1526,13 @@ def _execution_locked(
             phase = OntServiceConfigurationPhase.readback_pending
             message = pending_message
         else:
+            if lan_cr_pending:
+                failure_code = "acs_cr_failed"
+                failure_message = (
+                    "The LAN configuration is queued in ACS, but the ONT still rejects "
+                    "or misses the GenieACS Connection Request. Fix the ONT connection "
+                    "request credentials or force an OLT ONT reset, then retry."
+                )
             head.phase = OntServiceConfigurationPhase.failed
             revision.phase = OntServiceConfigurationPhase.failed
             head.failure_code = failure_code
@@ -1582,7 +1637,26 @@ def _retry_locked(
             "stale_configuration",
             "Configuration lifecycle changed; refresh before retrying.",
         )
-    if head.phase is not OntServiceConfigurationPhase.failed:
+    latest_configuration_operation = (
+        db.get(NetworkOperation, head.latest_operation_id)
+        if head.latest_operation_id is not None
+        else None
+    )
+    interrupted_current_revision_for_retry = bool(
+        latest_configuration_operation is not None
+        and latest_configuration_operation.status
+        in {NetworkOperationStatus.failed, NetworkOperationStatus.canceled}
+        and head.phase
+        in {
+            OntServiceConfigurationPhase.queued,
+            OntServiceConfigurationPhase.applying,
+            OntServiceConfigurationPhase.readback_pending,
+        }
+    )
+    if (
+        head.phase is not OntServiceConfigurationPhase.failed
+        and not interrupted_current_revision_for_retry
+    ):
         raise _error(
             "retry_not_eligible",
             "Only the owner's current failed revision may be retried.",
@@ -1755,15 +1829,56 @@ def get_ont_service_configuration_projection(
         and ont.reconcile_desired_revision == revision.revision
         and ont.reconcile_operation_id == head.latest_operation_id
     )
+    latest_operation = (
+        db.get(NetworkOperation, head.latest_operation_id)
+        if head is not None and head.latest_operation_id is not None
+        else None
+    )
+    interrupted_current_revision = bool(
+        head is not None
+        and latest_operation is not None
+        and latest_operation.status
+        in {NetworkOperationStatus.failed, NetworkOperationStatus.canceled}
+        and head.phase
+        in {
+            OntServiceConfigurationPhase.queued,
+            OntServiceConfigurationPhase.applying,
+            OntServiceConfigurationPhase.readback_pending,
+        }
+    )
+    projected_phase = (
+        OntServiceConfigurationPhase.failed
+        if interrupted_current_revision
+        else (head.phase if head is not None else None)
+    )
+    projected_waiting_reason = (
+        None
+        if interrupted_current_revision
+        else (head.waiting_reason if head is not None else None)
+    )
+    projected_failure_code = (
+        "operation_interrupted"
+        if interrupted_current_revision
+        else (head.failure_code if head is not None else None)
+    )
+    projected_failure_message = (
+        str(
+            latest_operation.error
+            or (latest_operation.output_payload or {}).get("message")
+            or "Configuration worker stopped before recording a lifecycle result."
+        )
+        if interrupted_current_revision and latest_operation is not None
+        else (head.failure_message if head is not None else None)
+    )
     if head is None:
         next_action = (
             OntConfigurationNextAction.submit_configuration
             if assignment
             else OntConfigurationNextAction.none
         )
-    elif head.phase is OntServiceConfigurationPhase.failed:
+    elif projected_phase is OntServiceConfigurationPhase.failed:
         next_action = OntConfigurationNextAction.retry_current_configuration
-    elif head.phase in {
+    elif projected_phase in {
         OntServiceConfigurationPhase.queued,
         OntServiceConfigurationPhase.applying,
         OntServiceConfigurationPhase.readback_pending,
@@ -1782,10 +1897,10 @@ def get_ont_service_configuration_projection(
             OntConfigurationSection(revision.section) if revision is not None else None
         ),
         operation_id=head.latest_operation_id if head is not None else None,
-        phase=head.phase if head is not None else None,
-        waiting_reason=head.waiting_reason if head is not None else None,
-        failure_code=head.failure_code if head is not None else None,
-        failure_message=head.failure_message if head is not None else None,
+        phase=projected_phase,
+        waiting_reason=projected_waiting_reason,
+        failure_code=projected_failure_code,
+        failure_message=projected_failure_message,
         last_verified_at=revision.verified_at if revision is not None else None,
         last_observation_at=(
             observation.last_reconciled_at
@@ -1803,6 +1918,64 @@ def get_ont_service_configuration_projection(
         next_action=next_action,
         current_events=current_events,
         historical_events=historical_events,
+    )
+
+
+def get_ont_service_configuration_eligibility(
+    db: Session, *, ont_unit_id: uuid.UUID
+) -> OntServiceConfigurationEligibility:
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont is None:
+        raise _error("ont_not_found", "ONT was not found.")
+    active_assignments = list(
+        db.scalars(
+            select(OntAssignment).where(
+                OntAssignment.ont_unit_id == ont.id,
+                OntAssignment.active.is_(True),
+            )
+        )
+    )
+    has_one_active_assignment = len(active_assignments) == 1
+    effective = resolve_effective_ont_config(db, ont)
+    config_pack_ready = bool(
+        isinstance(effective, dict) and effective.get("config_pack") is not None
+    )
+    has_olt_assignment = bool(getattr(ont, "olt_device_id", None))
+    routed_wan_configurable = bool(
+        has_one_active_assignment and has_olt_assignment and config_pack_ready
+    )
+
+    return OntServiceConfigurationEligibility(
+        routed_wan_configurable=routed_wan_configurable,
+        bridge_mode_configurable=False,
+        nat_toggle_configurable=False,
+        nat_default_enabled=True,
+        lan_dhcp_configurable=has_one_active_assignment,
+        retain_config_on_move_supported=False,
+        routed_wan_message=(
+            "Routed DHCP, PPPoE, and static WAN changes are owner-backed."
+            if routed_wan_configurable
+            else "Routed WAN changes require one active assignment, an OLT assignment, "
+            "and an effective config pack."
+        ),
+        bridge_mode_message=(
+            "Bridge/routing conversion is not available from ONT Configure yet; "
+            "it needs a dedicated WAN-mode transition owner."
+        ),
+        nat_message=(
+            "NAT defaults to enabled for routed WAN. Disabling NAT is not available "
+            "until NAT is added to the typed WAN intent and readback contract."
+        ),
+        lan_dhcp_message=(
+            "LAN gateway, DHCP state, pool, and block size are owner-backed."
+            if has_one_active_assignment
+            else "LAN DHCP edits require one active assignment."
+        ),
+        move_message=(
+            "Moving an ONT must use the inventory move flow, preserve logical desired "
+            "configuration, and re-resolve OLT-local service ports and profile bindings "
+            "on the target OLT; ONT Configure does not perform moves."
+        ),
     )
 
 
@@ -2021,6 +2194,7 @@ __all__ = (
     "OntConfigurationChange",
     "OntConfigurationSection",
     "OntServiceConfigurationError",
+    "OntServiceConfigurationEligibility",
     "OntServiceConfigurationProjection",
     "RepairOntServiceConfigurationDriftCommand",
     "RepairOntServiceConfigurationDriftOutcome",
@@ -2031,6 +2205,7 @@ __all__ = (
     "configure_customer_wifi",
     "configure_ont_service",
     "execute_ont_service_configuration",
+    "get_ont_service_configuration_eligibility",
     "get_ont_service_configuration_projection",
     "get_latest_ont_configuration_section_delivery",
     "inspect_ont_service_configuration_drift",

@@ -236,6 +236,7 @@ DOMAIN = DomainSOT(
                 "explicit integration manifest adoption",
                 "immutable integration configuration revisions",
                 "integration capability grants and bindings",
+                "payment webhook ingress traffic policy",
                 "Meta social installation configuration",
                 "pre-activation integration webhook verification",
             ),
@@ -284,6 +285,15 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.AUTHORITATIVE_RECORD,
                         input_names=(
                             "deployed connector manifest",
+                            "integration installation protocol",
+                            "canonical integration installation aggregate",
+                        ),
+                        canonical_writer="integration.installations",
+                    ),
+                    ConcernContract(
+                        name="payment webhook ingress traffic policy",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
                             "integration installation protocol",
                             "canonical integration installation aggregate",
                         ),
@@ -1560,6 +1570,7 @@ DOMAIN = DomainSOT(
                             "canonical vendor purchase-invoice records",
                             "ERP purchase-invoice origination response",
                             "ERP purchase-invoice flow controls",
+                            "ERP purchase-invoice tax-profile control",
                         ),
                         canonical_writer=("integration.dotmac_erp_payables_adapter"),
                     ),
@@ -1628,6 +1639,15 @@ DOMAIN = DomainSOT(
                         source=(
                             "ERP sync enablement, purchase_invoice ownership, bounded "
                             "batch size, and scheduler cadence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="ERP purchase-invoice tax-profile control",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "billing.vendor_purchase_invoice_erp_tax_profile carried "
+                            "as the ERP tax profile for PO-backed vendor AP invoices"
                         ),
                     ),
                 ),
