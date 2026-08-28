@@ -24,6 +24,19 @@ on:
         description: Required reason for a hotfix exception
         required: false
         type: string
+      resume_after_migration:
+        description: Resume a failed production run after backup and migrations already completed
+        required: true
+        default: false
+        type: boolean
+      failed_deployment_run_id:
+        description: Required prior failed production deploy run ID for resume
+        required: false
+        type: string
+      prior_backup_path:
+        description: Required on-host backup artifact path from the prior failed run
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -151,6 +164,12 @@ jobs:
           HOTFIX: ${{ inputs.hotfix_no_migrations }}
           CHANGE_REFERENCE: ${{ inputs.change_reference }}
           HOTFIX_REASON: ${{ inputs.reason }}
+          RESUME_AFTER_MIGRATION: ${{ inputs.resume_after_migration }}
+          FAILED_DEPLOYMENT_RUN_ID: ${{ inputs.failed_deployment_run_id }}
+          PRIOR_BACKUP_PATH: ${{ inputs.prior_backup_path }}
+          AUTHORIZATION_RUN_ID: ${{ inputs.authorization_run_id }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+          DB_BACKUP_BASENAME: dotmac_sub_run_${{ github.run_id }}
         run: |
           set -euo pipefail
           mapfile -t files < <(find "$RUNNER_TEMP/authorization" -type f -name authorization.json)
@@ -160,6 +179,12 @@ jobs:
             args+=(--hotfix-no-migrations --change-reference "$CHANGE_REFERENCE" --reason "$HOTFIX_REASON")
           elif [ -n "$CHANGE_REFERENCE" ] || [ -n "$HOTFIX_REASON" ]; then
             echo "Hotfix attribution was supplied without hotfix_no_migrations." >&2
+            exit 1
+          fi
+          if [ "$RESUME_AFTER_MIGRATION" = "true" ]; then
+            args+=(--resume-after-migration --failed-run-id "$FAILED_DEPLOYMENT_RUN_ID" --backup-path "$PRIOR_BACKUP_PATH")
+          elif [ -n "$FAILED_DEPLOYMENT_RUN_ID" ] || [ -n "$PRIOR_BACKUP_PATH" ]; then
+            echo "Resume evidence was supplied without resume_after_migration." >&2
             exit 1
           fi
           REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \

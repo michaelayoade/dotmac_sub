@@ -149,6 +149,18 @@ Sub's lineage-head collision inventory: `idempotency_records`,
 verifies the kernel contract; none represents a second business authority. The
 executable current-head ratchet consequently contains fourteen names.
 
+**2026-08-28 — production deploy orchestration hardening.** The first
+production rollout of the composed commercial module slice exposed two
+additional deployment prerequisites and one orchestration conflict. The outbox
+relay migration owns hardened functions in `public`, so the bootstrap contract
+now verifies and repairs `dotmac_app` membership in `app_admin` and
+`app_admin` `USAGE, CREATE` on `public` before Alembic. The warm candidate
+port is now `18002`, leaving `18001` reserved for the long-running backup app,
+and the deploy owner checks the port before backup or migration. Production
+resume after a post-migration failure is explicit and evidence-bound: it
+requires the same authorization, digest, prior run, backup artifact, candidate
+heads and database heads before skipping only backup and migration.
+
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
 the Poetry lock and its required `dotmac-kernel==0.1.0a94`. The annotated

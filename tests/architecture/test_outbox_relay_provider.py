@@ -6,7 +6,10 @@ import ast
 from pathlib import Path
 
 from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
-from app.outbox_dispatcher_roles import RELAY_DISPATCHER_CONTRACT
+from app.outbox_dispatcher_roles import (
+    OUTBOX_RELAY_OWNERSHIP_CONTRACT,
+    RELAY_DISPATCHER_CONTRACT,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "alembic" / "versions" / "557_outbox_relay_prereq.py"
@@ -88,6 +91,19 @@ def test_migration_copy_matches_the_runtime_login_posture() -> None:
         "outbox_dispatcher": (True, False, False),
         "platform_outbox_dispatcher": (True, False, False),
     }
+
+
+def test_migration_copy_matches_the_runtime_function_ownership_prerequisites() -> None:
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    source = MIGRATION.read_text(encoding="utf-8")
+
+    assert f'MIGRATION_ROLE = "{contract.migration_role}"' in source
+    assert f'DEFINER_ROLE = "{contract.definer_role}"' in source
+    assert f'RELAY_SCHEMA = "{contract.schema}"' in source
+    assert (
+        f"DEFINER_SCHEMA_PRIVILEGES = {contract.schema_privileges!r}".replace("'", '"')
+        in source
+    )
 
 
 def test_role_creation_is_only_in_the_explicit_bootstrap() -> None:

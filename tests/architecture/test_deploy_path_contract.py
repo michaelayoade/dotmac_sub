@@ -127,6 +127,39 @@ def test_deploy_checks_database_prerequisites_before_backup_and_migrations() -> 
     assert deploy.index(prerequisite_check) < deploy.index(migration)
 
 
+def test_deploy_candidate_port_does_not_collide_with_backup_app_port() -> None:
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/runbooks/PRODUCTION_DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert 'CANDIDATE_PORT="${CANDIDATE_PORT:-18002}"' in deploy
+    assert "assert_candidate_port_available" in deploy
+    assert deploy.index("\nassert_candidate_port_available\n") < deploy.index(
+        "Backing up database before migrations"
+    )
+    assert "127.0.0.1:18001" in docs
+    assert "127.0.0.1:18002" in docs
+
+
+def test_production_deploy_exposes_fail_closed_post_migration_resume() -> None:
+    workflow = (ROOT / ".github/workflows/production-deploy.yml").read_text(
+        encoding="utf-8"
+    )
+    adapter = (ROOT / "scripts/deploy_production.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+
+    assert "resume_after_migration" in workflow
+    assert "failed_deployment_run_id" in workflow
+    assert "prior_backup_path" in workflow
+    assert "AUTHORIZATION_RUN_ID" in workflow
+    assert "DB_BACKUP_BASENAME: dotmac_sub_run_${{ github.run_id }}" in workflow
+    assert "PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID" in adapter
+    assert "scripts.deploy_resume_policy verify-post-migration" in deploy
+    assert "Skipping migrations under verified post-migration resume evidence" in deploy
+    assert deploy.index('BACKUP_MODE="$(verify_post_migration_resume)"') < deploy.index(
+        "Backing up database before migrations"
+    )
+
+
 def test_openbao_initializer_seeds_kernel_secret_source_paths() -> None:
     initializer = (ROOT / "scripts/setup/openbao_init.sh").read_text(encoding="utf-8")
     source = (ROOT / "app/services/kernel_secret_source.py").read_text(encoding="utf-8")

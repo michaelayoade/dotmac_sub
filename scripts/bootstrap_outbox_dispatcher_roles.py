@@ -2,8 +2,8 @@
 """Create or adopt the composed-module outbox dispatcher roles.
 
 This is an explicitly privileged cluster bootstrap, separate from ordinary
-Alembic execution. It never sets or prints a password and never grants object
-privileges; migration 555 owns the schema/function grants.
+Alembic execution. It never sets or prints a password. It owns the role and
+schema prerequisites migration 557 needs before it can harden relay functions.
 
 Usage::
 
@@ -32,9 +32,11 @@ import psycopg
 from psycopg import sql
 
 from app.outbox_dispatcher_roles import (
+    OUTBOX_RELAY_OWNERSHIP_CONTRACT,
     RELAY_DISPATCHER_CONTRACT,
     RolePosture,
     relay_dispatcher_violations,
+    relay_ownership_violations,
 )
 
 BOOTSTRAP_URL_VAR = "BOOTSTRAP_DATABASE_URL"
@@ -61,11 +63,50 @@ def observe(conn: psycopg.Connection) -> dict[str, RolePosture]:
     return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
 
 
+def observe_ownership(conn: psycopg.Connection) -> tuple[bool, dict[str, bool]]:
+    """Read the ownership prerequisites migration 557 requires."""
+
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    rows = conn.execute(
+        "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+        ([contract.migration_role, contract.definer_role],),
+    ).fetchall()
+    roles = {str(row[0]) for row in rows}
+    if contract.definer_role not in roles:
+        return False, dict.fromkeys(contract.schema_privileges, False)
+    if contract.migration_role not in roles:
+        member = False
+    else:
+        member = bool(
+            conn.execute(
+                "SELECT pg_has_role(%s, %s, 'MEMBER')",
+                (contract.migration_role, contract.definer_role),
+            ).fetchone()[0]
+        )
+    privileges = {
+        privilege: bool(
+            conn.execute(
+                "SELECT has_schema_privilege(%s, %s, %s)",
+                (contract.definer_role, contract.schema, privilege),
+            ).fetchone()[0]
+        )
+        for privilege in contract.schema_privileges
+    }
+    return member, privileges
+
+
 def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
     observed = observe(conn)
+    ownership = observe_ownership(conn)
     wrong_existing = [
         violation
-        for violation in relay_dispatcher_violations(observed)
+        for violation in (
+            *relay_dispatcher_violations(observed),
+            *relay_ownership_violations(
+                migration_role_is_definer_member=ownership[0],
+                definer_schema_privileges=ownership[1],
+            ),
+        )
         if not violation.endswith("is missing")
     ]
     if wrong_existing and not repair:
@@ -101,11 +142,61 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
                 sql.SQL("ALTER ROLE {} {}").format(identifier, sql.SQL(wanted))
             )
             print(f"repaired: {role} {have} -> {wanted}")
+
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    member, privileges = observe_ownership(conn)
+    if not member:
+        statement = sql.SQL("GRANT {} TO {}").format(
+            sql.Identifier(contract.definer_role),
+            sql.Identifier(contract.migration_role),
+        )
+        if dry_run:
+            print(
+                f"would grant role membership: {contract.definer_role} "
+                f"to {contract.migration_role}"
+            )
+        else:
+            conn.execute(statement)
+            print(
+                f"granted role membership: {contract.definer_role} "
+                f"to {contract.migration_role}"
+            )
+    missing_privileges = tuple(
+        privilege
+        for privilege in contract.schema_privileges
+        if not privileges.get(privilege, False)
+    )
+    if missing_privileges:
+        statement = sql.SQL("GRANT {} ON SCHEMA {} TO {}").format(
+            sql.SQL(", ").join(sql.SQL(privilege) for privilege in missing_privileges),
+            sql.Identifier(contract.schema),
+            sql.Identifier(contract.definer_role),
+        )
+        if dry_run:
+            print(
+                "would grant schema privileges: "
+                f"{', '.join(missing_privileges)} on {contract.schema} "
+                f"to {contract.definer_role}"
+            )
+        else:
+            conn.execute(statement)
+            print(
+                "granted schema privileges: "
+                f"{', '.join(missing_privileges)} on {contract.schema} "
+                f"to {contract.definer_role}"
+            )
     return 0
 
 
 def verify(conn: psycopg.Connection) -> int:
-    violations = relay_dispatcher_violations(observe(conn))
+    member, privileges = observe_ownership(conn)
+    violations = (
+        *relay_dispatcher_violations(observe(conn)),
+        *relay_ownership_violations(
+            migration_role_is_definer_member=member,
+            definer_schema_privileges=privileges,
+        ),
+    )
     for violation in violations:
         print(f"DISPATCHER CONTRACT: {violation}", file=sys.stderr)
     return 1 if violations else 0
