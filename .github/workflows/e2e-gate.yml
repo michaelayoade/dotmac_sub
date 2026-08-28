@@ -146,6 +146,8 @@ jobs:
           REDIS_URL: "redis://127.0.0.1:56379/0"
         run: |
           BOOTSTRAP_DATABASE_URL="$DATABASE_URL" \
+            poetry run python scripts/bootstrap_commercial_module_prereqs.py
+          BOOTSTRAP_DATABASE_URL="$DATABASE_URL" \
             poetry run python scripts/bootstrap_outbox_dispatcher_roles.py
           poetry run alembic upgrade heads
           poetry run python -m scripts.seed.seed_rbac

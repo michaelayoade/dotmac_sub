@@ -115,6 +115,18 @@ def test_deploy_checks_openbao_boot_secrets_before_migrations() -> None:
     assert deploy.index(preflight) < deploy.index(migration)
 
 
+def test_deploy_checks_database_prerequisites_before_backup_and_migrations() -> None:
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+
+    prerequisite_check = "\nverify_database_prerequisites\n"
+    backup = "Backing up database before migrations"
+    migration = 'log "Applying migrations (alembic upgrade heads)"'
+    assert "scripts/bootstrap_commercial_module_prereqs.py --verify-only" in deploy
+    assert "scripts/bootstrap_outbox_dispatcher_roles.py --verify-only" in deploy
+    assert deploy.index(prerequisite_check) < deploy.index(backup)
+    assert deploy.index(prerequisite_check) < deploy.index(migration)
+
+
 def test_openbao_initializer_seeds_kernel_secret_source_paths() -> None:
     initializer = (ROOT / "scripts/setup/openbao_init.sh").read_text(encoding="utf-8")
     source = (ROOT / "app/services/kernel_secret_source.py").read_text(encoding="utf-8")
