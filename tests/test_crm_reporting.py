@@ -64,7 +64,7 @@ def test_expected_operational_inventory_is_complete_and_exclusions_stay_excluded
         assert required_flow in data_flow_guide
 
     analytics_migration = Path(
-        "alembic/versions/564_inbox_agent_analytics_indexes.py"
+        "alembic/versions/565_inbox_agent_analytics_indexes.py"
     ).read_text(encoding="utf-8")
     for index_name in (
         "ix_inbox_conversations_agent_analytics",

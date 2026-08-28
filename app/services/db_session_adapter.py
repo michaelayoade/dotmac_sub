@@ -26,6 +26,8 @@ class DbSessionProvider(Protocol):
 
     def release_read_transaction(self, db: Session) -> None: ...
 
+    def discard_failed_transaction(self, db: Session) -> None: ...
+
     def advisory_lock(
         self,
         lock_key: int,
@@ -88,6 +90,12 @@ class SqlAlchemySessionAdapter:
         # through a surrounding connection transaction (as used by integration
         # harnesses); rolling it back could unwind that external lifecycle.
         db.commit()
+
+    def discard_failed_transaction(self, db: Session) -> None:
+        """Discard a failed adapter transaction without owning business state."""
+
+        if db.in_transaction():
+            db.rollback()
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:

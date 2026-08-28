@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.integration_platform import (
     IntegrationBindingState,
     IntegrationCapabilityBinding,
@@ -80,31 +80,10 @@ class WebhookIngressPolicy:
         }
 
 
-def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return min(max(int(raw), minimum), maximum)
-    except ValueError:
-        logger.warning("Invalid integer env %s; using %s", name, default)
-        return default
-
-
 def default_webhook_ingress_policy() -> WebhookIngressPolicy:
     return WebhookIngressPolicy(
-        requests_per_window=_bounded_env_int(
-            "PAYMENT_WEBHOOK_RATE_LIMIT_PER_IP",
-            120,
-            WEBHOOK_INGRESS_LIMIT_MIN,
-            WEBHOOK_INGRESS_LIMIT_MAX,
-        ),
-        window_seconds=_bounded_env_int(
-            "PAYMENT_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS",
-            60,
-            WEBHOOK_INGRESS_WINDOW_MIN,
-            WEBHOOK_INGRESS_WINDOW_MAX,
-        ),
+        requests_per_window=settings.payment_webhook_rate_limit_per_ip,
+        window_seconds=settings.payment_webhook_rate_limit_window_seconds,
     )
 
 
@@ -150,12 +129,7 @@ def publish_webhook_ingress_policy(
 
 
 def effective_webhook_ingress_policy(provider_type: str) -> WebhookIngressPolicy:
-    if os.getenv("PAYMENT_WEBHOOK_RATE_LIMIT_ENABLED", "true").strip().lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
+    if not settings.payment_webhook_rate_limit_enabled:
         default = default_webhook_ingress_policy()
         return WebhookIngressPolicy(
             requests_per_window=default.requests_per_window,

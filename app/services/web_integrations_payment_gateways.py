@@ -9,11 +9,10 @@ from sqlalchemy.orm import Session
 from app.models.billing import PaymentProviderType
 from app.models.integration_platform import (
     IntegrationCapabilityBinding,
-    IntegrationInbox,
     IntegrationInstallation,
 )
 from app.services import payment_gateway_finance, payment_routing
-from app.services.integrations import installations, payment_capability
+from app.services.integrations import inbox, installations, payment_capability
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
     PAYMENT_WEBHOOK_CAPABILITY,
@@ -208,11 +207,9 @@ def build_config_state(db: Session, provider_type_value: str) -> dict[str, Any]:
         webhook_binding.policy_json if webhook_binding else None
     )
     receipts = (
-        db.query(IntegrationInbox)
-        .filter(IntegrationInbox.capability_binding_id == webhook_binding.id)
-        .order_by(IntegrationInbox.received_at.desc())
-        .limit(20)
-        .all()
+        inbox.list_recent_receipts_for_capability(
+            db, capability_binding_id=webhook_binding.id, limit=20
+        )
         if webhook_binding
         else []
     )

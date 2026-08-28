@@ -1970,7 +1970,7 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
             "Revenue category report projection is unavailable",
             extra={"error_type": type(exc).__name__},
         )
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         data = web_reports_ext_service.RevenueCategoriesReportData.unavailable()
         status_code = 503
     ctx = _base_context(
