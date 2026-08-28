@@ -208,8 +208,7 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "/admin/inbox/presence" in sidebar
     assert (
         "Only online agents with recent presence evidence receive auto-assigned "
-        "inbox conversations."
-        in sidebar
+        "inbox conversations." in sidebar
     )
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
