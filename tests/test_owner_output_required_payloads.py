@@ -70,6 +70,10 @@ HandlerCall = Callable[[object, Event], None]
             Event(EventType.vendor_purchase_invoice_approved, {}),
         ),
         (
+            MaterialsLifecycleProjectionHandler().handle,
+            Event(EventType.vendor_project_completed, {}),
+        ),
+        (
             SupportLifecycleProjectionHandler().handle,
             Event(
                 EventType.work_order_field_outcome_recorded,

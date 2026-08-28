@@ -1581,6 +1581,12 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="vendor_purchase_invoice_erp_tax_profile",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("VENDOR_PURCHASE_INVOICE_ERP_TAX_PROFILE", ""),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="default_payment_method_type",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),

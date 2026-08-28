@@ -825,6 +825,10 @@ def reply(
                 result.reason or "Reply could not be sent.",
                 conversation_id=conversation.id,
             )
+        team_inbox_assignment.record_agent_reply_activity(
+            db,
+            person_id=command.actor_person_id,
+        )
         if conversation.channel_type in {
             InboxChannelType.facebook_comment.value,
             InboxChannelType.instagram_comment.value,

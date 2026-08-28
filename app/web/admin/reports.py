@@ -309,19 +309,19 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "name": "NCC Subscriber Data (Quarterly)",
                 "url": "/admin/reports/ncc-subscribers",
                 "description": "Active subscriptions by type, connection, speed, State & region",
-                "permission": "customer:read",
+                "permission": "reports:ncc:read",
             },
             {
-                "name": "NCC Complaints (Quarterly)",
+                "name": "NCC Complaints (Weekly)",
                 "url": "/admin/reports/ncc-complaints",
                 "description": "Complaint records, categories, SLA and the filing workbook",
-                "permission": "provisioning:read",
+                "permission": "reports:ncc:read",
             },
             {
                 "name": "NCC Regulatory Pack",
                 "url": "/admin/reports/ncc-pack",
                 "description": "All three NCC returns assembled into one filing view",
-                "permission": "provisioning:read",
+                "permission": "reports:ncc:read",
             },
         ],
     },
@@ -506,7 +506,7 @@ def _operational_report_query(
                 "reports:network:read",
                 "reports:support:read",
                 "customer:read",
-                "provisioning:read",
+                "reports:ncc:read",
             )
         )
     ],
@@ -1987,7 +1987,7 @@ def _ncc_params(
 @router.get(
     "/ncc-subscribers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_subscribers(
     request: Request,
@@ -2035,7 +2035,7 @@ def reports_ncc_subscribers(
 
 @router.get(
     "/ncc-subscribers/export",
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_subscribers_export(
     as_of: str | None = None,
@@ -2068,14 +2068,17 @@ def reports_ncc_subscribers_export(
     )
 
 
-# ── NCC quarterly Complaints return (①) ──────────────────────────────────────
+# ── NCC weekly Complaints return (①) ──────────────────────────────────────
 def _ncc_complaints_window(
     date_from: str | None, date_to: str | None
 ) -> tuple[datetime, datetime]:
-    """Bound the complaints window. Defaults to the trailing 90 days — the
-    quarterly cadence the return is filed on — anchored on ``created_at``."""
+    """Bound the complaints window.
+
+    Defaults to the trailing seven days, matching the weekly complaints report
+    cadence, anchored on ``created_at``.
+    """
     end = _parse_date_end(date_to) or datetime.now(UTC)
-    start = _parse_date_start(date_from) or (end - timedelta(days=90))
+    start = _parse_date_start(date_from) or (end - timedelta(days=7))
     if end < start:
         start, end = end, start
     return start, end
@@ -2084,7 +2087,7 @@ def _ncc_complaints_window(
 @router.get(
     "/ncc-complaints",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_complaints(
     request: Request,
@@ -2159,7 +2162,7 @@ def reports_ncc_complaints(
 
 @router.get(
     "/ncc-complaints/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_complaints_export(
     date_from: str | None = None,
@@ -2189,7 +2192,7 @@ def _ncc_pack_window(
 
 @router.get(
     "/ncc-regulatory-pack",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_regulatory_pack(
     date_from: str | None = None,
@@ -2210,7 +2213,7 @@ def reports_ncc_regulatory_pack(
 @router.get(
     "/ncc-pack",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_pack_page(
     request: Request,
@@ -2243,7 +2246,7 @@ def reports_ncc_pack_page(
 
 @router.get(
     "/ncc-regulatory-pack.pdf",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_regulatory_pack_pdf(
     date_from: str | None = None,
@@ -2294,7 +2297,7 @@ def _render_ncc_pack_html(pack: dict, start: datetime, end: datetime) -> str:
     complete = "COMPLETE" if meta.get("complete") else "INCOMPLETE — see sections below"
     rows = "".join(
         [
-            _section_row("① Quarterly complaints", pack.get("complaints", {})),
+            _section_row("① Weekly complaints", pack.get("complaints", {})),
             _section_row("② Quarterly subscribers", pack.get("subscribers", {})),
             _section_row("③ Annual financials", pack.get("financials", {})),
             _section_row("③ Annual staff", pack.get("staff", {})),
@@ -2383,7 +2386,7 @@ def reports_ncc_email_settings(
 
 @router.get(
     "/ncc-weekly-runs/{run_id}/download",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_weekly_run_download(
     run_id: UUID,

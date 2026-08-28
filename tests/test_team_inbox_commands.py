@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationStatus,
     InboxMessage,
@@ -165,6 +168,54 @@ def test_email_reply_normalizes_and_preserves_copy_recipients(monkeypatch, db_se
             ),
         )
     assert len(captured) == 1
+
+
+def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_session):
+    actor_id = uuid.uuid4()
+    stale_seen_at = datetime.now(UTC) - timedelta(minutes=20)
+    conversation = _conversation(db_session)
+    conversation_id = conversation.id
+    presence = InboxAgentPresence(
+        person_id=actor_id,
+        status=InboxAgentPresenceStatus.online.value,
+        manual_override_status=InboxAgentPresenceStatus.online.value,
+        last_seen_at=stale_seen_at,
+    )
+    db_session.add(presence)
+    db_session.commit()
+
+    def fake_send(db, *, conversation, payload, record_failure):
+        message = InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction="outbound",
+            body=payload.body_text,
+            from_address="support@example.test",
+            to_addresses=[conversation.contact_address],
+            metadata_=dict(payload.metadata or {}),
+        )
+        db.add(message)
+        db.flush()
+        return team_inbox_outbound.InboxReplyResult(
+            kind="queued",
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            from_address=message.from_address,
+        )
+
+    monkeypatch.setattr(team_inbox_outbound, "send_inbox_reply", fake_send)
+
+    team_inbox_commands.reply(
+        db_session,
+        command=team_inbox_commands.ReplyCommand(
+            conversation_id=conversation_id,
+            body_text="We are checking this.",
+            actor_person_id=actor_id,
+        ),
+    )
+
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at > stale_seen_at
 
 
 @pytest.mark.parametrize(

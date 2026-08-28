@@ -1570,6 +1570,7 @@ DOMAIN = DomainSOT(
                             "canonical vendor purchase-invoice records",
                             "ERP purchase-invoice origination response",
                             "ERP purchase-invoice flow controls",
+                            "ERP purchase-invoice tax-profile control",
                         ),
                         canonical_writer=("integration.dotmac_erp_payables_adapter"),
                     ),
@@ -1638,6 +1639,15 @@ DOMAIN = DomainSOT(
                         source=(
                             "ERP sync enablement, purchase_invoice ownership, bounded "
                             "batch size, and scheduler cadence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="ERP purchase-invoice tax-profile control",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "billing.vendor_purchase_invoice_erp_tax_profile carried "
+                            "as the ERP tax profile for PO-backed vendor AP invoices"
                         ),
                     ),
                 ),

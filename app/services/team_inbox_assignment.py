@@ -282,6 +282,34 @@ def effective_presence_status(
     return status
 
 
+def record_agent_reply_activity(
+    db: Session,
+    *,
+    person_id: str | UUID | None,
+    now: datetime | None = None,
+) -> InboxAgentPresence | None:
+    person_uuid = _coerce_uuid(person_id)
+    if person_uuid is None:
+        return None
+    presence = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == person_uuid)
+        .one_or_none()
+    )
+    if presence is None:
+        return None
+    selected_status = (
+        presence.manual_override_status
+        or presence.status
+        or InboxAgentPresenceStatus.offline.value
+    )
+    if selected_status != InboxAgentPresenceStatus.online.value:
+        return presence
+    presence.last_seen_at = now or datetime.now(UTC)
+    db.flush()
+    return presence
+
+
 def _active_assignment_count_query(db: Session, person_ids: list[UUID]):
     return (
         db.query(func.count(InboxConversationAssignment.id))
@@ -323,7 +351,7 @@ def set_agent_presence(
         presence = InboxAgentPresence(person_id=person_uuid)
         db.add(presence)
 
-    previous_effective_status = effective_presence_status(presence)
+    previous_effective_status = effective_presence_status(presence, now=observed_at)
     if previous_effective_status == clean_status:
         presence.last_seen_at = observed_at
         db.flush()

@@ -32,8 +32,10 @@ arrival time, so a delayed poll or retry rebuilds the same bounded window.
 
 ## Configuration and provenance
 
-The admin page at `/admin/reports/ncc-complaints` displays and, with
-`notification:write`, updates the complete effective configuration: enabled,
+The admin page at `/admin/reports/ncc-complaints` requires `reports:ncc:read`.
+On-demand workbook exports and preserved scheduled artifact downloads require
+`reports:ncc:export`. The same page displays and, with `notification:write`,
+updates the complete effective configuration: enabled,
 To/CC/BCC, SMTP sender key, subject, body template, weekday, local time,
 timezone and lookback. Every field is backed by the registered notification
 setting specification. Defaults remain disabled and Tuesday-based.

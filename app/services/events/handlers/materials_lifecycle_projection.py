@@ -24,6 +24,7 @@ from app.services.events.types import Event, EventType
 HANDLED_EVENT_TYPES = frozenset(
     {
         EventType.field_material_request_approved,
+        EventType.vendor_project_completed,
         EventType.vendor_purchase_invoice_approved,
     }
 )
@@ -35,6 +36,8 @@ class MaterialsLifecycleProjectionHandler:
     def handle(self, db: Session, event: Event) -> None:
         if event.event_type == EventType.field_material_request_approved:
             self._request_erp_issue(db, event)
+        elif event.event_type == EventType.vendor_project_completed:
+            self._request_project_completion_invoice(db, event)
         elif event.event_type == EventType.vendor_purchase_invoice_approved:
             self._request_payables_export(db, event)
 
@@ -86,4 +89,22 @@ class MaterialsLifecycleProjectionHandler:
                 invoice_id=str(invoice_id),
                 event_id=event.event_id,
                 context=self._context(event, str(invoice_id)),
+            )
+
+    def _request_project_completion_invoice(self, db: Session, event: Event) -> None:
+        project_id = require_output_text(
+            event.payload,
+            "project_id",
+            consumer="operations.vendor_purchase_invoices",
+            event_id=event.event_id,
+            event_type=event.event_type.value,
+        )
+        from app.services import vendor_purchase_invoices
+
+        with _owner_session(db) as owner_db:
+            vendor_purchase_invoices.consume_project_completed(
+                owner_db,
+                project_id=str(project_id),
+                event_id=event.event_id,
+                context=self._context(event, str(project_id)),
             )

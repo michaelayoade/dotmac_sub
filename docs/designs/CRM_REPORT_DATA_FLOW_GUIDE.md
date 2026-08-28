@@ -18,7 +18,7 @@ Transformation/calculation: Filters the requested Ticket-created window, exclude
 Route/API: `/admin/reports/ncc-complaints`; on-demand XLSX at `/admin/reports/ncc-complaints/export`; preserved scheduled XLSX at `/admin/reports/ncc-weekly-runs/{run_id}/download`.
 UI component/template: `templates/admin/reports/ncc_complaints.html`.
 Displayed as: Complaints, Not Yet Filable, and Unclassified cards, filing-readiness table, on-demand workbook, complete Tuesday delivery configuration, and recent run/delivery/artifact evidence.
-Permission: `provisioning:read`; notification-setting writes separately require `notification:write`.
+Permission: `reports:ncc:read`; on-demand XLSX and scheduled artifact downloads require `reports:ncc:export`; notification-setting writes separately require `notification:write`.
 Ownership: Self-Care-owned.
 Data freshness/synchronization: Live request-time database read. The scheduler polls every five minutes; the owner admits one configured Tuesday occurrence after local delivery time and retries recorded failures.
 Plain-English flow: Self-Care support records are translated into the NCC filing contract without inventing missing classifications. On Tuesday, the delivery owner preserves the exact validated workbook and queues it once to the configured To/CC/BCC recipients.
@@ -32,7 +32,7 @@ Transformation/calculation: Builds complaints, subscriber/capacity, financial, a
 Route/API: `/admin/reports/ncc-pack`; JSON `/admin/reports/ncc-regulatory-pack`; PDF `/admin/reports/ncc-regulatory-pack.pdf`; subscriber detail `/admin/reports/ncc-subscribers`.
 UI component/template: `ncc_pack.html` and `ncc_subscribers.html`.
 Displayed as: COMPLETE/INCOMPLETE pack state, per-section availability/errors, JSON/PDF links, and the subscriber detail view.
-Permission: `provisioning:read`; subscriber detail uses `customer:read`.
+Permission: `reports:ncc:read`; JSON/PDF exports and subscriber CSV export require `reports:ncc:export`.
 Ownership: Mixed Self-Care-owned and external; the assembled pack is a Self-Care projection.
 Data freshness/synchronization: Native facts and external gateway results are read during pack construction; failures have no fabricated fallback.
 Plain-English flow: Self-Care combines its regulatory records with explicitly owned back-office facts and reports each source's availability.

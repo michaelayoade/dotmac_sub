@@ -20,8 +20,11 @@ def test_reports_routes_use_granular_permissions_not_the_coarse_keys():
     assert 'require_permission("reports:billing:export")' in REPORTS
     assert 'require_permission("reports:network:read")' in REPORTS
     assert 'require_permission("reports:network:export")' in REPORTS
+    assert 'require_permission("reports:ncc:read")' in REPORTS
+    assert 'require_permission("reports:ncc:export")' in REPORTS
     assert '"reports:billing:read"' in REPORTS
     assert '"reports:network:read"' in REPORTS
+    assert '"reports:ncc:read"' in REPORTS
 
 
 def test_seed_catalog_defines_granular_reports_permissions():
@@ -30,6 +33,8 @@ def test_seed_catalog_defines_granular_reports_permissions():
         "reports:billing:export",
         "reports:network:read",
         "reports:network:export",
+        "reports:ncc:read",
+        "reports:ncc:export",
     ):
         assert f'("{key}"' in SEED, key
     # The coarse catalog entries are retired.
@@ -48,8 +53,20 @@ def test_export_controls_are_gated_on_the_export_permission():
         encoding="utf-8"
     )
     assert 'can(request, "reports:billing:export")' in revenue
+    ncc_complaints = (ROOT / "templates/admin/reports/ncc_complaints.html").read_text(
+        encoding="utf-8"
+    )
+    ncc_subscribers = (ROOT / "templates/admin/reports/ncc_subscribers.html").read_text(
+        encoding="utf-8"
+    )
+    ncc_pack = (ROOT / "templates/admin/reports/ncc_pack.html").read_text(
+        encoding="utf-8"
+    )
     assert 'can(request, "reports:network:export")' in network
     assert 'can(request, "reports:network:export")' in bandwidth
+    assert 'can(request, "reports:ncc:export")' in ncc_complaints
+    assert 'can(request, "reports:ncc:export")' in ncc_subscribers
+    assert 'can(request, "reports:ncc:export")' in ncc_pack
 
 
 def test_reports_hub_uses_granular_access_and_hides_unauthorized_links():
@@ -69,3 +86,22 @@ def test_reports_hub_uses_granular_access_and_hides_unauthorized_links():
     assert all(
         link.get("permission") for section in sections for link in section["links"]
     )
+
+
+def test_ncc_reports_are_granted_to_customer_experience_manager_seed_role():
+    from scripts.seed.seed_rbac import (
+        DEFAULT_PERMISSIONS,
+        DEFAULT_ROLES,
+        ROLE_PERMISSIONS,
+    )
+
+    seeded = {key for key, _description in DEFAULT_PERMISSIONS}
+    assert {"reports:ncc:read", "reports:ncc:export"} <= seeded
+    assert (
+        "customer_experience_manager",
+        "Customer experience manager access",
+    ) in DEFAULT_ROLES
+    assert {
+        "reports:ncc:read",
+        "reports:ncc:export",
+    } <= set(ROLE_PERMISSIONS["customer_experience_manager"])
