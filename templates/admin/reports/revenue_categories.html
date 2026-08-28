@@ -1,11 +1,11 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, empty_state, animation_styles, icon_chart_bar %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, report_chart_card, stats_card, empty_state, animation_styles, icon_chart_bar %}
 
 {% block title %}Revenue by Category - Admin{% endblock %}
 
 {% block charts_js %}
-<script src="/static/js/vendor/chart.min.js"></script>
-<script src="/static/js/charts.js"></script>
+<script src="/static/js/vendor/echarts.min.js"></script>
+<script src="/static/js/echarts-charts.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -14,18 +14,24 @@
     {% call page_header(title="Revenue by Category", subtitle="Invoice revenue grouped by service type", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
 
     <div class="grid gap-4 sm:grid-cols-2">
-        {{ stats_card("Categories", total|default(0), icon_chart_bar(), color="teal", color2="emerald") }}
-        {{ stats_card("Total Revenue", "{:,.2f}".format(total_revenue|default(0)|float), icon_chart_bar(), color="emerald", color2="teal") }}
+        {{ stats_card("Categories", (category_count.value if category_count.is_present else category_count.placeholder), icon_chart_bar(), color="teal", color2="emerald") }}
+        {{ stats_card("Total Revenue", ("{:,.2f}".format(total_revenue.value|float) if total_revenue.is_present else total_revenue.placeholder), icon_chart_bar(), color="emerald", color2="teal") }}
     </div>
 
-    {% if chart_labels %}
-    <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Revenue Mix</h2>
-        <div style="height: 300px;">
-            <canvas id="revenueCategoryChart"></canvas>
-        </div>
-    </div>
-    {% endif %}
+    {% call report_chart_card("Revenue Mix", revenue_mix_chart, "revenue-category-chart", color="teal", color2="emerald", min_height=300) %}
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const ctx = document.getElementById('revenue-category-chart');
+        if (!ctx) return;
+        const chart = DotmacCharts.createDoughnutChart(ctx, {
+            labels: {{ revenue_mix_chart.labels | tojson | safe }},
+            values: {{ revenue_mix_chart.series[0].values | tojson | safe }},
+            colors: ['#0f766e', '#059669', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#ea580c']
+        }, { legendPosition: 'bottom' });
+        DotmacCharts.registerChart('revenue-category-chart', chart);
+    });
+    </script>
+    {% endcall %}
 
     {% call card("Revenue Categories", color="teal") %}
     {% if categories %}
@@ -49,30 +55,13 @@
             </tbody>
         </table>
     </div>
+    {% elif revenue_mix_chart.is_unavailable %}
+    <div role="alert" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">Revenue categories could not be loaded. Refresh the page to try again.</div>
     {% else %}
     {{ empty_state("No categorized revenue", "Invoice revenue with linked service categories will appear here.") }}
     {% endif %}
     {% endcall %}
 </div>
 
-{% if chart_labels %}
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const ctx = document.getElementById('revenueCategoryChart');
-    if (!ctx) return;
-    new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: {{ chart_labels | tojson }},
-            datasets: [{
-                data: {{ chart_values | tojson }},
-                backgroundColor: ['#0f766e', '#059669', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#ea580c']
-            }]
-        },
-        options: { responsive: true, maintainAspectRatio: false }
-    });
-});
-</script>
-{% endif %}
 {{ animation_styles() }}
 {% endblock %}

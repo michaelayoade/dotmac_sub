@@ -5,8 +5,8 @@ every portal projects KPIs, actions, and cell state the same way and the
 presentation layer never re-derives business meaning (the recurring drift the
 portal review found). The **List** contract already exists as
 ``app.services.list_query`` (``ListDefinition`` / ``ListQuery`` — filters, sort,
-pagination, counts, and declared capabilities); this module adds the three that
-did not exist yet: **State**, **KPI**, and **Action**.
+pagination, counts, and declared capabilities); this module owns **State**,
+**KPI**, **Action**, and **Chart**.
 
 These are transport-neutral: the owner decides value, eligibility, and meaning;
 the client owns concrete colours, spacing, and platform-native rendering for
@@ -18,11 +18,110 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from math import isfinite
+from typing import Any, TypeAlias
 
 from app.schemas.status_presentation import StatusIcon, StatusTone
 
-__all__ = ["Action", "Kpi", "StateKind", "StateValue"]
+__all__ = [
+    "Action",
+    "ChartProjection",
+    "ChartSeries",
+    "ChartStateKind",
+    "Kpi",
+    "StateKind",
+    "StateValue",
+]
+
+ChartNumber: TypeAlias = int | float
+
+
+class ChartStateKind(StrEnum):
+    """Whether a chart can render authoritative series data."""
+
+    present = "present"
+    empty = "empty"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class ChartSeries:
+    """One named numeric series in a chart projection."""
+
+    label: str
+    values: tuple[ChartNumber, ...]
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("Chart series label is required")
+        if not self.values:
+            raise ValueError("Chart series values are required")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            for value in self.values
+        ):
+            raise ValueError("Chart series values must be finite numeric values")
+
+
+@dataclass(frozen=True, slots=True)
+class ChartProjection:
+    """Chart data plus an explicit empty or unavailable presentation state."""
+
+    state: ChartStateKind
+    labels: tuple[str, ...] = ()
+    series: tuple[ChartSeries, ...] = ()
+    message: str | None = None
+    as_of: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.as_of is not None and self.as_of.tzinfo is None:
+            raise ValueError("Chart freshness must be timezone-aware")
+        if self.state is ChartStateKind.present:
+            if not self.labels or not self.series:
+                raise ValueError("Present chart requires labels and series")
+            if any(not label.strip() for label in self.labels):
+                raise ValueError("Chart labels cannot be blank")
+            if any(len(item.values) != len(self.labels) for item in self.series):
+                raise ValueError("Every chart series must match the label count")
+            if self.message:
+                raise ValueError("Present chart cannot carry an absence message")
+        else:
+            if self.labels or self.series or self.as_of is not None:
+                raise ValueError("Absent chart cannot carry data or freshness")
+            if not str(self.message or "").strip():
+                raise ValueError("Absent chart requires a presentation message")
+
+    @classmethod
+    def present(
+        cls,
+        *,
+        labels: tuple[str, ...],
+        series: tuple[ChartSeries, ...],
+        as_of: datetime | None = None,
+    ) -> ChartProjection:
+        return cls(ChartStateKind.present, labels, series, as_of=as_of)
+
+    @classmethod
+    def empty(cls, message: str) -> ChartProjection:
+        return cls(ChartStateKind.empty, message=message)
+
+    @classmethod
+    def unavailable(cls, message: str) -> ChartProjection:
+        return cls(ChartStateKind.unavailable, message=message)
+
+    @property
+    def is_present(self) -> bool:
+        return self.state is ChartStateKind.present
+
+    @property
+    def is_empty(self) -> bool:
+        return self.state is ChartStateKind.empty
+
+    @property
+    def is_unavailable(self) -> bool:
+        return self.state is ChartStateKind.unavailable
 
 
 class StateKind(StrEnum):

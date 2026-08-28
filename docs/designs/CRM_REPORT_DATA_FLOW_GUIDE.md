@@ -45,7 +45,7 @@ Backend query/service: `crm_reporting.network_infrastructure_facts`, composed by
 Transformation/calculation: Counts active/total OLTs, observed-online ONTs, IP usage, VLANs, PON capacity/utilization, available fibre, FDHs, and splitter outputs; selects ten recent ONT observations.
 Route/API: `/admin/reports/network`; CSV `/admin/reports/network/export`.
 UI component/template: `templates/admin/reports/network.html`.
-Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT observations.
+Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT observations. Each chart receives a typed `ChartProjection`; missing inventory or pools render an explicit empty state instead of a blank plotting surface.
 Permission: `reports:network:read`; CSV requires `reports:network:export`.
 Ownership: Network observations are projected/synchronized into Self-Care; the persisted projection is the report source.
 Data freshness/synchronization: Live report query over the latest collector/synchronizer results.
@@ -73,7 +73,7 @@ Backend query/service: `web_reports.get_churn_report_data`, `subscriber_growth`,
 Transformation/calculation: Calculates strict cancelled, active, and suspended cohorts, churn/retention percentages, monthly churn, and stored cancellation-reason counts with an explicit missing-reason bucket.
 Route/API: `/admin/reports/churn`; CSV `/admin/reports/churn/export`.
 UI component/template: `templates/admin/reports/churn.html`.
-Displayed as: Churn, cancellation, at-risk, and retention cards; trend/reason views; recent cancellations.
+Displayed as: Churn, cancellation, at-risk, and retention cards; trend/reason views; recent cancellations. The monthly trend uses a typed `ChartProjection`, so a completed zero-cancellation read is visibly empty rather than silently omitted.
 Permission: `customer:read`.
 Ownership: Self-Care-owned; CRM retention engagement records are excluded.
 Data freshness/synchronization: Live native lifecycle read.
