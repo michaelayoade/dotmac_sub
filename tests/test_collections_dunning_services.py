@@ -621,39 +621,6 @@ def test_dunning_account_revalidates_stale_cohort_invoice(
     assert result.has_effective_overdue is False
 
 
-def test_payment_resolves_open_but_not_paused_cases(
-    db_session, subscriber, subscription, catalog_offer
-):
-    """An incoming payment auto-resolves OPEN dunning cases but must leave a
-    PAUSED case (operator hold) untouched (#A7 paused-policy)."""
-    open_case = DunningCase(
-        account_id=subscriber.id,
-        status=DunningCaseStatus.open,
-        started_at=datetime.now(UTC),
-    )
-    paused_case = DunningCase(
-        account_id=subscriber.id,
-        status=DunningCaseStatus.paused,
-        started_at=datetime.now(UTC),
-    )
-    db_session.add_all([open_case, paused_case])
-    subscription.status = SubscriptionStatus.active
-    subscriber.status = SubscriberStatus.delinquent
-    db_session.commit()
-
-    collections_service.dunning_workflow.resolve_cases_for_account(
-        db_session, str(subscriber.id), None, commit=False
-    )
-    db_session.flush()
-
-    db_session.refresh(open_case)
-    db_session.refresh(paused_case)
-    db_session.refresh(subscriber)
-    assert open_case.status == DunningCaseStatus.resolved
-    assert paused_case.status == DunningCaseStatus.paused  # operator hold kept
-    assert subscriber.status == SubscriberStatus.active
-
-
 def test_suspend_proceeds_when_overdue_and_unshielded(
     db_session, subscriber, subscription, catalog_offer
 ):

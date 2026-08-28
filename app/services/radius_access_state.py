@@ -47,6 +47,81 @@ def stage_subscription_radius_profile(
     return credential
 
 
+class CredentialProfileConflict(ValueError):
+    """A credential is not in the RADIUS profile state the caller expected.
+
+    A domain error, deliberately not an ``HTTPException``: this module is not
+    in ``tests/architecture/service_http_exception_baseline.txt`` and must not
+    be added to it. The adapter that owns a transport maps this to its own
+    status code.
+    """
+
+
+def apply_throttle_profile(
+    db: Session,
+    *,
+    credential_id: UUID,
+    profile_before_id: UUID | None,
+    throttle_profile_id: UUID,
+) -> AccessCredential:
+    """Move one credential onto a throttle profile, remembering what it left.
+
+    ``pre_throttle_radius_profile_id`` is the restore anchor: it holds the
+    profile the credential carried before the throttle, so a later restore
+    does not have to re-derive it. A credential that was already on no profile
+    leaves the anchor null, because there is nothing to come back to.
+
+    An anchor that is already set is never overwritten. Re-throttling an
+    already-throttled credential would otherwise record the throttle profile
+    as the thing to restore, and the customer's real speed would be lost with
+    no way to recover it from the row.
+    """
+
+    credential = db.get(AccessCredential, credential_id)
+    if credential is None or credential.radius_profile_id != profile_before_id:
+        raise CredentialProfileConflict(
+            "Access credential is not on the profile the throttle expected"
+        )
+    if (
+        credential.radius_profile_id is not None
+        and credential.pre_throttle_radius_profile_id is None
+    ):
+        credential.pre_throttle_radius_profile_id = credential.radius_profile_id
+    credential.radius_profile_id = throttle_profile_id
+    db.flush()
+    return credential
+
+
+def restore_throttle_profile(
+    db: Session,
+    *,
+    credential_id: UUID,
+    throttled_profile_id: UUID | None,
+    restore_profile_id: UUID | None,
+) -> AccessCredential:
+    """Return one throttled credential to its remembered profile.
+
+    Both halves are checked, not just the current profile: a credential whose
+    restore anchor no longer matches is one some other owner has moved since
+    the throttle, and guessing which profile it should end on would be
+    inventing a decision this module does not own.
+    """
+
+    credential = db.get(AccessCredential, credential_id)
+    if (
+        credential is None
+        or credential.radius_profile_id != throttled_profile_id
+        or credential.pre_throttle_radius_profile_id != restore_profile_id
+    ):
+        raise CredentialProfileConflict(
+            "Throttled credential is not in the state the restore expected"
+        )
+    credential.radius_profile_id = restore_profile_id
+    credential.pre_throttle_radius_profile_id = None
+    db.flush()
+    return credential
+
+
 # Status sets — declared here as constants so callers can also reason
 # about which SubscriptionStatus values map to a given AccessState
 # without inverting the function.

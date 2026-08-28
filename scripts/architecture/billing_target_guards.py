@@ -170,10 +170,16 @@ def metadata_financial_authority_sites() -> dict[str, int]:
 
 
 @cache
-def scheduled_financial_sweeps() -> set[str]:
-    """Return scheduled task names that sweep customer money or access."""
+def scheduled_financial_sweeps(source: Path | None = None) -> set[str]:
+    """Return scheduled task names that sweep customer money or access.
 
-    tree = _tree(SCHEDULER_CONFIG)
+    ``source`` exists so the detector can be pointed at a planted scheduler
+    configuration and shown to FAIL (ADR-0018 decision 5): without it, a clean
+    run and a detector that has silently stopped scanning are the same
+    observation. Production callers pass nothing and read the real config.
+    """
+
+    tree = _tree(source if source is not None else SCHEDULER_CONFIG)
     if tree is None:  # pragma: no cover - defensive
         return set()
 

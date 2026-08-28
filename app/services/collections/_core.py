@@ -910,35 +910,34 @@ def confirm_financial_access_consequence(
             }:
                 subscriptions_changed += 1
     elif preview.eligible and action == FinancialAccessAction.throttle:
-        credential_ids = [change.credential_id for change in preview.credential_changes]
-        credentials = {
-            credential.id: credential
-            for credential in (
-                db.query(AccessCredential)
-                .filter(AccessCredential.id.in_(credential_ids))
-                .with_for_update()
-                .all()
-            )
-        }
+        from app.services.account_lifecycle import (
+            CredentialConsequenceRefused,
+            CredentialThrottleCommand,
+            apply_credential_throttle,
+        )
+
         for change in preview.credential_changes:
-            credential = credentials.get(change.credential_id)
-            if credential is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Access credential changed after preview; preview again",
-                )
-            if (
-                credential.radius_profile_id != change.profile_before_id
-                or change.profile_after_id is None
-            ):
+            if change.profile_after_id is None:
                 raise HTTPException(
                     status_code=409,
                     detail="Access credential profile changed after preview",
                 )
-            if credential.radius_profile_id is not None:
-                credential.pre_throttle_radius_profile_id = credential.radius_profile_id
-            credential.radius_profile_id = change.profile_after_id
-            credential_results.append(change)
+        try:
+            apply_credential_throttle(
+                db,
+                [
+                    CredentialThrottleCommand(
+                        credential_id=change.credential_id,
+                        profile_before_id=change.profile_before_id,
+                        throttle_profile_id=change.profile_after_id,
+                    )
+                    for change in preview.credential_changes
+                    if change.profile_after_id is not None
+                ],
+            )
+        except CredentialConsequenceRefused as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        credential_results.extend(preview.credential_changes)
         db.flush()
         emit_event(
             db,
@@ -1468,33 +1467,28 @@ def confirm_financial_access_restoration(
         )
         resolved_case_ids.append(case.id)
 
+    from app.services.account_lifecycle import (
+        CredentialConsequenceRefused,
+        CredentialRestoreCommand,
+        apply_credential_restore,
+    )
+
     restored_credentials: list[FinancialAccessCredentialChange] = []
-    credential_ids = [change.credential_id for change in preview.credential_changes]
-    credentials = {
-        credential.id: credential
-        for credential in (
-            db.query(AccessCredential)
-            .filter(AccessCredential.id.in_(credential_ids))
-            .with_for_update()
-            .all()
-            if credential_ids
-            else []
+    try:
+        apply_credential_restore(
+            db,
+            [
+                CredentialRestoreCommand(
+                    credential_id=change.credential_id,
+                    throttled_profile_id=change.profile_before_id,
+                    restore_profile_id=change.profile_after_id,
+                )
+                for change in preview.credential_changes
+            ],
         )
-    }
-    for change in preview.credential_changes:
-        credential = credentials.get(change.credential_id)
-        if (
-            credential is None
-            or credential.radius_profile_id != change.profile_before_id
-            or credential.pre_throttle_radius_profile_id != change.profile_after_id
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Throttled credential changed after preview",
-            )
-        credential.radius_profile_id = change.profile_after_id
-        credential.pre_throttle_radius_profile_id = None
-        restored_credentials.append(change)
+    except CredentialConsequenceRefused as refused:
+        raise HTTPException(status_code=409, detail=str(refused)) from refused
+    restored_credentials.extend(preview.credential_changes)
 
     if preview.decision_inputs.get("clear_prepaid_timers"):
         _clear_prepaid_dunning_flags(db, account_id)
@@ -1652,149 +1646,6 @@ def _get_account_email(db: Session, account_id: str) -> str | None:
     if not account:
         return None
     return str(account.email) if account.email else None
-
-
-def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
-    """Apply throttle RADIUS profile to account's access credentials.
-
-    Throttling reduces bandwidth for the subscriber without fully suspending
-    service. This requires a 'throttle' RADIUS profile to be configured.
-
-    Args:
-        db: Database session
-        account_id: The account to throttle
-
-    Returns:
-        Tuple of (success: bool, credentials_throttled: int)
-    """
-    # Get throttle profile ID from settings
-    throttle_profile_id = settings_spec.resolve_value(
-        db, SettingDomain.collections, "throttle_radius_profile_id"
-    )
-    if not throttle_profile_id:
-        logger.warning(
-            f"Cannot throttle account {account_id}: throttle_radius_profile_id not configured"
-        )
-        return False, 0
-
-    # Verify the throttle profile exists
-    throttle_profile = db.get(RadiusProfile, throttle_profile_id)
-    if not throttle_profile or not throttle_profile.is_active:
-        logger.warning(
-            f"Cannot throttle account {account_id}: throttle profile {throttle_profile_id} not found or inactive"
-        )
-        return False, 0
-
-    # Get all active access credentials for the account
-    credentials = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
-        .filter(AccessCredential.is_active.is_(True))
-        .all()
-    )
-
-    if not credentials:
-        logger.info(f"No active credentials to throttle for account {account_id}")
-        return True, 0
-
-    throttled_count = 0
-    for cred in credentials:
-        # PERSIST the profile we are about to replace. The throttle is a temporary
-        # override, so the value it overrides has to survive it — previously this
-        # was only written to a log line, which meant a customer who paid could
-        # never get their speed back.
-        #
-        # Only capture on the FIRST throttle: re-throttling an already-throttled
-        # credential must not overwrite the real profile with the throttle profile.
-        if cred.radius_profile_id and str(cred.radius_profile_id) != str(
-            throttle_profile_id
-        ):
-            cred.pre_throttle_radius_profile_id = cred.radius_profile_id
-        cred.radius_profile_id = throttle_profile.id
-        throttled_count += 1
-
-    # Emit throttle event
-    emit_event(
-        db,
-        EventType.subscriber_throttled,
-        {
-            "account_id": str(account_id),
-            "credentials_throttled": throttled_count,
-            "throttle_profile_id": str(throttle_profile_id),
-        },
-        account_id=coerce_uuid(account_id),
-    )
-
-    logger.info(f"Throttled {throttled_count} credentials for account {account_id}")
-    return True, throttled_count
-
-
-def _restore_throttle(db: Session, account_id: str) -> int:
-    """Remove throttle and restore original RADIUS profiles.
-
-    When a throttled account makes payment, restore their original
-    bandwidth by removing the throttle profile.
-
-    Args:
-        db: Database session
-        account_id: The account to restore
-
-    Returns:
-        Number of credentials restored
-    """
-    throttle_profile_id = settings_spec.resolve_value(
-        db, SettingDomain.collections, "throttle_radius_profile_id"
-    )
-    if not throttle_profile_id:
-        return 0
-
-    # Get credentials with throttle profile
-    credentials = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
-        .filter(AccessCredential.radius_profile_id == coerce_uuid(throttle_profile_id))
-        .filter(AccessCredential.is_active.is_(True))
-        .all()
-    )
-
-    if not credentials:
-        return 0
-
-    restored_count = 0
-    for cred in credentials:
-        if cred.pre_throttle_radius_profile_id is not None:
-            # Give back exactly what we took. This preserves credential-level
-            # overrides and provides exact restoration evidence.
-            cred.radius_profile_id = cred.pre_throttle_radius_profile_id
-            cred.pre_throttle_radius_profile_id = None
-            restored_count += 1
-            continue
-
-        logger.warning(
-            "Legacy throttled credential %s has no exact pre-throttle profile; "
-            "leaving it unchanged for reviewed reconciliation",
-            cred.id,
-        )
-
-    if restored_count:
-        logger.info(
-            f"Restored {restored_count} throttled credentials for account {account_id}"
-        )
-        # The throttle emits ``subscriber_throttled``, which enqueues a RADIUS
-        # refresh. The un-throttle emitted nothing, so the customer's speed came
-        # back only on the next scheduled sweep — the throttle landed in seconds
-        # and the release took up to 15 minutes. Emit the mirror event.
-        emit_event(
-            db,
-            EventType.subscriber_unthrottled,
-            {
-                "account_id": str(account_id),
-                "credentials_restored": restored_count,
-            },
-            account_id=coerce_uuid(account_id),
-        )
-
-    return restored_count
 
 
 def _create_throttle_notification(
@@ -1970,7 +1821,6 @@ _NON_ADVANCING_DUNNING_OUTCOMES = frozenset(
         "prepaid_balance_available",
         "billing_profile_invalid",
         "notice_grace_active",
-        "enforcement_health_blocked",
     }
 )
 
@@ -2919,42 +2769,6 @@ class DunningWorkflow(ListResponseMixin):
             skipped=skipped,
             errors=errors,
         )
-
-    @staticmethod
-    def resolve_cases_for_account(
-        db: Session,
-        account_id: str,
-        invoice_id: str | None = None,
-        commit: bool = True,
-    ) -> int:
-        cases = (
-            db.query(DunningCase)
-            .filter(DunningCase.account_id == account_id)
-            # Only auto-resolve OPEN cases on payment; a paused case is an
-            # operator hold and must be released by a human, not by a payment.
-            .filter(DunningCase.status == DunningCaseStatus.open)
-            .all()
-        )
-        if not cases:
-            return 0
-        now = datetime.now(UTC)
-        for case in cases:
-            case.status = DunningCaseStatus.resolved
-            case.resolved_at = now
-            _create_action_log(
-                db,
-                case,
-                DunningAction.notify,
-                case.current_step,
-                invoice_id,
-                outcome="resolved",
-                notes="Resolved after payment",
-            )
-        db.flush()
-        _refresh_account_status(db, account_id)
-        if commit:
-            db.commit()
-        return len(cases)
 
 
 class BillingEnforcementReconciler:

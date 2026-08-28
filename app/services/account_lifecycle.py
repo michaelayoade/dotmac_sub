@@ -35,6 +35,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -45,6 +46,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.models.catalog import (
+    AccessCredential,
     BillingMode,
     Subscription,
     SubscriptionAddOn,
@@ -60,6 +62,11 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
+from app.services.radius_access_state import (
+    CredentialProfileConflict,
+    apply_throttle_profile,
+    restore_throttle_profile,
+)
 from app.services.subscription_lifecycle_evidence import (
     LifecycleEvidenceGrade,
     LifecycleEvidenceSource,
@@ -71,6 +78,143 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+# ── Collections-requested credential consequences ────────────────────────────
+#
+# Collections decides that an account has earned a consequence. It does not
+# decide that a credential may move, and it does not move one: per ADR-0030,
+# "a collections request is not permission or a service-state write — the
+# service owner revalidates and permits/refuses/applies the transition".
+#
+# The split below is that sentence, in two layers. This module REVALIDATES and
+# permits or refuses; ``app.services.radius_access_state`` APPLIES the profile
+# columns. Collections holds neither half. The two-directional ratchet in
+# ``tests/architecture/test_collections_credential_writer_ratchet.py`` is what
+# keeps it that way.
+
+
+class CredentialConsequenceOrigin(StrEnum):
+    """Named lanes permitted to request a credential consequence."""
+
+    collections_throttle = "collections_throttle"
+    collections_restore = "collections_restore"
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialThrottleCommand:
+    """Typed compare-and-set request to throttle one credential."""
+
+    credential_id: UUID
+    profile_before_id: UUID | None
+    throttle_profile_id: UUID
+    origin: CredentialConsequenceOrigin = (
+        CredentialConsequenceOrigin.collections_throttle
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialRestoreCommand:
+    """Typed compare-and-set request to un-throttle one credential."""
+
+    credential_id: UUID
+    throttled_profile_id: UUID | None
+    restore_profile_id: UUID | None
+    origin: CredentialConsequenceOrigin = (
+        CredentialConsequenceOrigin.collections_restore
+    )
+
+
+class CredentialConsequenceRefused(ValueError):
+    """The requested credential consequence is stale or not permitted."""
+
+
+def _lock_requested_credentials(
+    db: Session, credential_ids: Sequence[UUID]
+) -> dict[UUID, AccessCredential]:
+    """Take the row locks before revalidating, not after.
+
+    The lock is this owner's, not the requester's: revalidating against rows
+    another writer can still move is the same as not revalidating.
+    """
+
+    if not credential_ids:
+        return {}
+    locked = db.scalars(
+        select(AccessCredential)
+        .where(AccessCredential.id.in_(list(credential_ids)))
+        .with_for_update()
+    ).all()
+    return {credential.id: credential for credential in locked}
+
+
+def apply_credential_throttle(
+    db: Session, commands: Sequence[CredentialThrottleCommand]
+) -> tuple[AccessCredential, ...]:
+    """Permit or refuse a batch of throttle requests, then apply them.
+
+    All or nothing: one stale command refuses the batch, because a partially
+    throttled account is a state no policy asked for and no restore describes.
+    """
+
+    locked = _lock_requested_credentials(
+        db, [command.credential_id for command in commands]
+    )
+    for command in commands:
+        if command.credential_id not in locked:
+            raise CredentialConsequenceRefused(
+                "Access credential changed after preview; preview again"
+            )
+    applied: list[AccessCredential] = []
+    for command in commands:
+        try:
+            applied.append(
+                apply_throttle_profile(
+                    db,
+                    credential_id=command.credential_id,
+                    profile_before_id=command.profile_before_id,
+                    throttle_profile_id=command.throttle_profile_id,
+                )
+            )
+        except CredentialProfileConflict as conflict:
+            # Wording preserved from the call site this owner took over, so the
+            # refusal a client already handles does not change shape under a
+            # refactor that was supposed to move a writer and nothing else.
+            raise CredentialConsequenceRefused(
+                "Access credential profile changed after preview"
+            ) from conflict
+    return tuple(applied)
+
+
+def apply_credential_restore(
+    db: Session, commands: Sequence[CredentialRestoreCommand]
+) -> tuple[AccessCredential, ...]:
+    """Permit or refuse a batch of restore requests, then apply them."""
+
+    locked = _lock_requested_credentials(
+        db, [command.credential_id for command in commands]
+    )
+    for command in commands:
+        if command.credential_id not in locked:
+            raise CredentialConsequenceRefused(
+                "Throttled credential changed after preview"
+            )
+    applied: list[AccessCredential] = []
+    for command in commands:
+        try:
+            applied.append(
+                restore_throttle_profile(
+                    db,
+                    credential_id=command.credential_id,
+                    throttled_profile_id=command.throttled_profile_id,
+                    restore_profile_id=command.restore_profile_id,
+                )
+            )
+        except CredentialProfileConflict as conflict:
+            raise CredentialConsequenceRefused(
+                "Throttled credential changed after preview"
+            ) from conflict
+    return tuple(applied)
 
 
 class BillingAnchorProjectionSource(StrEnum):

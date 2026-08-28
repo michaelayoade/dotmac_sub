@@ -132,6 +132,43 @@ def test_no_new_scheduled_financial_sweep() -> None:
     )
 
 
+def test_scheduled_sweep_detector_is_sensitive(tmp_path: Path) -> None:
+    """ADR-0018: prove the sweep detector fails against a planted sweep.
+
+    ``test_no_new_scheduled_financial_sweep`` is two-directional — it fails on
+    an addition and on an unrecorded removal — but until this test it had no
+    sensitivity proof, and ``COL-R1``/``COL-R2``'s whole retirement evidence is
+    the baseline it guards. A guard over a region nothing actually scans passes
+    for the wrong reason.
+    """
+
+    planted = tmp_path / "scheduler_config.py"
+    planted.write_text(
+        "def configure() -> None:\n"
+        "    _sync_scheduled_task(\n"
+        '        name="planted_money_sweep",\n'
+        '        task_name="app.tasks.collections.sweep_everything",\n'
+        "    )\n"
+        "    _sync_scheduled_task(\n"
+        '        name="not_a_money_sweep",\n'
+        '        task_name="app.tasks.reporting.rebuild_index",\n'
+        "    )\n",
+        encoding="utf-8",
+    )
+
+    found = scheduled_financial_sweeps(planted)
+
+    assert "planted_money_sweep" in found, (
+        "the scheduled-sweep detector did not see a planted financial sweep; "
+        "a clean run of test_no_new_scheduled_financial_sweep therefore proves "
+        "nothing about the region it claims to guard"
+    )
+    # And it discriminates: a scheduled task outside the financial task
+    # prefixes is not swept up, so the detector is not merely matching every
+    # _sync_scheduled_task call it can find.
+    assert "not_a_money_sweep" not in found
+
+
 def test_sweep_baseline_is_sorted_and_unique() -> None:
     entries = [
         line.strip()

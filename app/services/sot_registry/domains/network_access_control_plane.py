@@ -38,6 +38,7 @@ DOMAIN = DomainSOT(
                 "subscriber portal/account-active projection",
                 "atomic account and child-service access projection",
                 "sole persisted Subscription.access_state writes",
+                "collections-requested credential consequence decision",
             ),
             depends_on=(
                 "events.dispatcher",
@@ -51,7 +52,12 @@ DOMAIN = DomainSOT(
                 "write the access-state projection. Subscription creation enters "
                 "active state through this owner, and every service-period, grant, "
                 "settlement, and reviewed-repair decision submits a typed, locked "
-                "compare-and-set billing-anchor projection to its one writer."
+                "compare-and-set billing-anchor projection to its one writer. "
+                "Ledger row COL-R5: a dunning or prepaid decision submits a typed "
+                "CredentialThrottleCommand/CredentialRestoreCommand here; this "
+                "owner takes the row locks, revalidates against the state the "
+                "preview promised, and permits or refuses. It does not itself "
+                "write the profile columns — access.radius_state applies them."
             ),
         ),
         SOTService(
@@ -911,7 +917,11 @@ DOMAIN = DomainSOT(
         SOTService(
             name="access.radius_state",
             module="app.services.radius_access_state",
-            owns=("pure desired RADIUS access-state mapping",),
+            owns=(
+                "pure desired RADIUS access-state mapping",
+                "credential RADIUS profile writes",
+                "pre-throttle restore anchor",
+            ),
             depends_on=(
                 "access.subscription_lifecycle",
                 "access.walled_garden_policy",
@@ -919,7 +929,15 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Maps canonical lifecycle status and effective restriction to an "
-                "AccessState. It writes neither lifecycle rows nor external RADIUS."
+                "AccessState. It writes neither lifecycle rows nor external RADIUS. "
+                "It IS the writer of a credential's radius_profile_id and "
+                "pre_throttle_radius_profile_id (ledger row COL-R5): the restore "
+                "anchor is set once when a throttle is applied and never "
+                "overwritten while it holds a value, so re-throttling an already "
+                "throttled credential cannot lose the customer's real profile. "
+                "The decision to move a credential belongs to its requesting "
+                "owner; this module applies an already-authorized transition and "
+                "refuses one whose expected before-state no longer holds."
             ),
         ),
         SOTService(

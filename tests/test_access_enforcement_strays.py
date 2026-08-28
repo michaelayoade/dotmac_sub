@@ -6,6 +6,11 @@ worse off than the system believed:
 S1  A dunning throttle was never lifted when the customer paid. The pre-throttle
     profile existed only in a log line, so their real speed was unrecoverable —
     and radius_population re-applied the throttle on every sweep.
+    The two helpers S1 originally asserted against were dead code with no
+    production caller, and ledger row COL-R7 deleted them. The INVARIANTS did
+    not go with them: they are asserted below against the owner that holds
+    them now — ``account_lifecycle`` decides, ``radius_access_state`` applies
+    (COL-R5).
 S2  Suspending ONE subscription hard-deleted RADIUS rows for the WHOLE subscriber,
     taking their other paid services offline.
 S3  The reseller portal suspended with emit=False (so nothing enforced it) and
@@ -16,6 +21,8 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+
+import pytest
 
 from app.models.catalog import (
     AccessCredential,
@@ -29,7 +36,13 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber
-from app.services.collections._core import _restore_throttle, _throttle_account
+from app.services.account_lifecycle import (
+    CredentialConsequenceRefused,
+    CredentialRestoreCommand,
+    CredentialThrottleCommand,
+    apply_credential_restore,
+    apply_credential_throttle,
+)
 
 
 def _profile(db, name: str) -> RadiusProfile:
@@ -99,84 +112,114 @@ def _credential(db, account, subscription, profile) -> AccessCredential:
 
 
 # --- S1: the throttle must be undone exactly ---------------------------------
+#
+# Asserted against the owner named by COL-R5, not against the retired helpers.
 
 
-def test_throttle_persists_the_profile_it_replaces(db_session, monkeypatch):
+def _throttled_credential(db, *, real_profile, throttle_profile):
+    """A credential the collections path has already throttled once."""
+
+    account = _account(db)
+    subscription = _subscription(db, account, _offer(db))
+    credential = _credential(db, account, subscription, real_profile)
+    apply_credential_throttle(
+        db,
+        [
+            CredentialThrottleCommand(
+                credential_id=credential.id,
+                profile_before_id=real_profile.id,
+                throttle_profile_id=throttle_profile.id,
+            )
+        ],
+    )
+    return credential
+
+
+def test_throttle_remembers_the_profile_it_replaces(db_session):
     """The customer's real speed must survive the throttle."""
+    real = _profile(db_session, "real-50M")
+    throttle = _profile(db_session, "throttle-1M")
+
+    credential = _throttled_credential(
+        db_session, real_profile=real, throttle_profile=throttle
+    )
+
+    assert credential.radius_profile_id == throttle.id
+    assert credential.pre_throttle_radius_profile_id == real.id
+
+
+def test_restoring_returns_the_exact_profile_that_was_throttled(db_session):
+    """Paying gets the customer's own speed back, not a guess at it."""
+    real = _profile(db_session, "real-50M")
+    throttle = _profile(db_session, "throttle-1M")
+    credential = _throttled_credential(
+        db_session, real_profile=real, throttle_profile=throttle
+    )
+
+    apply_credential_restore(
+        db_session,
+        [
+            CredentialRestoreCommand(
+                credential_id=credential.id,
+                throttled_profile_id=throttle.id,
+                restore_profile_id=real.id,
+            )
+        ],
+    )
+
+    assert credential.radius_profile_id == real.id
+    assert credential.pre_throttle_radius_profile_id is None
+
+
+def test_rethrottling_does_not_overwrite_the_remembered_profile(db_session):
+    """A second throttle must not record the throttle as the thing to restore.
+
+    This is the original S1 defect: once the anchor holds the throttle profile,
+    the customer's real speed is unrecoverable from the row.
+    """
+    real = _profile(db_session, "real-50M")
+    throttle = _profile(db_session, "throttle-1M")
+    credential = _throttled_credential(
+        db_session, real_profile=real, throttle_profile=throttle
+    )
+
+    apply_credential_throttle(
+        db_session,
+        [
+            CredentialThrottleCommand(
+                credential_id=credential.id,
+                profile_before_id=throttle.id,
+                throttle_profile_id=throttle.id,
+            )
+        ],
+    )
+
+    assert credential.pre_throttle_radius_profile_id == real.id
+
+
+def test_a_stale_throttle_command_is_refused(db_session):
+    """The decider revalidates; it does not trust the caller's preview."""
+    real = _profile(db_session, "real-50M")
+    throttle = _profile(db_session, "throttle-1M")
+    other = _profile(db_session, "someone-elses-move")
     account = _account(db_session)
-    offer = _offer(db_session)
-    subscription = _subscription(db_session, account, offer)
-    real = _profile(db_session, "Gold 100Mbps")
-    throttle = _profile(db_session, "Collections Throttle")
-    cred = _credential(db_session, account, subscription, real)
+    subscription = _subscription(db_session, account, _offer(db_session))
+    credential = _credential(db_session, account, subscription, real)
 
-    monkeypatch.setattr(
-        "app.services.collections._core.settings_spec.resolve_value",
-        lambda db, domain, key: str(throttle.id),
-    )
+    with pytest.raises(CredentialConsequenceRefused):
+        apply_credential_throttle(
+            db_session,
+            [
+                CredentialThrottleCommand(
+                    credential_id=credential.id,
+                    profile_before_id=other.id,  # not where the credential is
+                    throttle_profile_id=throttle.id,
+                )
+            ],
+        )
 
-    ok, count = _throttle_account(db_session, str(account.id))
-    db_session.commit()
-    db_session.refresh(cred)
-
-    assert ok and count == 1
-    assert cred.radius_profile_id == throttle.id
-    assert cred.pre_throttle_radius_profile_id == real.id, (
-        "the profile the throttle replaced was not persisted — the customer's "
-        "real speed is unrecoverable once they pay"
-    )
-
-
-def test_paying_restores_the_exact_profile_that_was_throttled(db_session, monkeypatch):
-    account = _account(db_session)
-    offer = _offer(db_session)
-    subscription = _subscription(db_session, account, offer)
-    real = _profile(db_session, "Gold 100Mbps")
-    throttle = _profile(db_session, "Collections Throttle")
-    cred = _credential(db_session, account, subscription, real)
-
-    monkeypatch.setattr(
-        "app.services.collections._core.settings_spec.resolve_value",
-        lambda db, domain, key: str(throttle.id),
-    )
-
-    _throttle_account(db_session, str(account.id))
-    db_session.commit()
-
-    restored = _restore_throttle(db_session, str(account.id))
-    db_session.commit()
-    db_session.refresh(cred)
-
-    assert restored == 1
-    assert cred.radius_profile_id == real.id, (
-        "the customer paid and did not get their speed back"
-    )
-    assert cred.pre_throttle_radius_profile_id is None
-
-
-def test_rethrottling_does_not_overwrite_the_real_profile(db_session, monkeypatch):
-    """A second throttle pass must not record the throttle AS the real profile."""
-    account = _account(db_session)
-    offer = _offer(db_session)
-    subscription = _subscription(db_session, account, offer)
-    real = _profile(db_session, "Gold 100Mbps")
-    throttle = _profile(db_session, "Collections Throttle")
-    cred = _credential(db_session, account, subscription, real)
-
-    monkeypatch.setattr(
-        "app.services.collections._core.settings_spec.resolve_value",
-        lambda db, domain, key: str(throttle.id),
-    )
-
-    _throttle_account(db_session, str(account.id))
-    db_session.commit()
-    _throttle_account(db_session, str(account.id))  # sweep runs again
-    db_session.commit()
-    db_session.refresh(cred)
-
-    assert cred.pre_throttle_radius_profile_id == real.id, (
-        "re-throttling overwrote the remembered profile with the throttle profile"
-    )
+    assert credential.radius_profile_id == real.id
+    assert credential.pre_throttle_radius_profile_id is None
 
 
 # --- S2: suspension must not take out the customer's other services ----------
