@@ -45,6 +45,7 @@ combined Inbox/Support workspace.
 | Composer AI polish | `communications.team_inbox_ai_polish` | Coordinates review-only, context-aware polishing of unsent staff drafts through the existing Team Inbox projection and AI generation owner |
 | Visitor chat mutations | `communications.team_inbox_widget` | Owns authenticated portal and anonymous fiber-site widget session, message, read, and satisfaction commands; anonymous identity is exact-match or Party-backed prospect with ambiguity held for review |
 | List/detail/metrics/actions, media, and location presentation | `communications.team_inbox_projection` | Normalizes filters, sort and pagination, computes KPIs, unread and action eligibility, resolves safe inline-image versus download-only media presentation, and maps validated structured coordinates to Google Maps links |
+| Performance and escalation reports | `communications.team_inbox_metrics` | Owns typed, bounded team and agent cohorts plus the current unresolved escalation projection; aggregates and paginates in the database |
 | Manager AI analysis input | `communications.team_inbox_analysis_projection` | Recomputes scope-authorized selected-conversation, recent-queue, and period facts plus bounded evidence; it never writes Inbox state or lets AI query Inbox rows |
 | Repair jobs | `communications.team_inbox_maintenance` | Rebuilds media worklists, retries failed intents, and applies stale-conversation policy |
 | Realtime | `communications.team_inbox_realtime` | Publishes best-effort projections only after commit; clients refetch on gaps |
@@ -337,6 +338,8 @@ queue interval, or assignment ending timestamp. See
 | Contact link | Conversation route plus reviewed Party/customer facts | contact-resolution owner | Revalidate/reapply a reviewed link, which repairs active unlinked threads on that exact normalized route; use the digest-bound `repair_team_inbox_subscriber_links` operator workflow for existing uniquely resolved routes; ambiguity remains explicit |
 | Operator unread | Message chronology plus per-person read cursor | operator-state owner | Set-based grouped queries recompute the projection; `rebuild_operator_read_state` removes impossible cross-conversation cursors |
 | Queue metrics and response cohorts | Conversation lifecycle, ordered message chronology, agent reply provenance/delivery, ticket handoff, assignment, and read state | projection query owner | Recompute on every query; no independent flag or counter is authoritative |
+| Performance report cohorts | Conversation lifecycle, ordered message chronology, recorded sender provenance, assignments, team composition, and staff identity in the selected half-open UTC period | `communications.team_inbox_metrics` | Recompute in set-based queries on every request; defaults to the latest 30 days, rejects ranges over 366 days, and exposes the effective period in the typed outcome |
+| Escalation report projection | Current unresolved conversation lifecycle, ordered scoped messages, active assignment, effective agent availability, and team SLA policy at the observation time | `communications.team_inbox_metrics` | Recompute on every request; SQL pagination and owner-supplied aggregate totals share the same candidate scope, so no stored escalation flag can drift |
 | Manager AI period analysis | Authorized Workqueue scope, Inbox message chronology, immutable status transitions, and immutable routing events | analysis-projection owner | Recompute on each request; the cohort is conversations with a message, status transition, or routing event in the selected half-open UTC period; evidence is bounded and never becomes Inbox truth |
 | Customer context drawer | Exact Party/Subscriber/Lead links plus permission-scoped owner queries | contact-context query owner | Recompute on drawer load; per-section failures remain explicit and retryable |
 | Meta free-form reply-window eligibility | Conversation channel plus ordered qualifying inbound customer messages | reply-window policy owner | Recompute on every send attempt and detail projection; a new qualifying inbound customer message reopens the free-form path |
@@ -349,6 +352,26 @@ Database reads remain authoritative when Redis realtime is unavailable or
 stale. Realtime has no replay authority.
 
 ## Page contract
+
+### Inbox report pages
+
+- Screens: `/admin/reports/inbox-performance`,
+  `/admin/reports/inbox-escalations`, and
+  `/admin/reports/operational/crm-performance`.
+- `communications.team_inbox_metrics` accepts typed date, scope, SLA, limit,
+  offset, and observation-time inputs. Routes do not derive report facts.
+- Performance pages and exports use the same explicit cohort. The default is
+  the latest 30 inclusive calendar days, represented internally as a half-open
+  UTC period; a range greater than 366 days fails closed.
+- Escalations are current unresolved work rather than an all-history cohort.
+  The owner applies candidate filtering, totals, and pagination in SQL before
+  the adapter renders rows. Message bodies and attachment payloads are never
+  loaded for these aggregates.
+- Agent personal scope is applied in the owner query before any report rows are
+  read. A missing signed-in person identity returns no personal rows.
+- CSV export reuses the same typed owner and effective filters. It may request
+  all aggregate rows, but it never materializes raw conversation or message
+  history in Python.
 
 - Screen: `/admin/inbox` and `/admin/inbox/{conversation_id}`.
 - The conversation HTMX response is a thread-only partial. The loaded workspace

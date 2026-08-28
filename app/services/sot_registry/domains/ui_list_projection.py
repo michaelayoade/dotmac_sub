@@ -57,6 +57,7 @@ DOMAIN = DomainSOT(
             owns=_CRM_REPORT_CONCERNS,
             depends_on=(
                 "auth.permission_gate",
+                "communications.team_inbox_metrics",
                 "communications.team_inbox_projection",
                 "customer.accounts",
                 "financial.invoices",
@@ -96,6 +97,7 @@ DOMAIN = DomainSOT(
                             "native RADIUS records",
                             "native customer outage intervals",
                             "native inbox records",
+                            "bounded inbox performance projections",
                             "native support records",
                             "native work-order and project records",
                             "native provisioning records",
@@ -169,6 +171,15 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_projection",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="inbox conversations, assignments, queues, messages, and recorded classifications",
+                    ),
+                    AuthorityInput(
+                        name="bounded inbox performance projections",
+                        owner="communications.team_inbox_metrics",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Typed date-bounded team and agent response cohorts with "
+                            "set-based aggregation and database pagination"
+                        ),
                     ),
                     AuthorityInput(
                         name="native support records",

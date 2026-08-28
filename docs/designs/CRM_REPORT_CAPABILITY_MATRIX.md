@@ -28,9 +28,9 @@ unrelated and remains native.
 | Sales order performance | `sales.reports.sales_order_kpi_report` | `/admin/reports/sales/orders` | `crm:sales_order:read` | Agent order/status/value KPI table and CSV |
 | Subscriber revenue/pipeline | `crm_reporting`, Invoice/Payment owners | `/admin/reports/operational/subscriber-revenue` | `reports:billing:read` | Period-filtered page/export |
 | Postpaid customers | `crm_reporting`, customer/billing owners | `/admin/reports/operational/postpaid-customers` | `reports:billing:read` | Native page/export |
-| CRM performance | `crm_reporting`, `team_inbox_metrics` | `/admin/reports/operational/crm-performance` | `reports:support:read` | Native team page/export |
-| Administrative agent performance | `crm_reporting`, `team_inbox_metrics` | `/admin/reports/operational/agent-performance` | `reports:support:read` | Native searchable agent page/export |
-| Personal agent performance | `crm_reporting`, signed-in principal scope | `/admin/reports/operational/my-performance` | `reports:support:read` | Fail-closed personal page/export |
+| CRM performance | `ui.crm_operational_reports`, `communications.team_inbox_metrics` | `/admin/reports/operational/crm-performance` | `reports:support:read` | Native date-bounded team page/export; 30-day default, 366-day maximum |
+| Administrative agent performance | `ui.crm_operational_reports`, `communications.team_inbox_metrics` | `/admin/reports/operational/agent-performance` | `reports:support:read` | Native date-bounded searchable agent page/export with database-first pagination |
+| Personal agent performance | `ui.crm_operational_reports`, `communications.team_inbox_metrics`, signed-in principal scope | `/admin/reports/operational/my-performance` | `reports:support:read` | Fail-closed personal scope applied before report rows are read |
 | Operations SLA violations | `crm_reporting`, Ticket/Project/ProjectTask due facts | `/admin/reports/operational/operations-sla` | `reports:support:read` | Period-filtered page/export |
 | Queue wait/classification | `crm_reporting`, native Inbox queue and recorded metadata | `/admin/reports/operational/queue-classification` | `reports:support:read` | Unclassified remains explicit |
 | Subscriber lifecycle | `crm_reporting`, customer/subscription owners | `/admin/reports/operational/subscriber-lifecycle` | `customer:read` | CRM retention records explicitly excluded |
