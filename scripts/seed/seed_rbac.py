@@ -348,6 +348,8 @@ DEFAULT_PERMISSIONS = [
     ("reports:billing:export", "Export billing and revenue report data"),
     ("reports:network:read", "View network and bandwidth reports"),
     ("reports:network:export", "Export network and bandwidth report data"),
+    ("reports:ncc:read", "View NCC regulatory reports"),
+    ("reports:ncc:export", "Export NCC regulatory report data and artifacts"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
     ("reports:support:read", "View support and inbox operations reports"),
@@ -387,6 +389,7 @@ DEFAULT_ROLES = [
     ("operator", "Network and provisioning operations"),
     ("support", "Subscriber and billing support"),
     ("finance_manager", "Full billing and finance access"),
+    ("customer_experience_manager", "Customer experience manager access"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -510,6 +513,16 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+        "reports:support:read",
+    ],
+    "customer_experience_manager": [
+        "customer:read",
+        "reseller:read",
+        "support:ticket:read",
+        "support:ticket:update",
+        "support:inbox:self_assign",
+        "reports:ncc:read",
+        "reports:ncc:export",
         "reports:support:read",
     ],
     "finance_manager": [

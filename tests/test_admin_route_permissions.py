@@ -660,6 +660,24 @@ def test_report_routes_require_domain_permissions():
         "POST",
         "support:ticket:update",
     )
+    for path in (
+        "/reports/ncc-subscribers",
+        "/reports/ncc-complaints",
+        "/reports/ncc-pack",
+    ):
+        assert _route_has_permission(
+            admin_reports.router, path, "GET", "reports:ncc:read"
+        )
+    for path in (
+        "/reports/ncc-subscribers/export",
+        "/reports/ncc-complaints/export",
+        "/reports/ncc-regulatory-pack",
+        "/reports/ncc-regulatory-pack.pdf",
+        "/reports/ncc-weekly-runs/{run_id}/download",
+    ):
+        assert _route_has_permission(
+            admin_reports.router, path, "GET", "reports:ncc:export"
+        )
 
 
 def test_team_inbox_routes_require_support_permissions():

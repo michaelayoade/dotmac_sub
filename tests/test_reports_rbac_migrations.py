@@ -221,3 +221,63 @@ def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):
             assert coarse_key in _grant_keys(
                 connection, table, holder_column, holder_id
             )
+
+
+def test_ncc_permission_migration_grants_customer_experience_roles(monkeypatch):
+    ncc = _load("ncc_report_permission_grants", "560_ncc_report_permissions.py")
+    engine = sa.create_engine("sqlite://")
+    metadata = sa.MetaData()
+    permissions = sa.Table(
+        "permissions",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("key", sa.String, unique=True, nullable=False),
+        sa.Column("description", sa.String),
+        sa.Column("is_active", sa.Boolean, nullable=False),
+        sa.Column("is_ui_assignable", sa.Boolean, nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True)),
+        sa.Column("updated_at", sa.DateTime(timezone=True)),
+    )
+    roles = sa.Table(
+        "roles",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("name", sa.String, unique=True, nullable=False),
+        sa.Column("is_active", sa.Boolean, nullable=False),
+    )
+    role_permissions = sa.Table(
+        "role_permissions",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("role_id", sa.String, nullable=False),
+        sa.Column("permission_id", sa.String, nullable=False),
+        sa.UniqueConstraint("role_id", "permission_id"),
+    )
+    metadata.create_all(engine)
+
+    cx_role_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            roles.insert(),
+            {
+                "id": cx_role_id,
+                "name": "customer_experience_manager",
+                "is_active": True,
+            },
+        )
+        monkeypatch.setattr(ncc.op, "get_bind", lambda: connection)
+
+        ncc.upgrade()
+        assert _grant_keys(connection, role_permissions, "role_id", cx_role_id) >= {
+            "reports:ncc:read",
+            "reports:ncc:export",
+        }
+
+        stored_permissions = set(
+            connection.execute(sa.select(permissions.c.key)).scalars()
+        )
+        assert {"reports:ncc:read", "reports:ncc:export"} <= stored_permissions
+
+        ncc.downgrade()
+        remaining_keys = set(connection.execute(sa.select(permissions.c.key)).scalars())
+        assert not ({"reports:ncc:read", "reports:ncc:export"} & remaining_keys)
