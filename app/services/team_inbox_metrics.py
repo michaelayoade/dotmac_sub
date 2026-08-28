@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from typing import cast as type_cast
 from uuid import UUID
 
 from sqlalchemy import (
@@ -550,17 +553,20 @@ def _message_facts(scope: CTE) -> _MessageFacts:
 
 def _duration_seconds(
     db: Session,
-    end_at: ColumnElement[datetime],
-    start_at: ColumnElement[datetime],
+    end_at: Any,
+    start_at: Any,
 ) -> ColumnElement[float]:
     dialect = db.get_bind().dialect.name
     if dialect == "postgresql":
-        return func.extract("epoch", end_at - start_at)
-    return (func.julianday(end_at) - func.julianday(start_at)) * 86400.0
+        return type_cast(ColumnElement[float], func.extract("epoch", end_at - start_at))
+    return type_cast(
+        ColumnElement[float],
+        (func.julianday(end_at) - func.julianday(start_at)) * 86400.0,
+    )
 
 
 def _case_by_team(
-    team_values: dict[UUID, int | None],
+    team_values: Mapping[UUID, int | None],
     team_column: ColumnElement[UUID],
 ) -> ColumnElement[int | None]:
     return case(
@@ -1199,7 +1205,17 @@ def _seconds_sql(db: Session, end, start):
 
 
 def _numeric(value: object) -> float | None:
-    return float(value) if value is not None else None
+    if value is None:
+        return None
+    if isinstance(value, int | float | str | bytes | bytearray):
+        return float(value)
+    return None
+
+
+def _avg(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
 
 
 def _uuid_value(value: object) -> UUID:
@@ -1218,7 +1234,7 @@ def _team_performance_by_team(
     now_utc = _as_utc(now) or datetime.now(UTC)
     empty = {
         team_id: InboxTeamPerformanceMetrics(
-            service_team_id=str(team_id),
+            service_team_id=team_id,
             conversation_count=0,
             open_count=0,
             unassigned_open_count=0,
@@ -1412,7 +1428,7 @@ def _team_performance_by_team(
 
     return {
         team_id: InboxTeamPerformanceMetrics(
-            service_team_id=str(team_id),
+            service_team_id=team_id,
             conversation_count=int(
                 conversation_values.get(team_id, {}).get("conversation_count") or 0
             ),
@@ -1710,8 +1726,8 @@ def agent_performance_report(
 def _analytics_duration_seconds(
     db: Session,
     *,
-    started_at: ColumnElement[datetime],
-    ended_at: ColumnElement[datetime],
+    started_at: Any,
+    ended_at: Any,
 ) -> ColumnElement[float | None]:
     """Return a portable SQL expression for a non-negative duration."""
 
@@ -1719,9 +1735,12 @@ def _analytics_duration_seconds(
         elapsed = (func.julianday(ended_at) - func.julianday(started_at)) * 86400.0
     else:
         elapsed = func.extract("epoch", ended_at - started_at)
-    return case(
-        (and_(started_at.is_not(None), ended_at >= started_at), elapsed),
-        else_=None,
+    return type_cast(
+        ColumnElement[float | None],
+        case(
+            (and_(started_at.is_not(None), ended_at >= started_at), elapsed),
+            else_=None,
+        ),
     )
 
 

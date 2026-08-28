@@ -402,17 +402,19 @@ def run_conversational_turn(
         )
 
     if _requires_identity_before_tools(state, policy):
-        requested = _next_identifier_to_request(state, policy)
-        if requested is not None:
-            state.missing_facts = _with_unique(state.missing_facts, requested)
+        requested_identifier = _next_identifier_to_request(state, policy)
+        if requested_identifier is not None:
+            state.missing_facts = _with_unique(
+                state.missing_facts, requested_identifier
+            )
             state.already_requested_fields = _with_unique(
-                state.already_requested_fields, requested
+                state.already_requested_fields, requested_identifier
             )
             state.clarification_count += 1
             return ConversationEngineDecision(
                 action="respond",
                 state=state,
-                response_text=_identifier_question(requested),
+                response_text=_identifier_question(requested_identifier),
                 metadata={"reason": "missing_customer_identifier"},
             )
         return _handoff_decision(
@@ -988,8 +990,11 @@ def _requested_identifier_label(
 
 
 def _missing_identifier_retry_count(state: ConversationalState) -> int:
+    value = state.collected_facts.get("missing_identifier_retry_count")
+    if not isinstance(value, int | str):
+        return 0
     try:
-        return int(state.collected_facts.get("missing_identifier_retry_count") or 0)
+        return int(value or 0)
     except (TypeError, ValueError):
         return 0
 

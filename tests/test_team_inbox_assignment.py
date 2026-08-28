@@ -6,6 +6,7 @@ from uuid import uuid4
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxAgentPresence,
+    InboxAgentPresenceEvent,
     InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,

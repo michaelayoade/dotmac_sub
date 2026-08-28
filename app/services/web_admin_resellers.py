@@ -13,8 +13,8 @@ from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.auth import UserCredential
+from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
@@ -555,12 +555,12 @@ def get_reseller_detail_context(
         ).all()
     )
     credential_by_principal: dict[UUID, UserCredential] = {}
-    for credential in credentials:
+    for credential_row in credentials:
         credential_principal_id = (
-            credential.reseller_user_id or credential.subscriber_id
+            credential_row.reseller_user_id or credential_row.subscriber_id
         )
         if credential_principal_id is not None:
-            credential_by_principal[credential_principal_id] = credential
+            credential_by_principal[credential_principal_id] = credential_row
     portal_user_views: list[ResellerPortalUserView] = []
     for link in portal_user_links:
         if link.subscriber_id is None:

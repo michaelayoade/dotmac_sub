@@ -5,10 +5,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Mapping, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import urlencode
 
 from sqlalchemy import func, select

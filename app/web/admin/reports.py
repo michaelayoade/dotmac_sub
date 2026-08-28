@@ -5,7 +5,7 @@ import logging
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from io import StringIO
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 from urllib.parse import quote, quote_plus, urlencode
 from uuid import UUID
 
@@ -1273,9 +1273,11 @@ def reports_inbox_performance(
     )
     team_rows = _inbox_team_rows(team_page.rows)
     agent_rows = _inbox_agent_rows(agent_page.rows)
-    inbound_total = sum(row["inbound_message_count"] for row in team_rows)
-    breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
-    responded_total = sum(row["responded_count"] for row in team_rows)
+    inbound_total = sum(cast(int, row["inbound_message_count"]) for row in team_rows)
+    breached_total = sum(
+        cast(int, row["response_sla_breached_count"]) for row in team_rows
+    )
+    responded_total = sum(cast(int, row["responded_count"]) for row in team_rows)
     context = {
         "request": request,
         "active_page": "reports-inbox-performance",
@@ -1289,8 +1291,10 @@ def reports_inbox_performance(
         "team_rows": team_rows,
         "agent_rows": agent_rows,
         "team_count": len(team_rows),
-        "open_count": sum(row["open_count"] for row in team_rows),
-        "unassigned_open_count": sum(row["unassigned_open_count"] for row in team_rows),
+        "open_count": sum(cast(int, row["open_count"]) for row in team_rows),
+        "unassigned_open_count": sum(
+            cast(int, row["unassigned_open_count"]) for row in team_rows
+        ),
         "breached_total": breached_total,
         "response_rate_percent": _percent(
             responded_total / inbound_total if inbound_total else None
@@ -1624,7 +1628,7 @@ def reports_inbox_escalations_export(
     writer.writeheader()
     for row in _inbox_escalation_rows(page.rows):
         export_row = {field: row[field] for field in writer.fieldnames}
-        export_row["reasons"] = "; ".join(row["reasons"])
+        export_row["reasons"] = "; ".join(cast(list[str], row["reasons"]))
         writer.writerow(export_row)
     return Response(
         output.getvalue(),

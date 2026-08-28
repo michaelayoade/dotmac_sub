@@ -9,8 +9,12 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.catalog import ServiceType
-from app.services import crm_reporting, subscriber_growth, web_reports
-from app.services import web_reports_extended
+from app.services import (
+    crm_reporting,
+    subscriber_growth,
+    web_reports,
+    web_reports_extended,
+)
 from app.services.billing import reporting as billing_reporting
 from app.services.ui_contracts import ChartProjection, ChartSeries
 from app.web.admin import reports as report_routes
