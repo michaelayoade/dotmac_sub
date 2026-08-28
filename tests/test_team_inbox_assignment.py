@@ -296,6 +296,29 @@ def test_stale_online_presence_is_not_available_for_auto_assignment(db_session):
     assert result.reason == "no_available_agent"
 
 
+def test_effective_online_presence_stays_online_until_freshness_expires(db_session):
+    observed_at = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    presence = InboxAgentPresence(
+        person_id=uuid4(),
+        status=InboxAgentPresenceStatus.online.value,
+        manual_override_status=InboxAgentPresenceStatus.online.value,
+        last_seen_at=observed_at,
+    )
+
+    assert (
+        team_inbox_assignment.effective_presence_status(
+            presence, now=observed_at + timedelta(minutes=30)
+        )
+        == InboxAgentPresenceStatus.online.value
+    )
+    assert (
+        team_inbox_assignment.effective_presence_status(
+            presence, now=observed_at + timedelta(minutes=30, seconds=1)
+        )
+        == InboxAgentPresenceStatus.offline.value
+    )
+
+
 def test_repeated_online_presence_update_refreshes_freshness(db_session):
     team = _team(db_session)
     agent = _member(db_session, team)
@@ -315,6 +338,68 @@ def test_repeated_online_presence_update_refreshes_freshness(db_session):
 
     assert updated.last_seen_at == observed_at
     assert presence.last_seen_at == observed_at
+
+
+def test_set_agent_presence_records_effective_transition_when_online_is_stale(db_session):
+    person_id = uuid4()
+    observed_at = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    presence = InboxAgentPresence(
+        person_id=person_id,
+        status=InboxAgentPresenceStatus.online.value,
+        manual_override_status=InboxAgentPresenceStatus.online.value,
+        last_seen_at=observed_at - timedelta(minutes=31),
+    )
+    db_session.add(presence)
+    db_session.flush()
+
+    updated = team_inbox_assignment.set_agent_presence(
+        db_session,
+        person_id=person_id,
+        status=InboxAgentPresenceStatus.online.value,
+        now=observed_at,
+    )
+
+    assert updated.status == InboxAgentPresenceStatus.online.value
+    assert updated.manual_override_status == InboxAgentPresenceStatus.online.value
+    assert updated.last_seen_at == observed_at
+    event = db_session.query(InboxAgentPresenceEvent).one()
+    assert event.previous_status == InboxAgentPresenceStatus.offline.value
+    assert event.status == InboxAgentPresenceStatus.online.value
+
+
+def test_reply_activity_refreshes_only_manually_online_presence(db_session):
+    online_person_id = uuid4()
+    away_person_id = uuid4()
+    original_seen_at = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    reply_seen_at = original_seen_at + timedelta(minutes=20)
+    online_presence = InboxAgentPresence(
+        person_id=online_person_id,
+        status=InboxAgentPresenceStatus.online.value,
+        manual_override_status=InboxAgentPresenceStatus.online.value,
+        last_seen_at=original_seen_at,
+    )
+    away_presence = InboxAgentPresence(
+        person_id=away_person_id,
+        status=InboxAgentPresenceStatus.away.value,
+        manual_override_status=InboxAgentPresenceStatus.away.value,
+        last_seen_at=original_seen_at,
+    )
+    db_session.add_all([online_presence, away_presence])
+    db_session.flush()
+
+    team_inbox_assignment.record_agent_reply_activity(
+        db_session,
+        person_id=online_person_id,
+        now=reply_seen_at,
+    )
+    team_inbox_assignment.record_agent_reply_activity(
+        db_session,
+        person_id=away_person_id,
+        now=reply_seen_at,
+    )
+
+    assert online_presence.last_seen_at == reply_seen_at
+    assert away_presence.last_seen_at == original_seen_at
 
 
 def test_set_agent_presence_creates_manual_override(db_session):
