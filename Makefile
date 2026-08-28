@@ -101,10 +101,7 @@ bootstrap-test-database-roles: ## Create/adopt module and dispatcher prerequisit
 		exit 2; \
 	}
 	@poetry run python -c 'import os; from scripts.ci.migrated_test_database import parse_test_database_target; parse_test_database_target(os.environ.get("TEST_DATABASE_URL"))'
-	@BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}" \
-		poetry run python scripts/bootstrap_commercial_module_prereqs.py
-	@BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}" \
-		poetry run python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+	@poetry run python -m scripts.ci.bootstrap_test_database_prereqs
 
 test-integration: assert-full-test-host ## Run the PostgreSQL integration gate
 	@$(MAKE) --no-print-directory bootstrap-test-database-roles
