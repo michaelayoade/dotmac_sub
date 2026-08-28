@@ -360,22 +360,94 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
     assert "self-hosted" not in workflow
 
 
-def test_promotion_still_requires_the_candidate_to_be_an_ancestor_of_main() -> None:
-    """One trunk does not make the ancestry check redundant.
+def test_promotion_separates_the_authorizing_main_from_the_staged_release() -> None:
+    """Two identities, derived independently, never conflated.
 
-    The candidate is a specific SHA; `main` keeps moving while a release is in
-    flight. Without the ancestry check, a release_sha that had been rewritten or
-    that simply does not contain the built candidate would still authorize the
-    candidate's digest, and the recorded release revision would name a tree the
-    running image was never built from.
+    The authorizing `main` tip says WHO authorized; the staged revision says
+    WHAT is deployed. Deriving the release SHA, its tree, or its VERSION from
+    the checkout silently substitutes the former for the latter the moment
+    anything lands on main -- which a version-bump PR does after every merge.
     """
 
     workflow = _read(".github/workflows/release-promotion.yml")
 
-    assert 'git merge-base --is-ancestor "$source_revision" "$RELEASE_SHA"' in workflow
-    assert "Staged source revision is not an ancestor of main." in workflow
+    # The artifact is named by the operator, not inferred from the tip.
+    assert "staged_release_sha:" in workflow
+    assert "authorization_main_sha=$(git rev-parse HEAD)" in workflow.replace('"', "")
+
+    # Reachability replaces tip-equality: main may move, the staged commit must
+    # still be on it. The old equality check must be gone, not merely relaxed.
+    assert (
+        'git merge-base --is-ancestor "$STAGED_SHA" "$authorization_main_sha"'
+        in workflow
+    )
+    assert "is not an ancestor of main" in workflow
+    assert "Refusing stale production promotion" not in workflow
+
+    # The authorized artifact IS the staged candidate.
+    assert 'test "$source_revision" = "$RELEASE_SHA"' in workflow
+    assert 'test "$source_tree" = "$RELEASE_TREE"' in workflow
+
+    # Tree and VERSION are read from the staged commit, never the checkout.
+    assert 'staged_tree="$(git rev-parse "${STAGED_SHA}^{tree}")"' in workflow
+    assert 'git show "${RELEASE_SHA}:VERSION"' in workflow
+    assert "tr -d '[:space:]' < VERSION" not in workflow
+
+    # Both identities reach the typed document.
+    assert "--authorization-main-revision" in workflow
     assert "--source-revision-is-ancestor" in workflow
-    assert "Refusing stale production promotion" in workflow
+
+
+def test_production_deploy_does_not_treat_head_sha_as_the_release_revision() -> None:
+    """The authorization run's head_sha is the AUTHORIZER, not the artifact.
+
+    production-deploy.yml checks out two different commits on purpose: the
+    verifier from the authorizing main, and the application from the staged
+    revision named inside the typed document. Collapsing them would deploy
+    whatever main happened to be when the authorization ran.
+    """
+
+    workflow = _read(".github/workflows/production-deploy.yml")
+
+    assert 'core.setOutput("authorization_main_sha", run.head_sha)' in workflow
+    assert 'core.setOutput("release_sha", run.head_sha)' not in workflow
+    assert "--expected-authorization-main-revision" in workflow
+    # The application checkout comes from the document, not from the run.
+    assert "ref: ${{ needs.verify.outputs.release_revision }}" in workflow
+
+
+def test_production_refuses_a_non_forward_deploy_without_typed_authorization() -> None:
+    """Anti-rollback runs before backup and migrations, and is not a boolean.
+
+    A flag would authorize any rollback; this authorizes ONE transition, so a
+    document kept from an earlier incident cannot wave through a later,
+    different one. Divergent and unprovable histories take the same path as a
+    known rollback -- they are not safer, so they must not be easier.
+    """
+
+    adapter = _read("scripts/deploy_production.sh")
+    workflow = _read(".github/workflows/production-deploy.yml")
+
+    assert "Anti-rollback gate" in adapter
+    assert "org.opencontainers.image.revision" in adapter
+    assert "--rollback-authorization" in adapter
+    assert "verify-rollback-authorization" in adapter
+    assert 'DIRECTION="backward"' in adapter
+    assert 'DIRECTION="divergent"' in adapter
+    assert 'DIRECTION="unknown"' in adapter
+    # The gate must precede the script that owns backup and migrations.
+    assert adapter.index("Anti-rollback gate") < adapter.index(
+        'bash "${REPO_DIR}/scripts/deploy.sh"'
+    )
+    # Naming the exact transition is the authorization; there is no flag.
+    for required in (
+        "rollback_from_revision:",
+        "rollback_to_revision:",
+        "rollback_change_reference:",
+        "rollback_reason:",
+    ):
+        assert required in workflow
+    assert "write-rollback-authorization" in workflow
 
 
 def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> None:

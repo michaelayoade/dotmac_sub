@@ -11,8 +11,8 @@ on:
         description: Successful Deploy main to staging run ID
         required: true
         type: string
-      release_sha:
-        description: Exact full SHA of the current green main tip
+      staged_release_sha:
+        description: Exact full SHA of the staged candidate to authorize
         required: true
         type: string
 
@@ -22,7 +22,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: production-promotion-${{ inputs.release_sha }}
+  group: production-promotion-${{ inputs.staged_release_sha }}
   cancel-in-progress: false
 
 env:
@@ -35,16 +35,19 @@ jobs:
     environment: production
     timeout-minutes: 20
     steps:
-      - name: Checkout exact current main
+      # The checkout is the AUTHORIZATION identity: protected `main`, whose
+      # checked-in workflow and verifier code perform this authorization. It is
+      # deliberately NOT the artifact being released.
+      - name: Checkout current protected main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Require exact current green main release
+      - name: Resolve authorizing main and the staged release separately
         id: release
         env:
-          EXPECTED_SHA: ${{ inputs.release_sha }}
+          STAGED_SHA: ${{ inputs.staged_release_sha }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -52,17 +55,29 @@ jobs:
             echo "Dispatch this workflow with --ref main." >&2
             exit 1
           }
-          printf '%s' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
-            echo "release_sha must be a full lowercase Git SHA." >&2
+          printf '%s' "$STAGED_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "staged_release_sha must be a full lowercase Git SHA." >&2
             exit 1
           }
-          release_sha="$(git rev-parse HEAD)"
-          test "$release_sha" = "$EXPECTED_SHA" || {
-            echo "Refusing stale production promotion: main is $release_sha, requested $EXPECTED_SHA." >&2
+          authorization_main_sha="$(git rev-parse HEAD)"
+
+          # Reachability, not identity. The staged commit must still be on the
+          # protected branch -- not reverted, not orphaned, not from a fork --
+          # but `main` is free to have moved on since it was staged. Requiring
+          # equality here is what previously forced a rebuild and restage every
+          # time anything landed on main.
+          git merge-base --is-ancestor "$STAGED_SHA" "$authorization_main_sha" || {
+            echo "Refusing production authorization: $STAGED_SHA is not an ancestor of main ($authorization_main_sha)." >&2
             exit 1
           }
-          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
-          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+          # The tree comes from the STAGED commit, never from the checkout,
+          # which is a different commit whenever main has advanced.
+          staged_tree="$(git rev-parse "${STAGED_SHA}^{tree}")"
+
+          echo "authorization_main_sha=$authorization_main_sha" >> "$GITHUB_OUTPUT"
+          echo "sha=$STAGED_SHA" >> "$GITHUB_OUTPUT"
+          echo "tree=$staged_tree" >> "$GITHUB_OUTPUT"
 
       - name: Require exact successful source, staging, and main runs
         uses: actions/github-script@v7
@@ -71,6 +86,9 @@ jobs:
           STAGING_RUN_ID: ${{ inputs.staging_deployment_run_id }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
         with:
+          # RELEASE_SHA is the staged candidate: the CI that matters is the CI
+          # that ran on the code being deployed, not on a later main tip that
+          # nothing was built from.
           script: |
             const candidateId = Number(process.env.CANDIDATE_RUN_ID);
             const stagingId = Number(process.env.STAGING_RUN_ID);
@@ -116,7 +134,7 @@ jobs:
                 failures.push(`${workflowName}=not-green`);
               }
             }
-            if (failures.length) core.setFailed(`Main checks are not green: ${failures.join(", ")}`);
+            if (failures.length) core.setFailed(`Staged revision checks are not green: ${failures.join(", ")}`);
 
       - name: Download candidate evidence from exact build run
         uses: actions/download-artifact@v4
@@ -140,6 +158,7 @@ jobs:
       - name: Authorize exact staged digest
         id: authorization
         env:
+          AUTHORIZATION_MAIN_SHA: ${{ steps.release.outputs.authorization_main_sha }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
           RELEASE_TREE: ${{ steps.release.outputs.tree }}
           AUTHORIZATION_RUN_ID: ${{ github.run_id }}
@@ -155,8 +174,17 @@ jobs:
             --path "$RUNNER_TEMP/candidate/candidate.json" \
             --github-output "$candidate_outputs"
           source_revision="$(sed -n 's/^source_revision=//p' "$candidate_outputs")"
-          git merge-base --is-ancestor "$source_revision" "$RELEASE_SHA" || {
-            echo "Staged source revision is not an ancestor of main." >&2
+          # The authorized release IS the staged candidate -- exact equality,
+          # not ancestry. Ancestry against main was already proven above, and
+          # is about reachability of the staged commit, not about which commit
+          # the deployed image was built from.
+          test "$source_revision" = "$RELEASE_SHA" || {
+            echo "Refusing authorization: candidate was built from $source_revision, but $RELEASE_SHA was requested." >&2
+            exit 1
+          }
+          source_tree="$(sed -n 's/^source_tree=//p' "$candidate_outputs")"
+          test "$source_tree" = "$RELEASE_TREE" || {
+            echo "Refusing authorization: candidate tree $source_tree does not match staged tree $RELEASE_TREE." >&2
             exit 1
           }
           mkdir -p "$RUNNER_TEMP/production-authorization"
@@ -166,6 +194,7 @@ jobs:
             --expected-build-run-id "${{ inputs.candidate_build_run_id }}" \
             --expected-staging-deployment-id "${{ inputs.staging_deployment_run_id }}" \
             --authorization-run-id "$AUTHORIZATION_RUN_ID" \
+            --authorization-main-revision "$AUTHORIZATION_MAIN_SHA" \
             --release-revision "$RELEASE_SHA" \
             --release-tree "$RELEASE_TREE" \
             --source-revision-is-ancestor \
@@ -185,9 +214,15 @@ jobs:
       - name: Attach production aliases without rebuilding
         env:
           IMAGE_DIGEST: ${{ steps.authorization.outputs.image_digest }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           set -euo pipefail
-          version="$(tr -d '[:space:]' < VERSION)"
+          # Read VERSION out of the STAGED commit. The working tree belongs to
+          # the authorizing main checkout, so once main has advanced past the
+          # candidate -- which a version-bump PR does immediately after every
+          # merge -- reading ./VERSION would tag the staged digest with a
+          # version that image was never built from.
+          version="$(git show "${RELEASE_SHA}:VERSION" | tr -d '[:space:]')"
           printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           source_ref="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           version_ref="${REGISTRY}/${IMAGE_NAME}:${version}"
