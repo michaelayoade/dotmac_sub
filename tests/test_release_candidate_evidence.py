@@ -11,6 +11,7 @@ from scripts.release_artifact_contract import (
     GitTreeSha,
     MainAuthorizationEvidence,
     OCIImageDigest,
+    ProductionRollbackAuthorization,
     ProductManifestDigest,
     ReleaseArtifactEvidence,
     ReleaseCandidateRecord,
@@ -22,15 +23,21 @@ from scripts.release_candidate_evidence import (
     EvidenceDocumentError,
     read_candidate_evidence,
     read_production_authorization,
+    read_rollback_authorization,
     read_staging_acceptance,
     verify_candidate_evidence,
     verify_production_authorization,
+    verify_rollback_authorization,
     write_candidate_evidence,
     write_production_authorization,
+    write_rollback_authorization,
     write_staging_acceptance,
 )
 
 SOURCE_REVISION = GitCommitSha("1" * 40)
+# A later main commit that performed the authorization. Distinct from the
+# staged revision on purpose: on one trunk main moves after every merge.
+AUTHORIZING_MAIN_REVISION = GitCommitSha("6" * 40)
 SOURCE_TREE = GitTreeSha("2" * 40)
 IMAGE_DIGEST = OCIImageDigest("sha256:" + "3" * 64)
 PRODUCT_MANIFEST_DIGEST = ProductManifestDigest("sha256:" + "4" * 64)
@@ -139,6 +146,27 @@ def test_staging_acceptance_round_trips_the_same_digest(tmp_path: Path) -> None:
     assert read_staging_acceptance(path) == evidence
 
 
+def _authorized_record() -> ReleaseCandidateRecord:
+    return ReleaseCandidateRecord(
+        artifact=_candidate(),
+        staging=StagingAcceptanceEvidence(
+            deployment_id=StagingDeploymentId(500),
+            source_revision=SOURCE_REVISION,
+            source_tree=SOURCE_TREE,
+            image_digest=IMAGE_DIGEST,
+            conclusion=EvidenceConclusion.SUCCESS,
+        ),
+        main=MainAuthorizationEvidence(
+            authorization_run_id=WorkflowRunId(600),
+            authorization_main_revision=AUTHORIZING_MAIN_REVISION,
+            release_revision=SOURCE_REVISION,
+            release_tree=SOURCE_TREE,
+            required_ci_conclusion=EvidenceConclusion.SUCCESS,
+            source_revision_is_ancestor=True,
+        ),
+    )
+
+
 def test_production_authorization_round_trips_distinct_main_identity(
     tmp_path: Path,
 ) -> None:
@@ -154,7 +182,8 @@ def test_production_authorization_round_trips_distinct_main_identity(
         ),
         main=MainAuthorizationEvidence(
             authorization_run_id=WorkflowRunId(600),
-            release_revision=GitCommitSha("6" * 40),
+            authorization_main_revision=AUTHORIZING_MAIN_REVISION,
+            release_revision=SOURCE_REVISION,
             release_tree=SOURCE_TREE,
             required_ci_conclusion=EvidenceConclusion.SUCCESS,
             source_revision_is_ancestor=True,
@@ -167,7 +196,8 @@ def test_production_authorization_round_trips_distinct_main_identity(
         restored,
         expected_authorization_run_id=WorkflowRunId(600),
         expected_source_revision=SOURCE_REVISION,
-        expected_release_revision=GitCommitSha("6" * 40),
+        expected_authorization_main_revision=AUTHORIZING_MAIN_REVISION,
+        expected_release_revision=SOURCE_REVISION,
         expected_image_digest=IMAGE_DIGEST,
     )
 
@@ -189,7 +219,8 @@ def test_production_authorization_rejects_a_different_staging_digest(
         ),
         main=MainAuthorizationEvidence(
             authorization_run_id=WorkflowRunId(600),
-            release_revision=GitCommitSha("6" * 40),
+            authorization_main_revision=AUTHORIZING_MAIN_REVISION,
+            release_revision=SOURCE_REVISION,
             release_tree=SOURCE_TREE,
             required_ci_conclusion=EvidenceConclusion.SUCCESS,
             source_revision_is_ancestor=True,
@@ -198,3 +229,82 @@ def test_production_authorization_rejects_a_different_staging_digest(
 
     with pytest.raises(EvidenceDocumentError, match="staging_image_digest_mismatch"):
         write_production_authorization(path, record)
+
+
+def test_verifier_binds_the_authorizing_main_revision(tmp_path: Path) -> None:
+    """The deploy must prove WHICH main authorized it, not just that one did.
+
+    production-deploy.yml passes the authorization run's own head_sha here. If
+    the document could name any main revision, an authorization produced by
+    older workflow code would be indistinguishable from one produced by the
+    protected code the deploy believes it is running under.
+    """
+
+    path = tmp_path / "authorization.json"
+    write_production_authorization(path, _authorized_record())
+    restored = read_production_authorization(path)
+
+    verify_production_authorization(
+        restored, expected_authorization_main_revision=AUTHORIZING_MAIN_REVISION
+    )
+    with pytest.raises(EvidenceDocumentError, match="authorizing main revision"):
+        verify_production_authorization(
+            restored,
+            expected_authorization_main_revision=GitCommitSha("7" * 40),
+        )
+
+
+def test_rollback_authorization_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "rollback.json"
+    authorization = ProductionRollbackAuthorization(
+        from_revision=AUTHORIZING_MAIN_REVISION,
+        to_revision=SOURCE_REVISION,
+        change_reference="INC-4212",
+        reason="revert the billing regression",
+    )
+
+    write_rollback_authorization(path, authorization)
+    restored = read_rollback_authorization(path)
+
+    assert restored == authorization
+    verify_rollback_authorization(
+        restored,
+        running_revision=AUTHORIZING_MAIN_REVISION,
+        target_revision=SOURCE_REVISION,
+    )
+
+
+def test_rollback_authorization_is_bound_to_one_exact_transition(
+    tmp_path: Path,
+) -> None:
+    """It authorizes a transition, not a standing permission to go backwards.
+
+    Both halves must bite: an authorization written for a different running
+    revision, or for a different target, is refused. Otherwise a document kept
+    from an earlier incident would silently authorize an unrelated rollback.
+    """
+
+    path = tmp_path / "rollback.json"
+    write_rollback_authorization(
+        path,
+        ProductionRollbackAuthorization(
+            from_revision=AUTHORIZING_MAIN_REVISION,
+            to_revision=SOURCE_REVISION,
+            change_reference="INC-4212",
+            reason="revert the billing regression",
+        ),
+    )
+    restored = read_rollback_authorization(path)
+
+    with pytest.raises(EvidenceDocumentError, match="running revision"):
+        verify_rollback_authorization(
+            restored,
+            running_revision=GitCommitSha("8" * 40),
+            target_revision=SOURCE_REVISION,
+        )
+    with pytest.raises(EvidenceDocumentError, match="deploying revision"):
+        verify_rollback_authorization(
+            restored,
+            running_revision=AUTHORIZING_MAIN_REVISION,
+            target_revision=GitCommitSha("8" * 40),
+        )

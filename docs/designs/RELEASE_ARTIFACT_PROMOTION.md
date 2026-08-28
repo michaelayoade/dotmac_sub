@@ -3,6 +3,38 @@
 **Status:** Build-once candidate, digest-bound staging, production promotion,
 production verification, backup enforcement, and publisher cutover implemented
 
+**Amended 2026-08-28 (dual identity):** authorization and artifact are two
+separate identities, and conflating them was a second dev-first assumption that
+survived the branch migration:
+
+- `authorization_main_revision` — the protected `main` tip whose checked-in
+  workflow and verifier code performed the authorization. It says WHO
+  authorized.
+- `release_revision` — the exact staged candidate whose tree, digest, CI and
+  staging acceptance are authorized. It says WHAT is deployed.
+
+Under dev-first these were necessarily different commits on different branches,
+so nothing distinguished "the code that authorizes" from "the code being
+released". On a single trunk the promotion previously demanded
+`release_sha == git rev-parse HEAD`, which is a freshness rule, not a safety
+rule: any commit landing on `main` — including the automatic version bump after
+every merge — invalidated an in-flight candidate and forced a rebuild plus a
+fresh staging cycle.
+
+Safety now comes from three independent bindings instead of tip equality: the
+authorized revision must BE the staged candidate (`RELEASE_REVISION_NOT_STAGED`),
+its tree must match (`MAIN_TREE_MISMATCH`), and it must remain reachable from
+the authorizing `main` (`SOURCE_REVISION_NOT_IN_MAIN`). Version and `latest`
+aliases are read from the staged commit rather than the authorization checkout,
+and production-deploy no longer treats the authorization run's `head_sha` as the
+application release revision.
+
+Production additionally refuses any deploy that is not a descendant of the
+running revision — proven from the running container's own
+`org.opencontainers.image.revision` label, before backup or migrations. A
+deliberate rollback requires a typed authorization bound to the exact
+transition, not a boolean escape.
+
 **Amended 2026-08-28:** the release source branch changed from `dev` to `main`
 when the dev-first hop was retired. Nothing else in this decision changed: the
 image is still built once from an explicitly selected green SHA, staging still
