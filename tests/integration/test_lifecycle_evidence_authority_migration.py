@@ -1,10 +1,16 @@
-"""Fresh and incremental PostgreSQL proofs for lifecycle evidence authority."""
+"""PostgreSQL proofs for lifecycle evidence authority.
+
+The incremental proof replays the real predecessor-to-candidate chain in a
+fresh database. Head-schema behaviour tests use isolated clones of one real
+Alembic-built template: their subject is the resulting constraint/trigger
+behaviour, not the act of running the migration.
+"""
 
 from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -58,7 +64,7 @@ def engine():
 
 
 @pytest.fixture
-def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
+def fresh_migration_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
     configured = os.getenv("TEST_DATABASE_URL")
     if not configured:
         pytest.skip("migrated-schema test requires TEST_DATABASE_URL")
@@ -196,9 +202,10 @@ def _seed_subscription(url: URL) -> uuid.UUID:
 
 
 def test_head_has_the_authority_columns_constraints_and_trigger(
-    engine, migrated_database
-):
-    _alembic("heads")
+    engine,
+    cloned_database: Callable[[str], URL],
+) -> None:
+    database_url = cloned_database("heads")
 
     required = {
         "ck_subscription_lifecycle_events_evidence_grade",
@@ -206,8 +213,8 @@ def test_head_has_the_authority_columns_constraints_and_trigger(
         "ck_subscription_lifecycle_events_trusted_shape",
         "uq_subscription_lifecycle_events_source_identity",
     }
-    assert required <= _constraints(migrated_database)
-    with psycopg.connect(_render(migrated_database)) as conn:
+    assert required <= _constraints(database_url)
+    with psycopg.connect(_render(database_url)) as conn:
         columns = {
             name
             for (name,) in conn.execute(
@@ -238,13 +245,15 @@ def test_head_has_the_authority_columns_constraints_and_trigger(
 
 
 def test_incremental_upgrade_preserves_legacy_rows_and_appends_one_baseline(
-    engine, migrated_database
-):
+    engine,
+    fresh_migration_database: URL,
+) -> None:
+    database_url = fresh_migration_database
     _alembic(PREDECESSOR)
-    _restore_production_predecessor_shape(migrated_database)
-    subscription_id = _seed_subscription(migrated_database)
+    _restore_production_predecessor_shape(database_url)
+    subscription_id = _seed_subscription(database_url)
     legacy_id = uuid.uuid4()
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database_url), autocommit=True) as conn:
         conn.execute(
             "INSERT INTO subscription_lifecycle_events "
             "(id, subscription_id, event_type, to_status, created_at, "
@@ -255,7 +264,7 @@ def test_incremental_upgrade_preserves_legacy_rows_and_appends_one_baseline(
 
     _alembic(CANDIDATE)
 
-    with psycopg.connect(_render(migrated_database)) as conn:
+    with psycopg.connect(_render(database_url)) as conn:
         legacy = conn.execute(
             "SELECT evidence_grade, evidence_source, effective_at, recorded_at "
             "FROM subscription_lifecycle_events WHERE id = %s",
@@ -285,11 +294,14 @@ def test_incremental_upgrade_preserves_legacy_rows_and_appends_one_baseline(
     assert baseline[7].startswith("sha256:")
 
 
-def test_raw_insert_defaults_to_unsupported_observation(engine, migrated_database):
-    _alembic("heads")
-    subscription_id = _seed_subscription(migrated_database)
+def test_raw_insert_defaults_to_unsupported_observation(
+    engine,
+    cloned_database: Callable[[str], URL],
+) -> None:
+    database_url = cloned_database("heads")
+    subscription_id = _seed_subscription(database_url)
     evidence_id = uuid.uuid4()
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database_url), autocommit=True) as conn:
         conn.execute(
             "INSERT INTO subscription_lifecycle_events "
             "(id, subscription_id, event_type, to_status, created_at) "
@@ -305,10 +317,13 @@ def test_raw_insert_defaults_to_unsupported_observation(engine, migrated_databas
     assert found == ("unsupported_observation", "untrusted_observation")
 
 
-def test_database_rejects_an_incomplete_trusted_claim(engine, migrated_database):
-    _alembic("heads")
-    subscription_id = _seed_subscription(migrated_database)
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+def test_database_rejects_an_incomplete_trusted_claim(
+    engine,
+    cloned_database: Callable[[str], URL],
+) -> None:
+    database_url = cloned_database("heads")
+    subscription_id = _seed_subscription(database_url)
+    with psycopg.connect(_render(database_url), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
             conn.execute(
                 "INSERT INTO subscription_lifecycle_events "
@@ -326,11 +341,12 @@ def test_database_rejects_an_incomplete_trusted_claim(engine, migrated_database)
 
 
 def test_subscription_identity_cannot_be_deleted_behind_retained_evidence(
-    engine, migrated_database
-):
-    _alembic("heads")
-    subscription_id = _seed_subscription(migrated_database)
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    engine,
+    cloned_database: Callable[[str], URL],
+) -> None:
+    database_url = cloned_database("heads")
+    subscription_id = _seed_subscription(database_url)
+    with psycopg.connect(_render(database_url), autocommit=True) as conn:
         conn.execute(
             "INSERT INTO subscription_lifecycle_events "
             "(id, subscription_id, event_type, to_status, created_at) "
