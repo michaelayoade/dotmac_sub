@@ -414,3 +414,91 @@ def test_the_shard_job_passes_a_durations_output_path(
     ]
     assert len(runs) == 1
     assert "CI_INTEGRATION_DURATIONS_OUTPUT" in runs[0]
+
+
+# --------------------------------------------------------------------------
+# Docker build is independent of the test lanes -- an enforceable premise
+# --------------------------------------------------------------------------
+
+TEST_LANE_JOBS = frozenset(
+    {
+        "lint",
+        "type-check",
+        "import-boundaries",
+        "unit-shards",
+        "architecture",
+        "test",
+        "coverage",
+        "security",
+        "pre-commit",
+        "integration-shards",
+        "integration-run",
+        "integration-test",
+    }
+)
+
+
+def test_docker_build_consumes_nothing_from_the_test_lanes(
+    workflow: dict[str, Any],
+) -> None:
+    """The premise that justifies running it concurrently.
+
+    `docker-build` is allowed to skip the test lanes only because it reads
+    nothing they produce -- it checks the repository out itself and starts its
+    own ci-db and ci-redis. If it ever begins downloading a test artifact or
+    branching on a test job's result, the decoupling stops being free and this
+    fails rather than silently racing.
+    """
+
+    job = workflow["jobs"]["docker-build"]
+    body = yaml.safe_dump(job)
+
+    referenced = {name for name in TEST_LANE_JOBS if f"needs.{name}." in body}
+    assert not referenced, (
+        "docker-build reads results from test lanes it no longer waits for: "
+        f"{sorted(referenced)}"
+    )
+
+    downloads = [
+        step
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact@")
+    ]
+    assert not downloads, (
+        "docker-build downloads an artifact, so it is no longer independent of "
+        "whatever job produces it"
+    )
+
+    assert job["needs"] == ["changes"], job["needs"]
+
+
+def test_docker_build_starts_its_own_services(workflow: dict[str, Any]) -> None:
+    """Non-vacuity for the test above.
+
+    The independence claim is only meaningful because this job provisions its
+    own database and cache. A job that had quietly started reusing a shared
+    service would satisfy the "reads no artifact" check while not being
+    independent at all.
+    """
+
+    body = yaml.safe_dump(workflow["jobs"]["docker-build"])
+    assert "docker network create ci-net" in body
+    assert "--name ci-db" in body
+    assert "--name ci-redis" in body
+    assert "services:" not in workflow["jobs"]["docker-build"]
+
+
+def test_docker_build_still_reports_on_every_run(workflow: dict[str, Any]) -> None:
+    """A required check that stops reporting deadlocks the merge queue.
+
+    Its steps are individually gated for docs-only and push runs, so the JOB
+    must remain unconditional even when every step inside it is skipped.
+    """
+
+    job = workflow["jobs"]["docker-build"]
+    assert str(job["if"]).startswith("always()")
+    guarded = [step for step in job["steps"] if "if" in step]
+    assert len(guarded) == len(job["steps"]), (
+        "every docker-build step must guard itself, since the job no longer "
+        "does it for them"
+    )
