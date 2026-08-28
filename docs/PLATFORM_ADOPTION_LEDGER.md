@@ -130,6 +130,18 @@ and Collections now consume the effect in their tenant-only shadow composition,
 but cannot move authority until their backfill, parity and sealed cutover gates
 pass.
 
+**2026-08-28 — production prerequisite bootstrap for composed commercial
+modules.** The commercial module shadow composition requires privileged
+database prerequisites that the restricted production migration role must not
+own: the module database roles, outbox dispatcher roles, and the `mod_payments`,
+`mod_billing`, `mod_coll`, `mod_serviceorders`, and `mod_subscriptions`
+schemas. `scripts/bootstrap_commercial_module_prereqs.py` now owns the module
+role/schema repair path, while `scripts/bootstrap_outbox_dispatcher_roles.py`
+continues to own dispatcher identities. `scripts/deploy.sh` verifies both
+contracts with the restricted migration connection before backup and before
+Alembic, and only runs repair when an elevated `BOOTSTRAP_DATABASE_URL` is
+explicitly supplied.
+
 The two provider revisions intentionally add four kernel-identical names to
 Sub's lineage-head collision inventory: `idempotency_records`,
 `platform_idempotency_records`, `outbox_events`, and

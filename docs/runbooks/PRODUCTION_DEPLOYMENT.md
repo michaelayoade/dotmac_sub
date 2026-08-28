@@ -21,6 +21,10 @@ rollback boundary in one operation.
   from Python's safe path, so a stale or locally modified `scripts/` package
   cannot interpret release evidence or decide backup policy.
 - The database backup and deploy locks are writable.
+- The commercial module prerequisite bootstrap has an elevated database
+  connection available only when repair is intended. `BOOTSTRAP_DATABASE_URL`
+  may be injected for the deploy process, but it is not an application
+  connection string and is never logged.
 - Host-side release-control modules execute from the exact authorized Actions
   checkout through `scripts/run_repo_module.sh`. `PYTHONPATH` alone is not an
   admissible checkout boundary because Python searches the current deploy
@@ -42,32 +46,70 @@ contain the backup upstream.
 3. Require successful `CI` and `Mobile CI` GitHub push workflow runs for that
    exact full revision on `main`. Missing, pending, failed, wrong-branch, or
    unavailable evidence fails closed before backup or database mutation.
-4. Back up the database.
-5. Run candidate-image pre-migration state checks against the target database.
-6. Pin the immutable image and revision.
-7. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
-8. Verify registered schema contracts and reject every invalid or unready
+4. Run database prerequisite bootstrap if `BOOTSTRAP_DATABASE_URL` is supplied,
+   then verify commercial module schemas and outbox dispatcher roles through
+   the restricted migration connection. Missing prerequisites fail here before
+   backup and before Alembic.
+5. Back up the database.
+6. Run candidate-image pre-migration state checks against the target database.
+7. Pin the immutable image and revision.
+8. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
+9. Verify registered schema contracts and reject every invalid or unready
    user-schema index.
-9. Verify every enabled integration installation pin resolves to a current or
+10. Verify every enabled integration installation pin resolves to a current or
    bounded historical definition in the new image. Unavailable pins block
    replacement; historical pins are reported for explicit adoption.
-10. Verify that an enabled `crm.ticket_pull` control has exactly one enabled
+11. Verify that an enabled `crm.ticket_pull` control has exactly one enabled
    `crm.ticket_observation.v1` binding and one active job bound to it. Complete
    the reviewed
    [`CRM_TICKET_CAPABILITY_CUTOVER.md`](CRM_TICKET_CAPABILITY_CUTOVER.md)
    procedure with the candidate image before deployment when this gate fails.
-11. Start and health-check the new application image on `127.0.0.1:18001`.
-12. Recreate the primary application and workers. Nginx uses the healthy
+12. Start and health-check the new application image on `127.0.0.1:18001`.
+13. Recreate the primary application and workers. Nginx uses the healthy
    candidate while the primary port is unavailable.
-13. Verify the primary image has no source-code bind mount and wait for its
+14. Verify the primary image has no source-code bind mount and wait for its
    health endpoint.
-14. Require every declared Celery worker to remain restart-free and answer a
+15. Require every declared Celery worker to remain restart-free and answer a
    node-specific ping, and require Celery Beat to remain running without
    restarts, across a bounded stabilization window.
-15. Gracefully drain the candidate and retain the configured rollback images.
+16. Gracefully drain the candidate and retain the configured rollback images.
 
 The candidate runs the same image, environment, and database schema as the
 primary. It is bound to localhost and exists only for the handoff window.
+
+## Commercial module database prerequisites
+
+Commercial modules are composed in shadow mode under owned `mod_*` schemas:
+`mod_payments`, `mod_billing`, `mod_coll`, `mod_serviceorders`, and
+`mod_subscriptions`. Their schemas and cluster roles are privileged deployment
+prerequisites. Alembic runs as the restricted migration role and only verifies
+that the prerequisites exist.
+
+Repair is explicit and idempotent:
+
+```bash
+BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+  python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+  python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+```
+
+Verification uses the restricted migration connection:
+
+```bash
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
+  python scripts/bootstrap_commercial_module_prereqs.py --verify-only
+
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
+  python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only
+```
+
+The deploy owner runs the same verification before backup and before
+`alembic upgrade heads`. It runs repair first only when `BOOTSTRAP_DATABASE_URL`
+is present in the deploy environment. Do not permanently grant database-level
+`CREATE` to `dotmac_app`; the bootstrap creates/adopts the schemas and Alembic
+skips already-present declared module schema creates.
 
 ## Service-extension duplicate reconciliation
 
@@ -163,6 +205,9 @@ tree drifted for days undetected.
 
 - Migration, schema verification, unavailable integration-pin, or CRM ticket
   capability-readiness failure occurs before service replacement.
+- Commercial module prerequisite or dispatcher-role failure occurs before
+  database backup and before Alembic. Run the explicit bootstrap repair, then
+  rerun the guarded deploy.
 - Candidate startup failure leaves the primary release serving traffic.
 - Primary health failure restores the previous image while the candidate
   continues serving, then removes the candidate after the rollback is healthy.

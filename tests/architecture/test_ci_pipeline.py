@@ -460,10 +460,11 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     assert "python -m scripts.ci.migrated_test_database" in makefile
 
 
-def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -> None:
-    """Fresh test clusters need roles; ordinary and production migrations do not."""
+def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> None:
+    """Fresh test clusters need prerequisite bootstrap before migrations."""
 
-    bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
+    commercial_bootstrap = "scripts/bootstrap_commercial_module_prereqs.py"
+    dispatcher_bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
@@ -475,8 +476,12 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
         )
     ]
     assert 'BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}"' in helper
-    assert bootstrap in helper
-    assert helper.index("parse_test_database_target") < helper.index(bootstrap)
+    assert commercial_bootstrap in helper
+    assert dispatcher_bootstrap in helper
+    assert helper.index("parse_test_database_target") < helper.index(
+        commercial_bootstrap
+    )
+    assert helper.index(commercial_bootstrap) < helper.index(dispatcher_bootstrap)
     assert "postgresql://" not in helper
 
     integration = makefile[
@@ -507,7 +512,12 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
     ]
     for workflow_step in (ci_migration, nightly_migration, gate_migration):
         assert 'BOOTSTRAP_DATABASE_URL="$DATABASE_URL"' in workflow_step
-        assert workflow_step.index(bootstrap) < workflow_step.index(
+        assert commercial_bootstrap in workflow_step
+        assert dispatcher_bootstrap in workflow_step
+        assert workflow_step.index(commercial_bootstrap) < workflow_step.index(
+            dispatcher_bootstrap
+        )
+        assert workflow_step.index(dispatcher_bootstrap) < workflow_step.index(
             "alembic upgrade heads"
         )
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
@@ -519,14 +529,27 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_gate
 
     production_sources = (
-        (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8"),
         (ROOT / ".github/workflows/production-deploy.yml").read_text(encoding="utf-8"),
     )
-    assert all(bootstrap not in source for source in production_sources)
-    for start, end in (
-        ("migrate:", "new-migration:"),
-        ("docker-migrate:", "# ─── Host-build fallback guard"),
-        ("prod-migrate:", "# ─── GHCR deploy"),
-    ):
-        production_recipe = makefile[makefile.index(start) : makefile.index(end)]
-        assert bootstrap not in production_recipe
+    assert all(commercial_bootstrap not in source for source in production_sources)
+    assert all(dispatcher_bootstrap not in source for source in production_sources)
+
+    production_deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    for bootstrap in (commercial_bootstrap, dispatcher_bootstrap):
+        assert f"{bootstrap} --verify-only" in production_deploy
+        assert production_deploy.index(f"{bootstrap} --verify-only") < (
+            production_deploy.index("Backing up database before migrations")
+        )
+        assert f"{bootstrap} --repair" in production_deploy
+        assert production_deploy.index(f"{bootstrap} --repair") < (
+            production_deploy.index("Backing up database before migrations")
+        )
+
+    for bootstrap in (commercial_bootstrap, dispatcher_bootstrap):
+        for start, end in (
+            ("migrate:", "new-migration:"),
+            ("docker-migrate:", "prod-build:"),
+            ("prod-migrate:", "deploy:"),
+        ):
+            production_recipe = makefile[makefile.index(start) : makefile.index(end)]
+            assert bootstrap not in production_recipe
