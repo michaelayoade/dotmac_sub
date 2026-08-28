@@ -420,6 +420,36 @@ implementation.
 - Mobile layouts wrap long addresses without hiding recipients or displacing
   the message body and primary Send action.
 
+## Agent Performance Analytics Page Contract
+
+- Audience and task: CX/support leaders compare agent workload, resolution, and
+  responsiveness; the personal variant gives the signed-in agent the same
+  evidence restricted to their identity.
+- Authority: `ui.crm_operational_reports` owns the typed report projection;
+  Team Inbox assignment, message, status-transition, team, and staff-identity
+  owners retain their underlying facts. Routes and templates are adapters.
+- First viewport: current Africa/Lagos month by default, Today/Current
+  week/Custom controls, agent search on the administrative view, page size,
+  export, and stable lazy-loading KPI/table placeholders.
+- Metrics and table: Agents, Chats assigned, Chats resolved, Active now, Avg
+  resolution, and Avg first response precede Agent, Team, Assigned, Resolved,
+  Active now, Avg resolution, and Avg first response columns. Agent is a
+  display name with first/last-name then email fallback; UUID is never a visible
+  identity.
+- The dedicated Inbox Performance page's Agent Load table uses the same staff
+  display-name fallback. Its internal person UUID is never rendered as the
+  Agent value.
+- Cohort semantics: inclusive local dates become UTC half-open bounds.
+  Assignment, resolution, and first-response facts use their authoritative
+  event times. Active now is explicitly current position. Filters, summary,
+  SQL pagination, personal scope, and CSV use one typed query contract.
+- States: loading, empty, timing unavailable, read failure with retry,
+  unauthorized, and missing personal identity are distinct. Read failure never
+  displays cached or estimated values.
+- Responsive behavior: the filter rail wraps, KPI cards stack, and the
+  seven-column table remains horizontally accessible without hiding agent
+  identity or metric meaning.
+
 ## ONT Configure Page Contract
 
 - Audience and task: authorized network staff submit one customer-service

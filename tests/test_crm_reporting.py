@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -61,6 +62,18 @@ def test_expected_operational_inventory_is_complete_and_exclusions_stay_excluded
     ):
         assert required_flow in data_flow_guide
 
+    analytics_migration = Path(
+        "alembic/versions/564_inbox_agent_analytics_indexes.py"
+    ).read_text(encoding="utf-8")
+    for index_name in (
+        "ix_inbox_conversations_agent_analytics",
+        "ix_inbox_assignments_agent_analytics",
+        "ix_inbox_status_event_agent_analytics",
+        "ix_inbox_messages_agent_analytics",
+    ):
+        assert index_name in analytics_migration
+    assert "CREATE INDEX CONCURRENTLY" in analytics_migration
+
 
 @pytest.mark.parametrize("slug", list(crm_reporting.CrmReportSlug))
 def test_every_operational_report_has_a_typed_empty_state(db_session, slug):
@@ -74,6 +87,87 @@ def test_every_operational_report_has_a_typed_empty_state(db_session, slug):
     assert report.total >= 0
     assert len(report.columns) > 0
     assert crm_reporting.build_csv(report).startswith(report.columns[0])
+
+
+def test_agent_performance_period_defaults_and_presets_use_lagos_boundaries():
+    now = datetime(2026, 8, 28, 23, 30, tzinfo=UTC)
+
+    month = crm_reporting.resolve_agent_performance_period(
+        preset=crm_reporting.AgentPerformancePeriodPreset.MONTH,
+        now=now,
+    )
+    today = crm_reporting.resolve_agent_performance_period(
+        preset=crm_reporting.AgentPerformancePeriodPreset.TODAY,
+        now=now,
+    )
+    week = crm_reporting.resolve_agent_performance_period(
+        preset=crm_reporting.AgentPerformancePeriodPreset.WEEK,
+        now=now,
+    )
+
+    assert (month.start_date, month.end_date) == (
+        date(2026, 8, 1),
+        date(2026, 8, 31),
+    )
+    assert month.start_at == datetime(2026, 7, 31, 23, 0, tzinfo=UTC)
+    assert month.end_at == datetime(2026, 8, 31, 23, 0, tzinfo=UTC)
+    assert today.start_date == today.end_date == date(2026, 8, 29)
+    assert (week.start_date, week.end_date) == (
+        date(2026, 8, 24),
+        date(2026, 8, 30),
+    )
+
+
+def test_admin_and_personal_agent_reports_render_display_name_not_uuid(
+    db_session, monkeypatch
+):
+    person_id = uuid4()
+    team_id = uuid4()
+    analytics = crm_reporting.team_inbox_metrics.InboxAgentPerformanceAnalyticsPage(
+        rows=(
+            crm_reporting.team_inbox_metrics.InboxAgentPerformanceAnalyticsRow(
+                person_id=person_id,
+                agent_name="Ada Agent",
+                service_team_id=team_id,
+                service_team_name="Support",
+                assigned_conversation_count=4,
+                resolved_conversation_count=3,
+                active_assignment_count=1,
+                average_resolution_seconds=1800,
+                average_first_response_seconds=300,
+            ),
+        ),
+        summary=crm_reporting.team_inbox_metrics.InboxAgentPerformanceSummary(
+            agent_count=1,
+            assigned_conversation_count=4,
+            resolved_conversation_count=3,
+            active_assignment_count=1,
+            average_resolution_seconds=1800,
+            average_first_response_seconds=300,
+        ),
+        total=1,
+        page=1,
+        per_page=50,
+        generated_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        crm_reporting.team_inbox_metrics,
+        "agent_performance_analytics",
+        lambda *_args, **_kwargs: analytics,
+    )
+    query = crm_reporting.CrmReportQuery(
+        date_from=date(2026, 8, 1),
+        date_to=date(2026, 8, 31),
+        person_id=person_id,
+    )
+
+    for slug in (
+        crm_reporting.CrmReportSlug.AGENT_PERFORMANCE,
+        crm_reporting.CrmReportSlug.MY_PERFORMANCE,
+    ):
+        report = crm_reporting.get_report(db_session, slug=slug, query=query)
+        assert report.rows[0][0] == "Ada Agent"
+        assert str(person_id) not in report.rows[0]
 
 
 def test_network_report_uses_uncapped_counts_and_observed_ont_status(db_session):
@@ -392,11 +486,212 @@ def test_operational_route_enforces_the_exact_report_permission():
     assert getattr(exc_info.value, "status_code", None) == 403
 
 
+@pytest.mark.parametrize("report_slug", ["agent-performance", "my-performance"])
+def test_agent_performance_page_returns_shell_before_running_analytics(
+    db_session, monkeypatch, report_slug
+):
+    import app.web.admin as admin_web
+
+    user_id = uuid4()
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={"permission_keys": {"reports:support:read"}},
+            user=SimpleNamespace(id=user_id),
+        )
+    )
+    monkeypatch.setattr(admin_web, "get_current_user", lambda _request: None)
+    monkeypatch.setattr(admin_web, "get_sidebar_stats", lambda _db: {})
+    monkeypatch.setattr(
+        crm_reporting,
+        "get_report",
+        lambda *_args, **_kwargs: pytest.fail(
+            "initial lazy shell must not run the analytics query"
+        ),
+    )
+    monkeypatch.setattr(
+        report_routes.templates,
+        "TemplateResponse",
+        lambda _template, context: context,
+    )
+
+    context = report_routes.reports_operational_page(
+        request=request,
+        report_slug=report_slug,
+        range_value="custom",
+        date_from="2026-08-01",
+        date_to="2026-08-28",
+        search="Ada",
+        page=1,
+        per_page=50,
+        db=db_session,
+    )
+
+    assert context["report"] is None
+    assert context["lazy_load"] is True
+    assert f"/{report_slug}/data?" in context["lazy_data_url"]
+    assert "date_from=2026-08-01" in context["lazy_data_url"]
+    if report_slug == "my-performance":
+        assert "search=" not in context["lazy_data_url"]
+
+
+def test_agent_performance_data_endpoint_fetches_one_filtered_page(
+    db_session, monkeypatch
+):
+    user_id = uuid4()
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={"permission_keys": {"reports:support:read"}},
+            user=SimpleNamespace(id=user_id),
+        )
+    )
+    captured = []
+
+    def get_report(_db, *, slug, query):
+        captured.append((slug, query))
+        return crm_reporting.CrmReportPage(
+            definition=crm_reporting.REPORT_DEFINITIONS[slug],
+            metrics=(),
+            columns=("Agent",),
+            rows=(),
+            total=0,
+            page=query.page,
+            per_page=query.per_page or 1,
+        )
+
+    monkeypatch.setattr(crm_reporting, "get_report", get_report)
+    monkeypatch.setattr(
+        report_routes.templates,
+        "TemplateResponse",
+        lambda _template, context, **kwargs: {**context, **kwargs},
+    )
+
+    context = report_routes.reports_operational_agent_data(
+        request=request,
+        report_slug="agent-performance",
+        range_value="custom",
+        date_from="2026-08-01",
+        date_to="2026-08-28",
+        search="Ada Agent",
+        page=2,
+        per_page=25,
+        db=db_session,
+    )
+
+    slug, query = captured[0]
+    assert slug is crm_reporting.CrmReportSlug.AGENT_PERFORMANCE
+    assert query.date_from == date(2026, 8, 1)
+    assert query.date_to == date(2026, 8, 28)
+    assert query.page == 2
+    assert query.per_page == 25
+    assert query.search == "Ada Agent"
+    assert "page=1" in context["previous_data_url"]
+    assert context["headers"] == {"Cache-Control": "private, no-store"}
+
+
+def test_agent_performance_data_endpoint_marks_database_failure_unavailable(
+    db_session, monkeypatch
+):
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={"permission_keys": {"reports:support:read"}},
+            user=SimpleNamespace(id=uuid4()),
+        )
+    )
+    released = []
+
+    def unavailable(*_args, **_kwargs):
+        raise report_routes.SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(
+        crm_reporting,
+        "get_report",
+        unavailable,
+    )
+    monkeypatch.setattr(
+        report_routes.db_session_adapter,
+        "release_read_transaction",
+        lambda db: released.append(db),
+    )
+    monkeypatch.setattr(
+        report_routes.templates,
+        "TemplateResponse",
+        lambda _template, context, **kwargs: {**context, **kwargs},
+    )
+
+    context = report_routes.reports_operational_agent_data(
+        request=request,
+        report_slug="agent-performance",
+        range_value="month",
+        date_from=None,
+        date_to=None,
+        search=None,
+        page=1,
+        per_page=50,
+        db=db_session,
+    )
+
+    assert context["report"] is None
+    assert "temporarily unavailable" in context["report_error"]
+    assert "estimated" in context["report_error"]
+    assert released == [db_session]
+    assert context["headers"] == {"Cache-Control": "private, no-store"}
+
+
 def test_operational_report_template_compiles():
     template = report_routes.templates.env.get_template(
         "admin/reports/operational.html"
     )
     assert template is not None
+    assert report_routes.templates.env.get_template(
+        "admin/reports/_agent_performance_results.html"
+    )
+
+
+def test_inbox_performance_agent_load_template_uses_display_name_not_uuid():
+    source = Path("templates/admin/reports/inbox_performance.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "{{ row.agent_name }}" in source
+    assert "{{ row.person_id }}" not in source
+
+
+def test_agent_performance_partial_renders_display_name_and_lazy_pagination():
+    agent_id = uuid4()
+    report = crm_reporting.CrmReportPage(
+        definition=crm_reporting.REPORT_DEFINITIONS[
+            crm_reporting.CrmReportSlug.AGENT_PERFORMANCE
+        ],
+        metrics=(crm_reporting.CrmReportMetric("Chats assigned", "12"),),
+        columns=("Agent", "Team", "Assigned"),
+        rows=(("Ada Agent", "Customer Experience", "12"),),
+        total=2,
+        page=1,
+        per_page=1,
+        note="Current month in Africa/Lagos.",
+    )
+
+    rendered = report_routes.templates.env.get_template(
+        "admin/reports/_agent_performance_results.html"
+    ).render(
+        report=report,
+        report_error=None,
+        retry_url="/admin/reports/operational/agent-performance/data?page=1",
+        previous_data_url=None,
+        next_data_url="/admin/reports/operational/agent-performance/data?page=2",
+        previous_page_url=None,
+        next_page_url="/admin/reports/operational/agent-performance?page=2",
+    )
+
+    assert "Ada Agent" in rendered
+    assert str(agent_id) not in rendered
+    assert "Chats assigned" in rendered
+    assert (
+        'hx-get="/admin/reports/operational/agent-performance/data?page=2"' in rendered
+    )
+    assert (
+        'hx-push-url="/admin/reports/operational/agent-performance?page=2"' in rendered
+    )
 
 
 def test_sales_report_columns_bind_labels_to_exact_row_keys():

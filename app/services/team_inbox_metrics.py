@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from statistics import mean
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import String, and_, case, cast, func, or_, select, true
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
@@ -17,6 +18,7 @@ from app.models.team_inbox import (
     InboxConversationTeam,
     InboxMessage,
     InboxMessageDirection,
+    InboxStatusTransitionEvent,
 )
 from app.services import service_team_composition, team_inbox_assignment
 
@@ -59,10 +61,85 @@ class InboxTeamPerformanceReportRow:
 @dataclass(frozen=True)
 class InboxAgentPerformanceReportRow:
     person_id: str
+    agent_name: str
     service_team_id: str
     service_team_name: str
     service_team_capabilities: tuple[str, ...]
     metrics: InboxAgentPerformanceMetrics
+
+
+class InboxAgentPerformanceQueryError(ValueError):
+    """Stable validation failure for the bounded agent analytics query."""
+
+    code = "ui.crm_operational_reports.invalid_query"
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentPerformanceQuery:
+    """Typed event-time, identity, search, and pagination boundary."""
+
+    start_at: datetime
+    end_at: datetime
+    page: int = 1
+    per_page: int | None = 50
+    person_id: UUID | None = None
+    search: str | None = None
+
+    def __post_init__(self) -> None:
+        start_at = _as_utc(self.start_at)
+        end_at = _as_utc(self.end_at)
+        if start_at is None or end_at is None or start_at >= end_at:
+            raise InboxAgentPerformanceQueryError(
+                "Agent performance requires an increasing bounded date range."
+            )
+        if self.page < 1:
+            raise InboxAgentPerformanceQueryError("Page must be at least one.")
+        if self.per_page is not None and not 10 <= self.per_page <= 500:
+            raise InboxAgentPerformanceQueryError(
+                "Page size must be between 10 and 500."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentPerformanceAnalyticsRow:
+    person_id: UUID
+    agent_name: str
+    service_team_id: UUID
+    service_team_name: str
+    assigned_conversation_count: int
+    resolved_conversation_count: int
+    active_assignment_count: int
+    average_resolution_seconds: float | None
+    average_first_response_seconds: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentPerformanceSummary:
+    agent_count: int
+    assigned_conversation_count: int
+    resolved_conversation_count: int
+    active_assignment_count: int
+    average_resolution_seconds: float | None
+    average_first_response_seconds: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentPerformanceAnalyticsPage:
+    rows: tuple[InboxAgentPerformanceAnalyticsRow, ...]
+    summary: InboxAgentPerformanceSummary
+    total: int
+    page: int
+    per_page: int
+    generated_at: datetime
+    provenance: str = "live authoritative inbox events"
+
+    @property
+    def has_previous(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page * self.per_page < self.total
 
 
 @dataclass(frozen=True)
@@ -113,6 +190,16 @@ def _positive_int(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _staff_display_name(user: SystemUser) -> str:
+    """Project the canonical staff label without exposing the identity UUID."""
+
+    return (
+        (user.display_name or "").strip()
+        or f"{user.first_name} {user.last_name}".strip()
+        or user.email
+    )
 
 
 def response_sla_seconds_for_team(
@@ -663,6 +750,7 @@ def agent_performance_report(
         rows.append(
             InboxAgentPerformanceReportRow(
                 person_id=str(user.id),
+                agent_name=_staff_display_name(user),
                 service_team_id=str(team.id),
                 service_team_name=team.name,
                 service_team_capabilities=tuple(
@@ -672,6 +760,471 @@ def agent_performance_report(
             )
         )
     return rows
+
+
+def _analytics_duration_seconds(
+    db: Session,
+    *,
+    started_at: ColumnElement[datetime],
+    ended_at: ColumnElement[datetime],
+) -> ColumnElement[float | None]:
+    """Return a portable SQL expression for a non-negative duration."""
+
+    if db.bind is not None and db.bind.dialect.name == "sqlite":
+        elapsed = (func.julianday(ended_at) - func.julianday(started_at)) * 86400.0
+    else:
+        elapsed = func.extract("epoch", ended_at - started_at)
+    return case(
+        (and_(started_at.is_not(None), ended_at >= started_at), elapsed),
+        else_=None,
+    )
+
+
+def agent_performance_analytics(
+    db: Session,
+    *,
+    query: InboxAgentPerformanceQuery,
+) -> InboxAgentPerformanceAnalyticsPage:
+    """Aggregate bounded agent metrics in SQL and return one paged projection.
+
+    Assignment totals use assignment effective time. Resolution totals and
+    durations use append-only status-transition evidence, credited only to the
+    resolving agent's matching assignment at that instant. First-response time
+    uses the first recorded human outbound after the first inbound message for
+    conversations first received inside the requested interval.
+    """
+
+    start_at = _as_utc(query.start_at)
+    end_at = _as_utc(query.end_at)
+    if start_at is None or end_at is None:
+        raise InboxAgentPerformanceQueryError("Date bounds must be timezone-aware.")
+
+    display_name = func.coalesce(
+        func.nullif(func.trim(SystemUser.display_name), ""),
+        func.nullif(func.trim(SystemUser.first_name + " " + SystemUser.last_name), ""),
+        SystemUser.email,
+    )
+    member_statement = (
+        select(
+            ServiceTeamMember.team_id.label("service_team_id"),
+            ServiceTeam.name.label("service_team_name"),
+            SystemUser.id.label("person_id"),
+            display_name.label("agent_name"),
+        )
+        .join(ServiceTeam, ServiceTeam.id == ServiceTeamMember.team_id)
+        .join(SystemUser, SystemUser.person_party_id == ServiceTeamMember.person_id)
+        .where(
+            ServiceTeam.is_active.is_(True),
+            ServiceTeamMember.is_active.is_(True),
+            SystemUser.is_active.is_(True),
+        )
+    )
+    if query.person_id is not None:
+        member_statement = member_statement.where(SystemUser.id == query.person_id)
+    normalized_search = (query.search or "").strip()
+    if normalized_search:
+        search_term = f"%{normalized_search}%"
+        member_statement = member_statement.where(
+            or_(
+                SystemUser.display_name.ilike(search_term),
+                SystemUser.first_name.ilike(search_term),
+                SystemUser.last_name.ilike(search_term),
+                SystemUser.email.ilike(search_term),
+            )
+        )
+    members = member_statement.cte("agent_performance_members")
+
+    assigned = (
+        select(
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+            func.count(
+                func.distinct(InboxConversationAssignment.conversation_id)
+            ).label("assigned_count"),
+        )
+        .where(
+            InboxConversationAssignment.assigned_at >= start_at,
+            InboxConversationAssignment.assigned_at < end_at,
+        )
+        .group_by(
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+        )
+        .cte("agent_period_assignments")
+    )
+    active = (
+        select(
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+            func.count(InboxConversationAssignment.id).label("active_count"),
+        )
+        .where(InboxConversationAssignment.is_active.is_(True))
+        .group_by(
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+        )
+        .cte("agent_active_assignments")
+    )
+
+    resolution_duration = _analytics_duration_seconds(
+        db,
+        started_at=InboxConversation.first_message_at,
+        ended_at=InboxStatusTransitionEvent.occurred_at,
+    )
+    resolution_facts = (
+        select(
+            InboxStatusTransitionEvent.id.label("event_id"),
+            InboxConversationAssignment.service_team_id,
+            InboxStatusTransitionEvent.actor_person_id.label("person_id"),
+            resolution_duration.label("duration_seconds"),
+        )
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxStatusTransitionEvent.conversation_id,
+        )
+        .join(
+            InboxConversationAssignment,
+            and_(
+                InboxConversationAssignment.conversation_id
+                == InboxStatusTransitionEvent.conversation_id,
+                InboxConversationAssignment.person_id
+                == InboxStatusTransitionEvent.actor_person_id,
+                InboxConversationAssignment.assigned_at
+                <= InboxStatusTransitionEvent.occurred_at,
+                or_(
+                    InboxConversationAssignment.ended_at.is_(None),
+                    InboxConversationAssignment.ended_at
+                    >= InboxStatusTransitionEvent.occurred_at,
+                ),
+            ),
+        )
+        .where(
+            InboxStatusTransitionEvent.status == InboxConversationStatus.resolved.value,
+            InboxStatusTransitionEvent.actor_person_id.is_not(None),
+            InboxStatusTransitionEvent.occurred_at >= start_at,
+            InboxStatusTransitionEvent.occurred_at < end_at,
+        )
+        .distinct()
+        .cte("agent_resolution_facts")
+    )
+    resolution = (
+        select(
+            resolution_facts.c.service_team_id,
+            resolution_facts.c.person_id,
+            func.count(func.distinct(resolution_facts.c.event_id)).label(
+                "resolved_count"
+            ),
+            func.count(resolution_facts.c.duration_seconds).label(
+                "resolution_timed_count"
+            ),
+            func.coalesce(func.sum(resolution_facts.c.duration_seconds), 0.0).label(
+                "resolution_seconds_sum"
+            ),
+        )
+        .group_by(
+            resolution_facts.c.service_team_id,
+            resolution_facts.c.person_id,
+        )
+        .cte("agent_resolutions")
+    )
+
+    message_time = func.coalesce(
+        InboxMessage.received_at,
+        InboxMessage.sent_at,
+        InboxMessage.created_at,
+    )
+    first_inbound_time = func.min(message_time)
+    first_inbound = (
+        select(
+            InboxMessage.conversation_id,
+            first_inbound_time.label("first_inbound_at"),
+        )
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxMessage.conversation_id,
+        )
+        .where(
+            InboxMessage.direction == InboxMessageDirection.inbound.value,
+            InboxConversation.first_message_at >= start_at,
+            InboxConversation.first_message_at < end_at,
+        )
+        .group_by(InboxMessage.conversation_id)
+        .cte("agent_first_inbound")
+    )
+    sender_value = InboxMessage.metadata_["sent_by_person_id"].as_string()
+    outbound_ranked = (
+        select(
+            InboxMessage.conversation_id,
+            sender_value.label("sender_person_id"),
+            message_time.label("response_at"),
+            first_inbound.c.first_inbound_at,
+            func.row_number()
+            .over(
+                partition_by=InboxMessage.conversation_id,
+                order_by=(message_time.asc(), InboxMessage.id.asc()),
+            )
+            .label("response_rank"),
+        )
+        .join(
+            first_inbound,
+            first_inbound.c.conversation_id == InboxMessage.conversation_id,
+        )
+        .where(
+            InboxMessage.direction == InboxMessageDirection.outbound.value,
+            sender_value.is_not(None),
+            message_time >= first_inbound.c.first_inbound_at,
+            message_time < end_at,
+        )
+        .cte("agent_human_outbounds")
+    )
+    first_response = (
+        select(
+            outbound_ranked.c.conversation_id,
+            outbound_ranked.c.sender_person_id,
+            outbound_ranked.c.response_at,
+            outbound_ranked.c.first_inbound_at,
+        )
+        .where(outbound_ranked.c.response_rank == 1)
+        .cte("agent_first_response")
+    )
+    response_duration = _analytics_duration_seconds(
+        db,
+        started_at=first_response.c.first_inbound_at,
+        ended_at=first_response.c.response_at,
+    )
+    assignment_person_text = func.replace(
+        cast(InboxConversationAssignment.person_id, String), "-", ""
+    )
+    response_person_text = func.replace(first_response.c.sender_person_id, "-", "")
+    response_facts = (
+        select(
+            first_response.c.conversation_id,
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+            response_duration.label("duration_seconds"),
+        )
+        .join(
+            InboxConversationAssignment,
+            and_(
+                InboxConversationAssignment.conversation_id
+                == first_response.c.conversation_id,
+                assignment_person_text == response_person_text,
+                InboxConversationAssignment.assigned_at <= first_response.c.response_at,
+                or_(
+                    InboxConversationAssignment.ended_at.is_(None),
+                    InboxConversationAssignment.ended_at
+                    >= first_response.c.response_at,
+                ),
+            ),
+        )
+        .distinct()
+        .cte("agent_first_response_facts")
+    )
+    responses = (
+        select(
+            response_facts.c.service_team_id,
+            response_facts.c.person_id,
+            func.count(response_facts.c.duration_seconds).label("response_count"),
+            func.coalesce(func.sum(response_facts.c.duration_seconds), 0.0).label(
+                "response_seconds_sum"
+            ),
+        )
+        .group_by(
+            response_facts.c.service_team_id,
+            response_facts.c.person_id,
+        )
+        .cte("agent_first_responses")
+    )
+
+    assigned_count = func.coalesce(assigned.c.assigned_count, 0)
+    resolved_count = func.coalesce(resolution.c.resolved_count, 0)
+    active_count = func.coalesce(active.c.active_count, 0)
+    resolution_timed_count = func.coalesce(resolution.c.resolution_timed_count, 0)
+    resolution_seconds_sum = func.coalesce(resolution.c.resolution_seconds_sum, 0.0)
+    response_count = func.coalesce(responses.c.response_count, 0)
+    response_seconds_sum = func.coalesce(responses.c.response_seconds_sum, 0.0)
+    performance = (
+        select(
+            members.c.person_id,
+            members.c.agent_name,
+            members.c.service_team_id,
+            members.c.service_team_name,
+            assigned_count.label("assigned_count"),
+            resolved_count.label("resolved_count"),
+            active_count.label("active_count"),
+            resolution_timed_count.label("resolution_timed_count"),
+            resolution_seconds_sum.label("resolution_seconds_sum"),
+            response_count.label("response_count"),
+            response_seconds_sum.label("response_seconds_sum"),
+            case(
+                (
+                    resolution_timed_count > 0,
+                    resolution_seconds_sum / resolution_timed_count,
+                ),
+                else_=None,
+            ).label("average_resolution_seconds"),
+            case(
+                (
+                    response_count > 0,
+                    response_seconds_sum / response_count,
+                ),
+                else_=None,
+            ).label("average_first_response_seconds"),
+        )
+        .outerjoin(
+            assigned,
+            and_(
+                assigned.c.service_team_id == members.c.service_team_id,
+                assigned.c.person_id == members.c.person_id,
+            ),
+        )
+        .outerjoin(
+            active,
+            and_(
+                active.c.service_team_id == members.c.service_team_id,
+                active.c.person_id == members.c.person_id,
+            ),
+        )
+        .outerjoin(
+            resolution,
+            and_(
+                resolution.c.service_team_id == members.c.service_team_id,
+                resolution.c.person_id == members.c.person_id,
+            ),
+        )
+        .outerjoin(
+            responses,
+            and_(
+                responses.c.service_team_id == members.c.service_team_id,
+                responses.c.person_id == members.c.person_id,
+            ),
+        )
+        .cte("agent_performance")
+    )
+
+    total = int(db.scalar(select(func.count()).select_from(members)) or 0)
+    if total == 0:
+        return InboxAgentPerformanceAnalyticsPage(
+            rows=(),
+            summary=InboxAgentPerformanceSummary(
+                agent_count=0,
+                assigned_conversation_count=0,
+                resolved_conversation_count=0,
+                active_assignment_count=0,
+                average_resolution_seconds=None,
+                average_first_response_seconds=None,
+            ),
+            total=0,
+            page=1,
+            per_page=query.per_page or 1,
+            generated_at=datetime.now(UTC),
+        )
+
+    summary_values = (
+        select(
+            func.count(func.distinct(performance.c.person_id)).label(
+                "summary_agent_count"
+            ),
+            func.coalesce(func.sum(performance.c.assigned_count), 0).label(
+                "summary_assigned_count"
+            ),
+            func.coalesce(func.sum(performance.c.resolved_count), 0).label(
+                "summary_resolved_count"
+            ),
+            func.coalesce(func.sum(performance.c.active_count), 0).label(
+                "summary_active_count"
+            ),
+            func.coalesce(func.sum(performance.c.resolution_timed_count), 0).label(
+                "summary_resolution_timed_count"
+            ),
+            func.coalesce(func.sum(performance.c.resolution_seconds_sum), 0.0).label(
+                "summary_resolution_seconds_sum"
+            ),
+            func.coalesce(func.sum(performance.c.response_count), 0).label(
+                "summary_response_count"
+            ),
+            func.coalesce(func.sum(performance.c.response_seconds_sum), 0.0).label(
+                "summary_response_seconds_sum"
+            ),
+        )
+        .select_from(performance)
+        .cte("agent_performance_summary")
+    )
+    row_statement = (
+        select(performance, summary_values)
+        .select_from(performance.join(summary_values, true()))
+        .order_by(
+            performance.c.agent_name.asc(),
+            performance.c.service_team_name.asc(),
+            performance.c.person_id.asc(),
+        )
+    )
+    effective_page = query.page
+    if query.per_page is not None:
+        last_page = max((total + query.per_page - 1) // query.per_page, 1)
+        effective_page = min(query.page, last_page)
+        row_statement = row_statement.offset(
+            (effective_page - 1) * query.per_page
+        ).limit(query.per_page)
+    raw_rows = db.execute(row_statement).mappings().all()
+    summary_row = raw_rows[0]
+
+    resolution_timed_total = int(summary_row["summary_resolution_timed_count"] or 0)
+    response_total = int(summary_row["summary_response_count"] or 0)
+    summary = InboxAgentPerformanceSummary(
+        agent_count=int(summary_row["summary_agent_count"] or 0),
+        assigned_conversation_count=int(summary_row["summary_assigned_count"] or 0),
+        resolved_conversation_count=int(summary_row["summary_resolved_count"] or 0),
+        active_assignment_count=int(summary_row["summary_active_count"] or 0),
+        average_resolution_seconds=(
+            round(
+                float(summary_row["summary_resolution_seconds_sum"])
+                / resolution_timed_total,
+                3,
+            )
+            if resolution_timed_total
+            else None
+        ),
+        average_first_response_seconds=(
+            round(
+                float(summary_row["summary_response_seconds_sum"]) / response_total,
+                3,
+            )
+            if response_total
+            else None
+        ),
+    )
+    rows = tuple(
+        InboxAgentPerformanceAnalyticsRow(
+            person_id=row["person_id"],
+            agent_name=str(row["agent_name"]),
+            service_team_id=row["service_team_id"],
+            service_team_name=str(row["service_team_name"]),
+            assigned_conversation_count=int(row["assigned_count"] or 0),
+            resolved_conversation_count=int(row["resolved_count"] or 0),
+            active_assignment_count=int(row["active_count"] or 0),
+            average_resolution_seconds=(
+                round(float(row["average_resolution_seconds"]), 3)
+                if row["average_resolution_seconds"] is not None
+                else None
+            ),
+            average_first_response_seconds=(
+                round(float(row["average_first_response_seconds"]), 3)
+                if row["average_first_response_seconds"] is not None
+                else None
+            ),
+        )
+        for row in raw_rows
+    )
+    per_page = query.per_page or max(total, 1)
+    return InboxAgentPerformanceAnalyticsPage(
+        rows=rows,
+        summary=summary,
+        total=total,
+        page=effective_page,
+        per_page=per_page,
+        generated_at=datetime.now(UTC),
+    )
 
 
 def active_service_team_options(db: Session) -> list[ServiceTeam]:
