@@ -377,6 +377,37 @@ run_migrations() {
   done
 }
 
+run_database_prerequisite_bootstrap() {
+  local bootstrap_url
+  bootstrap_url="${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
+  if [[ -z "${bootstrap_url}" ]]; then
+    log "No BOOTSTRAP_DATABASE_URL supplied; verifying existing database prerequisites only"
+    return 0
+  fi
+
+  log "Repairing commercial module database prerequisites with the elevated bootstrap connection"
+  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+    python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+  log "Repairing outbox dispatcher database prerequisites with the elevated bootstrap connection"
+  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+    python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+}
+
+verify_database_prerequisites() {
+  log "Verifying commercial module prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+
+  log "Verifying outbox dispatcher prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
+}
+
 # Deploy-integrity gate. The immutable image must not be shadowed by a host
 # source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
 # or an override carrying a working-tree mount) got layered on, so the RUNNING
@@ -700,6 +731,9 @@ fi
   --repository "${GITHUB_RELEASE_REPOSITORY}" \
   --revision "${GITHUB_RELEASE_REVISION}" \
   --branch "${GITHUB_RELEASE_BRANCH}"
+
+run_database_prerequisite_bootstrap
+verify_database_prerequisites
 
 # If this script is killed mid-backup -- an SSH session dropping is enough --
 # the pg_dump it started does NOT die with it. It keeps running, and the next
