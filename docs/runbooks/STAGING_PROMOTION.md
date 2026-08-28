@@ -24,9 +24,10 @@ What was removed is the merge, not the proof.
 2. Require CI, Mobile CI, and Version Impact to pass, then squash-merge into
    `main`.
 3. Select the exact `origin/main` SHA intended for deployment and require CI and
-   Mobile CI to pass on that exact commit. An open rolling version-bump pull
-   request does not block a digest-bound candidate for an already-selected
-   source SHA; it governs semver metadata and aliases, not deployment authority.
+   Mobile CI to pass on that exact commit.
+   An open rolling version-bump pull request does not block a digest-bound
+   candidate for an already-selected source SHA; it governs semver metadata and
+   aliases, not deployment authority.
 4. Dispatch `Build release candidate once` on `main`, supplying that full main
    SHA as `candidate_sha`. The workflow refuses a stale SHA or non-green source,
    builds the application once on GitHub, and records its immutable OCI digest.
