@@ -1,7 +1,7 @@
 """Disable unsafe first-turn AI intake handoff rules.
 
 Revision ID: 564_ai_intake_disable_first_turn_handoff_rules
-Revises: 563_topup_reconcile_leases
+Revises: 563_erp_department_service_team_membership
 Create Date: 2026-08-28
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "564_ai_intake_disable_first_turn_handoff_rules"
-down_revision: str | None = "563_topup_reconcile_leases"
+down_revision: str | None = "563_erp_department_service_team_membership"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

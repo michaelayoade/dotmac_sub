@@ -1,7 +1,7 @@
 """Track ERP department-managed service-team membership.
 
 Revision ID: 563_erp_department_service_team_membership
-Revises: 562_topup_reconcile_progress
+Revises: 560_ncc_report_permissions
 Create Date: 2026-08-28
 """
 
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "563_erp_department_service_team_membership"
-down_revision: str | None = "562_topup_reconcile_progress"
+down_revision: str | None = "560_ncc_report_permissions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

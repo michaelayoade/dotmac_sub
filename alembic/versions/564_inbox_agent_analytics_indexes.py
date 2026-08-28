@@ -8,7 +8,7 @@ index names before rebuilding. The application query remains compatible before,
 during, and after each build. Downgrade removes only these derived read indexes.
 
 Revision ID: 564_inbox_agent_analytics_indexes
-Revises: 563_topup_reconcile_leases
+Revises: 564_ai_intake_disable_first_turn_handoff_rules
 Create Date: 2026-08-28
 """
 
@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "564_inbox_agent_analytics_indexes"
-down_revision: str | None = "563_topup_reconcile_leases"
+down_revision: str | None = "564_ai_intake_disable_first_turn_handoff_rules"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

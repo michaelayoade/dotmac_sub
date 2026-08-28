@@ -1,7 +1,7 @@
 """Add explicit NCC report permissions.
 
 Revision ID: 560_ncc_report_permissions
-Revises: 559_upcoming_charges_indexes
+Revises: 563_topup_reconcile_leases
 Create Date: 2026-08-28
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "560_ncc_report_permissions"
-down_revision: str | None = "559_upcoming_charges_indexes"
+down_revision: str | None = "563_topup_reconcile_leases"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
