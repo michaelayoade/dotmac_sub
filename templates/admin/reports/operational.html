@@ -1,35 +1,45 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
 
-{% block title %}{{ report.definition.title }} - Admin{% endblock %}
+{% block title %}{{ definition.title }} - Admin{% endblock %}
 
 {% block content %}
 {{ ambient_background("violet", "blue") }}
 <div class="relative space-y-8">
     {% call(content) page_header(
-        title=report.definition.title,
-        subtitle=report.definition.description,
+        title=definition.title,
+        subtitle=definition.description,
         icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/></svg>',
         color="violet", color2="blue",
-        breadcrumbs=[{"label": "Reports", "href": "/admin/reports"}, {"label": report.definition.title}]
+        breadcrumbs=[{"label": "Reports", "href": "/admin/reports"}, {"label": definition.title}]
     ) %}
-        <a href="/admin/reports/operational/{{ report.definition.slug.value }}/export?date_from={{ date_from }}&date_to={{ date_to }}{% if search %}&search={{ search | urlencode }}{% endif %}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">Export CSV</a>
+        <a href="/admin/reports/operational/{{ definition.slug.value }}/export?range={{ range_value }}&date_from={{ date_from }}&date_to={{ date_to }}{% if search %}&search={{ search | urlencode }}{% endif %}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">Export CSV</a>
     {% endcall %}
 
-    {% if report.definition.supports_date_filter %}<form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+    {% if lazy_load %}<form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div><label for="range" class="block text-xs font-medium text-slate-500">Period</label><select id="range" name="range" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"><option value="month"{% if range_value == "month" %} selected{% endif %}>Current month</option><option value="today"{% if range_value == "today" %} selected{% endif %}>Today</option><option value="week"{% if range_value == "week" %} selected{% endif %}>Current week</option><option value="custom"{% if range_value == "custom" %} selected{% endif %}>Custom</option></select></div>
+        <div><label for="date_from" class="block text-xs font-medium text-slate-500">From</label><input id="date_from" name="date_from" type="date" value="{{ date_from }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>
+        <div><label for="date_to" class="block text-xs font-medium text-slate-500">To</label><input id="date_to" name="date_to" type="date" value="{{ date_to }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>
+        {% if definition.slug.value == "agent-performance" %}<div><label for="agent_search" class="block text-xs font-medium text-slate-500">Search agent</label><input id="agent_search" name="search" type="search" value="{{ search }}" placeholder="Name or email" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>{% endif %}
+        <div><label for="per_page" class="block text-xs font-medium text-slate-500">Rows</label><select id="per_page" name="per_page" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700">{% for size in [25, 50, 100, 200] %}<option value="{{ size }}"{% if per_page == size %} selected{% endif %}>{{ size }}</option>{% endfor %}</select></div>
+        <button type="submit" class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white">Apply</button>
+        <a href="/admin/reports/operational/{{ definition.slug.value }}" class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300">Reset to current month</a>
+    </form>{% elif definition.supports_date_filter %}<form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div><label for="date_from" class="block text-xs font-medium text-slate-500">From</label><input id="date_from" name="date_from" type="date" value="{{ date_from }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>
         <div><label for="date_to" class="block text-xs font-medium text-slate-500">To</label><input id="date_to" name="date_to" type="date" value="{{ date_to }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>
         <button type="submit" class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white">Apply</button>
-        {% if date_from or date_to %}<a href="/admin/reports/operational/{{ report.definition.slug.value }}" class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300">Clear</a>{% endif %}
+        {% if date_from or date_to %}<a href="/admin/reports/operational/{{ definition.slug.value }}" class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300">Clear</a>{% endif %}
     </form>{% endif %}
-    {% if report.definition.slug.value == "agent-performance" %}<form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <input type="hidden" name="date_from" value="{{ date_from }}">
-        <input type="hidden" name="date_to" value="{{ date_to }}">
-        <div><label for="agent_search" class="block text-xs font-medium text-slate-500">Search agent</label><input id="agent_search" name="search" type="search" value="{{ search }}" placeholder="Name or email" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700"></div>
-        <button type="submit" class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white">Search</button>
-        {% if search %}<a href="/admin/reports/operational/agent-performance?date_from={{ date_from }}&date_to={{ date_to }}" class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300">Clear</a>{% endif %}
-    </form>{% endif %}
+
+    {% if lazy_load %}
+    <section id="agent-performance-results" class="space-y-8" aria-live="polite" aria-busy="true" hx-get="{{ lazy_data_url }}" hx-trigger="load" hx-swap="outerHTML">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Loading agent performance summary">
+            {% for _ in range(6) %}<div class="h-28 animate-pulse rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800"></div>{% endfor %}
+        </div>
+        <div class="h-64 animate-pulse rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800"></div>
+    </section>
+    <noscript><p class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">JavaScript is required for lazy loading. <a class="underline" href="{{ lazy_data_url }}">Open the report data directly</a>.</p></noscript>
+    {% else %}
 
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {% for metric in report.metrics %}
@@ -45,7 +55,7 @@
     <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">{{ report.note }}</div>
     {% endif %}
 
-    {% call card(report.definition.title, color="violet", padding=False) %}
+    {% call card(definition.title, color="violet", padding=False) %}
         {% if report.rows %}
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
@@ -68,6 +78,7 @@
         </div>
         {% endif %}
     {% endcall %}
+    {% endif %}
 </div>
 {{ animation_styles() }}
 {% endblock %}

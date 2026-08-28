@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from io import StringIO
 from typing import Literal, TypedDict
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -1138,7 +1138,7 @@ def _inbox_agent_rows(
 ) -> list[dict[str, object]]:
     return [
         {
-            "person_id": row.person_id,
+            "agent_name": row.agent_name,
             "service_team_id": row.service_team_id,
             "service_team_name": row.service_team_name,
             "service_team_capabilities": ", ".join(row.service_team_capabilities),
@@ -2524,6 +2524,51 @@ def _operational_definition(
     return definition
 
 
+_LAZY_AGENT_REPORTS = {
+    crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+}
+
+
+def _agent_performance_period(
+    *,
+    range_value: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> crm_reporting_service.AgentPerformancePeriod:
+    try:
+        preset = crm_reporting_service.AgentPerformancePeriodPreset(range_value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid report period") from None
+    try:
+        return crm_reporting_service.resolve_agent_performance_period(
+            preset=preset,
+            date_from=_parse_report_date(date_from),
+            date_to=_parse_report_date(date_to),
+        )
+    except crm_reporting_service.CrmReportQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _agent_report_url_params(
+    *,
+    period: crm_reporting_service.AgentPerformancePeriod,
+    search: str | None,
+    page: int,
+    per_page: int,
+) -> str:
+    values: dict[str, str | int] = {
+        "range": period.preset.value,
+        "date_from": period.start_date.isoformat(),
+        "date_to": period.end_date.isoformat(),
+        "page": page,
+        "per_page": per_page,
+    }
+    if search:
+        values["search"] = search
+    return urlencode(values)
+
+
 @router.get(
     "/operational/{report_slug}/export",
     dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
@@ -2531,13 +2576,22 @@ def _operational_definition(
 def reports_operational_export(
     request: Request,
     report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
     db: Session = Depends(get_db),
 ):
     definition = _operational_definition(request, report_slug)
-    if not definition.supports_date_filter:
+    if definition.slug in _LAZY_AGENT_REPORTS:
+        period = _agent_performance_period(
+            range_value=range_value,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        date_from = period.start_date.isoformat()
+        date_to = period.end_date.isoformat()
+    elif not definition.supports_date_filter:
         date_from = date_to = None
     elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
         date_from, date_to, _start_at, _end_at = _inbox_performance_period(
@@ -2563,13 +2617,14 @@ def reports_operational_export(
 
 
 @router.get(
-    "/operational/{report_slug}",
+    "/operational/{report_slug}/data",
     response_class=HTMLResponse,
     dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
 )
-def reports_operational_page(
+def reports_operational_agent_data(
     request: Request,
     report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
@@ -2578,7 +2633,102 @@ def reports_operational_page(
     db: Session = Depends(get_db),
 ):
     definition = _operational_definition(request, report_slug)
-    if not definition.supports_date_filter:
+    if definition.slug not in _LAZY_AGENT_REPORTS:
+        raise HTTPException(status_code=404, detail="Lazy report endpoint not found")
+    period = _agent_performance_period(
+        range_value=range_value,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    effective_search = (
+        search
+        if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
+        else None
+    )
+    query = _operational_report_query(
+        request=request,
+        date_from=period.start_date.isoformat(),
+        date_to=period.end_date.isoformat(),
+        page=page,
+        per_page=per_page,
+        personal=definition.slug == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+        search=effective_search,
+    )
+    report = None
+    report_error = None
+    try:
+        report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+    except SQLAlchemyError:
+        logger.exception(
+            "agent_performance_report_read_failed",
+            extra={"report_slug": definition.slug.value},
+        )
+        db_session_adapter.release_read_transaction(db)
+        report_error = (
+            "Agent performance data is temporarily unavailable. "
+            "No values have been estimated."
+        )
+
+    effective_page = report.page if report is not None else page
+
+    def link(target_page: int, *, data: bool) -> str:
+        suffix = "/data" if data else ""
+        params = _agent_report_url_params(
+            period=period,
+            search=effective_search,
+            page=target_page,
+            per_page=per_page,
+        )
+        return f"/admin/reports/operational/{report_slug}{suffix}?{params}"
+
+    context = {
+        "request": request,
+        "report": report,
+        "report_error": report_error,
+        "retry_url": link(effective_page, data=True),
+        "previous_data_url": (
+            link(effective_page - 1, data=True) if effective_page > 1 else None
+        ),
+        "previous_page_url": (
+            link(effective_page - 1, data=False) if effective_page > 1 else None
+        ),
+        "next_data_url": link(effective_page + 1, data=True),
+        "next_page_url": link(effective_page + 1, data=False),
+    }
+    return templates.TemplateResponse(
+        "admin/reports/_agent_performance_results.html",
+        context,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get(
+    "/operational/{report_slug}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
+)
+def reports_operational_page(
+    request: Request,
+    report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    search: str | None = Query(default=None, max_length=120),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
+    db: Session = Depends(get_db),
+):
+    definition = _operational_definition(request, report_slug)
+    period = None
+    if definition.slug in _LAZY_AGENT_REPORTS:
+        period = _agent_performance_period(
+            range_value=range_value,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        date_from = period.start_date.isoformat()
+        date_to = period.end_date.isoformat()
+    elif not definition.supports_date_filter:
         date_from = date_to = None
     elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
         date_from, date_to, _start_at, _end_at = _inbox_performance_period(
@@ -2595,7 +2745,12 @@ def reports_operational_page(
         if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
         else None,
     )
-    report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+    lazy_load = definition.slug in _LAZY_AGENT_REPORTS
+    report = (
+        None
+        if lazy_load
+        else crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+    )
     context = _base_context(
         request,
         db,
@@ -2606,9 +2761,28 @@ def reports_operational_page(
     context.update(
         {
             "report": report,
+            "definition": definition,
             "date_from": date_from or "",
             "date_to": date_to or "",
             "search": search or "",
+            "range_value": period.preset.value if period else range_value,
+            "lazy_load": lazy_load,
+            "lazy_data_url": (
+                "/admin/reports/operational/"
+                f"{report_slug}/data?"
+                + _agent_report_url_params(
+                    period=period,
+                    search=search
+                    if definition.slug
+                    == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
+                    else None,
+                    page=page,
+                    per_page=per_page,
+                )
+                if period
+                else None
+            ),
+            "per_page": per_page,
         }
     )
     return templates.TemplateResponse("admin/reports/operational.html", context)

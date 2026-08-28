@@ -17,6 +17,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -70,6 +71,75 @@ class CrmReportSlug(StrEnum):
     SERVICE_QUALITY = "service-quality"
     REVENUE_SERVICE = "revenue-service"
     PROJECT_TASK_PERFORMANCE = "project-task-performance"
+
+
+class AgentPerformancePeriodPreset(StrEnum):
+    TODAY = "today"
+    WEEK = "week"
+    MONTH = "month"
+    CUSTOM = "custom"
+
+
+class CrmReportQueryError(ValueError):
+    """Transport-neutral validation failure for a CRM report query."""
+
+    code = "ui.crm_operational_reports.invalid_query"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPerformancePeriod:
+    preset: AgentPerformancePeriodPreset
+    start_date: date
+    end_date: date
+    start_at: datetime
+    end_at: datetime
+    timezone_name: str = "Africa/Lagos"
+
+
+def resolve_agent_performance_period(
+    *,
+    preset: AgentPerformancePeriodPreset,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    now: datetime | None = None,
+) -> AgentPerformancePeriod:
+    """Resolve inclusive Lagos calendar dates to UTC half-open instants."""
+
+    zone = ZoneInfo("Africa/Lagos")
+    clock = (now or datetime.now(UTC)).astimezone(zone)
+    today = clock.date()
+    if preset is AgentPerformancePeriodPreset.TODAY:
+        start_date = end_date = today
+    elif preset is AgentPerformancePeriodPreset.WEEK:
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+    elif preset is AgentPerformancePeriodPreset.MONTH:
+        start_date = today.replace(day=1)
+        next_month = (
+            start_date.replace(year=start_date.year + 1, month=1)
+            if start_date.month == 12
+            else start_date.replace(month=start_date.month + 1)
+        )
+        end_date = next_month - timedelta(days=1)
+    else:
+        if date_from is None or date_to is None:
+            raise CrmReportQueryError(
+                "Custom agent performance periods require both dates."
+            )
+        if date_from > date_to:
+            raise CrmReportQueryError("From date cannot be after To date.")
+        start_date = date_from
+        end_date = date_to
+
+    start_local = datetime.combine(start_date, time.min, zone)
+    end_local = datetime.combine(end_date + timedelta(days=1), time.min, zone)
+    return AgentPerformancePeriod(
+        preset=preset,
+        start_date=start_date,
+        end_date=end_date,
+        start_at=start_local.astimezone(UTC),
+        end_at=end_local.astimezone(UTC),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +357,20 @@ def _text(value: object) -> str:
         return value.isoformat()
     raw = getattr(value, "value", value)
     return str(raw).replace("_", " ").title() if raw != "" else "—"
+
+
+def _duration_label(value: float | None) -> str:
+    if value is None:
+        return "â€”"
+    if value < 60:
+        return f"{value:.0f}s"
+    minutes = value / 60
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    hours = minutes / 60
+    if hours < 24:
+        return f"{hours:.1f}h"
+    return f"{hours / 24:.1f}d"
 
 
 def _subscriber_name(subscriber: Subscriber | None) -> str:
@@ -829,75 +913,91 @@ def _crm_performance(db: Session, query: CrmReportQuery) -> CrmReportPage:
 def _agent_performance(
     db: Session, query: CrmReportQuery, *, personal: bool = False
 ) -> CrmReportPage:
-    if personal and query.person_id is None:
-        report: tuple[team_inbox_metrics.InboxAgentPerformanceReportRow, ...] = ()
-        projection = None
-    else:
-        projection = team_inbox_metrics.agent_performance_page(
-            db,
-            query=team_inbox_metrics.InboxPerformanceQuery(
-                period_start_at=query.start_at,
-                period_end_at=query.end_at,
-                person_id=query.person_id if personal else None,
-                search=query.search,
-                limit=None,
-            ),
-        )
-        report = projection.rows
-    rows = [
+    period = resolve_agent_performance_period(
+        preset=(
+            AgentPerformancePeriodPreset.CUSTOM
+            if query.date_from is not None or query.date_to is not None
+            else AgentPerformancePeriodPreset.MONTH
+        ),
+        date_from=query.date_from,
+        date_to=query.date_to,
+    )
+    scoped_person_id = query.person_id
+    if personal and scoped_person_id is None:
+        scoped_person_id = UUID(int=0)
+    analytics = team_inbox_metrics.agent_performance_analytics(
+        db,
+        query=team_inbox_metrics.InboxAgentPerformanceQuery(
+            start_at=period.start_at,
+            end_at=period.end_at,
+            page=query.page,
+            per_page=query.per_page,
+            person_id=scoped_person_id if personal else None,
+            search=query.search if not personal else None,
+        ),
+    )
+    rows = tuple(
         (
-            str(item.person_id),
+            item.agent_name,
             item.service_team_name,
-            str(item.metrics.active_assignment_count),
-            str(item.metrics.handled_conversation_count),
-            str(item.metrics.resolved_conversation_count),
-            _text(item.metrics.average_first_response_seconds),
-            _text(item.metrics.average_queue_wait_seconds),
+            str(item.assigned_conversation_count),
+            str(item.resolved_conversation_count),
+            str(item.active_assignment_count),
+            _duration_label(item.average_resolution_seconds),
+            _duration_label(item.average_first_response_seconds),
         )
-        for item in report
-    ]
+        for item in analytics.rows
+    )
     definition = REPORT_DEFINITIONS[
         CrmReportSlug.MY_PERFORMANCE if personal else CrmReportSlug.AGENT_PERFORMANCE
     ]
-    period_note = (
-        ""
-        if projection is None
-        else (
-            " Conversation cohort is bounded to "
-            f"{projection.window.start_at.date().isoformat()} through "
-            f"{(projection.window.end_at - timedelta(microseconds=1)).date()}."
-        )
-    )
+    scope_note = " Metrics are restricted to the signed-in agent." if personal else ""
     note = (
-        "Metrics are restricted to the signed-in agent." + period_note
-        if personal
-        else period_note.strip()
+        f"Live authoritative Inbox events for {period.start_date:%d %b %Y} to "
+        f"{period.end_date:%d %b %Y} (Africa/Lagos). Resolutions are credited "
+        "only when the resolving agent had the matching assignment."
+        f"{scope_note}"
     )
-    return _page(
-        definition,
-        query,
-        (
-            CrmReportMetric("Agents", str(len({item.person_id for item in report}))),
+    return CrmReportPage(
+        definition=definition,
+        metrics=(
+            CrmReportMetric("Agents", str(analytics.summary.agent_count)),
             CrmReportMetric(
-                "Handled",
-                str(sum(item.metrics.handled_conversation_count for item in report)),
+                "Chats assigned",
+                str(analytics.summary.assigned_conversation_count),
+                "Assigned during the selected period",
             ),
             CrmReportMetric(
-                "Resolved",
-                str(sum(item.metrics.resolved_conversation_count for item in report)),
+                "Chats resolved",
+                str(analytics.summary.resolved_conversation_count),
+                "Agent resolutions during the selected period",
+            ),
+            CrmReportMetric(
+                "Active now", str(analytics.summary.active_assignment_count)
+            ),
+            CrmReportMetric(
+                "Avg resolution",
+                _duration_label(analytics.summary.average_resolution_seconds),
+            ),
+            CrmReportMetric(
+                "Avg first response",
+                _duration_label(analytics.summary.average_first_response_seconds),
             ),
         ),
-        (
+        columns=(
             "Agent",
             "Team",
-            "Active assignments",
-            "Handled",
+            "Assigned",
             "Resolved",
-            "Avg first response (s)",
-            "Avg queue wait (s)",
+            "Active now",
+            "Avg resolution",
+            "Avg first response",
         ),
-        rows,
-        note,
+        rows=rows,
+        total=analytics.total,
+        page=analytics.page,
+        per_page=analytics.per_page,
+        note=note,
     )
 
 

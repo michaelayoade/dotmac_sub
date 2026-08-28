@@ -110,7 +110,10 @@ DOMAIN = DomainSOT(
                         name="typed CRM report query",
                         owner="ui.list_contracts",
                         kind=AuthorityKind.CONTROL_INPUT,
-                        source="inclusive dates, pagination, and personal-agent scope",
+                        source=(
+                            "inclusive dates, Africa/Lagos day/week/month/custom "
+                            "periods, bounded pagination, search, and personal-agent scope"
+                        ),
                     ),
                     AuthorityInput(
                         name="authorized report scope",
@@ -202,7 +205,11 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
-                    boundary="The adapter supplies a read session; the projection never flushes or commits.",
+                    boundary=(
+                        "The adapter supplies a read session; agent analytics use "
+                        "bounded grouped SQL reads and the projection never flushes "
+                        "or commits."
+                    ),
                     locking="Committed operational facts require no mutation lock.",
                     idempotency="The same committed facts and typed query produce the same report rows.",
                     retries="Bounded report reads and CSV serialization are safe to retry.",
@@ -220,7 +227,10 @@ DOMAIN = DomainSOT(
                     state=AuthorityMigrationState.SHADOWING,
                     old_owner="dotmac_crm report projection routes and templates",
                     new_owner="ui.crm_operational_reports",
-                    verification="typed owner, route, permission, render, empty-state, pagination, and export tests",
+                    verification=(
+                        "typed owner, route, permission, lazy render, raw-event "
+                        "metric parity, empty/error state, SQL pagination, and export tests"
+                    ),
                     cutover_gate="report-by-report comparison against the retained CRM surface",
                     fallback_retirement="CRM routes retire only under the CRM web retirement gate",
                 ),
@@ -231,7 +241,35 @@ DOMAIN = DomainSOT(
                     "docs/designs/CRM_REPORT_DATA_FLOW_GUIDE.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                 ),
-                test_refs=("tests/test_crm_reporting.py",),
+                test_refs=(
+                    "tests/test_crm_reporting.py",
+                    "tests/test_team_inbox_metrics.py",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="bounded live Inbox agent performance analytics",
+                        input_names=("typed CRM report query", "native inbox records"),
+                        writer="ui.crm_operational_reports",
+                        freshness=(
+                            "Calculated on demand from committed assignment, message, "
+                            "and status-transition evidence; each response identifies "
+                            "its generation time and Africa/Lagos period."
+                        ),
+                        stale_behavior=(
+                            "No result cache is authoritative; a failed read renders "
+                            "unavailable and never reuses or estimates prior values."
+                        ),
+                        drift_signal=(
+                            "Per-agent assigned, resolved, resolution-duration, or "
+                            "first-response totals differ from the same bounded raw events."
+                        ),
+                        rebuild_operation=(
+                            "Re-run the idempotent typed query for the exact period, "
+                            "search, personal scope, and page."
+                        ),
+                        repair_owner="communications.team_inbox_projection",
+                    ),
+                ),
             ),
         ),
         SOTService(
