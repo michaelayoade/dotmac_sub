@@ -264,20 +264,10 @@ def _ensure_identity_available(
             "identity_conflict",
             "Username is already assigned to another local principal.",
         )
-    if (
-        db.execute(
-            select(Subscriber.id).where(func.lower(Subscriber.email) == email)
-        ).first()
-        is not None
-        or db.execute(
-            select(ResellerUser.id).where(func.lower(ResellerUser.email) == email)
-        ).first()
-        is not None
-    ):
-        raise _error(
-            "identity_conflict",
-            "Email is already assigned to another portal principal.",
-        )
+    # Email is contact information, not a local-login identity. A customer and
+    # a reseller principal may legitimately use the same mailbox; their
+    # credentials remain unambiguous through the globally unique username
+    # above. Do not infer an identity conflict from contact data.
 
 
 def _locked_reseller(db: Session, reseller_id: UUID) -> Reseller:

@@ -10,10 +10,11 @@ from typing import cast
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import Invoice, Payment, PaymentStatus
+from app.models.auth import UserCredential
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
@@ -62,6 +63,19 @@ class ResellerCatalogOfferOption:
     @property
     def is_restricted(self) -> bool:
         return self.active_assignment_count > 0
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerPortalUserView:
+    """Operator-facing identity and access state for one reseller principal."""
+
+    principal_type: str
+    principal_id: UUID
+    display_name: str
+    email: str | None
+    username: str | None
+    is_active: bool
+    invite_pending: bool
 
 
 def _roles_for_form(db: Session) -> list[Role]:
@@ -263,7 +277,7 @@ def parse_create_user_payload(form) -> dict[str, str | None] | None:
         "first_name": form_str("user_first_name").strip(),
         "last_name": form_str("user_last_name").strip(),
         "email": form_str("user_email").strip(),
-        "username": form_str("user_email").strip() or None,
+        "username": form_str("user_username").strip() or None,
         "role": form_str("user_role").strip() or None,
     }
 
@@ -274,14 +288,10 @@ def validate_create_user_payload(
     if not user_payload:
         return None
     missing = [
-        key
-        for key, value in user_payload.items()
-        if key not in {"role", "username"} and not value
+        key for key, value in user_payload.items() if key != "role" and not value
     ]
     if missing:
-        return (
-            "Provide first name, last name, and email to create a reseller portal user."
-        )
+        return "Provide first name, last name, email, and username to create a reseller portal user."
     return None
 
 
@@ -507,14 +517,84 @@ def get_reseller_detail_context(
         key = getattr(status, "value", str(status))
         subscriber_status_counts[key] = subscriber_status_counts.get(key, 0) + 1
 
-    reseller_portal_users = int(
-        db.scalar(
-            select(func.count(Subscriber.id))
-            .where(Subscriber.reseller_id == reseller_uuid)
-            .where(Subscriber.user_type == UserType.reseller)
-        )
-        or 0
+    portal_user_links = list(
+        db.scalars(
+            select(ResellerUser)
+            .where(ResellerUser.reseller_id == reseller_uuid)
+            .order_by(ResellerUser.created_at.asc())
+        ).all()
     )
+    legacy_principal_ids = [
+        link.subscriber_id
+        for link in portal_user_links
+        if link.subscriber_id is not None
+    ]
+    first_class_principal_ids = [
+        link.id for link in portal_user_links if link.subscriber_id is None
+    ]
+    legacy_principals = {
+        subscriber.id: subscriber
+        for subscriber in db.scalars(
+            select(Subscriber).where(
+                Subscriber.id.in_(legacy_principal_ids or [UUID(int=0)])
+            )
+        ).all()
+    }
+    credentials = list(
+        db.scalars(
+            select(UserCredential).where(
+                or_(
+                    UserCredential.subscriber_id.in_(
+                        legacy_principal_ids or [UUID(int=0)]
+                    ),
+                    UserCredential.reseller_user_id.in_(
+                        first_class_principal_ids or [UUID(int=0)]
+                    ),
+                )
+            )
+        ).all()
+    )
+    credential_by_principal: dict[UUID, UserCredential] = {}
+    for credential in credentials:
+        credential_principal_id = (
+            credential.reseller_user_id or credential.subscriber_id
+        )
+        if credential_principal_id is not None:
+            credential_by_principal[credential_principal_id] = credential
+    portal_user_views: list[ResellerPortalUserView] = []
+    for link in portal_user_links:
+        if link.subscriber_id is None:
+            principal_type = "reseller_user"
+            principal_id = link.id
+            display_name = link.full_name or "Unnamed reseller user"
+            email = link.email
+        else:
+            principal = legacy_principals.get(link.subscriber_id)
+            if principal is None:
+                continue
+            principal_type = "subscriber"
+            principal_id = principal.id
+            display_name = principal.display_name or (
+                f"{principal.first_name} {principal.last_name}".strip()
+            )
+            email = principal.email
+        credential = credential_by_principal.get(principal_id)
+        portal_user_views.append(
+            ResellerPortalUserView(
+                principal_type=principal_type,
+                principal_id=principal_id,
+                display_name=display_name or "Unnamed reseller user",
+                email=email,
+                username=credential.username if credential is not None else None,
+                is_active=bool(
+                    link.is_active and (credential is None or credential.is_active)
+                ),
+                invite_pending=bool(
+                    credential is not None and credential.must_change_password
+                ),
+            )
+        )
+    reseller_portal_users = len(portal_user_views)
 
     active_services = 0
     pending_services = 0
@@ -675,6 +755,7 @@ def get_reseller_detail_context(
         "reseller_subscribers": reseller_subscribers,
         "reseller_subscribers_total": total_subscribers,
         "reseller_portal_users": reseller_portal_users,
+        "reseller_portal_user_views": tuple(portal_user_views),
         "subscriber_status_counts": subscriber_status_counts,
         "active_services": active_services,
         "pending_services": pending_services,

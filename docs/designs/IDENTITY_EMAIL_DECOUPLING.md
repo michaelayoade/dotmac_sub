@@ -63,6 +63,14 @@ Net effect: a reseller may onboard 500 customers all using `owner@abcnetworks.co
 Each is a distinct `Subscriber` (distinct `id`, distinct `subscriber_number`, distinct login
 credential where one exists). Email becomes descriptive, not identifying.
 
+The same rule applies across customer and reseller portal principals: an
+existing `Subscriber.email` never blocks a reseller portal principal. A local
+`UserCredential.username` remains globally unique, so the reseller onboarding
+form collects a distinct username instead of deriving one from the contact
+email. Reseller-detail access evidence lists the exact linked portal
+principals and their local credential state; matching email alone is never
+treated as an identity link.
+
 ---
 
 ## 3. Scope
