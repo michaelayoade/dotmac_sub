@@ -107,7 +107,7 @@ jobs:
           docker run --rm $COMMON dotmac-sub:e2e sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $COMMON dotmac-sub:e2e sh -c \
-            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
           docker run --rm $COMMON dotmac-sub:e2e alembic upgrade heads
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_rbac
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_admin \
