@@ -2154,6 +2154,10 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
         except Exception:
             device_login_tier = None
 
+    success: str | None = None
+    if request.query_params.get("saved") == "profile":
+        success = "User profile updated successfully."
+
     ctx: dict = {
         "request": request,
         "user": edit_data["user"],
@@ -2171,6 +2175,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
         "active_menu": "system",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "success": success,
     }
     if can_manage_device_login:
         ctx["device_login_tier"] = device_login_tier
@@ -2256,10 +2261,14 @@ def user_edit_submit(
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 "error": message,
+                "success": None,
             },
             status_code=400,
         )
-    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/system/users/{user_id}/edit?saved=profile",
+        status_code=303,
+    )
 
 
 @router.post(

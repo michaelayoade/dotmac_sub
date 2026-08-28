@@ -1,5 +1,6 @@
 """Typed adapter coverage for administrative staff recovery routes."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -9,15 +10,17 @@ import app.web.admin as web_admin
 from app.services import staff_provisioning, web_system_user_edit
 from app.web.admin import system as admin_system
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-def _request(path: str) -> Request:
+
+def _request(path: str, *, query_string: bytes = b"") -> Request:
     request = Request(
         {
             "type": "http",
             "method": "POST",
             "path": path,
             "headers": [],
-            "query_string": b"",
+            "query_string": query_string,
             "server": ("testserver", 80),
             "client": ("testclient", 50000),
             "scheme": "http",
@@ -159,3 +162,96 @@ def test_staff_edit_page_carries_field_technician_access(monkeypatch) -> None:
     assert captured["template"] == "admin/system/users/edit.html"
     assert context["field_technician_access"] is True
     assert context["field_technician_profile_id"] == profile_id
+
+
+def test_staff_edit_page_shows_profile_save_success(monkeypatch) -> None:
+    user_id = uuid4()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        admin_system.web_system_profiles_service,
+        "get_user_edit_data",
+        lambda _db, _user_id: {
+            "user": SimpleNamespace(id=user_id),
+            "roles": [],
+            "current_role_ids": set(),
+            "managed_role_ids": set(),
+            "all_permissions": [],
+            "direct_permission_ids": set(),
+            "field_technician_profile_id": None,
+            "field_technician_access": False,
+        },
+    )
+    monkeypatch.setattr(admin_system, "_system_user_audit_items", lambda *_a: [])
+    monkeypatch.setattr(web_admin, "get_sidebar_stats", lambda _db: {})
+
+    def template_response(template, context, status_code=200):
+        captured["template"] = template
+        captured["context"] = context
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(admin_system.templates, "TemplateResponse", template_response)
+    request = _request(
+        f"/admin/system/users/{user_id}/edit", query_string=b"saved=profile"
+    )
+    request.state.auth = {}
+
+    response = admin_system.user_edit(request, str(user_id), db=object())
+
+    context = captured["context"]
+    assert response.status_code == 200
+    assert captured["template"] == "admin/system/users/edit.html"
+    assert context["success"] == "User profile updated successfully."
+
+
+def test_staff_edit_submit_redirects_back_with_success(monkeypatch) -> None:
+    user_id = uuid4()
+    captured: list[staff_provisioning.UpdateStaffIdentityCommand] = []
+
+    def update_staff_identity(_db, command):
+        captured.append(command)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        admin_system.staff_provisioning_service,
+        "update_staff_identity",
+        update_staff_identity,
+    )
+    monkeypatch.setattr(
+        admin_system.web_system_common_service,
+        "is_admin_request",
+        lambda _request: True,
+    )
+
+    response = admin_system.user_edit_submit(
+        _request(f"/admin/system/users/{user_id}/edit"),
+        str(user_id),
+        form_data={
+            "first_name": "Field",
+            "last_name": "Tech",
+            "display_name": "Field Tech",
+            "email": "field.tech@example.com",
+            "phone": "",
+            "field_technician_access": "on",
+        },
+        db=object(),
+    )
+
+    assert response.status_code == 303
+    assert (
+        response.headers["location"]
+        == f"/admin/system/users/{user_id}/edit?saved=profile"
+    )
+    assert captured[0].field_technician_access is True
+
+
+def test_staff_edit_template_shows_field_service_access_status() -> None:
+    template = (
+        PROJECT_ROOT / "templates" / "admin" / "system" / "users" / "edit.html"
+    ).read_text()
+
+    assert "Field Service App:" in template
+    assert "field_technician_access" in template
+    assert "Enabled" in template
+    assert "Not enabled" in template
+    assert "success" in template
