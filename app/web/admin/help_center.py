@@ -158,19 +158,20 @@ def help_center(
         (item for item in articles if item.slug == article.strip()),
         articles[0] if articles else None,
     )
+    context: dict[str, object] = {
+        "request": request,
+        "active_page": "help-center",
+        "active_menu": "help",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "articles": articles,
+        "grouped_articles": _group_articles(articles),
+        "selected_article": selected_article,
+        "categories": sorted({article.category for article in ARTICLES}),
+        "query": q,
+        "selected_category": selected,
+    }
     return templates.TemplateResponse(
         "admin/help/index.html",
-        {
-            "request": request,
-            "active_page": "help-center",
-            "active_menu": "help",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "articles": articles,
-            "grouped_articles": _group_articles(articles),
-            "selected_article": selected_article,
-            "categories": sorted({article.category for article in ARTICLES}),
-            "query": q,
-            "selected_category": selected,
-        },
+        context,
     )
