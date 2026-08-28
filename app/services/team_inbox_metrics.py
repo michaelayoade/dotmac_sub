@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from statistics import mean
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import case, distinct, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
@@ -298,6 +298,429 @@ def _has_outbound_after(messages: list[InboxMessage], at: datetime) -> bool:
     )
 
 
+def _message_time_sql():
+    return func.coalesce(
+        InboxMessage.received_at, InboxMessage.sent_at, InboxMessage.created_at
+    )
+
+
+def _seconds_sql(db: Session, end, start):
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        return (func.julianday(end) - func.julianday(start)) * 86400.0
+    return func.extract("epoch", end - start)
+
+
+def _numeric(value: object) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _uuid_value(value: object) -> UUID:
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
+def _team_performance_by_team(
+    db: Session,
+    team_ids: tuple[UUID, ...],
+    *,
+    response_sla_seconds_by_team: dict[UUID, int | None],
+    now: datetime | None = None,
+) -> dict[UUID, InboxTeamPerformanceMetrics]:
+    now_utc = _as_utc(now) or datetime.now(UTC)
+    empty = {
+        team_id: InboxTeamPerformanceMetrics(
+            service_team_id=str(team_id),
+            conversation_count=0,
+            open_count=0,
+            unassigned_open_count=0,
+            assigned_open_count=0,
+            inbound_message_count=0,
+            outbound_message_count=0,
+            responded_count=0,
+            response_sla_breached_count=0,
+            average_first_response_seconds=None,
+            average_queue_wait_seconds=None,
+        )
+        for team_id in team_ids
+    }
+    if not team_ids:
+        return empty
+
+    links = (
+        select(
+            InboxConversationTeam.service_team_id.label("team_id"),
+            InboxConversationTeam.conversation_id.label("conversation_id"),
+            InboxConversation.status.label("status"),
+            InboxConversation.first_message_at.label("first_message_at"),
+        )
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxConversationTeam.conversation_id,
+        )
+        .where(InboxConversationTeam.service_team_id.in_(team_ids))
+        .where(InboxConversationTeam.is_active.is_(True))
+        .subquery()
+    )
+    conversation_scope = select(
+        distinct(links.c.conversation_id).label("conversation_id")
+    ).subquery()
+
+    queue_wait = _seconds_sql(
+        db,
+        InboxConversationAssignment.assigned_at,
+        links.c.first_message_at,
+    )
+    conversation_rows = db.execute(
+        select(
+            links.c.team_id,
+            func.count(links.c.conversation_id).label("conversation_count"),
+            func.sum(
+                case(
+                    (links.c.status != InboxConversationStatus.resolved.value, 1),
+                    else_=0,
+                )
+            ).label("open_count"),
+            func.sum(
+                case(
+                    (
+                        (links.c.status != InboxConversationStatus.resolved.value)
+                        & (InboxConversationAssignment.id.is_not(None)),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("assigned_open_count"),
+            func.avg(queue_wait).label("average_queue_wait_seconds"),
+        )
+        .select_from(
+            links.outerjoin(
+                InboxConversationAssignment,
+                (
+                    InboxConversationAssignment.conversation_id
+                    == links.c.conversation_id
+                )
+                & (InboxConversationAssignment.is_active.is_(True)),
+            )
+        )
+        .group_by(links.c.team_id)
+    ).all()
+    conversation_values: dict[UUID, dict[str, float | int | None]] = {}
+    for row in conversation_rows:
+        conversation_count = int(row.conversation_count or 0)
+        open_count = int(row.open_count or 0)
+        assigned_open_count = int(row.assigned_open_count or 0)
+        conversation_values[_uuid_value(row.team_id)] = {
+            "conversation_count": conversation_count,
+            "open_count": open_count,
+            "assigned_open_count": assigned_open_count,
+            "unassigned_open_count": open_count - assigned_open_count,
+            "average_queue_wait_seconds": _numeric(row.average_queue_wait_seconds),
+        }
+
+    message_rows = db.execute(
+        select(
+            links.c.team_id,
+            func.sum(
+                case(
+                    (InboxMessage.direction == InboxMessageDirection.inbound.value, 1),
+                    else_=0,
+                )
+            ).label("inbound_count"),
+            func.sum(
+                case(
+                    (InboxMessage.direction == InboxMessageDirection.outbound.value, 1),
+                    else_=0,
+                )
+            ).label("outbound_count"),
+        )
+        .select_from(
+            links.join(
+                InboxMessage,
+                InboxMessage.conversation_id == links.c.conversation_id,
+            )
+        )
+        .group_by(links.c.team_id)
+    ).all()
+    message_values = {
+        _uuid_value(row.team_id): {
+            "inbound_message_count": int(row.inbound_count or 0),
+            "outbound_message_count": int(row.outbound_count or 0),
+        }
+        for row in message_rows
+    }
+
+    message_time = _message_time_sql()
+    first_inbound = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.min(message_time).label("first_inbound_at"),
+        )
+        .join(
+            conversation_scope,
+            conversation_scope.c.conversation_id == InboxMessage.conversation_id,
+        )
+        .where(InboxMessage.direction == InboxMessageDirection.inbound.value)
+        .group_by(InboxMessage.conversation_id)
+        .subquery()
+    )
+    outbound_time = _message_time_sql()
+    first_outbound = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.min(outbound_time).label("first_outbound_at"),
+        )
+        .join(
+            first_inbound,
+            first_inbound.c.conversation_id == InboxMessage.conversation_id,
+        )
+        .where(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .where(outbound_time >= first_inbound.c.first_inbound_at)
+        .group_by(InboxMessage.conversation_id)
+        .subquery()
+    )
+    response_seconds = _seconds_sql(
+        db,
+        first_outbound.c.first_outbound_at,
+        first_inbound.c.first_inbound_at,
+    )
+    pending_seconds = _seconds_sql(db, literal(now_utc), first_inbound.c.first_inbound_at)
+    response_rows = db.execute(
+        select(
+            links.c.team_id,
+            first_outbound.c.first_outbound_at,
+            response_seconds.label("response_seconds"),
+            pending_seconds.label("pending_seconds"),
+        )
+        .select_from(
+            links.join(
+                first_inbound,
+                first_inbound.c.conversation_id == links.c.conversation_id,
+            ).outerjoin(
+                first_outbound,
+                first_outbound.c.conversation_id == links.c.conversation_id,
+            )
+        )
+    ).all()
+
+    response_values_by_team: dict[UUID, list[float]] = {
+        team_id: [] for team_id in team_ids
+    }
+    response_breaches_by_team = dict.fromkeys(team_ids, 0)
+    for row in response_rows:
+        team_id = _uuid_value(row.team_id)
+        sla = response_sla_seconds_by_team.get(team_id)
+        if row.first_outbound_at is not None:
+            value = float(row.response_seconds or 0)
+            response_values_by_team[team_id].append(value)
+            if sla is not None and value > sla:
+                response_breaches_by_team[team_id] += 1
+        elif (
+            sla is not None
+            and row.pending_seconds is not None
+            and float(row.pending_seconds) > sla
+        ):
+            response_breaches_by_team[team_id] += 1
+
+    return {
+        team_id: InboxTeamPerformanceMetrics(
+            service_team_id=str(team_id),
+            conversation_count=int(
+                conversation_values.get(team_id, {}).get("conversation_count") or 0
+            ),
+            open_count=int(conversation_values.get(team_id, {}).get("open_count") or 0),
+            unassigned_open_count=int(
+                conversation_values.get(team_id, {}).get("unassigned_open_count") or 0
+            ),
+            assigned_open_count=int(
+                conversation_values.get(team_id, {}).get("assigned_open_count") or 0
+            ),
+            inbound_message_count=int(
+                message_values.get(team_id, {}).get("inbound_message_count") or 0
+            ),
+            outbound_message_count=int(
+                message_values.get(team_id, {}).get("outbound_message_count") or 0
+            ),
+            responded_count=len(response_values_by_team[team_id]),
+            response_sla_breached_count=response_breaches_by_team[team_id],
+            average_first_response_seconds=_avg(response_values_by_team[team_id]),
+            average_queue_wait_seconds=conversation_values.get(team_id, {}).get(
+                "average_queue_wait_seconds"
+            ),
+        )
+        for team_id in team_ids
+    }
+
+
+def _assignment_values_by_agent(
+    db: Session,
+    team_ids: tuple[UUID, ...],
+) -> dict[tuple[UUID, UUID], dict[str, float | int | None]]:
+    if not team_ids:
+        return {}
+
+    queue_wait = _seconds_sql(
+        db,
+        InboxConversationAssignment.assigned_at,
+        InboxConversation.first_message_at,
+    )
+    resolved_conversation_id = case(
+        (
+            InboxConversation.status == InboxConversationStatus.resolved.value,
+            InboxConversationAssignment.conversation_id,
+        ),
+        else_=None,
+    )
+    rows = db.execute(
+        select(
+            InboxConversationAssignment.service_team_id.label("team_id"),
+            InboxConversationAssignment.person_id.label("person_id"),
+            func.sum(
+                case((InboxConversationAssignment.is_active.is_(True), 1), else_=0)
+            ).label("active_assignment_count"),
+            func.count(
+                distinct(InboxConversationAssignment.conversation_id)
+            ).label("handled_conversation_count"),
+            func.count(distinct(resolved_conversation_id)).label(
+                "resolved_conversation_count"
+            ),
+            func.avg(queue_wait).label("average_queue_wait_seconds"),
+        )
+        .select_from(InboxConversationAssignment)
+        .outerjoin(
+            InboxConversation,
+            InboxConversation.id == InboxConversationAssignment.conversation_id,
+        )
+        .where(InboxConversationAssignment.service_team_id.in_(team_ids))
+        .group_by(
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+        )
+    ).all()
+
+    return {
+        (_uuid_value(row.team_id), _uuid_value(row.person_id)): {
+            "active_assignment_count": int(row.active_assignment_count or 0),
+            "handled_conversation_count": int(row.handled_conversation_count or 0),
+            "resolved_conversation_count": int(row.resolved_conversation_count or 0),
+            "average_queue_wait_seconds": _numeric(row.average_queue_wait_seconds),
+        }
+        for row in rows
+    }
+
+
+def _human_response_seconds_by_agent(
+    db: Session,
+    team_ids: tuple[UUID, ...],
+) -> dict[tuple[UUID, UUID], list[float]]:
+    if not team_ids:
+        return {}
+
+    links = (
+        select(
+            InboxConversationTeam.service_team_id.label("team_id"),
+            InboxConversationTeam.conversation_id.label("conversation_id"),
+        )
+        .where(InboxConversationTeam.service_team_id.in_(team_ids))
+        .where(InboxConversationTeam.is_active.is_(True))
+        .subquery()
+    )
+    conversation_scope = select(
+        distinct(links.c.conversation_id).label("conversation_id")
+    ).subquery()
+
+    message_time = _message_time_sql()
+    first_inbound = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.min(message_time).label("first_inbound_at"),
+        )
+        .join(
+            conversation_scope,
+            conversation_scope.c.conversation_id == InboxMessage.conversation_id,
+        )
+        .where(InboxMessage.direction == InboxMessageDirection.inbound.value)
+        .group_by(InboxMessage.conversation_id)
+        .subquery()
+    )
+
+    outbound_time = _message_time_sql()
+    sent_by_person = InboxMessage.metadata_["sent_by_person_id"].as_string()
+    first_human_outbound = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.min(outbound_time).label("first_outbound_at"),
+        )
+        .join(
+            first_inbound,
+            first_inbound.c.conversation_id == InboxMessage.conversation_id,
+        )
+        .where(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .where(sent_by_person.is_not(None))
+        .where(sent_by_person != "")
+        .where(outbound_time >= first_inbound.c.first_inbound_at)
+        .group_by(InboxMessage.conversation_id)
+        .subquery()
+    )
+
+    sender_at_first_response = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.min(InboxMessage.metadata_["sent_by_person_id"].as_string()).label(
+                "person_id"
+            ),
+        )
+        .join(
+            first_human_outbound,
+            (first_human_outbound.c.conversation_id == InboxMessage.conversation_id)
+            & (_message_time_sql() == first_human_outbound.c.first_outbound_at),
+        )
+        .where(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .where(InboxMessage.metadata_["sent_by_person_id"].as_string().is_not(None))
+        .where(InboxMessage.metadata_["sent_by_person_id"].as_string() != "")
+        .group_by(InboxMessage.conversation_id)
+        .subquery()
+    )
+
+    response_seconds = _seconds_sql(
+        db,
+        first_human_outbound.c.first_outbound_at,
+        first_inbound.c.first_inbound_at,
+    )
+    response_rows = db.execute(
+        select(
+            links.c.team_id,
+            sender_at_first_response.c.person_id,
+            response_seconds.label("response_seconds"),
+        )
+        .select_from(
+            links.join(
+                first_inbound,
+                first_inbound.c.conversation_id == links.c.conversation_id,
+            )
+            .join(
+                first_human_outbound,
+                first_human_outbound.c.conversation_id == links.c.conversation_id,
+            )
+            .join(
+                sender_at_first_response,
+                sender_at_first_response.c.conversation_id == links.c.conversation_id,
+            )
+        )
+    ).all()
+
+    values: dict[tuple[UUID, UUID], list[float]] = {}
+    for row in response_rows:
+        try:
+            key = (_uuid_value(row.team_id), _uuid_value(row.person_id))
+        except (TypeError, ValueError):
+            continue
+        if row.response_seconds is not None:
+            values.setdefault(key, []).append(float(row.response_seconds))
+    return values
+
+
 def team_performance_metrics(
     db: Session,
     service_team_id: str | UUID,
@@ -306,102 +729,12 @@ def team_performance_metrics(
     now: datetime | None = None,
 ) -> InboxTeamPerformanceMetrics:
     team_uuid = UUID(str(service_team_id))
-    now_utc = _as_utc(now) or datetime.now(UTC)
-    conversation_ids = _conversation_ids_for_team(db, team_uuid)
-    conversations = (
-        db.query(InboxConversation)
-        .filter(InboxConversation.id.in_(conversation_ids))
-        .all()
-        if conversation_ids
-        else []
-    )
-    messages_by_conversation = _messages_by_conversation(db, conversation_ids)
-    active_assignments = (
-        {
-            row.conversation_id: row
-            for row in db.query(InboxConversationAssignment)
-            .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
-            .filter(InboxConversationAssignment.is_active.is_(True))
-            .all()
-        }
-        if conversation_ids
-        else {}
-    )
-
-    inbound_count = 0
-    outbound_count = 0
-    response_values: list[float] = []
-    queue_wait_values: list[float] = []
-    response_breaches = 0
-
-    for conversation in conversations:
-        messages = messages_by_conversation.get(conversation.id, [])
-        inbound_count += sum(
-            1
-            for message in messages
-            if message.direction == InboxMessageDirection.inbound.value
-        )
-        outbound_count += sum(
-            1
-            for message in messages
-            if message.direction == InboxMessageDirection.outbound.value
-        )
-        response_seconds = _first_response_seconds(messages)
-        if response_seconds is not None:
-            response_values.append(response_seconds)
-            if (
-                response_sla_seconds is not None
-                and response_seconds > response_sla_seconds
-            ):
-                response_breaches += 1
-        elif response_sla_seconds is not None:
-            first_inbound = next(
-                (
-                    message
-                    for message in messages
-                    if message.direction == InboxMessageDirection.inbound.value
-                ),
-                None,
-            )
-            pending_seconds = (
-                _seconds_between(_message_time(first_inbound), now_utc)
-                if first_inbound is not None
-                else None
-            )
-            if pending_seconds is not None and pending_seconds > response_sla_seconds:
-                response_breaches += 1
-
-        assignment = active_assignments.get(conversation.id)
-        if assignment is not None:
-            queue_wait = _seconds_between(
-                conversation.first_message_at, assignment.assigned_at
-            )
-            if queue_wait is not None:
-                queue_wait_values.append(queue_wait)
-
-    open_conversations = [
-        conversation
-        for conversation in conversations
-        if conversation.status != InboxConversationStatus.resolved.value
-    ]
-    assigned_open_count = sum(
-        1
-        for conversation in open_conversations
-        if conversation.id in active_assignments
-    )
-    return InboxTeamPerformanceMetrics(
-        service_team_id=str(team_uuid),
-        conversation_count=len(conversations),
-        open_count=len(open_conversations),
-        unassigned_open_count=len(open_conversations) - assigned_open_count,
-        assigned_open_count=assigned_open_count,
-        inbound_message_count=inbound_count,
-        outbound_message_count=outbound_count,
-        responded_count=len(response_values),
-        response_sla_breached_count=response_breaches,
-        average_first_response_seconds=_avg(response_values),
-        average_queue_wait_seconds=_avg(queue_wait_values),
-    )
+    return _team_performance_by_team(
+        db,
+        (team_uuid,),
+        response_sla_seconds_by_team={team_uuid: response_sla_seconds},
+        now=now,
+    )[team_uuid]
 
 
 def agent_performance_metrics(
@@ -412,69 +745,28 @@ def agent_performance_metrics(
 ) -> InboxAgentPerformanceMetrics:
     team_uuid = UUID(str(service_team_id))
     person_uuid = UUID(str(person_id))
-    assignments = (
-        db.query(InboxConversationAssignment)
-        .filter(InboxConversationAssignment.service_team_id == team_uuid)
-        .filter(InboxConversationAssignment.person_id == person_uuid)
-        .all()
+    key = (team_uuid, person_uuid)
+    assignment_values = _assignment_values_by_agent(db, (team_uuid,)).get(key, {})
+    first_response_values = _human_response_seconds_by_agent(db, (team_uuid,)).get(
+        key, []
     )
-    conversation_ids = [assignment.conversation_id for assignment in assignments]
-    conversations = (
-        {
-            conversation.id: conversation
-            for conversation in db.query(InboxConversation)
-            .filter(InboxConversation.id.in_(conversation_ids))
-            .all()
-        }
-        if conversation_ids
-        else {}
-    )
-    queue_wait_values: list[float] = []
-    for assignment in assignments:
-        conversation = conversations.get(assignment.conversation_id)
-        if conversation is None:
-            continue
-        queue_wait = _seconds_between(
-            conversation.first_message_at, assignment.assigned_at
-        )
-        if queue_wait is not None:
-            queue_wait_values.append(queue_wait)
-
-    first_response_values: list[float] = []
-    team_conversation_ids = _conversation_ids_for_team(db, team_uuid)
-    for messages in _messages_by_conversation(db, team_conversation_ids).values():
-        response = _first_human_response(messages)
-        if response is None:
-            continue
-        first_inbound, first_outbound = response
-        if _sent_by_person_id(first_outbound) != person_uuid:
-            continue
-        response_seconds = _seconds_between(
-            _message_time(first_inbound), _message_time(first_outbound)
-        )
-        if response_seconds is not None:
-            first_response_values.append(response_seconds)
 
     return InboxAgentPerformanceMetrics(
         person_id=str(person_uuid),
         service_team_id=str(team_uuid),
-        active_assignment_count=sum(
-            1 for assignment in assignments if assignment.is_active
+        active_assignment_count=int(
+            assignment_values.get("active_assignment_count") or 0
         ),
-        handled_conversation_count=len(
-            {assignment.conversation_id for assignment in assignments}
+        handled_conversation_count=int(
+            assignment_values.get("handled_conversation_count") or 0
         ),
-        resolved_conversation_count=len(
-            {
-                assignment.conversation_id
-                for assignment in assignments
-                if (conversation := conversations.get(assignment.conversation_id))
-                is not None
-                and conversation.status == InboxConversationStatus.resolved.value
-            }
+        resolved_conversation_count=int(
+            assignment_values.get("resolved_conversation_count") or 0
         ),
         average_first_response_seconds=_avg(first_response_values),
-        average_queue_wait_seconds=_avg(queue_wait_values),
+        average_queue_wait_seconds=assignment_values.get(
+            "average_queue_wait_seconds"
+        ),
     )
 
 
@@ -493,29 +785,28 @@ def team_performance_report(
         db,
         tuple(team.id for team in teams),
     )
-    rows: list[InboxTeamPerformanceReportRow] = []
-    for team in teams:
-        team_sla_seconds = response_sla_seconds_for_team(
-            team,
-            fallback=response_sla_seconds,
+    response_sla_by_team = {
+        team.id: response_sla_seconds_for_team(team, fallback=response_sla_seconds)
+        for team in teams
+    }
+    metrics_by_team = _team_performance_by_team(
+        db,
+        tuple(team.id for team in teams),
+        response_sla_seconds_by_team=response_sla_by_team,
+        now=now,
+    )
+    return [
+        InboxTeamPerformanceReportRow(
+            service_team_id=str(team.id),
+            service_team_name=team.name,
+            service_team_capabilities=tuple(
+                capability.value for capability in capabilities_by_team[team.id]
+            ),
+            response_sla_seconds=response_sla_by_team[team.id],
+            metrics=metrics_by_team[team.id],
         )
-        rows.append(
-            InboxTeamPerformanceReportRow(
-                service_team_id=str(team.id),
-                service_team_name=team.name,
-                service_team_capabilities=tuple(
-                    capability.value for capability in capabilities_by_team[team.id]
-                ),
-                response_sla_seconds=team_sla_seconds,
-                metrics=team_performance_metrics(
-                    db,
-                    team.id,
-                    response_sla_seconds=team_sla_seconds,
-                    now=now,
-                ),
-            )
-        )
-    return rows
+        for team in teams
+    ]
 
 
 def agent_performance_report(
@@ -557,108 +848,35 @@ def agent_performance_report(
         return []
 
     team_ids = tuple({team.id for _member, team, _user in members})
-    assignments = (
-        db.query(InboxConversationAssignment)
-        .filter(InboxConversationAssignment.service_team_id.in_(team_ids))
-        .all()
-    )
-    assignments_by_agent: dict[
-        tuple[UUID, UUID], list[InboxConversationAssignment]
-    ] = {}
-    for assignment in assignments:
-        assignments_by_agent.setdefault(
-            (assignment.service_team_id, assignment.person_id), []
-        ).append(assignment)
-
-    assignment_conversation_ids = {
-        assignment.conversation_id for assignment in assignments
-    }
-    conversations = {
-        conversation.id: conversation
-        for conversation in (
-            db.query(InboxConversation)
-            .filter(InboxConversation.id.in_(assignment_conversation_ids))
-            .all()
-            if assignment_conversation_ids
-            else []
-        )
-    }
-    team_links = (
-        db.query(InboxConversationTeam)
-        .filter(InboxConversationTeam.service_team_id.in_(team_ids))
-        .filter(InboxConversationTeam.is_active.is_(True))
-        .all()
-    )
-    team_conversation_ids: dict[UUID, set[UUID]] = {}
-    for link in team_links:
-        team_conversation_ids.setdefault(link.service_team_id, set()).add(
-            link.conversation_id
-        )
-    message_ids = {
-        conversation_id
-        for conversation_ids in team_conversation_ids.values()
-        for conversation_id in conversation_ids
-    }
-    messages_by_conversation = _messages_by_conversation(db, list(message_ids))
-    response_seconds_by_agent: dict[tuple[UUID, UUID], list[float]] = {}
-    for team_id, conversation_ids in team_conversation_ids.items():
-        for conversation_id in conversation_ids:
-            response = _first_human_response(
-                messages_by_conversation.get(conversation_id, [])
-            )
-            if response is None:
-                continue
-            first_inbound, first_outbound = response
-            person_id = _sent_by_person_id(first_outbound)
-            response_seconds = _seconds_between(
-                _message_time(first_inbound), _message_time(first_outbound)
-            )
-            if person_id is not None and response_seconds is not None:
-                response_seconds_by_agent.setdefault((team_id, person_id), []).append(
-                    response_seconds
-                )
-
+    assignment_values_by_agent = _assignment_values_by_agent(db, team_ids)
+    response_seconds_by_agent = _human_response_seconds_by_agent(db, team_ids)
     capabilities_by_team = service_team_composition.capabilities_by_team(
         db,
         team_ids,
     )
+
     rows: list[InboxAgentPerformanceReportRow] = []
-    for member, team, user in members:
-        agent_assignments = assignments_by_agent.get((team.id, user.id), [])
-        queue_wait_values = [
-            queue_wait
-            for assignment in agent_assignments
-            if (conversation := conversations.get(assignment.conversation_id))
-            is not None
-            and (
-                queue_wait := _seconds_between(
-                    conversation.first_message_at, assignment.assigned_at
-                )
-            )
-            is not None
-        ]
+    for _member, team, user in members:
+        key = (team.id, user.id)
+        assignment_values = assignment_values_by_agent.get(key, {})
         metrics = InboxAgentPerformanceMetrics(
             person_id=str(user.id),
             service_team_id=str(team.id),
-            active_assignment_count=sum(
-                1 for assignment in agent_assignments if assignment.is_active
+            active_assignment_count=int(
+                assignment_values.get("active_assignment_count") or 0
             ),
-            handled_conversation_count=len(
-                {assignment.conversation_id for assignment in agent_assignments}
+            handled_conversation_count=int(
+                assignment_values.get("handled_conversation_count") or 0
             ),
-            resolved_conversation_count=len(
-                {
-                    assignment.conversation_id
-                    for assignment in agent_assignments
-                    if (conversation := conversations.get(assignment.conversation_id))
-                    is not None
-                    and conversation.status == InboxConversationStatus.resolved.value
-                }
+            resolved_conversation_count=int(
+                assignment_values.get("resolved_conversation_count") or 0
             ),
             average_first_response_seconds=_avg(
-                response_seconds_by_agent.get((team.id, user.id), [])
+                response_seconds_by_agent.get(key, [])
             ),
-            average_queue_wait_seconds=_avg(queue_wait_values),
+            average_queue_wait_seconds=assignment_values.get(
+                "average_queue_wait_seconds"
+            ),
         )
         rows.append(
             InboxAgentPerformanceReportRow(
