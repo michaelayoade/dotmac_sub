@@ -536,6 +536,8 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
         assert 'echo "$BOOTSTRAP_DATABASE_URL"' not in workflow_step
 
+    assert f"{dispatcher_bootstrap} --repair" in ci_migration
+
     assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_workflow
