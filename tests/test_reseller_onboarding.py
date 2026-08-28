@@ -20,6 +20,7 @@ from app.services import (
     credential_recovery,
     reseller_onboarding,
     subscriber_assignments,
+    web_admin_resellers,
 )
 from app.services.ephemeral_communication_actions import (
     EPHEMERAL_ACTION_METADATA_KEY,
@@ -316,14 +317,56 @@ def test_invite_materializes_for_exact_reseller_principal(
     assert "in-memory-reseller-capability" not in str(notification.metadata_)
 
 
-def test_identity_conflict_rolls_back_new_reseller(
+def test_shared_subscriber_email_does_not_block_reseller_principal(
     db_session,
     subscriber,
-    legacy_principal_mode,
+    first_class_principal_mode,
 ) -> None:
     subscriber.email = "existing.reseller@example.com"
     db_session.commit()
-    owner, assignment = _contexts("identity-conflict")
+    owner, assignment = _contexts("shared-subscriber-email")
+
+    result = reseller_onboarding.create_reseller(
+        db_session,
+        reseller_onboarding.CreateResellerCommand(
+            context=owner,
+            reseller=ResellerCreate(name="Shared Email Reseller", code="SHARED-EMAIL"),
+            portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                first_name="Reseller",
+                last_name="Owner",
+                email=" Existing.Reseller@Example.com ",
+                username="shared-email-reseller",
+                password="InitialSecret123!",  # noqa: S106 - fixture-only credential
+            ),
+            assignment_context=assignment,
+        ),
+    )
+
+    assert result.principal_type == "reseller_user"
+    assert (
+        db_session.query(ResellerUser)
+        .filter_by(email="existing.reseller@example.com")
+        .count()
+        == 1
+    )
+
+
+def test_existing_local_username_blocks_reseller_principal(
+    db_session,
+    subscriber,
+    first_class_principal_mode,
+) -> None:
+    db_session.add(
+        UserCredential(
+            subscriber_id=subscriber.id,
+            provider=AuthProvider.local,
+            username="existing-local-username",
+            password_hash="fixture-hash",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    owner, assignment = _contexts("username-conflict")
 
     with pytest.raises(reseller_onboarding.ResellerOnboardingError) as captured:
         reseller_onboarding.create_reseller(
@@ -331,13 +374,62 @@ def test_identity_conflict_rolls_back_new_reseller(
             reseller_onboarding.CreateResellerCommand(
                 context=owner,
                 reseller=ResellerCreate(name="Conflict Reseller", code="CONFLICT-RSL"),
-                portal_user=_user(email=" Existing.Reseller@Example.com "),
+                portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                    first_name="Reseller",
+                    last_name="Owner",
+                    email="shared-contact@example.com",
+                    username="existing-local-username",
+                    password="InitialSecret123!",  # noqa: S106 - fixture-only credential
+                ),
                 assignment_context=assignment,
             ),
         )
 
     assert captured.value.code == "auth.reseller_onboarding.identity_conflict"
     assert db_session.query(Reseller).filter_by(code="CONFLICT-RSL").count() == 0
+
+
+def test_reseller_detail_projects_first_class_portal_user(db_session) -> None:
+    reseller = Reseller(name="Portal Evidence Reseller", code="PORTAL-EVIDENCE")
+    db_session.add(reseller)
+    db_session.flush()
+    portal_user = ResellerUser(
+        reseller_id=reseller.id,
+        email="portal.owner@example.com",
+        full_name="Portal Owner",
+        is_active=True,
+    )
+    db_session.add(portal_user)
+    db_session.flush()
+    db_session.add(
+        UserCredential(
+            reseller_user_id=portal_user.id,
+            provider=AuthProvider.local,
+            username="portal-owner",
+            password_hash="fixture-hash",
+            must_change_password=True,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = web_admin_resellers.get_reseller_detail_context(
+        db_session, str(reseller.id)
+    )
+
+    assert context is not None
+    assert context["reseller_portal_users"] == 1
+    assert context["reseller_portal_user_views"] == (
+        web_admin_resellers.ResellerPortalUserView(
+            principal_type="reseller_user",
+            principal_id=portal_user.id,
+            display_name="Portal Owner",
+            email="portal.owner@example.com",
+            username="portal-owner",
+            is_active=True,
+            invite_pending=True,
+        ),
+    )
 
 
 def test_exact_reset_supports_first_class_reseller_user(

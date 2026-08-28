@@ -73,6 +73,7 @@ def _render_detail() -> str:
         subscriptions_total=0,
         open_tickets=0,
         reseller_portal_users=0,
+        reseller_portal_user_views=[],
         explicit_available_offers_total=1,
         reseller_subscribers=[],
         recent_invoices=[],
@@ -126,6 +127,14 @@ def test_invite_user_form_is_exposed_from_reseller_details_header() -> None:
     assert (
         TEMPLATE.count('action="/admin/resellers/{{ reseller.id }}/users/create"') == 1
     )
+    assert 'name="username"' in TEMPLATE
+    assert "The email may be shared with a customer." in TEMPLATE
+
+
+def test_reseller_detail_exposes_portal_access_evidence() -> None:
+    assert "Portal access" in TEMPLATE
+    assert "reseller_portal_user_views" in TEMPLATE
+    assert "Invite pending" in TEMPLATE
 
 
 def test_first_class_reseller_invite_does_not_offer_subscriber_roles() -> None:
