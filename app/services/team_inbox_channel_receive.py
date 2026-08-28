@@ -584,6 +584,12 @@ def _classify_inbound(
         .first()
         is not None
     )
+    active_ai_session = False
+    if not created_conversation and not has_active_assignment:
+        active_ai_session = (
+            ai_conversation_intake.active_session_for_conversation(db, conversation.id)
+            is not None
+        )
     tags_value = (conversation.metadata_ or {}).get("tags")
     tags = (
         tuple(str(item)[:80] for item in tags_value[:10])
@@ -604,6 +610,7 @@ def _classify_inbound(
         ),
         routing_allows_ai=routing_gate.ai_routing_allowed,
         created_conversation=created_conversation,
+        active_ai_session=active_ai_session,
         has_active_assignment=has_active_assignment,
         awaiting_follow_up=awaiting_follow_up,
         follow_up_count=follow_up_count,

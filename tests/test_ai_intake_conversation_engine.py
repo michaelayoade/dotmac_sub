@@ -210,6 +210,83 @@ def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
     assert second.action == "handoff"
 
 
+def test_billing_issue_requests_account_identifier_before_handoff(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "permitted_identifiers": ["portal_id"],
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "handoff_after_classification": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Why are you suspending my office account again?",
+        classification=_classification(
+            intent=AiIntakeIntent.billing_issue,
+            category=AiIntakeCategory.other_billing_issue,
+        ),
+    )
+
+    assert decision.action == "respond"
+    assert "Portal ID" in (decision.response_text or "")
+    assert decision.metadata["reason"] == "missing_customer_identifier"
+    assert decision.state.collected_facts["account_status_problem"] is True
+    assert decision.state.collected_facts["organization_account"] is True
+    assert decision.state.handoff_status == "not_requested"
+
+
+def test_identifier_prompt_retries_when_customer_replies_without_identifier(
+    db_session,
+):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 1,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Please can you check our internet is very poor.",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="\U0001f446",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "missing_customer_identifier"
+    assert second.action == "respond"
+    assert second.metadata["reason"] == "identifier_reply_missing_value"
+    assert "registered phone number" in (second.response_text or "")
+    assert second.state.handoff_status == "not_requested"
+    assert second.state.collected_facts["missing_identifier_retry_count"] == 1
+
+
 def test_unlinked_customer_portal_id_does_not_trigger_directory_search(db_session):
     subscriber = _subscriber(db_session)
     subscriber.account_number = "12345"
@@ -387,6 +464,46 @@ def test_monitoring_no_data_and_unavailable_are_not_offline(db_session, monkeypa
         )
         assert result == {"status": status.value}
         assert engine._monitoring_offline(state) is False
+
+
+def test_first_turn_handoff_rule_is_ignored_at_runtime(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {
+                            "type": "turn_count",
+                            "operator": ">=",
+                            "value": 0,
+                        },
+                        "action": "handoff",
+                        "reason": "bad_immediate_handoff",
+                    }
+                ],
+            }
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="I need to ask a general support question.",
+        classification=_classification(
+            intent=AiIntakeIntent.general_enquiry,
+            category=AiIntakeCategory.general_enquiry,
+        ),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.state.escalation_reason is None
 
 
 def test_rich_first_message_extracts_existing_facts(db_session):
