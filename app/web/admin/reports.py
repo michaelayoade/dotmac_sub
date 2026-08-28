@@ -1084,12 +1084,9 @@ def _percent(value: float | None) -> float:
     return round((value or 0) * 100, 1)
 
 
-def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: bool):
-    rows = team_inbox_metrics_service.team_performance_report(
-        db,
-        response_sla_seconds=response_sla_seconds,
-        include_inactive=include_inactive,
-    )
+def _inbox_team_rows(
+    rows: tuple[team_inbox_metrics_service.InboxTeamPerformanceReportRow, ...],
+) -> list[dict[str, object]]:
     team_rows = []
     for row in rows:
         metrics = row.metrics
@@ -1132,8 +1129,9 @@ def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: b
     return team_rows
 
 
-def _inbox_agent_rows(db: Session):
-    rows = team_inbox_metrics_service.agent_performance_report(db)
+def _inbox_agent_rows(
+    rows: tuple[team_inbox_metrics_service.InboxAgentPerformanceReportRow, ...],
+) -> list[dict[str, object]]:
     return [
         {
             "person_id": row.person_id,
@@ -1166,17 +1164,8 @@ def _reason_label(reason: str) -> str:
 
 
 def _inbox_escalation_rows(
-    db: Session,
-    response_sla_seconds: int,
-    queue_sla_seconds: int,
-    include_inactive: bool,
-):
-    rows = team_inbox_metrics_service.escalation_candidates(
-        db,
-        response_sla_seconds=response_sla_seconds,
-        queue_sla_seconds=queue_sla_seconds,
-        include_inactive=include_inactive,
-    )
+    rows: tuple[team_inbox_metrics_service.InboxEscalationCandidate, ...],
+) -> list[dict[str, object]]:
     return [
         {
             "conversation_id": row.conversation_id,
@@ -1197,6 +1186,33 @@ def _inbox_escalation_rows(
         }
         for row in rows
     ]
+
+
+def _inbox_performance_period(
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, str, datetime, datetime]:
+    today = datetime.now(UTC).date()
+    parsed_to = _parse_report_date(date_to) or today
+    parsed_from = _parse_report_date(date_from) or (
+        parsed_to
+        - timedelta(days=team_inbox_metrics_service.DEFAULT_PERFORMANCE_WINDOW_DAYS - 1)
+    )
+    start_at = datetime.combine(parsed_from, time.min, UTC)
+    end_at = datetime.combine(parsed_to + timedelta(days=1), time.min, UTC)
+    if start_at >= end_at:
+        raise HTTPException(status_code=422, detail="Invalid Inbox performance period")
+    if end_at - start_at > timedelta(
+        days=team_inbox_metrics_service.MAX_PERFORMANCE_WINDOW_DAYS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Inbox performance periods cannot exceed "
+                f"{team_inbox_metrics_service.MAX_PERFORMANCE_WINDOW_DAYS} days"
+            ),
+        )
+    return parsed_from.isoformat(), parsed_to.isoformat(), start_at, end_at
 
 
 def _active_service_team_options(db: Session):
@@ -1227,12 +1243,32 @@ def reports_inbox_performance(
     request: Request,
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     include_inactive: bool = False,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    team_rows = _inbox_team_rows(db, response_sla_seconds, include_inactive)
-    agent_rows = _inbox_agent_rows(db)
+    effective_from, effective_to, start_at, end_at = _inbox_performance_period(
+        date_from, date_to
+    )
+    performance_query = team_inbox_metrics_service.InboxPerformanceQuery(
+        period_start_at=start_at,
+        period_end_at=end_at,
+        include_inactive_teams=include_inactive,
+        limit=None,
+    )
+    team_page = team_inbox_metrics_service.team_performance_page(
+        db,
+        query=performance_query,
+        response_sla_seconds=response_sla_seconds,
+    )
+    agent_page = team_inbox_metrics_service.agent_performance_page(
+        db,
+        query=performance_query,
+    )
+    team_rows = _inbox_team_rows(team_page.rows)
+    agent_rows = _inbox_agent_rows(agent_page.rows)
     inbound_total = sum(row["inbound_message_count"] for row in team_rows)
     breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
     responded_total = sum(row["responded_count"] for row in team_rows)
@@ -1244,6 +1280,8 @@ def reports_inbox_performance(
         "sidebar_stats": get_sidebar_stats(db),
         "response_sla_seconds": response_sla_seconds,
         "include_inactive": include_inactive,
+        "date_from": effective_from,
+        "date_to": effective_to,
         "team_rows": team_rows,
         "agent_rows": agent_rows,
         "team_count": len(team_rows),
@@ -1268,8 +1306,23 @@ def reports_inbox_performance(
 def reports_inbox_performance_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     include_inactive: bool = False,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
+    _effective_from, _effective_to, start_at, end_at = _inbox_performance_period(
+        date_from, date_to
+    )
+    page = team_inbox_metrics_service.team_performance_page(
+        db,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            period_start_at=start_at,
+            period_end_at=end_at,
+            include_inactive_teams=include_inactive,
+            limit=None,
+        ),
+        response_sla_seconds=response_sla_seconds,
+    )
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -1291,7 +1344,7 @@ def reports_inbox_performance_export(
         ],
     )
     writer.writeheader()
-    for row in _inbox_team_rows(db, response_sla_seconds, include_inactive):
+    for row in _inbox_team_rows(page.rows):
         writer.writerow({field: row[field] for field in writer.fieldnames})
     return Response(
         output.getvalue(),
@@ -1310,16 +1363,23 @@ def reports_inbox_escalations(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
     include_inactive: bool = False,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    rows = _inbox_escalation_rows(
+    escalation_page = team_inbox_metrics_service.escalation_page(
         db,
-        response_sla_seconds,
-        queue_sla_seconds,
-        include_inactive,
+        query=team_inbox_metrics_service.InboxEscalationQuery(
+            response_sla_seconds=response_sla_seconds,
+            queue_sla_seconds=queue_sla_seconds,
+            include_inactive_teams=include_inactive,
+            limit=per_page,
+            offset=(page - 1) * per_page,
+        ),
     )
+    rows = _inbox_escalation_rows(escalation_page.rows)
     context = {
         "request": request,
         "active_page": "reports-inbox-escalations",
@@ -1331,16 +1391,14 @@ def reports_inbox_escalations(
         "include_inactive": include_inactive,
         "rows": rows,
         "service_team_options": _active_service_team_options(db),
-        "candidate_count": len(rows),
-        "response_breach_count": sum(
-            "response_sla_breached" in row["reason_keys"] for row in rows
-        ),
-        "queue_breach_count": sum(
-            "unassigned_queue_breached" in row["reason_keys"] for row in rows
-        ),
-        "no_agent_count": sum(
-            "no_available_agent" in row["reason_keys"] for row in rows
-        ),
+        "candidate_count": escalation_page.total_count,
+        "response_breach_count": escalation_page.response_breach_count,
+        "queue_breach_count": escalation_page.queue_breach_count,
+        "no_agent_count": escalation_page.no_agent_count,
+        "page": page,
+        "per_page": per_page,
+        "has_previous": page > 1,
+        "has_next": page * per_page < escalation_page.total_count,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
@@ -1531,6 +1589,15 @@ def reports_inbox_escalations_export(
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
+    page = team_inbox_metrics_service.escalation_page(
+        db,
+        query=team_inbox_metrics_service.InboxEscalationQuery(
+            response_sla_seconds=response_sla_seconds,
+            queue_sla_seconds=queue_sla_seconds,
+            include_inactive_teams=include_inactive,
+            limit=None,
+        ),
+    )
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -1551,12 +1618,7 @@ def reports_inbox_escalations_export(
         ],
     )
     writer.writeheader()
-    for row in _inbox_escalation_rows(
-        db,
-        response_sla_seconds,
-        queue_sla_seconds,
-        include_inactive,
-    ):
+    for row in _inbox_escalation_rows(page.rows):
         export_row = {field: row[field] for field in writer.fieldnames}
         export_row["reasons"] = "; ".join(row["reasons"])
         writer.writerow(export_row)
@@ -2419,6 +2481,12 @@ _OPERATIONAL_REPORT_PERMISSIONS = tuple(
     )
 )
 
+_INBOX_PERFORMANCE_REPORT_SLUGS = {
+    crm_reporting_service.CrmReportSlug.CRM_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+}
+
 
 def _operational_definition(
     request: Request, report_slug: str
@@ -2448,6 +2516,10 @@ def reports_operational_export(
     definition = _operational_definition(request, report_slug)
     if not definition.supports_date_filter:
         date_from = date_to = None
+    elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
+        date_from, date_to, _start_at, _end_at = _inbox_performance_period(
+            date_from, date_to
+        )
     query = _operational_report_query(
         request=request,
         date_from=date_from,
@@ -2485,6 +2557,10 @@ def reports_operational_page(
     definition = _operational_definition(request, report_slug)
     if not definition.supports_date_filter:
         date_from = date_to = None
+    elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
+        date_from, date_to, _start_at, _end_at = _inbox_performance_period(
+            date_from, date_to
+        )
     query = _operational_report_query(
         request=request,
         date_from=date_from,

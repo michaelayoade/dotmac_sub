@@ -209,18 +209,21 @@ REPORT_DEFINITIONS: dict[CrmReportSlug, CrmReportDefinition] = {
         "CRM Performance",
         "Inbox performance by service team",
         "reports:support:read",
+        True,
     ),
     CrmReportSlug.AGENT_PERFORMANCE: CrmReportDefinition(
         CrmReportSlug.AGENT_PERFORMANCE,
         "Agent Performance",
         "Inbox handling and response performance by agent",
         "reports:support:read",
+        True,
     ),
     CrmReportSlug.MY_PERFORMANCE: CrmReportDefinition(
         CrmReportSlug.MY_PERFORMANCE,
         "My Performance",
         "The signed-in agent's own inbox performance",
         "reports:support:read",
+        True,
     ),
     CrmReportSlug.OPERATIONS_SLA: CrmReportDefinition(
         CrmReportSlug.OPERATIONS_SLA,
@@ -771,7 +774,15 @@ def _postpaid(db: Session, query: CrmReportQuery) -> CrmReportPage:
 
 
 def _crm_performance(db: Session, query: CrmReportQuery) -> CrmReportPage:
-    report = team_inbox_metrics.team_performance_report(db)
+    projection = team_inbox_metrics.team_performance_page(
+        db,
+        query=team_inbox_metrics.InboxPerformanceQuery(
+            period_start_at=query.start_at,
+            period_end_at=query.end_at,
+            limit=None,
+        ),
+    )
+    report = projection.rows
     rows = [
         (
             item.service_team_name,
@@ -807,25 +818,35 @@ def _crm_performance(db: Session, query: CrmReportQuery) -> CrmReportPage:
             "Avg queue wait (s)",
         ),
         rows,
+        (
+            "Conversation cohort is bounded to "
+            f"{projection.window.start_at.date().isoformat()} through "
+            f"{(projection.window.end_at - timedelta(microseconds=1)).date()}."
+        ),
     )
 
 
 def _agent_performance(
     db: Session, query: CrmReportQuery, *, personal: bool = False
 ) -> CrmReportPage:
-    report = team_inbox_metrics.agent_performance_report(
-        db,
-        search=query.search,
-    )
-    if personal:
-        report = [
-            item
-            for item in report
-            if query.person_id and item.person_id == str(query.person_id)
-        ]
+    if personal and query.person_id is None:
+        report: tuple[team_inbox_metrics.InboxAgentPerformanceReportRow, ...] = ()
+        projection = None
+    else:
+        projection = team_inbox_metrics.agent_performance_page(
+            db,
+            query=team_inbox_metrics.InboxPerformanceQuery(
+                period_start_at=query.start_at,
+                period_end_at=query.end_at,
+                person_id=query.person_id if personal else None,
+                search=query.search,
+                limit=None,
+            ),
+        )
+        report = projection.rows
     rows = [
         (
-            item.person_id,
+            str(item.person_id),
             item.service_team_name,
             str(item.metrics.active_assignment_count),
             str(item.metrics.handled_conversation_count),
@@ -838,7 +859,20 @@ def _agent_performance(
     definition = REPORT_DEFINITIONS[
         CrmReportSlug.MY_PERFORMANCE if personal else CrmReportSlug.AGENT_PERFORMANCE
     ]
-    note = "Metrics are restricted to the signed-in agent." if personal else None
+    period_note = (
+        ""
+        if projection is None
+        else (
+            " Conversation cohort is bounded to "
+            f"{projection.window.start_at.date().isoformat()} through "
+            f"{(projection.window.end_at - timedelta(microseconds=1)).date()}."
+        )
+    )
+    note = (
+        "Metrics are restricted to the signed-in agent." + period_note
+        if personal
+        else period_note.strip()
+    )
     return _page(
         definition,
         query,

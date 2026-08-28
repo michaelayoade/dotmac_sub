@@ -4,6 +4,9 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from sqlalchemy import event
+
 from app.api import analytics as analytics_api
 from app.models.notification import Notification
 from app.models.service_team import (
@@ -112,6 +115,109 @@ def _message(
     return message
 
 
+def test_performance_window_defaults_to_30_days_and_rejects_unbounded_history():
+    observed_at = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+
+    window = team_inbox_metrics.resolve_performance_window(
+        team_inbox_metrics.InboxPerformanceQuery(observed_at=observed_at)
+    )
+
+    assert window.start_at == observed_at - timedelta(days=30)
+    assert window.end_at == observed_at
+    with pytest.raises(
+        team_inbox_metrics.InboxMetricsError,
+        match="cannot exceed 366 days",
+    ):
+        team_inbox_metrics.resolve_performance_window(
+            team_inbox_metrics.InboxPerformanceQuery(
+                period_start_at=observed_at - timedelta(days=367),
+                period_end_at=observed_at,
+            )
+        )
+
+
+def test_team_performance_uses_constant_set_based_queries(db_session):
+    observed_at = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+    for team_index in range(3):
+        team = _team(db_session, name=f"Support {team_index}")
+        for conversation_index in range(2):
+            first_at = observed_at - timedelta(
+                days=team_index + 1, minutes=conversation_index
+            )
+            conversation = _conversation(db_session, team, first_at=first_at)
+            _message(
+                db_session,
+                conversation,
+                direction=InboxMessageDirection.inbound.value,
+                at=first_at,
+            )
+    db_session.commit()
+
+    statements: list[str] = []
+
+    def record_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", record_statement)
+    try:
+        page = team_inbox_metrics.team_performance_page(
+            db_session,
+            query=team_inbox_metrics.InboxPerformanceQuery(
+                observed_at=observed_at,
+                limit=None,
+            ),
+            response_sla_seconds=900,
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", record_statement)
+
+    assert len(page.rows) == 3
+    assert len(statements) <= 5
+    assert all(
+        "inbox_messages.body" not in statement.lower() for statement in statements
+    )
+
+
+def test_escalation_page_paginates_candidates_and_preserves_full_totals(db_session):
+    team = _team(db_session)
+    observed_at = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+    for index in range(3):
+        first_at = observed_at - timedelta(hours=index + 2)
+        conversation = _conversation(db_session, team, first_at=first_at)
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.inbound.value,
+            at=first_at,
+        )
+    db_session.commit()
+
+    page = team_inbox_metrics.escalation_page(
+        db_session,
+        query=team_inbox_metrics.InboxEscalationQuery(
+            response_sla_seconds=60,
+            queue_sla_seconds=60,
+            limit=1,
+            offset=1,
+            observed_at=observed_at,
+        ),
+    )
+
+    assert len(page.rows) == 1
+    assert page.total_count == 3
+    assert page.response_breach_count == 3
+    assert page.queue_breach_count == 3
+    assert page.no_agent_count == 3
+
+
 def test_team_performance_metrics_tracks_response_and_queue_wait(db_session):
     team = _team(db_session)
     base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
@@ -199,7 +305,9 @@ def test_resolved_conversation_is_not_open(db_session):
     )
     db_session.commit()
 
-    metrics = team_inbox_metrics.team_performance_metrics(db_session, team.id)
+    metrics = team_inbox_metrics.team_performance_metrics(
+        db_session, team.id, now=base + timedelta(days=1)
+    )
 
     assert metrics.conversation_count == 1
     assert metrics.open_count == 0
@@ -240,6 +348,7 @@ def test_agent_performance_metrics_tracks_active_assignments_and_wait(db_session
         db_session,
         service_team_id=team.id,
         person_id=person_id,
+        now=base + timedelta(days=1),
     )
 
     assert metrics.active_assignment_count == 1
@@ -279,6 +388,7 @@ def test_agent_first_response_ignores_automated_outbound_messages(db_session):
         db_session,
         service_team_id=team.id,
         person_id=person_id,
+        now=base + timedelta(days=1),
     )
 
     assert metrics.average_first_response_seconds == 360
@@ -337,10 +447,11 @@ def test_agent_performance_report_lists_active_team_members(db_session):
     rows = team_inbox_metrics.agent_performance_report(
         db_session,
         service_team_id=team.id,
+        now=base + timedelta(days=1),
     )
 
     assert len(rows) == 1
-    assert rows[0].person_id == str(person_id)
+    assert rows[0].person_id == person_id
     assert rows[0].service_team_capabilities == ("customer_support",)
     assert rows[0].metrics.active_assignment_count == 1
     assert rows[0].metrics.handled_conversation_count == 1
@@ -351,6 +462,7 @@ def test_agent_performance_report_lists_active_team_members(db_session):
         db_session,
         service_team_id=team.id,
         search="Test Staff",
+        now=base + timedelta(days=1),
     )
     assert len(filtered_rows) == 1
     assert (
@@ -358,6 +470,7 @@ def test_agent_performance_report_lists_active_team_members(db_session):
             db_session,
             service_team_id=team.id,
             search="does-not-exist",
+            now=base + timedelta(days=1),
         )
         == []
     )
@@ -373,7 +486,7 @@ def test_analytics_api_returns_inbox_agent_performance_resolved_count(db_session
             is_active=True,
         )
     )
-    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    base = datetime.now(UTC) - timedelta(days=1)
     conversation = _conversation(db_session, team, first_at=base)
     conversation.status = InboxConversationStatus.resolved.value
     _message(
@@ -456,7 +569,10 @@ def test_crm_agent_performance_report_includes_resolved_conversations(db_session
     report = crm_reporting.get_report(
         db_session,
         slug=crm_reporting.CrmReportSlug.AGENT_PERFORMANCE,
-        query=crm_reporting.CrmReportQuery(),
+        query=crm_reporting.CrmReportQuery(
+            date_from=base.date(),
+            date_to=base.date(),
+        ),
     )
 
     assert "Resolved" in report.columns
@@ -478,7 +594,7 @@ def test_crm_agent_performance_report_includes_resolved_conversations(db_session
 
 def test_analytics_api_returns_inbox_team_performance(db_session):
     team = _team(db_session)
-    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    base = datetime.now(UTC) - timedelta(days=1)
     conversation = _conversation(db_session, team, first_at=base)
     _message(
         db_session,
@@ -537,8 +653,8 @@ def test_escalation_candidates_flag_breached_unassigned_conversation(db_session)
 
     assert len(candidates) == 1
     candidate = candidates[0]
-    assert candidate.conversation_id == str(conversation.id)
-    assert candidate.service_team_id == str(team.id)
+    assert candidate.conversation_id == conversation.id
+    assert candidate.service_team_id == team.id
     assert candidate.service_team_capabilities == ("customer_support",)
     assert candidate.contact_address == "customer@example.com"
     assert candidate.response_sla_seconds == 600

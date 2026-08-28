@@ -153,42 +153,42 @@ Plain-English flow: The postpaid cohort is joined to its authoritative billing p
 
 REPORT: CRM Performance
 Data source: ServiceTeam, InboxConversationTeam, InboxConversation, InboxMessage, and InboxConversationAssignment.
-Backend query/service: `team_inbox_metrics.team_performance_report`, mapped by `crm_reporting`.
-Transformation/calculation: Counts workload/open/assignment/response facts per team and measures first response and queue wait from authoritative timestamps.
+Backend query/service: `communications.team_inbox_metrics.team_performance_page`, mapped by `ui.crm_operational_reports` in `crm_reporting`.
+Transformation/calculation: Uses set-based SQL to count workload/open/assignment/response facts per team and measure first response and queue wait from authoritative timestamps inside the selected cohort.
 Route/API: `/admin/reports/operational/crm-performance`; CSV under `/export`.
 UI component/template: Shared operational template.
 Displayed as: Teams, Conversations, and Open cards plus team performance rows.
 Permission: `reports:support:read`.
 Ownership: Self-Care-owned team-inbox projection.
-Data freshness/synchronization: Live current-history query.
+Data freshness/synchronization: Live recomputation for the displayed inclusive dates; defaults to the latest 30 days and rejects ranges over 366 days.
 Plain-English flow: Inbox conversations, messages, and assignments become team workload and responsiveness measures; retention/campaign state is not involved.
 
 ## Administrative agent performance
 
 REPORT: Administrative Agent Performance
 Data source: ServiceTeamMember, ServiceTeam, SystemUser, assignments, conversations, and authored inbox messages.
-Backend query/service: `team_inbox_metrics.agent_performance_report`, mapped by `crm_reporting`.
+Backend query/service: `communications.team_inbox_metrics.agent_performance_page`, mapped by `ui.crm_operational_reports` in `crm_reporting`.
 Transformation/calculation: Counts active assignments and distinct handled conversations and calculates assignment wait and first human response per active team member.
 Route/API: `/admin/reports/operational/agent-performance`; CSV under `/export`.
 UI component/template: Shared operational template.
 Displayed as: Agents and Handled cards plus searchable, paginated per-agent/team timing rows.
 Permission: `reports:support:read`.
 Ownership: Self-Care-owned team-inbox projection.
-Data freshness/synchronization: Live current-history query.
+Data freshness/synchronization: Live date-bounded recomputation; member pagination and personal scope are applied before aggregate rows are returned.
 Plain-English flow: Recorded assignment and message-author evidence is grouped by active team member for an administrative view.
 
 ## Personal agent performance
 
 REPORT: Personal Agent Performance
 Data source: The same team-inbox records as administrative agent performance.
-Backend query/service: `team_inbox_metrics.agent_performance_report`, fail-closed filtered by the signed-in principal in `crm_reporting`.
+Backend query/service: `communications.team_inbox_metrics.agent_performance_page`, fail-closed scoped to the signed-in principal before the database read by `crm_reporting`.
 Transformation/calculation: Retains only rows whose person identifier matches the authenticated user; missing or invalid identity returns no rows.
 Route/API: `/admin/reports/operational/my-performance`; CSV under `/export`.
 UI component/template: Shared operational template.
 Displayed as: The signed-in agent's handling cards and performance rows.
 Permission: `reports:support:read` plus mandatory personal identity scope.
 Ownership: Self-Care-owned.
-Data freshness/synchronization: Live current-history query.
+Data freshness/synchronization: Live date-bounded recomputation using the same explicit period as the page and export.
 Plain-English flow: The common agent calculation is narrowed to the authenticated person before it reaches the UI or export.
 
 ## Operations SLA violations
