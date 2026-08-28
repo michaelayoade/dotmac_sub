@@ -464,7 +464,7 @@ def test_agent_performance_report_lists_active_team_members(db_session):
     assert rows[0].metrics.resolved_conversation_count == 1
     assert rows[0].metrics.average_queue_wait_seconds == 180
 
-    projected_rows = admin_reports._inbox_agent_rows(db_session)
+    projected_rows = admin_reports._inbox_agent_rows(rows)
     assert projected_rows[0]["agent_name"] == "Test Staff"
     assert "person_id" not in projected_rows[0]
 
