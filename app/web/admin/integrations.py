@@ -131,9 +131,6 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "webhook_ingress_url": (
-                f"{str(request.base_url).rstrip('/')}{state['webhook']['endpoint_path']}"
-            ),
             "page_title": "Integrations",
             "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
             "table_title": "Connectors",

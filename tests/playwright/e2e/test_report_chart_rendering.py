@@ -14,7 +14,8 @@ def _load_chart_runtime(page: Page) -> None:
     page.add_script_tag(path=str(PROJECT_ROOT / "static/js/echarts-charts.js"))
 
 
-def test_report_chart_runtime_creates_a_visible_plot(page: Page) -> None:
+def test_report_chart_runtime_creates_a_visible_plot(anon_page: Page) -> None:
+    page = anon_page
     errors: list[str] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_content(
@@ -48,7 +49,10 @@ def test_report_chart_runtime_creates_a_visible_plot(page: Page) -> None:
     assert errors == []
 
 
-def test_report_chart_runtime_reveals_fallback_for_failed_chart(page: Page) -> None:
+def test_report_chart_runtime_reveals_fallback_for_failed_chart(
+    anon_page: Page,
+) -> None:
+    page = anon_page
     page.set_content(
         """
         <section data-report-chart-state="present">
