@@ -29,7 +29,7 @@ require_exact_env_line() {
 }
 
 usage() {
-  echo "usage: deploy_production.sh <sha256:digest> <authorization.json> [--hotfix-no-migrations --change-reference REF --reason TEXT]" >&2
+  echo "usage: deploy_production.sh <sha256:digest> <authorization.json> [--hotfix-no-migrations --change-reference REF --reason TEXT] [--resume-after-migration --failed-run-id RUN_ID --backup-path PATH]" >&2
   exit 2
 }
 
@@ -46,6 +46,9 @@ require_exact_env_line "SERVER_NAME=dotmac-sub-prod"
 HOTFIX=0
 CHANGE_REFERENCE=""
 REASON=""
+RESUME_AFTER_MIGRATION=0
+FAILED_RUN_ID=""
+BACKUP_PATH=""
 while (($#)); do
   case "$1" in
     --hotfix-no-migrations) HOTFIX=1; shift ;;
@@ -59,6 +62,17 @@ while (($#)); do
       REASON="$2"
       shift 2
       ;;
+    --resume-after-migration) RESUME_AFTER_MIGRATION=1; shift ;;
+    --failed-run-id)
+      (($# >= 2)) || usage
+      FAILED_RUN_ID="$2"
+      shift 2
+      ;;
+    --backup-path)
+      (($# >= 2)) || usage
+      BACKUP_PATH="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
@@ -69,6 +83,15 @@ fi
 if [[ "${HOTFIX}" == "1" && ( -z "${CHANGE_REFERENCE}" || -z "${REASON}" ) ]]; then
   die "hotfix backup exception requires a change reference and reason"
 fi
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" && "${HOTFIX}" == "1" ]]; then
+  die "post-migration resume cannot be combined with a no-migration hotfix exception"
+fi
+if [[ "${RESUME_AFTER_MIGRATION}" != "1" && ( -n "${FAILED_RUN_ID}" || -n "${BACKUP_PATH}" ) ]]; then
+  die "resume evidence requires --resume-after-migration"
+fi
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" && ( -z "${FAILED_RUN_ID}" || -z "${BACKUP_PATH}" ) ]]; then
+  die "post-migration resume requires failed run ID and backup path"
+fi
 if [[ -n "${SKIP_BACKUP:-}" ]]; then
   die "SKIP_BACKUP is not accepted for production"
 fi
@@ -76,6 +99,19 @@ fi
 export PRODUCTION_RELEASE_EVIDENCE="${AUTHORIZATION_FILE}"
 unset SKIP_BACKUP
 unset PRODUCTION_BACKUP_DECISION_FILE
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" ]]; then
+  [[ "${FAILED_RUN_ID}" =~ ^[0-9]+$ && "${FAILED_RUN_ID}" -gt 0 ]] || die "failed run ID must be a positive integer"
+  [[ -n "${AUTHORIZATION_RUN_ID:-}" ]] || die "AUTHORIZATION_RUN_ID is required for post-migration resume"
+  export PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION=1
+  export PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID="${FAILED_RUN_ID}"
+  export PRODUCTION_DEPLOY_RESUME_BACKUP_PATH="${BACKUP_PATH}"
+  export PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID="${AUTHORIZATION_RUN_ID}"
+else
+  unset PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION
+  unset PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID
+  unset PRODUCTION_DEPLOY_RESUME_BACKUP_PATH
+  unset PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID
+fi
 
 if [[ "${HOTFIX}" == "1" ]]; then
   PREVIOUS_IMAGE="$(env_value APP_IMAGE)"

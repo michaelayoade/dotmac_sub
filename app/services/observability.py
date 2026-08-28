@@ -259,6 +259,27 @@ def record_task_skip(
     return streak
 
 
+def _task_counter(detail: dict[str, Any], key: str) -> int:
+    """Read one non-negative task counter without trusting transport JSON."""
+
+    value = detail.get(key)
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _task_flag(detail: dict[str, Any], key: str) -> bool:
+    """Read a typed task-result flag; strings never become truthy by accident."""
+
+    value = detail.get(key)
+    return value is True or (
+        isinstance(value, int) and not isinstance(value, bool) and value == 1
+    )
+
+
 def record_celery_task_success(
     task_name: str,
     *,
@@ -276,7 +297,11 @@ def record_celery_task_success(
             if (
                 task_name == job_heartbeat.PAYMENT_RECONCILIATION_TASK
                 and isinstance(detail, dict)
-                and int(detail.get("errors") or 0) > 0
+                and (
+                    _task_counter(detail, "errors") > 0
+                    or _task_flag(detail, "saturated")
+                    or _task_flag(detail, "partial")
+                )
             ):
                 status = "partial"
             job_heartbeat.record_result(

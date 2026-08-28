@@ -2264,7 +2264,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="BILLING_TOPUP_RECONCILIATION_BATCH_SIZE",
         value_type=SettingValueType.integer,
         default=50,
-        min_value=1,
+        min_value=2,
         max_value=500,
         label="Top-up Reconciliation Batch Size",
     ),

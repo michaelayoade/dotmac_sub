@@ -15,7 +15,7 @@ from app.services.payment_reconciliation import (
 
 
 @celery_app.task(name="app.tasks.payment_reconciliation.reconcile_topups")
-def reconcile_topups() -> dict[str, int]:
+def reconcile_topups() -> dict[str, int | bool]:
     """Sweep stranded top-up intents against the gateway verify API."""
 
     observed_at = datetime.now(UTC)

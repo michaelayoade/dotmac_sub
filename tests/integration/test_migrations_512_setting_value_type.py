@@ -23,12 +23,16 @@ error.
 The behavioural claim being proved is not "the column is text now". It is that
 a SECOND JSON-stored value type can be written, which the old CHECK made
 impossible for any type but ``json`` no matter who declared it.
+
+The two migration-path proofs below keep genuine empty-database chain replays.
+The two tests whose subject is only the resulting head-schema CHECK behaviour
+use isolated clones of one real Alembic-built head template.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -73,7 +77,7 @@ def _psycopg_url(url: URL) -> str:
 
 
 @pytest.fixture
-def isolated_migration_database() -> Iterator[URL]:
+def fresh_migration_database() -> Iterator[URL]:
     configured_url = os.getenv("TEST_DATABASE_URL")
     if not configured_url:
         raise pytest.UsageError("migration-path test requires TEST_DATABASE_URL")
@@ -268,10 +272,10 @@ def _stored_type(database_url: URL, key: str) -> object:
 
 
 def test_the_enum_becomes_open_text_and_a_second_json_type_becomes_writable(
-    isolated_migration_database: URL,
+    fresh_migration_database: URL,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = isolated_migration_database
+    database_url = fresh_migration_database
     _use_database(monkeypatch, database_url)
     config = _alembic_config()
 
@@ -327,8 +331,7 @@ def test_the_enum_becomes_open_text_and_a_second_json_type_becomes_writable(
 
 
 def test_a_valueless_row_is_still_refused(
-    isolated_migration_database: URL,
-    monkeypatch: pytest.MonkeyPatch,
+    cloned_database: Callable[[str], URL],
 ) -> None:
     """The replacement CHECK must still be a constraint, not a formality.
 
@@ -337,9 +340,7 @@ def test_a_valueless_row_is_still_refused(
     neither column populated must still be rejected.
     """
 
-    database_url = isolated_migration_database
-    _use_database(monkeypatch, database_url)
-    command.upgrade(_alembic_config(), "heads")
+    database_url = cloned_database("heads")
 
     with pytest.raises(Exception, match=ALIGNMENT_CONSTRAINT):
         _execute(
@@ -355,8 +356,7 @@ def test_a_valueless_row_is_still_refused(
 
 
 def test_a_boolean_written_to_both_columns_is_accepted(
-    isolated_migration_database: URL,
-    monkeypatch: pytest.MonkeyPatch,
+    cloned_database: Callable[[str], URL],
 ) -> None:
     """Sub's actual storage convention, pinned so the cutover changes it on purpose.
 
@@ -369,9 +369,7 @@ def test_a_boolean_written_to_both_columns_is_accepted(
     this test says so out loud rather than leaving it to a passing CI run.
     """
 
-    database_url = isolated_migration_database
-    _use_database(monkeypatch, database_url)
-    command.upgrade(_alembic_config(), "heads")
+    database_url = cloned_database("heads")
 
     _execute(
         database_url,
@@ -388,7 +386,7 @@ def test_a_boolean_written_to_both_columns_is_accepted(
 
 
 def test_a_database_built_after_the_model_change_migrates_cleanly(
-    isolated_migration_database: URL,
+    fresh_migration_database: URL,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other real case: no enum to convert, and 512 must not error.
@@ -398,7 +396,7 @@ def test_a_database_built_after_the_model_change_migrates_cleanly(
     rather than assuming the deployed shape.
     """
 
-    database_url = isolated_migration_database
+    database_url = fresh_migration_database
     _use_database(monkeypatch, database_url)
     command.upgrade(_alembic_config(), "heads")
 

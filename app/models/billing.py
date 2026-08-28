@@ -1950,9 +1950,24 @@ class TopupIntent(Base):
             "ix_topup_intents_gateway_reconcile_due",
             "provider_type",
             "status",
-            "completed_payment_id",
             "gateway_next_reconcile_at",
+            "gateway_last_reconcile_attempt_at",
             "created_at",
+            postgresql_where=text(
+                "completed_payment_id IS NULL AND status IN "
+                "('pending', 'failed', 'abandoned', 'canceled', 'expired')"
+            ),
+            sqlite_where=text(
+                "completed_payment_id IS NULL AND status IN "
+                "('pending', 'failed', 'abandoned', 'canceled', 'expired')"
+            ),
+        ),
+        Index(
+            "ix_topup_intents_provider_reconcile_attempt",
+            "provider_type",
+            "gateway_last_reconcile_attempt_at",
+            postgresql_where=text("gateway_last_reconcile_attempt_at IS NOT NULL"),
+            sqlite_where=text("gateway_last_reconcile_attempt_at IS NOT NULL"),
         ),
         Index(
             "uq_topup_intents_deposit_idempotency",
@@ -2025,6 +2040,12 @@ class TopupIntent(Base):
     gateway_last_reason_code: Mapped[str | None] = mapped_column(String(80))
     gateway_next_reconcile_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+    gateway_last_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_reconcile_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
     )
     gateway_observation_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

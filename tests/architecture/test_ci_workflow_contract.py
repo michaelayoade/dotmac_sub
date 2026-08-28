@@ -17,6 +17,7 @@ shipped script did something else entirely.
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import sys
@@ -32,6 +33,13 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/ci.yml"
 #: Aggregate jobs whose GitHub contexts are required for merge. Each must report
 #: on every run, including one where the PostgreSQL lane is skipped.
 REQUIRED_AGGREGATE_JOBS = ("integration-run", "integration-test", "test")
+REQUIRED_CI_EVENTS = {
+    "push",
+    "pull_request",
+    "merge_group",
+    "workflow_dispatch",
+    "schedule",
+}
 
 
 def _workflow() -> dict[str, Any]:
@@ -414,3 +422,177 @@ def test_the_shard_job_passes_a_durations_output_path(
     ]
     assert len(runs) == 1
     assert "CI_INTEGRATION_DURATIONS_OUTPUT" in runs[0]
+
+
+# --------------------------------------------------------------------------
+# Docker build is independent of the test lanes -- an enforceable premise
+# --------------------------------------------------------------------------
+
+TEST_LANE_JOBS = frozenset(
+    {
+        "lint",
+        "type-check",
+        "import-boundaries",
+        "unit-shards",
+        "architecture",
+        "test",
+        "coverage",
+        "security",
+        "pre-commit",
+        "integration-shards",
+        "integration-run",
+        "integration-test",
+    }
+)
+
+
+def test_docker_build_consumes_nothing_from_the_test_lanes(
+    workflow: dict[str, Any],
+) -> None:
+    """The premise that justifies running it concurrently.
+
+    `docker-build` is allowed to skip the test lanes only because it reads
+    nothing they produce -- it checks the repository out itself and starts its
+    own ci-db and ci-redis. If it ever begins downloading a test artifact or
+    branching on a test job's result, the decoupling stops being free and this
+    fails rather than silently racing.
+    """
+
+    job = workflow["jobs"]["docker-build"]
+    body = yaml.safe_dump(job)
+
+    referenced = {name for name in TEST_LANE_JOBS if f"needs.{name}." in body}
+    assert not referenced, (
+        "docker-build reads results from test lanes it no longer waits for: "
+        f"{sorted(referenced)}"
+    )
+
+    downloads = [
+        step
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact@")
+    ]
+    assert not downloads, (
+        "docker-build downloads an artifact, so it is no longer independent of "
+        "whatever job produces it"
+    )
+
+    assert job["needs"] == ["changes"], job["needs"]
+
+
+def test_docker_build_starts_its_own_services(workflow: dict[str, Any]) -> None:
+    """Non-vacuity for the test above.
+
+    The independence claim is only meaningful because this job provisions its
+    own database and cache. A job that had quietly started reusing a shared
+    service would satisfy the "reads no artifact" check while not being
+    independent at all.
+    """
+
+    body = yaml.safe_dump(workflow["jobs"]["docker-build"])
+    assert "docker network create ci-net" in body
+    assert "--name ci-db" in body
+    assert "--name ci-redis" in body
+    assert "services:" not in workflow["jobs"]["docker-build"]
+
+
+def test_docker_build_still_reports_on_every_run(workflow: dict[str, Any]) -> None:
+    """A required check that stops reporting deadlocks the merge queue.
+
+    Its steps are individually gated for docs-only and push runs, so the JOB
+    must remain unconditional even when every step inside it is skipped.
+    """
+
+    job = workflow["jobs"]["docker-build"]
+    assert str(job["if"]).startswith("always()")
+    guarded = [step for step in job["steps"] if "if" in step]
+    assert len(guarded) == len(job["steps"]), (
+        "every docker-build step must guard itself, since the job no longer "
+        "does it for them"
+    )
+
+
+def _docker_reporting_contract_violations(workflow: dict[str, Any]) -> list[str]:
+    """Return defects that can make the stable Docker context disappear."""
+
+    violations: list[str] = []
+    triggers = workflow[True] if True in workflow else workflow["on"]
+    missing_events = REQUIRED_CI_EVENTS - set(triggers)
+    if missing_events:
+        violations.append(
+            f"CI is missing Docker-relevant events: {sorted(missing_events)}"
+        )
+
+    job = workflow["jobs"]["docker-build"]
+    if job.get("name") != "Docker Build & Health Check":
+        violations.append("Docker required-context name changed")
+    condition = str(job.get("if", ""))
+    if "docs-only" in condition or "github.event_name" in condition:
+        violations.append("Docker job must not disappear for a change or event class")
+
+    no_op_steps = [
+        step
+        for step in job.get("steps", [])
+        if step.get("name") == "Docker validation not required"
+    ]
+    if len(no_op_steps) != 1:
+        violations.append("Docker context needs exactly one explicit no-op step")
+    else:
+        no_op_condition = str(no_op_steps[0].get("if", ""))
+        if "needs.changes.outputs.docs-only == 'true'" not in no_op_condition:
+            violations.append("Docker no-op must cover documentation-only changes")
+        if "github.event_name == 'push'" not in no_op_condition:
+            violations.append("Docker no-op must cover branch pushes")
+    return violations
+
+
+def test_docker_context_reports_for_every_main_trunk_event(
+    workflow: dict[str, Any],
+) -> None:
+    """The main-only topology changes branches, never the required context."""
+
+    assert not _docker_reporting_contract_violations(workflow)
+
+
+@pytest.mark.parametrize(
+    ("defect", "expected_violation"),
+    [
+        ("event_gate", "Docker job must not disappear for a change or event class"),
+        ("missing_merge_group", "CI is missing Docker-relevant events"),
+        ("renamed_context", "Docker required-context name changed"),
+        ("missing_docs_no_op", "Docker no-op must cover documentation-only changes"),
+        ("missing_push_no_op", "Docker no-op must cover branch pushes"),
+    ],
+)
+def test_docker_reporting_guard_is_sensitive(
+    workflow: dict[str, Any], defect: str, expected_violation: str
+) -> None:
+    """Each event/context/no-op assertion rejects its documented defect."""
+
+    planted = copy.deepcopy(workflow)
+    job = planted["jobs"]["docker-build"]
+    if defect == "event_gate":
+        job["if"] += " && github.event_name == 'pull_request'"
+    elif defect == "missing_merge_group":
+        triggers = planted[True] if True in planted else planted["on"]
+        del triggers["merge_group"]
+    elif defect == "renamed_context":
+        job["name"] = "Docker"
+    elif defect in {"missing_docs_no_op", "missing_push_no_op"}:
+        no_op = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Docker validation not required"
+        )
+        no_op["if"] = (
+            "github.event_name == 'push'"
+            if defect == "missing_docs_no_op"
+            else "needs.changes.outputs.docs-only == 'true'"
+        )
+    else:  # pragma: no cover - parametrization owns this vocabulary
+        raise AssertionError(f"unknown planted defect: {defect}")
+
+    assert any(
+        expected_violation in violation
+        for violation in _docker_reporting_contract_violations(planted)
+    )
