@@ -319,8 +319,10 @@ def record_agent_reply_activity(
     )
     if selected_status != InboxAgentPresenceStatus.online.value:
         return presence
-    presence.last_seen_at = now or datetime.now(UTC)
+    refreshed_at = now or datetime.now(UTC)
+    presence.last_seen_at = refreshed_at
     db.flush()
+    presence.last_seen_at = refreshed_at
     return presence
 
 
@@ -369,6 +371,7 @@ def set_agent_presence(
     if previous_effective_status == clean_status:
         presence.last_seen_at = observed_at
         db.flush()
+        presence.last_seen_at = observed_at
         return presence
     presence.status = clean_status
     presence.manual_override_status = clean_status
@@ -401,6 +404,7 @@ def set_agent_presence(
         )
     )
     db.flush()
+    presence.last_seen_at = observed_at
     return presence
 
 

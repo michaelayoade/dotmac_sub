@@ -1163,12 +1163,12 @@ def escalation_page(
                     else None
                 ),
                 pending_response_seconds=(
-                    max(float(row["pending_response_seconds"]), 0.0)
+                    round(max(float(row["pending_response_seconds"]), 0.0), 3)
                     if row["pending_response_seconds"] is not None
                     else None
                 ),
                 queue_wait_seconds=(
-                    max(float(row["queue_wait_seconds"]), 0.0)
+                    round(max(float(row["queue_wait_seconds"]), 0.0), 3)
                     if row["queue_wait_seconds"] is not None
                     else None
                 ),

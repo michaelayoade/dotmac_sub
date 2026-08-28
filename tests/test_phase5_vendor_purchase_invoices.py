@@ -317,6 +317,7 @@ def test_purchase_invoice_payload_includes_configured_erp_tax_profile(db_session
     invoice.subtotal = Decimal("1000.00")
     invoice.tax_total = Decimal("0.00")
     invoice.total = Decimal("1000.00")
+    db_session.flush()
     payload = build_purchase_invoice_payload(invoice, erp_tax_profile="WHT 2%")
     assert payload["tax_profile"] == "WHT 2%"
 

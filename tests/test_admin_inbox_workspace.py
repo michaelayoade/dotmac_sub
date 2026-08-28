@@ -815,7 +815,11 @@ def test_manager_dashboard_projects_presence_load_status_and_channels(db_session
     db_session.flush()
     db_session.add_all(
         [
-            InboxAgentPresence(person_id=user.id, status="online"),
+            InboxAgentPresence(
+                person_id=user.id,
+                status="online",
+                last_seen_at=datetime.now(UTC),
+            ),
             InboxConversationAssignment(
                 conversation_id=assigned.id,
                 service_team_id=team.id,
