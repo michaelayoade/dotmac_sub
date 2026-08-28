@@ -7,9 +7,13 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentProviderType
-from app.models.integration_platform import IntegrationInstallation
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
+    IntegrationInstallation,
+)
 from app.services import payment_gateway_finance, payment_routing
-from app.services.integrations import installations
+from app.services.integrations import installations, payment_capability
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
     PAYMENT_WEBHOOK_CAPABILITY,
@@ -182,6 +186,14 @@ def build_config_state(db: Session, provider_type_value: str) -> dict[str, Any]:
         ),
         None,
     )
+    webhook_binding = next(
+        (
+            binding
+            for binding in (installation.capability_bindings if installation else [])
+            if binding.capability_id == PAYMENT_WEBHOOK_CAPABILITY
+        ),
+        None,
+    )
     priority = (
         (intent_binding.policy_json or {}).get("presentment_priority", 0)
         if intent_binding
@@ -192,12 +204,54 @@ def build_config_state(db: Session, provider_type_value: str) -> dict[str, Any]:
         for row in payment_routing.provider_health(db)
         if row.provider_type == provider_type
     )
+    ingress_policy = payment_capability.webhook_ingress_policy_from_binding(
+        webhook_binding.policy_json if webhook_binding else None
+    )
+    receipts = (
+        db.query(IntegrationInbox)
+        .filter(IntegrationInbox.capability_binding_id == webhook_binding.id)
+        .order_by(IntegrationInbox.received_at.desc())
+        .limit(20)
+        .all()
+        if webhook_binding
+        else []
+    )
     return {
         "provider_type": provider_type.value,
         "provider_label": provider_type.value.title(),
         "installation": installation,
         "health": _health_projection(health),
         "required_refs": _required_refs(definition),
+        "webhook": {
+            "binding": webhook_binding,
+            "endpoint_path": f"/api/v1/payment-events/{provider_type.value}",
+            "source_label": (
+                "ERP verified relay"
+                if provider_type.value == "paystack"
+                else "Provider direct"
+            ),
+            "generic_guard": "Excluded by exact code-owned route",
+            "policy_source": "payments.webhook.v1 capability binding",
+            "requests_per_window": ingress_policy.requests_per_window,
+            "window_seconds": ingress_policy.window_seconds,
+            "limit_min": payment_capability.WEBHOOK_INGRESS_LIMIT_MIN,
+            "limit_max": payment_capability.WEBHOOK_INGRESS_LIMIT_MAX,
+            "window_min": payment_capability.WEBHOOK_INGRESS_WINDOW_MIN,
+            "window_max": payment_capability.WEBHOOK_INGRESS_WINDOW_MAX,
+            "receipts": [
+                {
+                    "id": str(receipt.id),
+                    "provider_event_id": receipt.provider_event_id,
+                    "event_type": receipt.event_type,
+                    "state": receipt.state,
+                    "attempt_count": receipt.attempt_count,
+                    "error_code": receipt.error_code,
+                    "received_at": receipt.received_at,
+                    "processed_at": receipt.processed_at,
+                }
+                for receipt in receipts
+            ],
+        },
         "form": {
             "presentment_priority": priority,
             "gateway_credentials": "",
@@ -246,6 +300,10 @@ def save_config(
     provider_type = _provider_type(provider_type_value)
     definition = _manifest(provider_type)
     installation = _selected_installation(db, provider_type)
+    existing_policies = {
+        binding.capability_id: dict(binding.policy_json or {})
+        for binding in (installation.capability_bindings if installation else [])
+    }
     current = installation.current_config_revision if installation else None
     existing_refs = dict(current.secret_refs or {}) if current else {}
     capability_ids = _manifest_capabilities(definition)
@@ -303,23 +361,81 @@ def save_config(
         actor=actor,
     )
     for capability_id in capability_ids:
+        policy = dict(existing_policies.get(capability_id) or {"default": True})
+        policy["default"] = True
+        if capability_id == PAYMENT_INTENT_CAPABILITY:
+            policy["presentment_priority"] = presentment_priority
+        elif capability_id == PAYMENT_WEBHOOK_CAPABILITY:
+            ingress = payment_capability.webhook_ingress_policy_from_binding(policy)
+            policy = payment_capability.binding_policy_with_webhook_ingress(
+                policy, ingress
+            )
         installations.bind_capability(
             db,
             installation_id=installation.id,
             capability_id=capability_id,
-            policy={
-                "default": True,
-                **(
-                    {"presentment_priority": presentment_priority}
-                    if capability_id == PAYMENT_INTENT_CAPABILITY
-                    else {}
-                ),
-            },
+            policy=policy,
             actor=actor,
         )
     payment_gateway_finance.ensure_gateway_identity(db, provider_type=provider_type)
     installations.validate_static(db, installation_id=installation.id, actor=actor)
     return installation
+
+
+def update_webhook_ingress_policy(
+    db: Session,
+    *,
+    provider_type_value: str,
+    requests_per_window: int,
+    window_seconds: int,
+    actor: str = "admin.payment_gateway",
+) -> tuple[IntegrationCapabilityBinding, payment_capability.WebhookIngressPolicy]:
+    provider_type = _provider_type(provider_type_value)
+    installation = _selected_installation(db, provider_type)
+    if installation is None:
+        raise ValueError("Save and enable the gateway before changing webhook policy")
+    binding = next(
+        (
+            row
+            for row in installation.capability_bindings
+            if row.capability_id == PAYMENT_WEBHOOK_CAPABILITY
+        ),
+        None,
+    )
+    if binding is None:
+        raise ValueError("Payment webhook capability is not configured")
+    ingress = payment_capability.WebhookIngressPolicy(
+        requests_per_window=requests_per_window,
+        window_seconds=window_seconds,
+    )
+    updated = installations.update_binding_policy(
+        db,
+        capability_binding_id=binding.id,
+        policy=payment_capability.binding_policy_with_webhook_ingress(
+            binding.policy_json, ingress
+        ),
+        actor=actor,
+    )
+    return updated, ingress
+
+
+def publish_configured_webhook_ingress_policy(
+    installation: IntegrationInstallation,
+) -> bool:
+    binding = next(
+        (
+            row
+            for row in installation.capability_bindings
+            if row.capability_id == PAYMENT_WEBHOOK_CAPABILITY
+        ),
+        None,
+    )
+    if binding is None:
+        return False
+    policy = payment_capability.webhook_ingress_policy_from_binding(binding.policy_json)
+    return payment_capability.publish_webhook_ingress_policy(
+        installation.connector_key, policy
+    )
 
 
 def validate_and_enable(
@@ -387,6 +503,8 @@ def disable(
 __all__ = [
     "build_config_state",
     "disable",
+    "publish_configured_webhook_ingress_policy",
     "save_config",
+    "update_webhook_ingress_policy",
     "validate_and_enable",
 ]

@@ -95,15 +95,38 @@ progress. A successful task heartbeat, `errors=0`, or a full checked batch is
 not proof of health when oldest due age is increasing, checked work is not
 advancing, or selected-to-checked gaps persist beyond concurrent claim races.
 
-The production Paystack webhook URL is:
+The canonical Sub Paystack ingress URL is:
 
 ```text
 https://selfcare.dotmac.io/api/v1/payment-events/paystack
 ```
 
+In the shared-merchant deployment, Paystack delivers to ERP first. ERP verifies
+the original signature and relays the unchanged signed body to this Sub URL for
+`DMAC-` references. Do not configure a second direct Paystack destination to Sub
+for the same merchant flow; repeated provider or relay delivery is safe but is
+not the intended topology.
+
+## Ingress traffic policy
+
+Signed payment-provider callbacks never share the generic API sync-pressure
+bucket. Their exact code-owned routes use a dedicated per-provider and
+per-source-IP limiter before a database session is acquired. The authoritative
+bounded policy is stored on the installation's `payments.webhook.v1` capability
+binding and managed from the payment-gateway setup page. Redis and process-local
+copies are runtime projections; startup re-materializes them from the binding.
+
+Bulk ERP sync limits and offender-IP lists must never be used to tune signed
+payment ingress. A limited provider request returns HTTP `429` with
+`Retry-After`; the provider or ERP relay must retry the same signed event, and
+the integration inbox preserves idempotency.
+
 ## Enable delivery
 
-Set the URL above as the **live** webhook URL in the Paystack Dashboard/Canvas.
+For a direct deployment, set the URL above as the **live** webhook URL in the
+Paystack Dashboard/Canvas. For the shared-merchant deployment, keep ERP as the
+single Paystack destination and configure ERP's verified relay to the Sub URL
+above.
 Do not place the Paystack secret in this repository, a ticket, a pull request,
 or an operator note. The signing secret remains in the approved secret store
 and is resolved by the Paystack integration binding.
