@@ -306,7 +306,6 @@ def test_staging_promotion_runbook_records_activation_and_failure_contracts() ->
     assert "release-candidate-evidence" in runbook
     assert "staging-acceptance-<source-sha>" in runbook
     assert "builds only on a GitHub-hosted runner" in runbook
-    assert "## One-time workflow bootstrap" not in runbook
     assert "### One-time workflow bootstrap" in runbook
     assert "workflow_dispatch" in runbook
     assert "Do not fabricate an" in runbook
