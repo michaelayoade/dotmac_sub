@@ -224,7 +224,7 @@ def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):
 
 
 def test_ncc_permission_migration_grants_customer_experience_roles(monkeypatch):
-    ncc = _load("ncc_report_permission_grants", "560_ncc_report_permissions.py")
+    ncc = _load("ncc_report_permission_grants", "564_ncc_report_permissions.py")
     engine = sa.create_engine("sqlite://")
     metadata = sa.MetaData()
     permissions = sa.Table(

@@ -18948,6 +18948,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "PUT /api/v1/staff-accounts/{user_id}/erp-department": {
+   "params": [
+    "header:Idempotency-Key",
+    "header:authorization",
+    "header:x-api-key",
+    "path:user_id!"
+   ],
+   "request": "4c3f4714feb0",
+   "responses": {
+    "200": "97b4f846e644",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "PUT /api/v1/staff-accounts/{user_id}/roles": {
    "params": [
     "header:Idempotency-Key",
@@ -19266,6 +19279,7 @@
   "DueDateCalculationResponse": "7e29aca78232",
   "DunningAction": "d42e316f102b",
   "ElevationRead": "3ca3d8f2a410",
+  "ErpDepartmentReference": "5ce6be19bec1",
   "ErpMaterialStatusReceipt": "dea085458884",
   "ErrorDetail": "baaa77850daa",
   "ErrorResponse": "9a1634f1cfc4",
@@ -20230,6 +20244,8 @@
   "SplitterRead": "462df98254d1",
   "SplitterUpdate": "fc09a009fc39",
   "StaffAccountCreate": "b6432e3a2f81",
+  "StaffAccountErpDepartmentRead": "8428a34c2b00",
+  "StaffAccountErpDepartmentUpdate": "d0e389a1811d",
   "StaffAccountRead": "cebf0aa826aa",
   "StaffAccountRolesUpdate": "cea929707cae",
   "StateKind": "c193abe43198",

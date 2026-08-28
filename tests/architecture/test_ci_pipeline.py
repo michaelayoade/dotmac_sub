@@ -24,7 +24,7 @@ def _service_readiness_block(source: str, *, database: str, redis: str) -> str:
     start_marker = (
         "          for i in $(seq 1 30); do\n"
         "            [ \"$(docker inspect --format='{{if .State.Health}}"
-        f"{{{{.State.Health.Status}}}}{{else}}none{{{{end}}}}' {database})\""
+        "{{.State.Health.Status}}{{else}}none{{end}}' " + database + ')"'
         ' = "healthy" ] && break'
     )
     redis_failure_marker = (

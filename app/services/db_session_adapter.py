@@ -94,7 +94,8 @@ class SqlAlchemySessionAdapter:
     def discard_failed_transaction(self, db: Session) -> None:
         """Discard a failed adapter transaction without owning business state."""
 
-        if db.in_transaction():
+        in_transaction = getattr(db, "in_transaction", None)
+        if in_transaction is None or in_transaction():
             db.rollback()
 
     @contextmanager

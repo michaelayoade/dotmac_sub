@@ -7,8 +7,8 @@ budget. A failed build is safe to retry; the migration drops only its own new
 index names before rebuilding. The application query remains compatible before,
 during, and after each build. Downgrade removes only these derived read indexes.
 
-Revision ID: 565_inbox_agent_analytics_indexes
-Revises: 564_ai_intake_disable_first_turn_handoff_rules
+Revision ID: 567_inbox_agent_analytics_indexes
+Revises: 566_ai_intake_disable_first_turn_handoff_rules
 Create Date: 2026-08-28
 """
 
@@ -18,8 +18,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "565_inbox_agent_analytics_indexes"
-down_revision: str | None = "564_ai_intake_disable_first_turn_handoff_rules"
+revision: str = "567_inbox_agent_analytics_indexes"
+down_revision: str | None = "566_ai_intake_disable_first_turn_handoff_rules"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
