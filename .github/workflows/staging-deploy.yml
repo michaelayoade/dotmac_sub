@@ -1,8 +1,8 @@
-name: Deploy dev to staging
+name: Deploy main to staging
 
-# The explicit release-candidate workflow builds the final current dev commit
+# The explicit release-candidate workflow builds the final current main commit
 # once and publishes typed evidence for its immutable OCI digest. This workflow
-# independently proves the candidate is still the current green dev tip, then
+# independently proves the candidate is still the current green main tip, then
 # hands the exact digest to the dedicated staging runner.
 #
 # Fail-closed activation contract:
@@ -12,7 +12,7 @@ name: Deploy dev to staging
 on:
   workflow_run:
     workflows: ["Build release candidate once"]
-    branches: [dev]
+    branches: [main]
     types: [completed]
 
 permissions:
@@ -25,12 +25,12 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify exact dev candidate
+    name: Verify exact main candidate
     if: >-
       vars.STAGING_AUTO_DEPLOY_ENABLED == 'true' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
-      github.event.workflow_run.head_branch == 'dev' &&
+      github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -82,7 +82,7 @@ jobs:
             --expected-build-run-id "$BUILD_RUN_ID" \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Require current dev tip and green push checks
+      - name: Require current main tip and green push checks
         uses: actions/github-script@v7
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
@@ -97,12 +97,12 @@ jobs:
               const branch = await github.rest.repos.getBranch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                branch: "dev",
+                branch: "main",
               });
-              const devTip = branch.data.commit.sha;
-              if (devTip !== candidate) {
+              const mainTip = branch.data.commit.sha;
+              if (mainTip !== candidate) {
                 core.setFailed(
-                  `Refusing stale staging deploy: dev is ${devTip}, candidate is ${candidate}.`
+                  `Refusing stale staging deploy: main is ${mainTip}, candidate is ${candidate}.`
                 );
                 return;
               }
@@ -147,7 +147,7 @@ jobs:
                 previousSummary = summary;
               }
               if (failed) {
-                core.setFailed(`A required dev push check failed: ${summary}`);
+                core.setFailed(`A required main push check failed: ${summary}`);
                 return;
               }
               if (ready) {
@@ -155,14 +155,14 @@ jobs:
                 return;
               }
               if (Date.now() >= deadline) {
-                core.setFailed(`Timed out waiting for required dev checks: ${summary}`);
+                core.setFailed(`Timed out waiting for required main checks: ${summary}`);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, 20000));
             }
 
   deploy:
-    name: Deploy exact dev image
+    name: Deploy exact main image
     needs: verify
     runs-on: [self-hosted, linux, x64, dotmac-sub-staging]
     environment: staging
@@ -188,10 +188,10 @@ jobs:
             exit 1
           fi
 
-          git -C "$STAGING_DEPLOY_DIR" fetch origin dev
+          git -C "$STAGING_DEPLOY_DIR" fetch origin main
           remote_sha="$(git -C "$STAGING_DEPLOY_DIR" rev-parse FETCH_HEAD)"
           if [ "$remote_sha" != "$CANDIDATE_SHA" ]; then
-            echo "origin/dev moved after candidate verification." >&2
+            echo "origin/main moved after candidate verification." >&2
             exit 1
           fi
           git -C "$STAGING_DEPLOY_DIR" checkout --detach "$CANDIDATE_SHA"
@@ -244,7 +244,7 @@ jobs:
           docker manifest inspect \
             "ghcr.io/michaelayoade/dotmac_sub@$IMAGE_DIGEST" >/dev/null
 
-      - name: Deploy verified dev image
+      - name: Deploy verified main image
         env:
           COMPOSE_PROJECT_NAME: dotmac_sub
           IMAGE_DIGEST: ${{ needs.verify.outputs.image_digest }}

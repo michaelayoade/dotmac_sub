@@ -8,12 +8,12 @@ name: Mobile CI
 on:
   # `integration/**` and `consolidate/**` carry multi-PR batches. Without these
   # targets, a PR INTO a batch branch runs no tests at all, and the whole batch
-  # meets CI for the first time at its merge to dev — exactly the risk these
+  # meets CI for the first time at its merge to main — exactly the risk these
   # branch families exist to contain.
   push:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   pull_request:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   merge_group:
   workflow_dispatch:
 

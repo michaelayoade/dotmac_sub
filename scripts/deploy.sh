@@ -633,7 +633,7 @@ case "$(env_value APP_ENV):$(env_value SERVER_NAME)" in
     fi
     ;;
   staging:dotmac-sub-staging)
-    GITHUB_RELEASE_BRANCH="dev"
+    GITHUB_RELEASE_BRANCH="main"
     DEPLOYMENT_TARGET="staging"
     if [[ "${SKIP_BACKUP:-0}" == "1" ]]; then
       echo "BACKUP POLICY REJECTED: use the verified staging adapter." >&2
