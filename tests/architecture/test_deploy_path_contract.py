@@ -138,6 +138,9 @@ def test_deploy_candidate_port_does_not_collide_with_backup_app_port() -> None:
     )
     assert "127.0.0.1:18001" in docs
     assert "127.0.0.1:18002" in docs
+    nginx = (ROOT / "nginx" / "selfcare.dotmac.io.conf").read_text(encoding="utf-8")
+    assert "127.0.0.1:18002 backup" in nginx
+    assert "127.0.0.1:18001 backup" not in nginx
 
 
 def test_production_deploy_exposes_fail_closed_post_migration_resume() -> None:

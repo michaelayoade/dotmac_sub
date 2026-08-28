@@ -8,7 +8,7 @@ rollback boundary in one operation.
 
 - `nginx/selfcare.dotmac.io.conf` is installed and `nginx -t` passes.
 - The primary upstream is `127.0.0.1:8001`.
-- The deployment-only backup upstream is `127.0.0.1:18001`.
+- The long-running backup app bind is `127.0.0.1:18001`; it is not the deploy warm-candidate route.
 - The warm candidate upstream is `127.0.0.1:18002` by default. Do not reuse
   `18001`; that port is reserved for the long-running backup app.
 - `.env` contains the production service configuration and approved secret
@@ -34,7 +34,7 @@ rollback boundary in one operation.
   the authorized verifier.
 
 The deployment refuses to start if the running Nginx configuration does not
-contain the backup upstream.
+contain the warm candidate upstream.
 
 ## Release sequence
 
