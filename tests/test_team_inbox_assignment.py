@@ -341,7 +341,9 @@ def test_repeated_online_presence_update_refreshes_freshness(db_session):
     assert presence.last_seen_at == observed_at
 
 
-def test_set_agent_presence_records_effective_transition_when_online_is_stale(db_session):
+def test_set_agent_presence_records_effective_transition_when_online_is_stale(
+    db_session,
+):
     person_id = uuid4()
     observed_at = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
     presence = InboxAgentPresence(

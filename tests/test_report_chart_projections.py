@@ -134,9 +134,7 @@ def test_churn_chart_has_an_explicit_empty_state(
             labels=("Jan", "Feb"), rates=(0.0, 0.0), counts=(0, 0)
         ),
     )
-    monkeypatch.setattr(
-        subscriber_growth, "recent_cancellations", lambda *_a, **_k: []
-    )
+    monkeypatch.setattr(subscriber_growth, "recent_cancellations", lambda *_a, **_k: [])
     monkeypatch.setattr(
         web_reports.crm_reporting_service,
         "subscription_churn_reason_counts",

@@ -305,7 +305,6 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-
 def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool:
     return subscriber_id in _subscribers_with_open_infrastructure_down_tickets(
         session,

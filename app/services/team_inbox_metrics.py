@@ -1300,10 +1300,7 @@ def _team_performance_by_team(
         .select_from(
             links.outerjoin(
                 InboxConversationAssignment,
-                (
-                    InboxConversationAssignment.conversation_id
-                    == links.c.conversation_id
-                )
+                (InboxConversationAssignment.conversation_id == links.c.conversation_id)
                 & (InboxConversationAssignment.is_active.is_(True)),
             )
         )
@@ -1388,15 +1385,16 @@ def _team_performance_by_team(
         first_outbound.c.first_outbound_at,
         first_inbound.c.first_inbound_at,
     )
-    pending_seconds = _seconds_sql(db, literal(now_utc), first_inbound.c.first_inbound_at)
+    pending_seconds = _seconds_sql(
+        db, literal(now_utc), first_inbound.c.first_inbound_at
+    )
     response_rows = db.execute(
         select(
             links.c.team_id,
             first_outbound.c.first_outbound_at,
             response_seconds.label("response_seconds"),
             pending_seconds.label("pending_seconds"),
-        )
-        .select_from(
+        ).select_from(
             links.join(
                 first_inbound,
                 first_inbound.c.conversation_id == links.c.conversation_id,
@@ -1482,9 +1480,9 @@ def _assignment_values_by_agent(
             func.sum(
                 case((InboxConversationAssignment.is_active.is_(True), 1), else_=0)
             ).label("active_assignment_count"),
-            func.count(
-                distinct(InboxConversationAssignment.conversation_id)
-            ).label("handled_conversation_count"),
+            func.count(distinct(InboxConversationAssignment.conversation_id)).label(
+                "handled_conversation_count"
+            ),
             func.count(distinct(resolved_conversation_id)).label(
                 "resolved_conversation_count"
             ),
@@ -1596,8 +1594,7 @@ def _human_response_seconds_by_agent(
             links.c.team_id,
             sender_at_first_response.c.person_id,
             response_seconds.label("response_seconds"),
-        )
-        .select_from(
+        ).select_from(
             links.join(
                 first_inbound,
                 first_inbound.c.conversation_id == links.c.conversation_id,
@@ -2143,7 +2140,9 @@ def agent_performance_analytics(
             else None
         ),
         average_first_response_seconds=(
-            round(float(summary_row["summary_response_seconds_sum"]) / response_total, 3)
+            round(
+                float(summary_row["summary_response_seconds_sum"]) / response_total, 3
+            )
             if response_total
             else None
         ),

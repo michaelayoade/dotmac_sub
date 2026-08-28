@@ -542,9 +542,7 @@ def get_revenue_report_data(db: Session) -> RevenueReportData:
     revenue_chart = (
         ChartProjection.present(
             labels=revenue.monthly.labels,
-            series=(
-                ChartSeries(label="Collections", values=revenue.monthly.values),
-            ),
+            series=(ChartSeries(label="Collections", values=revenue.monthly.values),),
             as_of=datetime.now(UTC),
         )
         if revenue.monthly.observation_count
@@ -952,9 +950,7 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
             tone=StatusTone.positive,
         ),
     }
-    churn_reasons = dict(
-        crm_reporting_service.subscription_churn_reason_counts(db=db)
-    )
+    churn_reasons = dict(crm_reporting_service.subscription_churn_reason_counts(db=db))
     monthly_churn = subscriber_growth.monthly_churn_series(db=db)
     churn_chart = (
         ChartProjection.present(
