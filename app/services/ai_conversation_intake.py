@@ -838,6 +838,82 @@ def _validate_queue_templates(queue_templates: object) -> None:
         raise ValueError("AI intake queue notification minutes are invalid")
 
 
+def _validate_engine_playbooks(
+    policy: Mapping[str, object], tools: Mapping[str, object]
+) -> None:
+    for playbook_key in ai_intake_conversation_engine.PLAYBOOK_POLICY_KEYS:
+        raw_playbooks = policy.get(playbook_key)
+        if raw_playbooks is None:
+            continue
+        if not isinstance(raw_playbooks, list):
+            raise ValueError("AI intake playbooks must be a list")
+        for raw_playbook in raw_playbooks:
+            if not isinstance(raw_playbook, Mapping):
+                raise ValueError("AI intake playbook entries must be objects")
+            intent = str(raw_playbook.get("intent") or "").strip()
+            if intent and intent not in SUPPORTED_AI_INTENT_KEYS:
+                raise ValueError("AI intake playbook intent is unsupported")
+            category = str(raw_playbook.get("category") or "").strip()
+            if category and category not in SUPPORTED_AI_CATEGORY_KEYS:
+                raise ValueError("AI intake playbook category is unsupported")
+            steps = raw_playbook.get("steps")
+            if not isinstance(steps, list) or not steps:
+                raise ValueError("AI intake playbook steps must be a non-empty list")
+            for raw_step in steps:
+                if not isinstance(raw_step, Mapping):
+                    raise ValueError("AI intake playbook steps must be objects")
+                condition = raw_step.get("condition")
+                if condition is not None:
+                    if not isinstance(condition, Mapping):
+                        raise ValueError(
+                            "AI intake playbook condition must be an object"
+                        )
+                    condition_type = str(condition.get("type") or "").strip()
+                    legacy_condition = any(
+                        key in condition for key in ("fact", "intent", "category")
+                    )
+                    if (
+                        condition_type
+                        and condition_type
+                        not in ai_intake_conversation_engine.SUPPORTED_RULE_CONDITIONS
+                    ):
+                        raise ValueError("AI intake playbook condition is unsupported")
+                    if not condition_type and not legacy_condition:
+                        raise ValueError("AI intake playbook condition is unsupported")
+                action = str(raw_step.get("action") or "").strip()
+                if not action:
+                    raise ValueError("AI intake playbook action is required")
+                if action not in ai_intake_conversation_engine.SUPPORTED_RULE_ACTIONS:
+                    raise ValueError("AI intake playbook action is unsupported")
+                tool_key = str(raw_step.get("tool") or "").strip()
+                if action in {"execute_tool", "invoke_tool"} and not tool_key:
+                    raise ValueError("AI intake playbook tool action requires a tool")
+                if action == "request_field" and not (
+                    raw_step.get("field") or raw_step.get("tool")
+                ):
+                    raise ValueError(
+                        "AI intake playbook field request requires a field"
+                    )
+                if (
+                    action in {"execute_tool", "invoke_tool"}
+                    and tool_key
+                    and tool_key not in ai_intake_conversation_engine.TOOL_CATALOG
+                ):
+                    raise ValueError("AI intake playbook references an unknown tool")
+                tool_value = tools.get(tool_key)
+                tool_enabled = (
+                    bool(tool_value.get("enabled", False))
+                    if isinstance(tool_value, Mapping)
+                    else bool(tool_value)
+                )
+                if (
+                    action in {"execute_tool", "invoke_tool"}
+                    and tool_key
+                    and not tool_enabled
+                ):
+                    raise ValueError("AI intake playbook references a disabled tool")
+
+
 def _validate_engine_policy(version: AiIntakePolicyVersion) -> None:
     metadata = (
         dict(version.metadata_ or {}) if isinstance(version.metadata_, dict) else {}
@@ -880,6 +956,7 @@ def _validate_engine_policy(version: AiIntakePolicyVersion) -> None:
     for key in tools:
         if key not in ai_intake_conversation_engine.TOOL_CATALOG:
             raise ValueError("AI intake tool configuration contains an unknown tool")
+    _validate_engine_playbooks(policy, tools)
     rules = policy.get("troubleshooting_rules")
     if rules is not None:
         if not isinstance(rules, list):
