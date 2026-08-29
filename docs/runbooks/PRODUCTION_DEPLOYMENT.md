@@ -32,9 +32,30 @@ rollback boundary in one operation.
   admissible checkout boundary because Python searches the current deploy
   directory first; a stale `/root/dotmac_sub/scripts` package must never shadow
   the authorized verifier.
+- Docker daemon access and exact-container inventory are readable by the
+  production runner. An existing `dotmac_sub_app` container carries a valid
+  full-SHA `org.opencontainers.image.revision` label.
 
 The deployment refuses to start if the running Nginx configuration does not
 contain the warm candidate upstream.
+
+Before anything touches the host, `scripts/deploy_production.sh` verifies the
+typed production authorization and observes the running revision. The gate is
+the first step after argument validation, so it runs before the hotfix
+migration-evidence collection as well as before `scripts/deploy.sh`, the
+backup, and migrations; a refusal leaves production exactly as it found it.
+Docker daemon, inventory, and container-inspection failures are distinct from
+an empty host and all fail closed. A missing or malformed revision label on an
+existing container also fails closed; it is not treated as a first deployment.
+
+For a genuine first deployment, the daemon must be readable and
+`dotmac_sub_app` must be confirmed absent. Supply all three protected workflow
+inputs: `bootstrap_target_revision` (the exact staged full SHA),
+`bootstrap_change_reference`, and `bootstrap_reason`. The workflow writes a
+typed authorization bound to `dotmac-sub-prod` and that exact revision. It is
+refused if the container exists, if any input is partial, or if rollback inputs
+are also present. Bootstrap cannot be combined with hotfix or post-migration
+resume modes.
 
 ## Release sequence
 
@@ -251,6 +272,11 @@ tree drifted for days undetected.
 
 ## Failure behavior
 
+- Unreadable Docker state, ambiguous container inventory, failed container
+  inspection, or a missing/malformed running revision label stops in
+  `scripts/deploy_production.sh` before any image pull, backup, or migration.
+  Confirmed container absence also stops unless an exact typed bootstrap
+  authorization is supplied.
 - Migration, schema verification, unavailable integration-pin, or CRM ticket
   capability-readiness failure occurs before service replacement.
 - Commercial module prerequisite or dispatcher-role failure occurs before

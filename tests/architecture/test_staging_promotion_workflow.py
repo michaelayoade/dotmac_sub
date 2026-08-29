@@ -435,19 +435,32 @@ def test_production_refuses_a_non_forward_deploy_without_typed_authorization() -
     assert 'DIRECTION="backward"' in adapter
     assert 'DIRECTION="divergent"' in adapter
     assert 'DIRECTION="unknown"' in adapter
-    # The gate must precede the script that owns backup and migrations.
-    assert adapter.index("Anti-rollback gate") < adapter.index(
-        'bash "${REPO_DIR}/scripts/deploy.sh"'
-    )
+    assert "docker info" in adapter
+    assert "production container inventory is unreadable" in adapter
+    assert "has no org.opencontainers.image.revision label" in adapter
+    assert "has a malformed org.opencontainers.image.revision label" in adapter
+    assert "verify-bootstrap-authorization" in adapter
+    # The gate must precede everything that touches the production host: the
+    # hotfix migration-evidence collection pulls images and creates throwaway
+    # containers, and deploy.sh owns the backup and `alembic upgrade`.
+    gate = adapter.index("# --- Anti-rollback gate")
+    gate_end = adapter.index("# --- End anti-rollback gate")
+    assert gate < gate_end
+    assert gate_end < adapter.index("docker pull")
+    assert gate_end < adapter.index('bash "${REPO_DIR}/scripts/deploy.sh"')
     # Naming the exact transition is the authorization; there is no flag.
     for required in (
         "rollback_from_revision:",
         "rollback_to_revision:",
         "rollback_change_reference:",
         "rollback_reason:",
+        "bootstrap_target_revision:",
+        "bootstrap_change_reference:",
+        "bootstrap_reason:",
     ):
         assert required in workflow
     assert "write-rollback-authorization" in workflow
+    assert "write-bootstrap-authorization" in workflow
 
 
 def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> None:

@@ -6,6 +6,17 @@ There is no `dev` branch: releases are selected from `main` by SHA and reach
 each environment by immutable digest. See
 `docs/runbooks/STAGING_PROMOTION.md`.
 
+`main` is the machine-owned integration and release branch: the repository
+default branch and the only protected one, carrying 19 required status
+contexts with `strict` and `enforce_admins` enabled, and refusing force pushes
+and deletion. Batch branches (`integration/**`, `consolidate/**`) are
+short-lived assembly branches that run the same required gates; they are not a
+second trunk and nothing is promoted from one branch to another. The single
+trunk is enforced against the workflow triggers and the tracked normative
+documents together by
+`tests/architecture/test_single_trunk_contract.py`, which fails if either side
+revives the retired `feature -> dev -> main` hop.
+
 ## Required gates
 
 Application changes retain all release gates:

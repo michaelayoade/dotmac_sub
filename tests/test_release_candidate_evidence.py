@@ -11,7 +11,9 @@ from scripts.release_artifact_contract import (
     GitTreeSha,
     MainAuthorizationEvidence,
     OCIImageDigest,
+    ProductionBootstrapAuthorization,
     ProductionRollbackAuthorization,
+    ProductionServerName,
     ProductManifestDigest,
     ReleaseArtifactEvidence,
     ReleaseCandidateRecord,
@@ -21,13 +23,16 @@ from scripts.release_artifact_contract import (
 )
 from scripts.release_candidate_evidence import (
     EvidenceDocumentError,
+    read_bootstrap_authorization,
     read_candidate_evidence,
     read_production_authorization,
     read_rollback_authorization,
     read_staging_acceptance,
+    verify_bootstrap_authorization,
     verify_candidate_evidence,
     verify_production_authorization,
     verify_rollback_authorization,
+    write_bootstrap_authorization,
     write_candidate_evidence,
     write_production_authorization,
     write_rollback_authorization,
@@ -308,3 +313,79 @@ def test_rollback_authorization_is_bound_to_one_exact_transition(
             running_revision=AUTHORIZING_MAIN_REVISION,
             target_revision=GitCommitSha("8" * 40),
         )
+
+
+def test_bootstrap_authorization_round_trips_exact_host_and_revision(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bootstrap.json"
+    authorization = ProductionBootstrapAuthorization(
+        target_revision=SOURCE_REVISION,
+        target_server=ProductionServerName("dotmac-sub-prod"),
+        change_reference="CHG-2026-0829",
+        reason="initialize the empty production application slot",
+    )
+
+    write_bootstrap_authorization(path, authorization)
+    restored = read_bootstrap_authorization(path)
+
+    assert restored == authorization
+    verify_bootstrap_authorization(
+        restored,
+        target_revision=SOURCE_REVISION,
+        target_server=ProductionServerName("dotmac-sub-prod"),
+    )
+
+
+def test_bootstrap_authorization_is_not_reusable_for_another_deploy(
+    tmp_path: Path,
+) -> None:
+    """The revision binding bites, so bootstrap is not a standing bypass."""
+
+    path = tmp_path / "bootstrap.json"
+    write_bootstrap_authorization(
+        path,
+        ProductionBootstrapAuthorization(
+            target_revision=SOURCE_REVISION,
+            target_server=ProductionServerName("dotmac-sub-prod"),
+            change_reference="CHG-2026-0829",
+            reason="initialize the empty production application slot",
+        ),
+    )
+    restored = read_bootstrap_authorization(path)
+
+    with pytest.raises(EvidenceDocumentError, match="deploying revision"):
+        verify_bootstrap_authorization(
+            restored,
+            target_revision=GitCommitSha("8" * 40),
+            target_server=ProductionServerName("dotmac-sub-prod"),
+        )
+
+
+def test_bootstrap_authorization_refuses_a_non_production_server(
+    tmp_path: Path,
+) -> None:
+    """The host binding is enforced when the document is read, not later.
+
+    `ProductionServerName` admits exactly one value, so a document naming any
+    other host cannot be loaded at all. That is where the server binding has to
+    bite: `verify_bootstrap_authorization` never sees a foreign host, so a test
+    written against it would be vacuous.
+    """
+
+    path = tmp_path / "bootstrap.json"
+    write_bootstrap_authorization(
+        path,
+        ProductionBootstrapAuthorization(
+            target_revision=SOURCE_REVISION,
+            target_server=ProductionServerName("dotmac-sub-prod"),
+            change_reference="CHG-2026-0829",
+            reason="initialize the empty production application slot",
+        ),
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["target_server"] = "dotmac-sub-staging"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(EvidenceDocumentError, match="dotmac-sub-prod"):
+        read_bootstrap_authorization(path)
