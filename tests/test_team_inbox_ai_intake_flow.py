@@ -100,13 +100,24 @@ class _Gateway:
         )
 
 
-def test_identifier_prompt_uses_required_sequential_order():
-    state = ai_intake_conversation_engine.ConversationalState(
+def _identifier_state():
+    return ai_intake_conversation_engine.ConversationalState(
         conversation_id=str(uuid4()),
         session_id=str(uuid4()),
         policy_version_id=str(uuid4()),
         channel=InboxChannelType.whatsapp.value,
     )
+
+
+def test_identifier_prompt_follows_declared_phone_first_order():
+    """A phone-first policy is asked phone first.
+
+    This fixture is deliberately NON-CANONICAL relative to the
+    portal -> email -> phone order the engine used to impose: if the
+    implementation ever reverts to imposing a canonical order, the very first
+    assertion here fails.
+    """
+    state = _identifier_state()
     policy = {
         "permitted_identifiers": (
             "registered_phone",
@@ -117,27 +128,27 @@ def test_identifier_prompt_uses_required_sequential_order():
 
     requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
 
-    assert requested == "portal_id"
+    assert requested == "registered_phone"
     assert ai_intake_conversation_engine._identifier_question(requested) == (
-        "Please send your Portal ID or account number so I can identify the service."
+        "Please send the registered phone number on the account."
     )
 
-    state.already_requested_fields = ("portal_id",)
+    state.already_requested_fields = ("registered_phone",)
     assert (
         ai_intake_conversation_engine._next_identifier_to_request(state, policy)
         == "registered_email"
     )
 
-    state.already_requested_fields = ("portal_id", "registered_email")
+    state.already_requested_fields = ("registered_phone", "registered_email")
     assert (
         ai_intake_conversation_engine._next_identifier_to_request(state, policy)
-        == "registered_phone"
+        == "portal_id"
     )
 
     state.already_requested_fields = (
-        "portal_id",
-        "registered_email",
         "registered_phone",
+        "registered_email",
+        "portal_id",
     )
     assert (
         ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
@@ -149,13 +160,168 @@ def test_identifier_prompt_uses_required_sequential_order():
     )
 
 
-def test_identifier_prompt_preserves_single_identifier_policy():
-    state = ai_intake_conversation_engine.ConversationalState(
-        conversation_id=str(uuid4()),
-        session_id=str(uuid4()),
-        policy_version_id=str(uuid4()),
-        channel=InboxChannelType.whatsapp.value,
+def test_identifier_prompt_follows_a_second_non_default_declared_order():
+    """A second non-canonical, non-default order is also obeyed verbatim.
+
+    email -> portal -> phone is neither the historical default nor the
+    canonical constant, so no fixed ordering can satisfy both this test and
+    the phone-first one above.
+    """
+    state = _identifier_state()
+    policy = {
+        "permitted_identifiers": (
+            "registered_email",
+            "portal_id",
+            "registered_phone",
+        )
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_email",
+        "portal_id",
+        "registered_phone",
     )
+
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "registered_email"
+    )
+    state.already_requested_fields = ("registered_email",)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "portal_id"
+    )
+
+
+def test_identifier_order_de_duplicates_by_first_occurrence():
+    policy = {
+        "permitted_identifiers": [
+            "registered_phone",
+            "portal_id",
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        ]
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "portal_id",
+        "registered_email",
+    )
+
+
+def test_identifier_order_drops_invalid_values_without_reordering():
+    policy = {
+        "permitted_identifiers": [
+            "nin",
+            "registered_email",
+            "",
+            "portal_id",
+            "meter_number",
+            "registered_phone",
+        ]
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_email",
+        "portal_id",
+        "registered_phone",
+    )
+
+
+def test_identifier_order_defaults_to_the_historical_order_when_absent():
+    assert ai_intake_conversation_engine._permitted_identifiers({}) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+    assert (
+        ai_intake_conversation_engine._permitted_identifiers({})
+        == ai_intake_conversation_engine.DEFAULT_IDENTIFIER_REQUEST_ORDER
+    )
+
+
+@pytest.mark.parametrize("configured", [(), [], None, "", ["nin"], "nin"])
+def test_identifier_order_defaults_to_the_historical_order_when_empty(configured):
+    policy = {"permitted_identifiers": configured}
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+
+
+def test_policy_default_identifier_order_is_the_historical_order():
+    policy = ai_intake_conversation_engine._policy(None)
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+
+
+def test_identifier_lookup_tries_identifiers_in_the_declared_order(monkeypatch):
+    """Identification lookup shares the prompting order, not a fixed one.
+
+    The state carries every identifier, so only the declared order decides
+    which one `customer_lookup` is called with first. The fixture order is
+    phone-first: an implementation that imposes a canonical portal-first order
+    fails here even though every prompt-order test still passed.
+    """
+    attempted: list[str] = []
+
+    def _fake_execute_tool(db, key, inputs, **kwargs):
+        assert key == "customer_lookup"
+        attempted.append(str(inputs["identifier_type"]))
+        return {"status": "not_found"}
+
+    monkeypatch.setattr(
+        ai_intake_conversation_engine, "execute_tool", _fake_execute_tool
+    )
+
+    state = _identifier_state()
+    state.portal_id = "12345"
+    state.registered_email = "customer@example.test"
+    state.registered_phone = "08030000000"
+    conversation = InboxConversation(
+        id=uuid4(),
+        channel_type=InboxChannelType.whatsapp.value,
+    )
+
+    ai_intake_conversation_engine._identify_customer(
+        None,
+        state=state,
+        conversation=conversation,
+        policy={
+            "permitted_identifiers": (
+                "registered_phone",
+                "registered_email",
+                "portal_id",
+            )
+        },
+        tool_mode="live",
+    )
+
+    assert attempted == ["registered_phone", "registered_email", "portal_id"]
+
+    attempted.clear()
+    state.subscriber_id = None
+    ai_intake_conversation_engine._identify_customer(
+        None,
+        state=state,
+        conversation=conversation,
+        policy={"permitted_identifiers": ("portal_id", "registered_phone")},
+        tool_mode="live",
+    )
+
+    assert attempted == ["portal_id", "registered_phone"]
+
+
+def test_identifier_prompt_preserves_single_identifier_policy():
+    state = _identifier_state()
     policy = {"permitted_identifiers": ("portal_id",)}
 
     requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
