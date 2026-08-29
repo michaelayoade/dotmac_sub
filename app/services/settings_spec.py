@@ -2368,7 +2368,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=0,
         min_value=0,
         max_value=28,
-        label="Prepaid Default Billing Day (0 = day of activation)",
+        label="Prepaid Default Billing Day (0 = activation day, capped at 28)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,

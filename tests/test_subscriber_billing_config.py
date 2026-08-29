@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -12,7 +13,10 @@ from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
-from app.services.subscriber import _apply_billing_defaults
+from app.services.subscriber import (
+    _activation_billing_day,
+    _apply_billing_defaults,
+)
 from app.services.web_subscriber_details import build_subscriber_detail_page_context
 
 
@@ -159,6 +163,18 @@ def test_billing_defaults_do_not_materialize_inherited_grace(
     _apply_billing_defaults(db_session, subscriber)
 
     assert subscriber.grace_period_days is None
+
+
+@pytest.mark.parametrize(
+    ("activation_day", "expected_billing_day"),
+    ((1, 1), (28, 28), (29, 28), (31, 28)),
+)
+def test_activation_billing_day_stays_valid_in_every_month(
+    activation_day: int, expected_billing_day: int
+):
+    activated_at = datetime(2026, 1, activation_day, tzinfo=UTC)
+
+    assert _activation_billing_day(activated_at) == expected_billing_day
 
 
 def test_billing_form_preserves_explicit_zero_grace(subscriber):

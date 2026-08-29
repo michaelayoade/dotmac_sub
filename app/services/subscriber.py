@@ -65,6 +65,12 @@ _BILLABLE_SUBSCRIPTION_STATUSES = (
     SubscriptionStatus.blocked,
     SubscriptionStatus.suspended,
 )
+_MAX_BILLING_DAY = 28
+
+
+def _activation_billing_day(activated_at: datetime) -> int:
+    """Map an activation date to the supported recurring billing-day range."""
+    return min(activated_at.day, _MAX_BILLING_DAY)
 
 
 def _release_subscriber_network_records(db: Session, subscriber_id) -> None:
@@ -416,9 +422,12 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
         )
         if val is not None:
             billing_day = int(str(val))
-            # 0 means "day of activation" — use today's day
+            # 0 means "day of activation". Recurring billing days stop at 28
+            # so the value remains valid in every month.
             subscriber.billing_day = (
-                billing_day if billing_day > 0 else datetime.now(UTC).day
+                billing_day
+                if billing_day > 0
+                else _activation_billing_day(datetime.now(UTC))
             )
 
     if subscriber.payment_due_days is None:
