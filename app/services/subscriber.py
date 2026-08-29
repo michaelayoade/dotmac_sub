@@ -36,6 +36,7 @@ from app.schemas.subscriber import (
     SubscriberSyncRead,
     SubscriberUpdate,
 )
+from app.services import billing_day as billing_day_service
 from app.services import geocoding as geocoding_service
 from app.services import numbering, settings_spec
 from app.services.common import (
@@ -397,26 +398,6 @@ class Resellers(ListResponseMixin):
         db.commit()
 
 
-#: Used only if the setting spec somehow declares no upper bound. 28 is the
-#: last day-of-month every month has, which is what makes it the safe clamp.
-_BILLING_DAY_FALLBACK_MAX = 28
-
-
-def _declared_max_billing_day(spec_key: str) -> int:
-    """The largest day-of-month a ``billing_day`` may hold.
-
-    Read from the setting spec rather than hardcoded here, so this writer
-    cannot drift away from the bound the spec declares and the admin form
-    enforces. A writer and a validator that disagree about a field's domain
-    produce exactly the failure this function exists to prevent: a value that
-    is legal to store and impossible to edit.
-    """
-
-    spec = settings_spec.get_spec(SettingDomain.billing, spec_key)
-    max_value = getattr(spec, "max_value", None) if spec is not None else None
-    return int(max_value) if max_value else _BILLING_DAY_FALLBACK_MAX
-
-
 def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
     """Populate materialized billing defaults that are account-owned.
 
@@ -437,24 +418,17 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
             billing_day = int(str(val))
             if billing_day <= 0:
                 # 0 means "day of activation". The activation day can be the
-                # 29th, 30th or 31st, which is OUTSIDE the domain this very
-                # setting declares (max_value=28) and the admin form enforces
-                # (max="28"). Writing an out-of-domain day was not a cosmetic
-                # mismatch: a customer activated on the 29th got a billing_day
-                # the browser then rejected, and because that control sits in a
-                # collapsed tab of the customer edit form, Chromium could not
-                # focus it — so it silently refused to submit the WHOLE form,
-                # logging only "An invalid form control with name='billing_day'
-                # is not focusable" to the console. The admin pressed Update and
-                # nothing happened, with no error anywhere on the server.
-                # 28 is also the only late day every month actually has.
-                billing_day = min(
-                    datetime.now(UTC).day,
-                    _declared_max_billing_day(billing_day_key),
+                # 29th, 30th or 31st, which is outside the domain the setting
+                # spec declares and the admin form renders. Storing one made
+                # the customer's edit form unsubmittable in the browser — see
+                # app/services/billing_day.py for the full account. The bound
+                # is read from the spec, never restated here.
+                billing_day = billing_day_service.resolve_activation_day(
+                    datetime.now(UTC),
+                    billing_day_service.billing_day_domain(billing_day_key),
                 )
-            # Resolved above rather than assigned in each branch: this stays
-            # ONE cohort write site (tests/architecture/test_isp_cohort_source_writers.py),
-            # and the frozen source baseline should not move for a bug fix.
+            # Resolved above rather than assigned per branch, so this stays ONE
+            # cohort write site (tests/architecture/test_isp_cohort_source_writers.py).
             subscriber.billing_day = billing_day
 
     if subscriber.payment_due_days is None:

@@ -46,6 +46,7 @@ from app.schemas.subscriber import (
     SubscriberUpdate,
 )
 from app.services import account_status_commands, customer_portal
+from app.services import billing_day as billing_day_service
 from app.services import catalog as catalog_service
 from app.services import notification as notification_service
 from app.services import radius as radius_service
@@ -213,7 +214,11 @@ def _apply_billing_approval_command(
 
 def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
     """Build string defaults for customer billing form controls."""
+    domain = billing_day_service.billing_day_domain()
     defaults = {
+        "billing_day_min": str(domain.minimum),
+        "billing_day_max": str(domain.maximum),
+        "billing_day_is_legacy": "false",
         "billing_enabled_override": "",
         "captive_redirect_enabled": "",
         "billing_day": "",
@@ -260,6 +265,17 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
             "tax_rate_id": str(subscriber.tax_rate_id or ""),
             "payment_method": str(subscriber.payment_method or ""),
         }
+    )
+    # The form renders the billing-day bounds from the declared domain rather
+    # than restating them in the template. A value stored BEFORE that domain
+    # was enforced is flagged instead: the template must then omit min/max, or
+    # the browser refuses to submit the whole form over a control sitting in a
+    # collapsed tab that it cannot focus or explain -- which is exactly how a
+    # customer activated on the 29th became uneditable.
+    defaults["billing_day_is_legacy"] = (
+        "true"
+        if billing_day_service.is_legacy_value(subscriber.billing_day, domain)
+        else "false"
     )
     return defaults
 
@@ -1887,7 +1903,6 @@ def _billing_override_payload(
     payment_method: str | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "billing_day": _optional_int(billing_day),
         "payment_due_days": _optional_int(payment_due_days),
         "grace_period_days": _optional_int(grace_period_days),
         "min_balance": _optional_decimal(min_balance),
@@ -1895,6 +1910,16 @@ def _billing_override_payload(
         "payment_method": _normalize_optional(payment_method),
         "captive_redirect_enabled": captive_redirect_enabled == "true",
     }
+    # ABSENT and EMPTY are different instructions, and conflating them is how a
+    # legacy billing day gets destroyed by an edit that never mentioned it.
+    # `Form(None)` means the field was not in the request body at all -- leave
+    # the stored value alone. An empty box submits "", which IS a deliberate
+    # "inherit" and clears the override. Every other key here predates this
+    # distinction and keeps its old behaviour; only billing_day has a value
+    # that must never be rewritten as a side effect.
+    if billing_day is not None:
+        payload["billing_day"] = _optional_int(billing_day)
+
     normalized_enabled = _normalize_optional(billing_enabled_override)
     if normalized_enabled == "true":
         payload["billing_enabled"] = True
