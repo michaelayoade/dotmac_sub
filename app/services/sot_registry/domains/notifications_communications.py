@@ -3590,7 +3590,11 @@ DOMAIN = DomainSOT(
                         name="SMTP envelope and RFC822 bytes",
                         owner="external:customer_mail_server",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                        source="Allowed recipient envelope and RFC822 bytes normalized before observation admission.",
+                        source=(
+                            "Allowed recipient envelope and RFC822 bytes normalized; "
+                            "validated attachment objects are stored privately before "
+                            "observation admission."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.NOT_APPLICABLE,
