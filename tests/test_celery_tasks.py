@@ -289,6 +289,36 @@ class TestBillingTask:
             counters=result,
         )
 
+    def test_refresh_billing_health_snapshot_records_snapshot_failure(self):
+        mock_db = MagicMock()
+
+        @contextmanager
+        def acquired_lock(*_args, **_kwargs):
+            yield mock_db, True
+
+        with (
+            patch(
+                "app.services.billing.scheduled.db_session_adapter.advisory_lock",
+                acquired_lock,
+            ),
+            patch(
+                "app.services.billing.scheduled._append_billing_health_snapshot",
+                side_effect=RuntimeError("template query failed"),
+            ),
+            patch("app.services.observability.record_task_run") as record_run,
+        ):
+            from app.tasks.billing import refresh_billing_health_snapshot_task
+
+            result = refresh_billing_health_snapshot_task()
+
+        assert result == {"error": "template query failed"}
+        mock_db.rollback.assert_called_once()
+        record_run.assert_called_once_with(
+            "app.tasks.billing.refresh_billing_health_snapshot",
+            status="error",
+            counters=result,
+        )
+
 
 # =============================================================================
 # OLT Profile Sync Task Tests

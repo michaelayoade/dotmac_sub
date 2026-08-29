@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models.team_inbox import InboxChannelType, InboxObservationKind
+from app.models.team_inbox import (
+    InboxChannelType,
+    InboxObservationKind,
+    InboxObservationStatus,
+)
 from app.services import (
     team_inbox_observations,
     team_inbox_processing,
@@ -28,6 +32,7 @@ from app.services.owner_commands import (
 logger = logging.getLogger(__name__)
 
 SMTP_PROBE_HEADER_VALUE = "team_inbox_smtp_e2e"
+SMTP_PROCESSING_ERROR_CODE = "smtp_processing_failed"
 
 SMTPController: Any = None
 try:
@@ -39,6 +44,7 @@ except ModuleNotFoundError:
 class SmtpInboundKind(StrEnum):
     received = "received"
     duplicate = "duplicate"
+    deferred = "deferred"
     skipped = "skipped"
     quarantined = "quarantined"
     failed = "failed"
@@ -230,16 +236,64 @@ def handle_smtp_message(
                 kind=SmtpInboundKind.quarantined,
                 reason=SmtpInboundReason.provider_identity_collision,
             )
-        result = team_inbox_processing.process_provider_observation(
-            db,
-            observation_id=recorded.observation_id,
-            context=CommandContext.system(
-                actor="system:team-inbox-observation-processor",
-                scope="team-inbox:provider-consequence",
-                reason="resolve committed SMTP observation",
-                idempotency_key=str(recorded.observation_id),
-            ),
-        )
+        if recorded.processing_status is InboxObservationStatus.processed:
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.duplicate,
+                conversation_id=str(recorded.conversation_id)
+                if recorded.conversation_id
+                else None,
+                message_id=str(recorded.message_id) if recorded.message_id else None,
+            )
+        if recorded.processing_status is InboxObservationStatus.rejected:
+            logger.warning(
+                "team_inbox_smtp_message_processing_already_deferred observation_id=%s",
+                recorded.observation_id,
+            )
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.deferred,
+                reason=SmtpInboundReason.processing_error,
+            )
+        try:
+            result = team_inbox_processing.process_provider_observation(
+                db,
+                observation_id=recorded.observation_id,
+                context=CommandContext.system(
+                    actor="system:team-inbox-observation-processor",
+                    scope="team-inbox:provider-consequence",
+                    reason="resolve committed SMTP observation",
+                    idempotency_key=str(recorded.observation_id),
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "team_inbox_smtp_observation_processing_failed observation_id=%s",
+                recorded.observation_id,
+            )
+            try:
+                team_inbox_processing.mark_provider_observation_processing_failed(
+                    db,
+                    observation_id=recorded.observation_id,
+                    context=CommandContext.system(
+                        actor="system:team-inbox-observation-processor",
+                        scope="team-inbox:provider-consequence",
+                        reason="defer committed SMTP observation for internal replay",
+                        idempotency_key=f"defer:{recorded.observation_id}",
+                    ),
+                    error_code=SMTP_PROCESSING_ERROR_CODE,
+                )
+            except Exception:
+                logger.exception(
+                    "team_inbox_smtp_processing_failure_mark_failed observation_id=%s",
+                    recorded.observation_id,
+                )
+                return SmtpInboundResult(
+                    kind=SmtpInboundKind.failed,
+                    reason=SmtpInboundReason.processing_error,
+                )
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.deferred,
+                reason=SmtpInboundReason.processing_error,
+            )
         return SmtpInboundResult(
             kind=(
                 SmtpInboundKind.received

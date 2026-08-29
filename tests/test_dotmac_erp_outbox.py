@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -33,6 +34,15 @@ from app.services.dotmac_erp.client import (
     DotMacERPError,
     DotMacERPNotFoundError,
     DotMacERPTransientError,
+)
+from app.services.dotmac_erp.operational_contracts import ErpOperationalSyncOutcome
+from app.services.integrations.backoffice_contracts import (
+    ERP_OPERATIONAL_SYNC_CAPABILITY,
+)
+from app.services.integrations.connectors.dotmac_erp import DotmacErpRunner
+from app.services.integrations.runtime_execution import (
+    RuntimeExecutionContext,
+    validate_connection,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -87,6 +97,18 @@ class FakeERPClient:
 
     def close(self):
         self.closed = True
+
+
+class FakeOperationalValidationClient:
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.commands = []
+
+    def sync_operational_domains(self, command):
+        self.commands.append(command)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +442,65 @@ def test_erp_capability_fails_closed_without_binding(db_session):
 
     with pytest.raises(installations.InstallationError, match="no enabled binding"):
         capability_client(db_session).get_ncc_staff_headcount()
+
+
+def test_erp_operational_capability_validation_checks_domain_scope():
+    client = FakeOperationalValidationClient(
+        DotMacERPAuthError("Authentication failed: 403", status_code=403)
+    )
+
+    result = DotmacErpRunner(client_override=client).validate_capability(
+        capability_id=ERP_OPERATIONAL_SYNC_CAPABILITY,
+        manifest=object(),
+        config={"base_url": "https://erp.dotmac.io"},
+        secret_material={"service_credentials": "test-token"},
+    )
+
+    assert result.valid is False
+    assert result.error_codes == ("erp_operational_scope_missing",)
+    assert result.details == {"required_scope": "sub:domain:write"}
+
+
+def test_erp_connection_validation_uses_operational_capability_scope_check():
+    client = FakeOperationalValidationClient(
+        DotMacERPAuthError("Authentication failed: 403", status_code=403)
+    )
+    context = RuntimeExecutionContext(
+        binding=SimpleNamespace(capability_id=ERP_OPERATIONAL_SYNC_CAPABILITY),
+        manifest=object(),
+        config={"base_url": "https://erp.dotmac.io"},
+        secret_material={"service_credentials": "test-token"},
+        runner=DotmacErpRunner(client_override=client),
+    )
+
+    result = validate_connection(context)
+
+    assert result.valid is False
+    assert result.error_codes == ("erp_operational_scope_missing",)
+
+
+def test_erp_operational_capability_validation_accepts_empty_bulk_sync():
+    client = FakeOperationalValidationClient(
+        ErpOperationalSyncOutcome(
+            contract_version=2,
+            projects_synced=0,
+            tickets_synced=0,
+            project_tasks_synced=0,
+            work_orders_synced=0,
+            errors=(),
+        )
+    )
+
+    result = DotmacErpRunner(client_override=client).validate_capability(
+        capability_id=ERP_OPERATIONAL_SYNC_CAPABILITY,
+        manifest=object(),
+        config={"base_url": "https://erp.dotmac.io"},
+        secret_material={"service_credentials": "test-token"},
+    )
+
+    assert result.valid is True
+    assert len(client.commands) == 1
+    assert client.commands[0].projects == ()
 
 
 # ---------------------------------------------------------------------------

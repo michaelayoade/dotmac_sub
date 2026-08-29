@@ -44,6 +44,7 @@ from app.services.integrations.connectors.whatsapp_runtime import WhatsAppRuntim
 from app.services.integrations.manifest import ConnectorManifest, ConnectorRuntimeType
 from app.services.integrations.registry import require_pinned_connector_definition
 from app.services.integrations.runtime import (
+    CapabilityValidationRunner,
     ConnectorRunner,
     OperationEnvelope,
     OperationResult,
@@ -238,6 +239,13 @@ def build_execution_context(
 
 
 def validate_connection(context: RuntimeExecutionContext) -> ValidationResult:
+    if isinstance(context.runner, CapabilityValidationRunner):
+        return context.runner.validate_capability(
+            capability_id=context.binding.capability_id,
+            manifest=context.manifest,
+            config=context.config,
+            secret_material=context.secret_material,
+        )
     return context.runner.validate(
         manifest=context.manifest,
         config=context.config,

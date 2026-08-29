@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from billiard.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.orm import Session
 
 from app.services import billing_automation as billing_automation_service
 from app.services.billing_enforcement_guards import (
@@ -101,7 +102,7 @@ def check_billing_switch_health() -> dict:
         session.close()
 
 
-def refresh_billing_health_snapshot() -> dict:
+def refresh_billing_health_snapshot() -> dict[str, object]:
     """Single-flight producer for the bounded snapshot consumed by ``/metrics``."""
     from app.services.billing_health import (
         BILLING_HEALTH_SNAPSHOT_LOCK_KEY,
@@ -109,6 +110,7 @@ def refresh_billing_health_snapshot() -> dict:
     )
     from app.services.observability import record_task_run, record_task_skip
 
+    logger.info("billing_health_snapshot_refresh_started")
     with db_session_adapter.advisory_lock(
         BILLING_HEALTH_SNAPSHOT_LOCK_KEY,
         timeout_ms=30_000,
@@ -117,10 +119,15 @@ def refresh_billing_health_snapshot() -> dict:
             streak = record_task_skip(
                 BILLING_HEALTH_SNAPSHOT_TASK, reason="already_running"
             )
+            logger.warning(
+                "billing_health_snapshot_refresh_skipped reason=already_running "
+                "skip_streak=%s",
+                streak,
+            )
             return {"skipped": "already_running", "skip_streak": streak}
 
         try:
-            result: dict = {}
+            result: dict[str, object] = {}
             _append_billing_health_snapshot(session, result)
             snapshot = result.get("billing_health")
             if not isinstance(snapshot, dict):
@@ -130,6 +137,12 @@ def refresh_billing_health_snapshot() -> dict:
                 BILLING_HEALTH_SNAPSHOT_TASK,
                 status="success",
                 counters=snapshot,
+            )
+            logger.info(
+                "billing_health_snapshot_refresh_succeeded "
+                "receipt_template_status=%s anomalies=%s",
+                snapshot.get("payment_receipt_email_template_status"),
+                snapshot.get("anomalies"),
             )
             return snapshot
         except SoftTimeLimitExceeded:
@@ -154,7 +167,9 @@ def refresh_billing_health_snapshot() -> dict:
             return error
 
 
-def _append_billing_health_snapshot(session, result: dict) -> None:
+def _append_billing_health_snapshot(
+    session: Session, result: dict[str, object]
+) -> None:
     try:
         from app.services.billing_health import (
             billing_health_snapshot,
@@ -358,8 +373,10 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
     except Exception:
         logger.exception(
             "billing_health_snapshot_failed: monitoring snapshot raised; "
-            "skipping liveness anomaly alerts (enforcement guard unaffected)"
+            "reporting task failure so the missing metrics snapshot is actionable "
+            "(enforcement guard unaffected)"
         )
+        raise
 
 
 def audit_cutover_balance_invariant() -> dict:
