@@ -98,6 +98,16 @@ authoritative documents in the same change that updates the contract.
 - `main` is the single release trunk. There is no long-lived `dev` branch and no
   branch-to-branch promotion hop: a feature branch merges into `main`, and every
   environment is reached from that one branch by DIGEST, never by another merge.
+- `main` is the machine-owned integration and release branch: it is the
+  repository default branch and the ONLY protected branch. Its protection is
+  what makes the trunk machine-owned rather than a convention -- 19 required
+  status contexts, `strict` (a branch must be up to date before merging), and
+  `enforce_admins` (nobody, including an administrator, merges around the
+  gates); force pushes and deletion are refused. A workflow trigger, runbook,
+  or agent instruction that names any other integration branch contradicts
+  this and is a defect, not a local variation. `feature -> dev -> main` is
+  retired and must not be reintroduced in tracked normative text or in a
+  workflow trigger (`tests/architecture/test_single_trunk_contract.py`).
 - Follow the mandatory release sequence for every release change:
   feature branch -> `main` -> `origin/main` -> prescribed validation on that
   exact remote commit -> rolling version bump -> explicit one-time candidate
