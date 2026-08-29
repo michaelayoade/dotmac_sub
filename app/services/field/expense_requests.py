@@ -560,7 +560,9 @@ def _expense_request_uuid(expense_request_id: str | UUID) -> UUID:
     try:
         return coerce_uuid(expense_request_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Expense request not found") from exc
+        raise HTTPException(
+            status_code=404, detail="Expense request not found"
+        ) from exc
 
 
 def _get_request(db: Session, expense_request_id: str | UUID) -> FieldExpenseRequest:
