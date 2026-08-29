@@ -22,6 +22,7 @@ from app.models.field_expense import (
     FieldExpenseRequest,
     FieldExpenseRequestItem,
 )
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
@@ -96,6 +97,19 @@ class ExpenseRequestSubmissionOutcome:
     created_at: datetime
     updated_at: datetime
     items: tuple[ExpenseRequestItemOutcome, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ListFieldExpenseVendors:
+    search: str | None = None
+    limit: int = 25
+    offset: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class FieldExpenseVendorOption:
+    id: UUID
+    label: str
 
 
 class FieldExpenseRequestError(DomainError):
@@ -341,6 +355,24 @@ def serialize_expense_request(request: FieldExpenseRequest) -> dict:
     }
 
 
+def list_expense_vendors(
+    *, db: Session, query: ListFieldExpenseVendors
+) -> tuple[FieldExpenseVendorOption, ...]:
+    limit = min(max(query.limit, 1), 100)
+    offset = max(query.offset, 0)
+    search = (query.search or "").strip()
+    rows = db.query(Vendor).filter(Vendor.is_active.is_(True))
+    if search:
+        rows = rows.filter(Vendor.name.ilike(f"%{search}%"))
+    return tuple(
+        FieldExpenseVendorOption(id=vendor.id, label=vendor.name)
+        for vendor in rows.order_by(Vendor.name.asc(), Vendor.id.asc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+
+
 class FieldExpenseRequests:
     @staticmethod
     def list_mine(
@@ -373,7 +405,9 @@ class FieldExpenseRequests:
         ]
 
     @staticmethod
-    def get(db: Session, principal: dict[str, Any], expense_request_id: str) -> dict:
+    def get(
+        db: Session, principal: dict[str, Any], expense_request_id: str | UUID
+    ) -> dict:
         return serialize_expense_request(
             _get_scoped_request(db, principal, expense_request_id)
         )
@@ -437,7 +471,9 @@ class FieldExpenseRequests:
         return serialize_expense_request(request)
 
     @staticmethod
-    def submit(db: Session, principal: dict[str, Any], expense_request_id: str) -> dict:
+    def submit(
+        db: Session, principal: dict[str, Any], expense_request_id: str | UUID
+    ) -> dict:
         request = _get_scoped_request(db, principal, expense_request_id)
         if request.status != "draft":
             raise HTTPException(status_code=409, detail="Only draft requests submit")
@@ -472,7 +508,7 @@ class FieldExpenseRequests:
         ]
 
     @staticmethod
-    def approve(db: Session, expense_request_id: str) -> dict:
+    def approve(db: Session, expense_request_id: str | UUID) -> dict:
         request = _get_request(db, expense_request_id)
         if request.status != "submitted":
             raise HTTPException(
@@ -487,7 +523,7 @@ class FieldExpenseRequests:
         return serialize_expense_request(request)
 
     @staticmethod
-    def reject(db: Session, expense_request_id: str, reason: str) -> dict:
+    def reject(db: Session, expense_request_id: str | UUID, reason: str) -> dict:
         request = _get_request(db, expense_request_id)
         if request.status != "submitted":
             raise HTTPException(
@@ -505,7 +541,9 @@ class FieldExpenseRequests:
         return serialize_expense_request(request)
 
     @staticmethod
-    def cancel(db: Session, principal: dict[str, Any], expense_request_id: str) -> dict:
+    def cancel(
+        db: Session, principal: dict[str, Any], expense_request_id: str | UUID
+    ) -> dict:
         request = _get_scoped_request(db, principal, expense_request_id)
         if request.status not in {"draft", "submitted"}:
             raise HTTPException(
@@ -518,11 +556,18 @@ class FieldExpenseRequests:
         return serialize_expense_request(request)
 
 
-def _get_request(db: Session, expense_request_id: str) -> FieldExpenseRequest:
+def _expense_request_uuid(expense_request_id: str | UUID) -> UUID:
+    try:
+        return coerce_uuid(expense_request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Expense request not found") from exc
+
+
+def _get_request(db: Session, expense_request_id: str | UUID) -> FieldExpenseRequest:
     request = (
         db.query(FieldExpenseRequest)
         .options(selectinload(FieldExpenseRequest.items))
-        .filter(FieldExpenseRequest.id == coerce_uuid(expense_request_id))
+        .filter(FieldExpenseRequest.id == _expense_request_uuid(expense_request_id))
         .filter(FieldExpenseRequest.is_active.is_(True))
         .one_or_none()
     )
@@ -532,13 +577,13 @@ def _get_request(db: Session, expense_request_id: str) -> FieldExpenseRequest:
 
 
 def _get_scoped_request(
-    db: Session, principal: dict[str, Any], expense_request_id: str
+    db: Session, principal: dict[str, Any], expense_request_id: str | UUID
 ) -> FieldExpenseRequest:
     profile = _profile_from_principal(db, principal)
     request = (
         db.query(FieldExpenseRequest)
         .options(selectinload(FieldExpenseRequest.items))
-        .filter(FieldExpenseRequest.id == coerce_uuid(expense_request_id))
+        .filter(FieldExpenseRequest.id == _expense_request_uuid(expense_request_id))
         .filter(_expense_request_ownership(profile))
         .filter(FieldExpenseRequest.is_active.is_(True))
         .one_or_none()
