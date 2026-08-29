@@ -539,10 +539,17 @@ def _freeze_billing_clock(monkeypatch: pytest.MonkeyPatch, instant: datetime) ->
     monkeypatch.setattr(billing_automation, "datetime", _FrozenDatetime)
 
 
-def _bill_one_quarter(
+def _bill_one_period(
     db_session, subscription, subscriber_account, *, cycle, next_billing_at
 ):
-    """Give the subscription one issued invoice line on ``cycle``, and return it."""
+    """Give the subscription one issued invoice line on ``cycle``, and return it.
+
+    Sets the cadence on BOTH the subscription and its offer. ``_resolve_price``
+    returns ``(None, None, None)`` when the offer has no active recurring price
+    row, and ``generate_cancellation_credit`` then falls back to
+    ``subscription.offer.billing_cycle`` — so setting only the subscription's
+    cadence silently leaves the credit on the offer's.
+    """
     from app.models.billing import (
         Invoice,
         InvoiceLine,
@@ -610,7 +617,7 @@ class TestCancellationCreditMoney:
     ):
         from app.services import billing_automation
 
-        _bill_one_quarter(
+        _bill_one_period(
             db_session,
             subscription,
             subscriber_account,
@@ -634,7 +641,7 @@ class TestCancellationCreditMoney:
     ):
         from app.services import billing_automation
 
-        _bill_one_quarter(
+        _bill_one_period(
             db_session,
             subscription,
             subscriber_account,
@@ -650,16 +657,24 @@ class TestCancellationCreditMoney:
         # 9 unused days of the 366-day year 2023-02-28 .. 2024-02-29.
         assert credit.subtotal == Decimal("737.70")
 
-    def test_reinjecting_the_deleted_reverse_reproduces_both_defects(
+    # The two sensitivity proofs below stay in SEPARATE tests on purpose. An
+    # earlier version drove both defects through one subscription and was
+    # wrong twice over: `generate_cancellation_credit` keys idempotency on
+    # (subscription, invoice line), so the second credit collided with the
+    # first, and re-pointing only `subscription.billing_cycle` left
+    # `subscription.offer.billing_cycle` on the old cadence — which is what
+    # `_resolve_price` falls back to when the offer has no price row.
+
+    def test_reinjecting_the_deleted_reverse_reproduces_the_quarterly_defect(
         self, db_session, subscription, subscriber_account, monkeypatch
     ):
-        """Sensitivity proof for the two tests above, through the real path."""
+        """DEFECT 1 sensitivity, through the real credit path."""
         from app.services import billing_automation
 
-        owner = _owner_module()
-        monkeypatch.setattr(owner, "billing_cycle_start", _legacy_billing_cycle_start)
-
-        _bill_one_quarter(
+        monkeypatch.setattr(
+            _owner_module(), "billing_cycle_start", _legacy_billing_cycle_start
+        )
+        _bill_one_period(
             db_session,
             subscription,
             subscriber_account,
@@ -669,17 +684,32 @@ class TestCancellationCreditMoney:
         _freeze_billing_clock(monkeypatch, datetime(2026, 3, 2, tzinfo=UTC))
 
         billing_automation.generate_cancellation_credit(db_session, subscription)
+
         credit = _issued_credit(db_session, subscriber_account)
         assert credit is not None
         assert credit.subtotal == Decimal("29032.26"), "DEFECT 1 no longer reproduces"
 
-        # And the leap-day crash the caller swallows.
-        subscription.billing_cycle = BillingCycle.annual
-        subscription.next_billing_at = datetime(2024, 2, 29, tzinfo=UTC)
-        db_session.flush()
+    def test_reinjecting_the_deleted_reverse_reproduces_the_leap_day_defect(
+        self, db_session, subscription, subscriber_account, monkeypatch
+    ):
+        """DEFECT 2 sensitivity: the crash the caller silently swallows."""
+        from app.services import billing_automation
+
+        monkeypatch.setattr(
+            _owner_module(), "billing_cycle_start", _legacy_billing_cycle_start
+        )
+        _bill_one_period(
+            db_session,
+            subscription,
+            subscriber_account,
+            cycle=BillingCycle.annual,
+            next_billing_at=datetime(2024, 2, 29, tzinfo=UTC),
+        )
         _freeze_billing_clock(monkeypatch, datetime(2024, 2, 20, tzinfo=UTC))
+
         with pytest.raises(ValueError, match="day is out of range for month"):
             billing_automation.generate_cancellation_credit(db_session, subscription)
+        assert _issued_credit(db_session, subscriber_account) is None
 
     def test_a_cancellation_credit_failure_is_logged_with_its_traceback(
         self, db_session, subscription, subscriber_account, monkeypatch, caplog
@@ -689,7 +719,7 @@ class TestCancellationCreditMoney:
 
         from app.services import account_lifecycle, billing_automation
 
-        _bill_one_quarter(
+        _bill_one_period(
             db_session,
             subscription,
             subscriber_account,
