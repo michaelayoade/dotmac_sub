@@ -10,7 +10,8 @@ estimate/feasibility/deposit are computed by the CRM; this is a faithful copy.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
@@ -21,10 +22,16 @@ from sqlalchemy.orm import Session
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.subscriber import Subscriber
 from app.schemas.notification import PushIntent
+from app.services.audit_adapter import record_audit_event
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
-from app.services.integrations.crm_capability import capability_client
+from app.services.domain_errors import DomainError
+from app.services.integrations import installations
+from app.services.integrations.connectors.dotmac_crm import (
+    CRM_QUOTE_COMMAND_CAPABILITY,
+)
+from app.services.integrations.crm_capability import CONNECTOR_KEY, capability_client
 from app.services.integrations.installations import InstallationError
 
 logger = logging.getLogger(__name__)
@@ -42,6 +49,189 @@ class QuoteReadState(StrEnum):
 class QuoteReadResult:
     payload: dict[str, object]
     state: QuoteReadState
+
+
+# ---------------------------------------------------------------------------
+# Portal quote COMMANDS (Sub -> CRM) - fail-closed contract
+#
+# ``request_quote`` and ``accept_quote`` are the last two Sub -> CRM business
+# writes (tests/architecture/test_no_crm_writeback.py::DEFERRED_MUTATIONS) and
+# they sit on a customer-money path: ``accept_quote`` is the tail of
+# ``quote_deposits.verify_deposit``, which has already recorded a deposit
+# payment in Sub's ledger by the time it runs.
+#
+# The CRM/Omni runtime was decommissioned on 2026-08-29, so this transport now
+# addresses a system that is not merely unreachable but gone. This module is
+# the single owner of what that means, and it owns exactly three guarantees:
+#
+#   1. EXPLICIT TYPED REFUSAL. A command that cannot be completed raises
+#      ``PortalQuoteCommandError`` - never a bare transport ``HTTPException``
+#      whose 502 reads as "retry in a minute" for a permanent condition.
+#   2. NO SILENT SUCCESS. A command that returns no acknowledged quote
+#      identity is a failure, not an empty ``{}`` behind an HTTP 200.
+#   3. NO PARTIAL STATE. Nothing is mirrored, and no money is recorded, for a
+#      command the CRM did not acknowledge. Callers that are about to move
+#      money ask ``ensure_portal_quote_commands_available`` FIRST.
+#
+# The precondition resolves local configuration only and makes no network
+# call, so a retired CRM is refused immediately instead of hanging for a
+# connect timeout.
+# ---------------------------------------------------------------------------
+
+#: Audit ``entity_type`` for every refused portal quote command.
+PORTAL_QUOTE_COMMAND_ENTITY = "portal_quote_command"
+
+#: Audit ``action`` values. One per refusal site, so an operator can tell a
+#: refused request apart from a refused acceptance apart from a deposit that
+#: was never taken.
+PORTAL_QUOTE_REQUEST_REFUSED = "sales.portal_quote.request_refused"
+PORTAL_QUOTE_ACCEPT_REFUSED = "sales.portal_quote.accept_refused"
+PORTAL_QUOTE_DEPOSIT_PREFLIGHT_REFUSED = "sales.portal_quote.deposit_preflight_refused"
+
+#: One customer-safe message for every refusal. It states the two facts a
+#: customer needs - nothing was charged, nothing was changed - and leaks no
+#: endpoint, host or capability detail.
+PORTAL_QUOTE_UNAVAILABLE_MESSAGE = (
+    "Online quoting is unavailable. Nothing was charged and no quote was "
+    "changed. Please contact support to continue."
+)
+
+
+class PortalQuoteCommandError(DomainError):
+    """Transport-neutral refusal of a Sub -> CRM portal quote command.
+
+    Raised instead of returning a partial or empty result. Adapters map it;
+    the shared ``DomainError`` handler in ``app/errors.py`` answers 409, which
+    is deliberately not the old 502 - the condition is a refusal, not a
+    transient upstream blip a client should retry against.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class PortalQuoteAuditContext:
+    """Who/what to record when a portal quote command is refused.
+
+    ``details`` carries structured, non-secret decision evidence only: ids and
+    reasons, never recipient data, endpoints or credential references.
+    """
+
+    action: str
+    subscriber_id: str
+    details: Mapping[str, str] = field(default_factory=dict)
+
+
+def _portal_quote_error(suffix: str, **details: object) -> PortalQuoteCommandError:
+    return PortalQuoteCommandError(
+        code=f"sales.portal_quote.{suffix}",
+        message=PORTAL_QUOTE_UNAVAILABLE_MESSAGE,
+        details=details,
+    )
+
+
+def _audit_portal_quote_refusal(
+    db: Session,
+    context: PortalQuoteAuditContext,
+    error: PortalQuoteCommandError,
+) -> None:
+    """Record durable evidence that a money-path quote command was refused.
+
+    Committed on its own: the command is refused, so there is no business
+    transaction to attach the row to, and the refusal must survive regardless.
+    A failure to audit is logged and must never mask the refusal itself -
+    failing closed is the stronger guarantee of the two.
+    """
+    metadata: dict[str, object] = {
+        "subscriber_id": context.subscriber_id,
+        "error_code": error.code,
+    }
+    metadata.update({key: str(value) for key, value in context.details.items()})
+    metadata.update({key: str(value) for key, value in error.details.items()})
+    try:
+        record_audit_event(
+            db,
+            action=context.action,
+            entity_type=PORTAL_QUOTE_COMMAND_ENTITY,
+            entity_id=context.subscriber_id,
+            metadata=metadata,
+            status_code=409,
+            is_success=False,
+        )
+    except Exception:  # pragma: no cover - defensive; refusal still stands
+        logger.exception(
+            "portal_quote_refusal_audit_failed action=%s error_code=%s",
+            context.action,
+            error.code,
+        )
+
+
+def ensure_portal_quote_commands_available(
+    db: Session,
+    *,
+    audit_context: PortalQuoteAuditContext | None = None,
+) -> None:
+    """Fail closed unless the CRM portal-quote command transport is enabled.
+
+    This is the money-path precondition. A caller that is about to record a
+    customer payment whose only consequence is a CRM quote acceptance must ask
+    this owner BEFORE the payment is recorded, so a deposit is never taken for
+    an acceptance that cannot be completed.
+
+    Resolves local capability configuration only - no network call - so a
+    decommissioned CRM is refused immediately rather than hanging.
+    """
+    try:
+        installations.require_enabled_capability_binding(
+            db,
+            connector_key=CONNECTOR_KEY,
+            capability_id=CRM_QUOTE_COMMAND_CAPABILITY,
+        )
+    except InstallationError as exc:
+        error = _portal_quote_error(
+            "transport_unavailable",
+            capability_id=CRM_QUOTE_COMMAND_CAPABILITY,
+            reason="capability_binding_not_enabled",
+        )
+        if audit_context is not None:
+            _audit_portal_quote_refusal(db, audit_context, error)
+        raise error from exc
+
+
+def _run_portal_quote_command(
+    db: Session,
+    context: PortalQuoteAuditContext,
+    command: Callable[[], object],
+) -> dict[str, object]:
+    """Run one Sub -> CRM quote command under the fail-closed contract."""
+    ensure_portal_quote_commands_available(db, audit_context=context)
+
+    try:
+        item = command()
+    except (CRMClientError, InstallationError) as exc:
+        error = _portal_quote_error(
+            "transport_failed",
+            capability_id=CRM_QUOTE_COMMAND_CAPABILITY,
+            reason=type(exc).__name__,
+        )
+        logger.warning(
+            "portal_quote_command_failed action=%s error_type=%s",
+            context.action,
+            type(exc).__name__,
+        )
+        _audit_portal_quote_refusal(db, context, error)
+        raise error from exc
+
+    if not isinstance(item, dict) or not item.get("id"):
+        # The transport reported success but handed back nothing identifying a
+        # quote. Returning it would be a 200 with an empty body on a money
+        # path - the silent success this contract exists to forbid.
+        error = _portal_quote_error(
+            "command_not_acknowledged",
+            capability_id=CRM_QUOTE_COMMAND_CAPABILITY,
+            reason="missing_quote_identity",
+        )
+        _audit_portal_quote_refusal(db, context, error)
+        raise error
+    return item
 
 
 def _to_dt(value: object) -> datetime | None:
@@ -299,32 +489,37 @@ def request_quote(
     region: str | None = None,
     note: str | None = None,
 ) -> dict[str, object]:
-    """Write-through: request a map-pinned installation quote from the CRM, mirror
-    the result locally, and return it. Raises 400 if the account isn't CRM-linked."""
+    """Write-through: request a map-pinned installation quote from the CRM,
+    mirror the result locally, and return it.
+
+    Fail-closed (see the portal quote command contract above): raises 400 if
+    the account is not CRM-linked, and ``PortalQuoteCommandError`` if the
+    transport is disabled, fails, or does not acknowledge a quote. It never
+    returns an empty payload and never mirrors an unacknowledged command."""
     crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))
     if not crm_subscriber_id:
         raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
 
-    try:
-        item = capability_client(db).request_portal_quote(
+    item = _run_portal_quote_command(
+        db,
+        PortalQuoteAuditContext(
+            action=PORTAL_QUOTE_REQUEST_REFUSED,
+            subscriber_id=str(subscriber_id),
+        ),
+        lambda: capability_client(db).request_portal_quote(
             crm_subscriber_id,
             latitude=latitude,
             longitude=longitude,
             address=address,
             region=region,
             note=note,
-        )
-    except CRMClientError as exc:
-        logger.warning("quote_request_failed subscriber=%s: %s", subscriber_id, exc)
-        raise HTTPException(
-            status_code=502, detail="Could not reach the quoting service"
-        ) from exc
+        ),
+    )
 
     sub_uuid = coerce_uuid(str(subscriber_id))
-    if isinstance(item, dict) and item.get("id"):
-        _upsert_row(db, subscriber_id=sub_uuid, item=item)
-        db.commit()
-    return item if isinstance(item, dict) else {}
+    _upsert_row(db, subscriber_id=sub_uuid, item=item)
+    db.commit()
+    return item
 
 
 def accept_quote(
@@ -338,35 +533,36 @@ def accept_quote(
 ) -> dict:
     """Write-through: accept a quote after the deposit is verified. The CRM
     records the deposit + triggers the sales-order/install-project; mirror the
-    returned quote locally."""
+    returned quote locally.
+
+    Fail-closed: raises ``PortalQuoteCommandError`` rather than reporting a
+    success it did not observe. Money has ALREADY been recorded by the time
+    this runs, so callers must call ``ensure_portal_quote_commands_available``
+    before they record it - see ``quote_deposits.verify_deposit``."""
     crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))
     if not crm_subscriber_id:
         raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
 
-    try:
-        item = capability_client(db).accept_portal_quote(
+    item = _run_portal_quote_command(
+        db,
+        PortalQuoteAuditContext(
+            action=PORTAL_QUOTE_ACCEPT_REFUSED,
+            subscriber_id=str(subscriber_id),
+            details={"quote_id": str(quote_id)},
+        ),
+        lambda: capability_client(db).accept_portal_quote(
             crm_subscriber_id,
             quote_id,
             deposit_reference=deposit_reference,
             deposit_amount=deposit_amount,
             provider=provider,
-        )
-    except CRMClientError as exc:
-        logger.warning(
-            "quote_accept_failed subscriber=%s quote=%s: %s",
-            subscriber_id,
-            quote_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=502, detail="Could not reach the quoting service"
-        ) from exc
+        ),
+    )
 
     sub_uuid = coerce_uuid(str(subscriber_id))
-    if isinstance(item, dict) and item.get("id"):
-        _upsert_row(db, subscriber_id=sub_uuid, item=item)
-        db.commit()
-    return item if isinstance(item, dict) else {}
+    _upsert_row(db, subscriber_id=sub_uuid, item=item)
+    db.commit()
+    return item
 
 
 _STATUS_EVENTS = {
