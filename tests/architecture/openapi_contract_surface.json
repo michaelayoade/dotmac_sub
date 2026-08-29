@@ -4223,6 +4223,20 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/expense-requests/vendors": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:limit",
+    "query:offset",
+    "query:q"
+   ],
+   "request": null,
+   "responses": {
+    "200": "06a699c539fa",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/expense-requests/{expense_request_id}": {
    "params": [
     "header:authorization",
@@ -19350,6 +19364,7 @@
   "FieldExpenseRequestItemRead": "515094e4452b",
   "FieldExpenseRequestRead": "4e1e5219e3d4",
   "FieldExpenseRequestSubmit": "e8a7e3d6ec5a",
+  "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
   "FieldFiberOntLiveRead": "b56481e9b334",
   "FieldFiberSourceObservationCreate": "e2926b09d191",
@@ -19659,6 +19674,7 @@
   "ListResponse_FieldEquipmentCustodyRead_": "3ca9545967e8",
   "ListResponse_FieldExpenseCategoryRead_": "48f31f419bbc",
   "ListResponse_FieldExpenseRequestRead_": "1a0780401fd8",
+  "ListResponse_FieldExpenseVendorRead_": "97f6aed34d68",
   "ListResponse_FieldFiberCustomerTraceRead_": "a780397774e9",
   "ListResponse_FieldFiberSourceObservationRead_": "5ad0239abaf9",
   "ListResponse_FieldFiberTestRead_": "195e32620d17",

@@ -25,9 +25,9 @@ class SubscriberFormPage(BasePage):
         """Assert the form is loaded.
 
         The edit page renders a second form (convert-to-business), so the
-        assertion targets the first — the main create/edit form.
+        assertion targets the named main create/edit form.
         """
-        expect(self.page.locator("form").first).to_be_visible()
+        expect(self.page.locator("#customer-edit-form")).to_be_visible()
 
     def expect_create_mode(self) -> None:
         """Assert form is in create mode."""
@@ -82,7 +82,14 @@ class SubscriberFormPage(BasePage):
     def submit(self) -> None:
         """Submit the main create/edit form (the edit page carries a second
         convert-to-business form with its own submit button)."""
-        self.page.locator("form").first.locator("button[type='submit']").click()
+        form = self.page.locator("#customer-edit-form")
+        invalid_fields: list[str] = form.locator(":invalid").evaluate_all(
+            """elements => elements.map(element =>
+                element.getAttribute('name') || element.id || element.tagName
+            )"""
+        )
+        assert invalid_fields == [], f"customer edit form is invalid: {invalid_fields}"
+        form.locator("button[type='submit']").click()
 
     def cancel(self) -> None:
         """Cancel and go back."""

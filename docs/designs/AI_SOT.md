@@ -177,11 +177,27 @@ The approved tool catalogue is backend-owned. Current tools are:
   state, live-session and equipment status where available. An unavailable
   result must not become a diagnosis.
 
-Policy versions may select which identifiers can be requested and which
-approved tools are enabled. The UI cannot create arbitrary tools or executable
-conditions. If a customer explicitly asks for a human, AI intake records
-`human_requested=true`, stops troubleshooting and requests handoff while
-preserving already collected facts.
+Policy versions may select which identifiers can be requested, and in which
+order. Customer identity prompts are asked one at a time, and the policy's
+declared `permitted_identifiers` order is authoritative: it is preserved
+exactly, de-duplicated by first occurrence, and unsupported values are dropped
+without reordering the remaining ones. The engine never imposes a canonical
+order over a declared one. When a policy declares no identifiers, the default
+order is registered phone, then registered email, then Portal/account ID. AI
+intake asks the next identifier only when the previous one is absent or did not
+identify the account, and identification lookup attempts identifiers in that
+same declared order, so prompting and lookup can never disagree. The UI cannot
+create arbitrary tools or executable conditions. If a customer explicitly asks
+for a human, AI intake records `human_requested=true`, stops troubleshooting and
+requests handoff while preserving already collected facts.
+
+Policy versions may define bounded first-line playbooks. A playbook matches an
+intent and optional category, then runs configured steps in order: request one
+missing field, provide configured guidance, invoke an approved read-only tool,
+mark resolved, or request handoff. Playbook wording, including empathy or
+acknowledgement text, is policy data curated from approved support patterns; the
+engine supplies only generic fallback field prompts and does not hardcode a
+category-specific conversation path.
 
 Policy versions may opt into immediate handoff after classification through
 `conversation_policy.handoff_after_classification`. The default is false for

@@ -505,6 +505,40 @@ class TestBuildBeatSchedule:
         assert row.enabled is True
         assert row.interval_seconds == 900
 
+    def test_billing_health_snapshot_survives_later_schedule_build_failure(
+        self, db_session, monkeypatch
+    ):
+        """A later settings/control failure must not hide billing health.
+
+        The metrics alert showed ``billing_health_snapshot_available == 0`` and
+        no billing-health task logs. Keep this producer registered first and
+        still append DB-backed rows when the rest of the schedule build fails.
+        """
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with (
+            patch.object(scheduler_config, "SessionLocal", return_value=db_session),
+            patch.object(
+                scheduler_config.control_registry,
+                "is_enabled",
+                side_effect=RuntimeError("control settings unavailable"),
+            ),
+        ):
+            schedule = scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "billing_health_snapshot")
+            .one()
+        )
+        assert row.task_name == "app.tasks.billing.refresh_billing_health_snapshot"
+        assert row.enabled is True
+        assert row.interval_seconds == 900
+        assert any(
+            entry["task"] == "app.tasks.billing.refresh_billing_health_snapshot"
+            for entry in schedule.values()
+        )
+
     def test_retires_parallel_radius_refresh_schedule(self, db_session, monkeypatch):
         refresh_task = "app.tasks.radius_population.refresh_radius_from_subs"
         stale_row = ScheduledTask(

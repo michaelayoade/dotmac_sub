@@ -845,6 +845,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `operations.material_catalog` | field material request eligibility | `command_writer` | ERP inventory catalogue observation ← `external:dotmac_erp` | `owner_managed` | `cutover_ready` | field operations | `docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md`<br>`tests/test_admin_material_requests.py` |
 | `operations.expense_categories` | ERP expense category query | `resolver` | ERP expense category observation ← `external:dotmac_erp` | `read_only` | `native` | field operations and finance | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_field_expense_categories.py` |
 | `operations.expense_requests` | field expense request submission | `command_writer` | canonical service work-order state ← `operations.work_orders` | `owner_managed` | `cutover_ready` | field operations and finance | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_field_expense_requests.py` |
+| `operations.expense_requests` | field expense vendor picker | `resolver` | legacy active vendor identity observation ← `external:legacy_vendor_registry` | `owner_managed` | `cutover_ready` | field operations and finance | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_field_expense_requests.py` |
 | `operations.material_dependencies` | contextual material need and ERP submission | `command_writer` | canonical service work-order state ← `operations.work_orders`<br>material dependency transition protocol ← `operations.work_order_status`<br>material-support cutover controls ← `control.settings_spec` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py`<br>`tests/test_admin_material_requests.py` |
 | `operations.material_dependencies` | service-work-order material need and operational approval | `command_writer` | canonical service work-order state ← `operations.work_orders` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py`<br>`tests/test_admin_material_requests.py` |
 | `operations.material_dependencies` | ERP material status observation | `reconciler` | ERP material-support outcome observation ← `external:dotmac_erp` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py`<br>`tests/test_admin_material_requests.py` |
@@ -5186,6 +5187,23 @@ Service intent:
    biller (`subscription.billing_cycle` -> offer/version price -> monthly). The
    offer price cadence is fallback-only; catalog offer-cadence immutability
    stays with `service_intent.catalog_billing_governance`.
+   It also owns **billing-period boundary geometry in both directions**:
+   `billing_cycle_end(period_start, cycle)` and
+   `billing_cycle_start(next_billing_at, cycle)` in
+   `app/services/catalog/subscriptions.py`, both reading the single total table
+   `_CYCLE_PERIOD_LENGTH` over `BillingCycle`. Boundaries use exact clamped
+   calendar arithmetic (`_add_months`, equivalent to
+   `dateutil.relativedelta`) and never a 30/90/365-day approximation; a cadence
+   absent from the table raises rather than defaulting to monthly. Any consumer
+   needing the period a subscription was last billed for — the cancellation
+   credit in `billing_automation.generate_cancellation_credit` is the live
+   one — calls `billing_cycle_start`. That consumer carried its own inline
+   reverse until 2026-08-29; the copy had no `quarterly` branch (a cancelled
+   quarterly subscription was credited against one month of a three-month
+   period, 2.9x over-issue) and used `datetime.replace(year=...)`, which raises
+   on 29 February and left the customer with no credit at all. Guarded by
+   `tests/architecture/test_cancellation_credit_cadence_ownership.py` and
+   `tests/test_cancellation_credit_cadence.py`.
 8. `service_intent.ont`: projects provisioning intent to ONT operations.
 
 Rule: catalog policy and subscription owners define commercial intent. Every

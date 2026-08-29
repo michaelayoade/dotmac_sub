@@ -17,8 +17,10 @@ access; the target host must be named explicitly before any production work.
 
 1. Confirm Alembic has one expected head and migration 404 is applied.
 2. Compare observation counts by provider, kind, and processing status. A
-   recorded observation without `processed_at` is a processing work item, not
-   permission to bypass the processor.
+   recorded observation without `processed_at` is a processing work item. A
+   rejected SMTP observation with `error_code=smtp_processing_failed` means the
+   email was already saved and must be replayed internally, not reaccepted from
+   the customer mail server.
 3. Review identity collisions separately in
    `inbox_provider_observation_collisions`. Group by `changed_fields` and inspect
    the retained candidate only through approved, access-controlled tooling.
@@ -28,7 +30,8 @@ access; the target host must be named explicitly before any production work.
    Repeated delivery of one semantic candidate increments `attempt_count`
    instead of creating unbounded quarantine rows.
 4. Re-run the observation processor by observation UUID. Exact completed
-   observations return `already_processed`.
+   observations return `already_processed`; rejected SMTP observations may be
+   replayed the same way after the processing fault is fixed.
 5. For delivery drift, compare the Inbox message provider identity with receipt
    observation time and rank. Reapply through the receipt processor; never set
    `delivery_status` manually.
