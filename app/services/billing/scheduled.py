@@ -147,24 +147,26 @@ def refresh_billing_health_snapshot() -> dict[str, object]:
             return snapshot
         except SoftTimeLimitExceeded:
             session.rollback()
-            error = {"error": "billing_health_snapshot_timed_out"}
-            logger.error(error["error"])
+            timeout_counters: dict[str, object] = {
+                "error": "billing_health_snapshot_timed_out"
+            }
+            logger.error(timeout_counters["error"])
             record_task_run(
                 BILLING_HEALTH_SNAPSHOT_TASK,
                 status="error",
-                counters=error,
+                counters=timeout_counters,
             )
-            return error
+            return timeout_counters
         except Exception as exc:  # noqa: BLE001 - runner records bounded failure
             session.rollback()
-            error = {"error": str(exc)[:500]}
+            failure_counters: dict[str, object] = {"error": str(exc)[:500]}
             logger.exception("billing_health_snapshot_refresh_failed")
             record_task_run(
                 BILLING_HEALTH_SNAPSHOT_TASK,
                 status="error",
-                counters=error,
+                counters=failure_counters,
             )
-            return error
+            return failure_counters
 
 
 def _append_billing_health_snapshot(
