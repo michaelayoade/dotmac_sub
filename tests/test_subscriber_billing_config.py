@@ -1,3 +1,4 @@
+import datetime as _dt
 from decimal import Decimal
 
 import pytest
@@ -272,3 +273,121 @@ def test_customer_vat_exemption_can_be_enabled_without_enabling_wht(
         account_id=account_id,
     )
     assert wht_policy.withholding_tax_enabled is False
+
+
+# --- billing_day must stay inside its declared domain ----------------------
+#
+# "0 = day of activation" used to write datetime.now(UTC).day straight onto the
+# subscriber. On the 29th, 30th or 31st that stores a day OUTSIDE the domain the
+# setting spec declares (max_value=28) and the admin customer form enforces
+# (max="28"). The consequence was not cosmetic: the browser refused to submit
+# that customer's edit form at all, and because the offending control sits in a
+# collapsed tab it could not be focused, so Chromium reported only
+# "An invalid form control with name='billing_day' is not focusable" to the
+# console -- no server error, no message to the admin, the Update button simply
+# did nothing. It reached CI as a browser test that had been green on the 28th
+# and red from the 29th, on every branch, with no code change in between.
+
+
+def _billing_day_after_activation(db_session, subscriber, monkeypatch, activation_day):
+    """Apply prepaid defaults as if the subscriber activated on a given day."""
+
+    import app.services.subscriber as subscriber_module
+
+    subscriber.billing_day = None
+    monkeypatch.setattr(
+        "app.services.subscriber.settings_spec.resolve_value",
+        lambda _db, _domain, key: {
+            "prepaid_default_billing_day": "0",
+            "prepaid_default_payment_due_days": "0",
+            "prepaid_default_min_balance": "0",
+        }.get(key),
+    )
+
+    class _FrozenDatetime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, activation_day, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(subscriber_module, "datetime", _FrozenDatetime)
+    _apply_billing_defaults(db_session, subscriber)
+    return subscriber.billing_day
+
+
+@pytest.mark.parametrize("activation_day", [29, 30, 31])
+def test_activation_day_past_the_declared_maximum_is_clamped(
+    db_session, subscriber, monkeypatch, activation_day
+):
+    stored = _billing_day_after_activation(
+        db_session, subscriber, monkeypatch, activation_day
+    )
+
+    assert stored == 28, (
+        f"activating on the {activation_day}th stored billing_day={stored}, "
+        "outside the 1..28 domain the setting spec declares and the admin "
+        "form enforces -- the customer's edit form becomes unsubmittable"
+    )
+
+
+@pytest.mark.parametrize("activation_day", [1, 15, 28])
+def test_an_in_domain_activation_day_is_stored_unchanged(
+    db_session, subscriber, monkeypatch, activation_day
+):
+    """The negative half of the control.
+
+    A clamp that flattened every activation day to 28 would pass the test
+    above and destroy the feature. The 28th is included deliberately: it is
+    the boundary, and it must survive untouched.
+    """
+
+    stored = _billing_day_after_activation(
+        db_session, subscriber, monkeypatch, activation_day
+    )
+
+    assert stored == activation_day
+
+
+def test_the_clamp_is_read_from_the_setting_spec_not_hardcoded():
+    """Writer and validator must share ONE declaration of the domain.
+
+    If someone widens the spec to 31, this fails and forces the writer, the
+    admin form's ``max`` and this expectation to be revisited together --
+    rather than letting the writer silently keep clamping to a bound the spec
+    no longer states.
+    """
+
+    from app.models.domain_settings import SettingDomain as _Domain
+    from app.services import settings_spec as _spec
+    from app.services.subscriber import _declared_max_billing_day
+
+    for key in ("prepaid_default_billing_day", "postpaid_default_billing_day"):
+        spec = _spec.get_spec(_Domain.billing, key)
+        assert spec is not None, f"{key} is no longer a registered setting"
+        assert spec.max_value == 28, (
+            f"{key} now declares max_value={spec.max_value}; the admin customer "
+            'form still renders max="28" for billing_day. Change both or '
+            "neither -- a writer and a validator that disagree about a field's "
+            "domain produce a value that is legal to store and impossible to "
+            "edit."
+        )
+        assert _declared_max_billing_day(key) == spec.max_value
+
+
+def test_the_admin_form_still_constrains_billing_day_to_the_declared_domain():
+    """Sensitivity proof for the test above.
+
+    The clamp only matters because the rendered form rejects anything past
+    28. If that ``max`` were ever dropped from the template, the tests above
+    would keep passing while the constraint they protect had quietly gone.
+    """
+
+    from pathlib import Path
+
+    template = Path("templates/admin/customers/form.html").read_text(encoding="utf-8")
+    person_field = [
+        line
+        for line in template.splitlines()
+        if 'name="billing_day"' in line and 'id="billing_day"' in line
+    ]
+    assert person_field, "the person billing_day input is gone from the form"
+    assert 'min="1"' in person_field[0] and 'max="28"' in person_field[0]
