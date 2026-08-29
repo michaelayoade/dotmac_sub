@@ -639,6 +639,15 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
+    subscriber.status = SubscriberStatus.suspended
+    lock = EnforcementLock(
+        subscription_id=subscription.id,
+        subscriber_id=subscriber.id,
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid-funding-change",
+        is_active=True,
+    )
+    db_session.add(lock)
     db_session.commit()
 
     result = apply_due_prepaid_service_after_funding_change(
@@ -650,10 +659,16 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     )
     db_session.commit()
 
+    db_session.refresh(lock)
     db_session.refresh(subscription)
+    db_session.refresh(subscriber)
     entitlement = db_session.query(ServiceEntitlement).one()
     assert result.disposition == FundingChangeRenewalDisposition.funded
     assert result.funded == 1
+    assert result.restored_service_count == 1
+    assert lock.is_active is False
+    assert subscription.status == SubscriptionStatus.active
+    assert subscriber.status == SubscriberStatus.active
     assert entitlement.starts_at.replace(tzinfo=UTC) == datetime(
         2026, 7, 20, tzinfo=UTC
     )
