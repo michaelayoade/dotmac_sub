@@ -88,8 +88,11 @@ transaction before applying the audited status transition.
    candidate evidence, candidate fingerprints, bounded changed-field names,
    and retry count. It never overwrites or processes the admitted observation.
    SMTP returns success only after that quarantine transaction commits, ending
-   deterministic redelivery; transient parsing, database, and processing
-   failures remain retryable. Other provider adapters retain fail-closed
+   deterministic redelivery. Pre-admission parsing and database failures remain
+   SMTP-retryable because Sub has not saved the message. Once the observation
+   is committed, processing failures are marked for internal replay/repair and
+   SMTP returns success so the customer mail server does not resend the same
+   saved message indefinitely. Other provider adapters retain fail-closed
    rejection until they deliberately adopt a transport disposition.
 4. A separate processing owner locks the observation. It resolves threading,
    contact and routing, then stores the consequence identity on the observation.

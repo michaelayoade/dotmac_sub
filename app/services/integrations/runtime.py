@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -109,6 +109,20 @@ class ConnectorRunner(Protocol):
     ) -> HealthResult: ...
 
     def cancel(self, operation_id: UUID) -> bool: ...
+
+
+@runtime_checkable
+class CapabilityValidationRunner(Protocol):
+    """Runner that can validate the exact capability being enabled."""
+
+    def validate_capability(
+        self,
+        *,
+        capability_id: str,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> ValidationResult: ...
 
 
 class RunnerRegistry:
