@@ -574,6 +574,7 @@ class FundingChangeRenewalResult:
     draft_invoices_voided: int = 0
     draft_invoices_pending: int = 0
     draft_review_exceptions: int = 0
+    restored_service_count: int = 0
 
 
 def preview_prepaid_recurring_charge(
@@ -2277,6 +2278,20 @@ def apply_due_prepaid_service_after_funding_change(
         funded += 1
 
     db.flush()
+    restored_service_count = 0
+    if funded or already_covered or non_cash_granted:
+        from app.models.collections import FinancialAccessOrigin
+        from app.services.collections._core import restore_account_services
+
+        restored_service_count = restore_account_services(
+            db,
+            str(account_id),
+            origin=FinancialAccessOrigin.prepaid_enforcement,
+            resolved_by=(
+                "prepaid_service_after_funding_change:"
+                f"{trigger_payment_id or hashlib.sha256(evidence.encode()).hexdigest()[:24]}"
+            ),
+        )
     disposition = (
         FundingChangeRenewalDisposition.non_cash_granted
         if non_cash_granted
@@ -2305,6 +2320,7 @@ def apply_due_prepaid_service_after_funding_change(
         non_cash_granted=non_cash_granted,
         treatment_blocked=treatment_blocked,
         draft_invoices_voided=duplicate_drafts_voided,
+        restored_service_count=restored_service_count,
     )
 
 
