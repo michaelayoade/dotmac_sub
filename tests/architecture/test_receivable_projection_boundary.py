@@ -374,13 +374,13 @@ def test_the_standing_blocker_carries_real_pin_coordinates() -> None:
 
 
 def test_the_data_cohort_does_not_claim_module_adoption() -> None:
-    """Recording a data cohort must not advance a module's adoption state."""
+    """A data cohort must not advance modules beyond their publication state."""
     from app.shadow.cohort import SHADOW_COHORT
     from app.shadow.vocabulary import AdoptionState, AuthorityMode
 
     for module in ("subscriptions", "billing", "collections"):
         entry = next(item for item in SHADOW_COHORT.modules if item.module == module)
-        assert entry.adoption_state is AdoptionState.SOURCE_ONLY
+        assert entry.adoption_state is AdoptionState.RELEASED_UNCOMPOSED
         assert entry.authority_mode is AuthorityMode.NONE
 
 
@@ -449,6 +449,26 @@ def test_every_writing_subcommand_accepts_apply() -> None:
         }
         assert "--apply" in options, f"{name} cannot be applied"
         assert "--dry-run" not in options, f"{name} exposes a --dry-run flag"
+
+
+def test_readiness_is_an_always_read_only_fail_closed_gate() -> None:
+    from scripts.billing.receivable_projection import build_parser
+
+    parser = build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, __import__("argparse")._SubParsersAction)
+    )
+    options = {
+        option
+        for action in subparsers.choices["readiness"]._actions
+        for option in action.option_strings
+    }
+    assert "--apply" not in options
+    assert "--dry-run" not in options
+    assert "--strict" not in options
+    assert {"--window-start", "--window-end", "--cutoff"} <= options
 
 
 def test_the_dry_run_path_never_enters_the_owner_boundary() -> None:
@@ -606,6 +626,7 @@ def test_the_owner_is_registered_with_a_complete_contract() -> None:
     )
     assert owner.module == "app.services.billing.receivable_projection"
     assert owner.contract is not None
+    assert "receivable cutover readiness verdict" in owner.owns
     assert contract_validation_errors(owner, service_names=names) == ()
 
 

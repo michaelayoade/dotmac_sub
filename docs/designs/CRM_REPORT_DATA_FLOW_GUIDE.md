@@ -45,7 +45,7 @@ Backend query/service: `crm_reporting.network_infrastructure_facts`, composed by
 Transformation/calculation: Counts active/total OLTs, observed-online ONTs, IP usage, VLANs, PON capacity/utilization, available fibre, FDHs, and splitter outputs; selects ten recent ONT observations.
 Route/API: `/admin/reports/network`; CSV `/admin/reports/network/export`.
 UI component/template: `templates/admin/reports/network.html`.
-Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT observations.
+Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT observations. Each chart receives a typed `ChartProjection`; missing inventory or pools render an explicit empty state instead of a blank plotting surface.
 Permission: `reports:network:read`; CSV requires `reports:network:export`.
 Ownership: Network observations are projected/synchronized into Self-Care; the persisted projection is the report source.
 Data freshness/synchronization: Live report query over the latest collector/synchronizer results.
@@ -73,7 +73,7 @@ Backend query/service: `web_reports.get_churn_report_data`, `subscriber_growth`,
 Transformation/calculation: Calculates strict cancelled, active, and suspended cohorts, churn/retention percentages, monthly churn, and stored cancellation-reason counts with an explicit missing-reason bucket.
 Route/API: `/admin/reports/churn`; CSV `/admin/reports/churn/export`.
 UI component/template: `templates/admin/reports/churn.html`.
-Displayed as: Churn, cancellation, at-risk, and retention cards; trend/reason views; recent cancellations.
+Displayed as: Churn, cancellation, at-risk, and retention cards; trend/reason views; recent cancellations. The monthly trend uses a typed `ChartProjection`, so a completed zero-cancellation read is visibly empty rather than silently omitted.
 Permission: `customer:read`.
 Ownership: Self-Care-owned; CRM retention engagement records are excluded.
 Data freshness/synchronization: Live native lifecycle read.
@@ -153,42 +153,51 @@ Plain-English flow: The postpaid cohort is joined to its authoritative billing p
 
 REPORT: CRM Performance
 Data source: ServiceTeam, InboxConversationTeam, InboxConversation, InboxMessage, and InboxConversationAssignment.
-Backend query/service: `team_inbox_metrics.team_performance_report`, mapped by `crm_reporting`.
-Transformation/calculation: Counts workload/open/assignment/response facts per team and measures first response and queue wait from authoritative timestamps.
+Backend query/service: `communications.team_inbox_metrics.team_performance_page`, mapped by `ui.crm_operational_reports` in `crm_reporting`.
+Transformation/calculation: Uses set-based SQL to count workload/open/assignment/response facts per team and measure first response and queue wait from authoritative timestamps inside the selected cohort.
 Route/API: `/admin/reports/operational/crm-performance`; CSV under `/export`.
 UI component/template: Shared operational template.
 Displayed as: Teams, Conversations, and Open cards plus team performance rows.
 Permission: `reports:support:read`.
 Ownership: Self-Care-owned team-inbox projection.
-Data freshness/synchronization: Live current-history query.
+Data freshness/synchronization: Live recomputation for the displayed inclusive dates; defaults to the latest 30 days and rejects ranges over 366 days.
 Plain-English flow: Inbox conversations, messages, and assignments become team workload and responsiveness measures; retention/campaign state is not involved.
+
+The dedicated `/admin/reports/inbox-performance` page also includes an Agent
+Load table from `team_inbox_metrics.agent_performance_report`. That projection
+renders the joined staff display name, then full name, then email; its internal
+person UUID is not a visible Agent label.
 
 ## Administrative agent performance
 
 REPORT: Administrative Agent Performance
-Data source: ServiceTeamMember, ServiceTeam, SystemUser, assignments, conversations, and authored inbox messages.
-Backend query/service: `team_inbox_metrics.agent_performance_report`, mapped by `crm_reporting`.
-Transformation/calculation: Counts active assignments and distinct handled conversations and calculates assignment wait and first human response per active team member.
-Route/API: `/admin/reports/operational/agent-performance`; CSV under `/export`.
-UI component/template: Shared operational template.
-Displayed as: Agents and Handled cards plus searchable, paginated per-agent/team timing rows.
+Data source: ServiceTeamMember, ServiceTeam, SystemUser, InboxConversationAssignment, InboxStatusTransitionEvent, InboxConversation, and authored InboxMessage records.
+Backend query/service: Typed `team_inbox_metrics.InboxAgentPerformanceQuery` through `agent_performance_analytics`, mapped by `crm_reporting`.
+Transformation/calculation: Counts distinct conversations assigned in the selected period from `assigned_at`; counts agent-authored resolved transitions from `occurred_at` only when the actor has the matching assignment at that instant; measures resolution from `first_message_at` to that event; and measures the first recorded human outbound after the first inbound for conversations first received in the period. Active assignments are a clearly labelled current-position value. Agent identity displays `SystemUser.display_name`, then first/last name, then email; UUID remains an internal scope key only.
+Route/API: `/admin/reports/operational/agent-performance`; lazy HTML data under `/data`; CSV under `/export`.
+UI component/template: Shared operational shell plus `_agent_performance_results.html` lazy result projection.
+Displayed as: Agents, assigned, resolved, active-now, average resolution, and average first-response cards plus searchable SQL-paginated per-agent/team rows.
 Permission: `reports:support:read`.
 Ownership: Self-Care-owned team-inbox projection.
-Data freshness/synchronization: Live current-history query.
-Plain-English flow: Recorded assignment and message-author evidence is grouped by active team member for an administrative view.
+Data freshness/synchronization: Live on-demand query; no cached value is treated as authority. Read failure renders unavailable and never estimates values.
+Plain-English flow: The page shell returns before analytics run. HTMX then fetches one bounded page whose totals and rows are grouped in the database from authoritative Inbox evidence.
+
+Page contract: The audience is CX/support leadership comparing agent workload and response outcomes. The default view is the current Africa/Lagos calendar month; Today, Current week, and an inclusive custom interval resolve to UTC half-open instants. The first viewport contains the period/search controls, loading state, and six KPI placeholders. The work surface contains Agent, Team, Assigned, Resolved, Active now, Avg resolution, and Avg first response. Search, period, page size, pagination, and export preserve the same cohort. Loading, authoritative empty, timing unavailable (`â€”`), read error with retry, unauthorized, and personal-scope failure are distinct. Desktop uses a seven-column table; mobile retains horizontal access without suppressing identity or metric semantics.
+
+Performance/index contract: The query pages active team-member identities before returning rows and performs assignment, resolution, and first-response aggregation in SQL. `567_inbox_agent_analytics_indexes` adds covering indexes for the conversation first-message cohort, assignment event time, resolved-status event time/actor, and message direction/chronology. PostgreSQL builds them concurrently with a five-second lock budget and fifteen-minute statement budget. No backfill is required; verification compares typed report results with raw records. Retry is idempotent and downgrade removes only the four read indexes.
 
 ## Personal agent performance
 
 REPORT: Personal Agent Performance
 Data source: The same team-inbox records as administrative agent performance.
-Backend query/service: `team_inbox_metrics.agent_performance_report`, fail-closed filtered by the signed-in principal in `crm_reporting`.
-Transformation/calculation: Retains only rows whose person identifier matches the authenticated user; missing or invalid identity returns no rows.
+Backend query/service: The same typed bounded SQL projection, fail-closed filtered by the signed-in principal before aggregation.
+Transformation/calculation: Applies the administrative metric semantics only to rows whose internal person identifier matches the authenticated user; missing or invalid identity returns no rows. The rendered Agent value is the same display-name projection and never the UUID.
 Route/API: `/admin/reports/operational/my-performance`; CSV under `/export`.
 UI component/template: Shared operational template.
-Displayed as: The signed-in agent's handling cards and performance rows.
+Displayed as: The signed-in agent's assigned, resolved, active-now, resolution, and first-response cards and rows.
 Permission: `reports:support:read` plus mandatory personal identity scope.
 Ownership: Self-Care-owned.
-Data freshness/synchronization: Live current-history query.
+Data freshness/synchronization: Live date-bounded recomputation using the same explicit period as the page and export.
 Plain-English flow: The common agent calculation is narrowed to the authenticated person before it reaches the UI or export.
 
 ## Operations SLA violations

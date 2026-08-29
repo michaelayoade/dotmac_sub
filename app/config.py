@@ -6,6 +6,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return min(max(int(raw), minimum), maximum)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
@@ -178,6 +195,15 @@ class Settings:
     s3_region: str = os.getenv("S3_REGION", "us-east-1")
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     REDIS_URL: str = redis_url
+    payment_webhook_rate_limit_per_ip: int = _bounded_env_int(
+        "PAYMENT_WEBHOOK_RATE_LIMIT_PER_IP", 120, 10, 1000
+    )
+    payment_webhook_rate_limit_window_seconds: int = _bounded_env_int(
+        "PAYMENT_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", 60, 10, 300
+    )
+    payment_webhook_rate_limit_enabled: bool = _env_bool(
+        "PAYMENT_WEBHOOK_RATE_LIMIT_ENABLED", True
+    )
     # Ceiling on how stale a cached setting can be when an invalidation does
     # NOT land — a Redis blip during a write, or a process that dies between
     # commit and delete. Invalidation is the mechanism (one `after_commit`

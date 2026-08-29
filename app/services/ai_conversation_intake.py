@@ -993,6 +993,13 @@ def _validate_engine_policy(version: AiIntakePolicyVersion) -> None:
                 and action not in ai_intake_conversation_engine.SUPPORTED_RULE_ACTIONS
             ):
                 raise ValueError("AI intake troubleshooting rule action is unsupported")
+            if ai_intake_conversation_engine._handoff_rule_matches_first_turn(
+                action,
+                condition,
+            ):
+                raise ValueError(
+                    "AI intake handoff troubleshooting rule must not match the first turn"
+                )
             tool_key = str(raw.get("tool") or "").strip()
             if action in {"execute_tool", "invoke_tool"} and not tool_key:
                 raise ValueError(
@@ -2517,6 +2524,7 @@ def _process_one_session(
         campaign_attributed=False,
         routing_allows_ai=True,
         created_conversation=True,
+        active_ai_session=True,
         has_active_assignment=False,
         awaiting_follow_up=session.state == "awaiting_customer",
         follow_up_count=session.turn_count,

@@ -151,7 +151,10 @@ lineage, and this ADR grants no permission to.
      sets that exact GUC name (`app/services/operator_tenant.py:85`), but
      defines no such function anywhere in `alembic/` or `app/`.
    - `module_database_roles.v1` wants `app_admin`, `app_user` and `platform_api`
-     to exist and be grantable. No Sub migration creates any of the three.
+     to exist and be grantable. The elevated
+     `scripts/bootstrap_commercial_module_prereqs.py` owner creates or repairs
+     those cluster identities; migration 546 verifies them before later module
+     DDL depends on them.
 
 3. **The idempotent schema-op wrappers become schema-aware and Sub-scoped.**
    Every guard takes the `schema=` kwarg its wrapped op already receives and
@@ -223,10 +226,11 @@ it can land ahead of any module work, and should.
 ADR-0009 rather than through kernel `0001`, so the ERP precedent is the one Sub
 follows and the kernel-lineage collision inventory is untouched.
 
-**Security.** Creating `app_admin`, `app_user` and `platform_api` introduces
-cluster roles Sub does not have today. Passwords are never set in migrations
-(the kernel spec is explicit). Grants land in the module's own revision; Sub's
-migration only ensures the roles exist and are grantable.
+**Security.** Creating `app_admin`, `app_user`, `platform_api`, the restricted
+`dotmac_app` schema owner, and the `mod_*` schemas is an elevated deployment
+bootstrap concern. Passwords are never set by migrations or bootstrap scripts.
+Grants land in the module's own revision; Sub's migrations verify that roles
+and schemas exist and are grantable.
 
 **Team.** `app/migration_bindings.py` becomes a reviewed file: a diff there is
 an authority statement about which Sub revision supplies a shared effect, and
@@ -368,6 +372,15 @@ hardened SECURITY DEFINER functions. PostgreSQL evidence covers the exact
 primary/foreign keys, defaults, claim indexes, positive and negative grants,
 schema usage, own-plane-only EXECUTE, real `app_user` tenant isolation and the
 pinned kernel verifier's negative observables.
+
+The commercial module schemas follow the same rule. A production deploy first
+runs `scripts/bootstrap_commercial_module_prereqs.py` with an elevated
+connection when repair is intended, then verifies the result through the
+restricted migration connection before backup or Alembic. The module schema
+manifest names `mod_payments`, `mod_billing`, `mod_coll`, `mod_serviceorders`
+and `mod_subscriptions`; the restricted migration role must not retain
+database-level `CREATE` merely so an already-present module schema can be
+observed.
 
 Storage is not delivery. This amendment binds a repairable prerequisite now
 consumed by shadow-composed commercial modules but installs no worker, route,
@@ -511,3 +524,33 @@ mismatches at the evaluation instant and across an approved temporal horizon on
 sealed representative data, exact Billing-input parity, a real monotonic source
 version, policy/case/consequence parity and explicit retirement of incumbent
 writers and jobs.
+
+## Amendment — 2026-08-27: receivable parity gets a sealed readiness verdict
+
+`billing.receivable_projection` now owns one additional read-only resolver:
+the receivable cutover readiness verdict. It binds the existing cohort
+definition seal, membership digest and semantic-parity fingerprint and refuses
+an invalid evidence seal or internally inconsistent aggregate, an empty
+compared cohort, unresolved or inexpressible classification, projection work
+still required, orphan or watermark refusal, semantic divergence, any
+`not_expressible` dimension, and every standing pinned contract blocker. The
+count invariants also make a row moving between the read-only plan and parity
+reads a blocker rather than a clean comparison. This closes the earlier gap
+where `parity --strict` was a useful regression check but intentionally allowed
+a recorded comparison ceiling.
+
+The distinction remains load-bearing. A `not_expressible` result is lawful and
+honest shadow evidence, so it is not retrospectively reclassified as a parity
+regression. It is nevertheless incomplete authority evidence and therefore
+blocks the stronger readiness verdict. The readiness command is always
+read-only and has no `--apply` or optional strict mode; blocked is its default
+state on this tree because the Subscriptions billing-treatment seam and
+obligation coverage remain open.
+
+A passing verdict makes one sealed evidence set eligible for a separately
+authorised authority review. It does not change `commercial_provider`, module
+adoption state, a database writer, a route or job, and does not authorise
+fallback retirement or deployment. Commercial Agreements remains Vendor legal
+agreement authority, and the independently deployed Integrator remains the
+external connector control plane; neither becomes a Sub runtime dependency or
+a substitute for local settlement evidence through this amendment.

@@ -13349,6 +13349,26 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/auth/oidc/mobile/exchange": {
+   "params": [],
+   "request": "dd1d0a73c52c",
+   "responses": {
+    "200": "25b83f30c87f",
+    "401": "77e455bb5be2",
+    "422": "a11c9d9b2af8",
+    "503": "fe55b1534d07"
+   }
+  },
+  "POST /api/v1/auth/oidc/mobile/start": {
+   "params": [],
+   "request": "8e46fd2f7b77",
+   "responses": {
+    "200": "c2a65299afc4",
+    "401": "77e455bb5be2",
+    "422": "a11c9d9b2af8",
+    "503": "fe55b1534d07"
+   }
+  },
   "POST /api/v1/auth/refresh": {
    "params": [],
    "request": "725d73ae17b5",
@@ -18928,6 +18948,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "PUT /api/v1/staff-accounts/{user_id}/erp-department": {
+   "params": [
+    "header:Idempotency-Key",
+    "header:authorization",
+    "header:x-api-key",
+    "path:user_id!"
+   ],
+   "request": "4c3f4714feb0",
+   "responses": {
+    "200": "97b4f846e644",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "PUT /api/v1/staff-accounts/{user_id}/roles": {
    "params": [
     "header:Idempotency-Key",
@@ -19246,6 +19279,7 @@
   "DueDateCalculationResponse": "7e29aca78232",
   "DunningAction": "d42e316f102b",
   "ElevationRead": "3ca3d8f2a410",
+  "ErpDepartmentReference": "5ce6be19bec1",
   "ErpMaterialStatusReceipt": "dea085458884",
   "ErrorDetail": "baaa77850daa",
   "ErrorResponse": "9a1634f1cfc4",
@@ -19839,6 +19873,12 @@
   "OfferVersionPriceUpdate": "76a6a7553426",
   "OfferVersionRead": "0e8e6d32a5a2",
   "OfferVersionUpdate": "b47aa4d646f1",
+  "OidcMobileExchangeRequest": "cf1ec8732fcf",
+  "OidcMobileExchangeResponse": "801d35afc466",
+  "OidcMobileStartRequest": "e9bf9b017c67",
+  "OidcMobileStartResponse": "862b37bcc39d",
+  "OidcRefusalDetail": "a7bac503da0d",
+  "OidcRefusalResponse": "192878748b61",
   "OltAuthorizationAdmissionRead": "574983f3378e",
   "OltAuthorizationOperationResponse": "22cd268c8f06",
   "OltAuthorizeOntRequest": "9f708145d6e3",
@@ -20204,6 +20244,8 @@
   "SplitterRead": "462df98254d1",
   "SplitterUpdate": "fc09a009fc39",
   "StaffAccountCreate": "b6432e3a2f81",
+  "StaffAccountErpDepartmentRead": "8428a34c2b00",
+  "StaffAccountErpDepartmentUpdate": "d0e389a1811d",
   "StaffAccountRead": "cebf0aa826aa",
   "StaffAccountRolesUpdate": "cea929707cae",
   "StateKind": "c193abe43198",

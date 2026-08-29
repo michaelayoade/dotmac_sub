@@ -162,6 +162,7 @@ class AiIntakeRequest(BaseModel):
     campaign_attributed: bool = False
     routing_allows_ai: bool = True
     created_conversation: bool = True
+    active_ai_session: bool = False
     has_active_assignment: bool = False
     awaiting_follow_up: bool = False
     follow_up_count: Annotated[int, Field(ge=0, le=10)] = 0

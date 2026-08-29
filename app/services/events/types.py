@@ -382,6 +382,12 @@ class EventType(enum.Enum):
     password_recovery_requested = "password_recovery.requested"
     password_recovery_completed = "password_recovery.completed"
 
+    # Field-mobile OIDC federation lifecycle (2). Payloads carry the ceremony,
+    # binding and deployment identities and the admitted principal — never a
+    # token, a nonce, an external subject, or an email.
+    oidc_mobile_ceremony_started = "oidc_mobile_ceremony.started"
+    oidc_mobile_assertion_admitted = "oidc_mobile_assertion.admitted"
+
     # Referral-created customer credential enrollment lifecycle (2)
     customer_credential_enrollment_requested = (
         "customer_credential_enrollment.requested"

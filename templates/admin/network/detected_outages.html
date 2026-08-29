@@ -49,7 +49,7 @@
                         <td class="py-2 text-slate-500">{{ row.confirmed_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                         <td class="py-2 text-slate-500">{% if row.mttr_so_far_seconds is not none %}{{ (row.mttr_so_far_seconds // 60) }} min{% else %}—{% endif %}</td>
                         <td class="py-2 whitespace-nowrap">
-                            {% if row.state in ['confirmed', 'clearing'] %}
+                            {% if row.state in ['confirmed', 'clearing'] and can(request, 'monitoring:outage_notify:send') %}
                             <a href="/admin/network/detected-outages/notify?incident_id={{ row.incident.id }}" class="text-sky-600 hover:underline dark:text-sky-400">Notify →</a>
                             {% else %}
                             <span class="text-slate-400">—</span>

@@ -561,7 +561,7 @@ SERVICES: tuple[SOTService, ...] = (
             "stranded top-up reconciliation",
             "scheduled top-up reconciliation execution",
             "verified provider settlement then allocation orchestration",
-            "top-up reconciliation backlog projection",
+            "top-up reconciliation backlog, progress, and age projection",
         ),
         depends_on=(
             "control.settings_spec",
@@ -572,8 +572,15 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.topup_intents",
         ),
         notes=(
-            "The bounded sweep selects immutable candidates, releases its read "
-            "transaction, and treats gateway verification as an external fact. "
+            "The bounded sweep uses a work-conserving two-lane policy with reserved "
+            "capacity for both stale pending customer payments and terminal late-"
+            "success recovery. A batch has room for both lanes, unused reservations "
+            "flow to the other lane, and provider cohorts interleave within each "
+            "lane starting with the least recently served provider. Every successfully "
+            "claimed intent durably advances typed attempt progress before provider "
+            "I/O, which rotates provider priority across sweeps, then gateway "
+            "verification is treated as an "
+            "external fact. "
             "Each consequence is a separate typed coordinator transaction that "
             "composes canonical financial participants."
         ),
@@ -585,6 +592,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical top-up reconciliation policy",
                         "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
                         "external gateway verification observation",
                         "canonical gateway observation lifecycle protocol",
                     ),
@@ -595,6 +603,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical top-up reconciliation policy",
                         "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
                         "external gateway verification observation",
                     ),
                 ),
@@ -610,11 +619,14 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 ConcernContract(
-                    name="top-up reconciliation backlog projection",
+                    name=(
+                        "top-up reconciliation backlog, progress, and age projection"
+                    ),
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical top-up reconciliation policy",
                         "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
                     ),
                 ),
             ),
@@ -624,8 +636,10 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="control.settings_spec",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed stale window, maximum age, and batch size settings "
-                        "with bounded defaults; intent expiry itself is canonical"
+                        "typed stale window, maximum age, batch size of at least two, "
+                        "pending retry, processing retry, unavailable retry, and "
+                        "terminal late-success retry settings with bounded defaults; "
+                        "intent expiry itself is canonical"
                     ),
                 ),
                 AuthorityInput(
@@ -636,6 +650,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "locked intent identity, account scope, provider, reference, "
                         "purpose, currency, invoice instruction, lifecycle status, "
                         "expiry, normalized safe observation, and completion state"
+                    ),
+                ),
+                AuthorityInput(
+                    name="typed gateway reconciliation progress",
+                    owner="financial.topup_intents",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "durable selection-attempt count and time, latest normalized "
+                        "observation count, time, outcome, and reason, plus the next "
+                        "reconcile time on the locked top-up intent"
                     ),
                 ),
                 AuthorityInput(
@@ -685,8 +709,11 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary=(
-                    "Candidate selection completes its read transaction before any "
-                    "gateway call. Each definitive observation enters exactly one "
+                    "Candidate selection completes its read transaction, then each "
+                    "candidate enters a dedicated execute_owner_command root. Only a "
+                    "successful atomic claim durably advances attempt progress and "
+                    "proceeds to a gateway call; a concurrent claim loss does neither. "
+                    "Each definitive observation later enters exactly one separate "
                     "execute_owner_command root that commits or rolls back settlement, "
                     "provider event, intent projection, audit, and domain events."
                 ),
@@ -699,13 +726,21 @@ SERVICES: tuple[SOTService, ...] = (
                     "Provider type plus intent reference reuses the webhook provider-"
                     "event identity. Provider transaction identity and canonical "
                     "participant keys prevent duplicate cash, allocation, and intent "
-                    "consequences."
+                    "consequences. One successfully claimed intent advances attempt "
+                    "progress once for its typed attempt identity before transport is "
+                    "invoked."
                 ),
                 retries=(
                     "Unavailable or unknown evidence fails closed until canonical "
                     "expiry; failed or abandoned evidence terminalizes immediately. "
-                    "Failed, abandoned, and expired intents remain bounded late-success "
-                    "candidates. Each candidate "
+                    "Stale pending intents and failed, abandoned, canceled, or expired "
+                    "late-success intents form separate lanes with reserved capacity "
+                    "when the configured batch size is at least two. Unused capacity "
+                    "is work-conserving, supported providers interleave within each "
+                    "lane from the least recently served provider, and both provider "
+                    "priority and due rows rotate by durable attempt progress so "
+                    "neither a busy lane nor a repeated provider error can pin the "
+                    "queue. Each candidate "
                     "is an independent transaction, so one rejection cannot roll back "
                     "or repeat another candidate's completed consequence."
                 ),
@@ -730,6 +765,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_reconciliation.topup_projection_rejected",
                     "financial.payment_reconciliation.outcome_invalid",
                     "financial.payment_reconciliation.observation_incomplete",
+                    "financial.payment_reconciliation.attempt_claim_rejected",
                     "financial.payment_reconciliation.invalid_command_context",
                     "financial.payment_reconciliation.command_contract_violation",
                     "financial.payment_reconciliation.nested_owner_command",
@@ -746,35 +782,48 @@ SERVICES: tuple[SOTService, ...] = (
                     "provider, reference, transaction, amount, fee, or currency mismatch",
                     "missing or invalid explicit invoice instruction",
                     "successful observation without linked payment evidence",
+                    "a selected intent whose lifecycle, provider, reference, or due "
+                    "state changed before durable attempt progress",
                     "active caller transaction or manifest mismatch",
                 ),
             ),
             projections=(
                 ProjectionContract(
-                    name="top-up reconciliation backlog projection",
+                    name=(
+                        "top-up reconciliation backlog, progress, and age projection"
+                    ),
                     input_names=(
                         "canonical top-up reconciliation policy",
                         "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
                     ),
                     writer="financial.payment_reconciliation",
                     freshness=(
                         "Recomputed on read at an explicit observation time "
-                        "from pending intent creation times and the effective "
-                        "stale and maximum-age policy."
+                        "from intent creation, typed attempt and observation progress, "
+                        "next reconcile times, and the effective stale, maximum-age, "
+                        "retry, lane-reservation, and provider-interleave policy."
                     ),
                     stale_behavior=(
-                        "Separates currently eligible intents from intents "
-                        "outside the automatic repair window; it never treats "
-                        "absence of a successful runner heartbeat as an empty "
-                        "backlog."
+                        "Reports exhaustive, mutually exclusive pending fresh, due, "
+                        "cooling-down, and outside-window partitions plus terminal "
+                        "late-success due, cooling-down, and outside-window partitions. "
+                        "It reports oldest due ages and attempt progress separately by "
+                        "lifecycle lane and never treats a runner heartbeat or a full "
+                        "checked batch as proof that the backlog is healthy."
                     ),
                     drift_signal=(
-                        "Pending intent counts disagree with the bounded "
-                        "eligible and outside-window partition."
+                        "A supported unresolved intent appears in zero or multiple "
+                        "partitions, lane totals disagree with their exhaustive "
+                        "partitions, oldest due age advances without durable attempt "
+                        "progress, checked and attempt progress disagree, or a "
+                        "selected-greater-than-checked gap persists beyond transient "
+                        "concurrent claim loss."
                     ),
                     rebuild_operation=(
                         "Re-run topup_reconciliation_backlog from canonical "
-                        "pending intents and effective reconciliation policy."
+                        "gateway intents, typed attempt and observation progress, and "
+                        "effective reconciliation policy."
                     ),
                     repair_owner="financial.payment_reconciliation",
                 ),
@@ -790,12 +839,15 @@ SERVICES: tuple[SOTService, ...] = (
                 new_owner="financial.payment_reconciliation",
                 verification=(
                     "Gateway outcome, deposit, invoice, consolidated, existing-payment, "
-                    "expiry, replay, transaction-boundary, manifest, and task-adapter "
-                    "tests."
+                    "expiry, reserved-lane and provider fairness, pre-I/O attempt "
+                    "progress, exhaustive backlog partition, age/progress telemetry, "
+                    "replay, transaction-boundary, manifest, and task-adapter tests."
                 ),
                 cutover_gate=(
                     "The task owns only session lifecycle and serialization; the sweep "
-                    "submits typed immutable evidence to per-intent coordinator roots."
+                    "uses both reserved lanes, advances each successfully claimed "
+                    "intent before provider I/O, and submits typed immutable evidence "
+                    "to per-intent coordinator roots."
                 ),
                 fallback_retirement=(
                     "Service commit/rollback/session creation, direct payment creation, "

@@ -39,7 +39,7 @@ on:
     tags:
       - "field-mobile-v*"
   pull_request:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
     paths:
       - '.github/workflows/field-app-release.yml'
       - 'field_mobile/brand.json'
@@ -48,6 +48,9 @@ on:
       - 'field_mobile/pubspec.yaml'
       - 'field_mobile/pubspec.lock'
       - 'field_mobile/.metadata'
+      - 'field_mobile/lib/core/deeplink/**'
+      - 'deploy/links.dotmac.io/**'
+      - 'scripts/check_field_applinks.py'
 
 permissions:
   contents: read
@@ -278,6 +281,18 @@ jobs:
                 "all agree with the pipeline.")
           PY
 
+      # The verified redirect boundary spans six artifacts that cannot see each
+      # other at build time (Dart defaults, brand.json, the Android intent
+      # filter, the iOS entitlement, and both association documents). When they
+      # drift the failure is silent: the link stops opening the app and starts
+      # opening a browser, with no error anywhere. Structural mode here, so a PR
+      # sees the drift; the identity placeholders are still allowed at this
+      # stage and are rejected in the signing job below.
+      - name: Validate the verified redirect boundary (structural)
+        run: |
+          set -euo pipefail
+          python3 scripts/check_field_applinks.py
+
       - name: Shell-syntax check the Xcode Cloud hook
         run: sh -n ${{ env.FIELD_APP_SUBDIR }}/ios/ci_scripts/ci_post_clone.sh
 
@@ -478,6 +493,19 @@ jobs:
       # Brand values come from the committed brand file; the Sentry DSN is
       # injected from a secret. A later --dart-define overrides the same key from
       # --dart-define-from-file, so an explicit API base URL still wins.
+      # A RELEASE BUILD may not be produced while an identity placeholder
+      # survives. `--require-real` rejects __ANDROID_CERT_SHA256__ and
+      # __APPLE_TEAM_ID__, and also rejects an empty or malformed real value, so
+      # a wrong fingerprint is caught the same way the placeholder is. A
+      # placeholder that can ship is worse than no association document at all:
+      # the app looks releasable and the redirect boundary silently does not
+      # verify. The same command gates PUBLISHING either association document --
+      # see deploy/links.dotmac.io/README.md.
+      - name: Refuse a release build with an unresolved identity placeholder
+        run: |
+          set -euo pipefail
+          python3 ../scripts/check_field_applinks.py --require-real
+
       - name: Build the signed ${{ github.event.inputs.track || 'appbundle' }}
         env:
           FIELD_SENTRY_DSN: ${{ secrets.FIELD_SENTRY_DSN }}

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -40,6 +40,9 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 
+if TYPE_CHECKING:
+    from app.services.team_inbox_receive import EmailThreadHeaders
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 T = TypeVar("T")
 OWNER = "communications.team_inbox_outbound_intents"
@@ -72,8 +75,9 @@ class InboxReplyPayload:
     cc_addresses: tuple[str, ...] = ()
     bcc_addresses: tuple[str, ...] = ()
     sent_by_person_id: str | UUID | None = None
-    metadata: dict | None = None
+    metadata: Mapping[str, object] | None = None
     dedupe_key: str | None = None
+    email_thread_headers: EmailThreadHeaders | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +203,23 @@ def _queue_outbox_reply(
             "bcc": list(payload.bcc_addresses),
         }
     )
+    message = existing_message or InboxMessage(
+        id=uuid4(), conversation_id=conversation.id
+    )
+    email_thread_headers: EmailThreadHeaders | None = None
+    if channel == NotificationChannel.email:
+        from app.services import team_inbox_receive
+
+        email_thread_headers = payload.email_thread_headers
+        if email_thread_headers is None:
+            email_thread_headers = (
+                team_inbox_receive.build_outbound_email_thread_headers(
+                    db,
+                    conversation_id=conversation.id,
+                    outbound_message_id=message.id,
+                )
+            )
+        intent_metadata["email_thread"] = email_thread_headers.as_metadata()
     linked_subscriber_id = conversation.subscriber_id
     if linked_subscriber_id is not None:
         intent_metadata["linked_subscriber_id"] = str(linked_subscriber_id)
@@ -253,12 +274,14 @@ def _queue_outbox_reply(
         )
 
     queued_at = now or datetime.now(UTC)
-    message = existing_message or InboxMessage(conversation_id=conversation.id)
     message.notification_id = notification.id
     message.channel_type = channel.value
     message.direction = InboxMessageDirection.outbound.value
     message.subject = subject
     message.body = body
+    message.external_message_id = (
+        email_thread_headers.message_id if email_thread_headers is not None else None
+    )
     message.external_thread_id = conversation.external_thread_id
     message.from_address = from_address
     message.to_addresses = [recipient]
@@ -1044,6 +1067,8 @@ def retry_outbound_message(
     sent_by_person_id: str | UUID | None = None,
     now: datetime | None = None,
 ) -> InboxReplyResult:
+    from app.services import team_inbox_receive
+
     metadata = dict(message.metadata_ or {})
     if metadata.get("delivery_status") != "failed":
         return InboxReplyResult(
@@ -1098,6 +1123,13 @@ def retry_outbound_message(
             else (),
             sent_by_person_id=sent_by_person_id,
             metadata=retry_metadata,
+            email_thread_headers=(
+                team_inbox_receive.EmailThreadHeaders.from_metadata(
+                    metadata.get("email_thread")
+                )
+                if conversation.channel_type == InboxChannelType.email.value
+                else None
+            ),
         ),
         now=now,
         record_failure=False,

@@ -23,7 +23,9 @@ SERVICE_READINESS_WORKFLOWS = {
 def _service_readiness_block(source: str, *, database: str, redis: str) -> str:
     start_marker = (
         "          for i in $(seq 1 30); do\n"
-        f"            docker exec {database} pg_isready -U postgres"
+        "            [ \"$(docker inspect --format='{{if .State.Health}}"
+        "{{.State.Health.Status}}{{else}}none{{end}}' " + database + ')"'
+        ' = "healthy" ] && break'
     )
     redis_failure_marker = (
         f"          if ! docker exec {redis} redis-cli ping >/dev/null 2>&1; then\n"
@@ -46,7 +48,9 @@ def _assert_service_readiness_blocks_match(blocks: tuple[str, ...]) -> None:
 def _assert_service_readiness_fails_closed(block: str) -> None:
     database_failure = block[
         block.index(
-            "          if ! docker exec DATABASE_SERVICE pg_isready -U postgres"
+            "          if [ \"$(docker inspect --format='{{if .State.Health}}"
+            "{{.State.Health.Status}}{{else}}none{{end}}' DATABASE_SERVICE)\""
+            ' != "healthy" ] || ! docker exec DATABASE_SERVICE pg_isready'
         ) : block.index("          fi\n")
     ]
     redis_failure_start = block.index(
@@ -108,7 +112,10 @@ def test_unit_shards_partition_all_unit_test_files_once(tmp_path: Path) -> None:
 
 def test_integration_shards_partition_every_file_once() -> None:
     module = _load_module("select_integration_shard", INTEGRATION_SHARD_SCRIPT)
-    expected = set((ROOT / "tests/integration").glob("test_*.py"))
+    # Recursive: the selector used a flat glob, so the first subdirectory added
+    # under tests/integration/ would have been dropped from every shard with no
+    # error and no skip. Kept in sync with the selector's own discovery.
+    expected = set((ROOT / "tests/integration").rglob("test_*.py"))
     groups = [
         set(module.select_integration_shard(shard=shard, shards=4))
         for shard in range(1, 5)
@@ -119,18 +126,39 @@ def test_integration_shards_partition_every_file_once() -> None:
 
 
 def test_postgresql_classifier_is_narrow_and_fails_closed() -> None:
+    """Exemptions stay narrow, and everything else triggers the lane.
+
+    CONTRACT CHANGE: a root-level `tests/*.py` module used to be exempt. It is
+    not, because the integration suite imports helpers from exactly there --
+    `tests.staff_identity_fixtures`, `tests.referral_program_testkit`,
+    `tests.prepaid_funding_helpers`, `tests.test_crm_ticket_pull` and
+    `tests.test_integration_whatsapp_capability` today, with nothing stopping
+    the next one. Editing such a module changed what the PostgreSQL lane
+    executes while telling CI it could skip that lane.
+
+    The surviving exemptions are proven rather than assumed: see
+    `test_postgresql_lane_isolation.py`, which walks the lane's transitive
+    import closure and fails if it ever reaches an exempt test package or any
+    request/render entry point.
+    """
+
     module = _load_module("classify_postgresql_changes", POSTGRESQL_CLASSIFIER_SCRIPT)
 
     assert not module.classify_postgresql_changes(
         ("templates/admin/inbox/index.html", "static/js/inbox.js")
     ).required
-    assert not module.classify_postgresql_changes(("tests/test_inbox_ui.py",)).required
+    assert not module.classify_postgresql_changes(
+        ("tests/architecture/test_ci_pipeline.py",)
+    ).required
+    assert module.classify_postgresql_changes(("tests/test_inbox_ui.py",)).required
+    assert module.classify_postgresql_changes(("tests/conftest.py",)).required
     assert module.classify_postgresql_changes(
         ("tests/integration/test_inbox.py",)
     ).required
     assert module.classify_postgresql_changes(
         ("app/services/team_inbox_read.py",)
     ).required
+    assert module.classify_postgresql_changes(("scripts/ci/anything.py",)).required
     assert module.classify_postgresql_changes(()).required
 
 
@@ -384,10 +412,14 @@ def test_ci_change_classifier_does_not_resolve_a_base_from_shallow_roots() -> No
     zero_sha_guard = '[ "$base" = "0000000000000000000000000000000000000000" ]'
     assert zero_sha_guard in executed
 
-    # The no-base branch must short-circuit to application before any git
-    # command consumes "$base"; running everything is the safe default.
+    # The no-base branch must short-circuit to the complete matrix before any
+    # git command consumes "$base"; running everything is the safe default.
+    #
+    # The evidence used to be the `application=true` output, which was removed
+    # because no job ever consumed it. `postgresql-required=true` is the
+    # surviving proof that this branch runs everything.
     tail = executed[executed.index(zero_sha_guard) :]
-    assert tail.index("application=true") < tail.index('git cat-file -e "$base')
+    assert tail.index("postgresql-required=true") < tail.index('git cat-file -e "$base')
 
 
 def test_production_dependency_group_excludes_ci_tools() -> None:
@@ -422,9 +454,10 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "pull_request:" in workflow
-    # Both events must still cover main and dev. Batch branches run these same
-    # gates instead of meeting them for the first time at the batch -> dev merge.
-    protected_branches = "branches: [main, dev, 'integration/**', 'consolidate/**']"
+    # `main` is the single release trunk, so both events must cover it. Batch
+    # branches run these same gates instead of meeting them for the first time
+    # at the batch -> main merge.
+    protected_branches = "branches: [main, 'integration/**', 'consolidate/**']"
     assert workflow.count(protected_branches) == 2
     assert "make test-integration" in workflow
     assert "poetry run alembic upgrade head" not in workflow
@@ -432,11 +465,16 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     assert "python -m scripts.ci.migrated_test_database" in makefile
 
 
-def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -> None:
-    """Fresh test clusters need roles; ordinary and production migrations do not."""
+def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> None:
+    """Fresh test clusters need prerequisite bootstrap before migrations."""
 
-    bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
+    commercial_bootstrap = "scripts/bootstrap_commercial_module_prereqs.py"
+    dispatcher_bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
+    ci_test_bootstrap = "scripts.ci.bootstrap_test_database_prereqs"
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    ci_test_bootstrap_source = (
+        ROOT / "scripts/ci/bootstrap_test_database_prereqs.py"
+    ).read_text(encoding="utf-8")
     ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
     e2e_gate = (ROOT / ".github/workflows/e2e-gate.yml").read_text(encoding="utf-8")
@@ -446,10 +484,23 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
             "test-integration:"
         )
     ]
-    assert 'BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}"' in helper
-    assert bootstrap in helper
-    assert helper.index("parse_test_database_target") < helper.index(bootstrap)
+    assert ci_test_bootstrap in helper
+    assert helper.index("parse_test_database_target") < helper.index(ci_test_bootstrap)
+    assert "BOOTSTRAP_DATABASE_URL" not in helper
     assert "postgresql://" not in helper
+    assert "bootstrap_commercial_module_prereqs" in ci_test_bootstrap_source
+    assert "bootstrap_outbox_dispatcher_roles" in ci_test_bootstrap_source
+    assert "_bootstrap_test_target(target.url, label=target.database_name)" in (
+        ci_test_bootstrap_source
+    )
+    assert (
+        '_bootstrap_outbox_url(\n        target.url.set(database="template1")'
+        in ci_test_bootstrap_source
+    )
+    assert (
+        "bootstrap_commercial_module_prereqs(\n            target.url.set"
+        not in ci_test_bootstrap_source
+    )
 
     integration = makefile[
         makefile.index("test-integration:") : makefile.index("INTEGRATION_SHARD ?=")
@@ -479,11 +530,18 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
     ]
     for workflow_step in (ci_migration, nightly_migration, gate_migration):
         assert 'BOOTSTRAP_DATABASE_URL="$DATABASE_URL"' in workflow_step
-        assert workflow_step.index(bootstrap) < workflow_step.index(
+        assert commercial_bootstrap in workflow_step
+        assert dispatcher_bootstrap in workflow_step
+        assert workflow_step.index(commercial_bootstrap) < workflow_step.index(
+            dispatcher_bootstrap
+        )
+        assert workflow_step.index(dispatcher_bootstrap) < workflow_step.index(
             "alembic upgrade heads"
         )
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
         assert 'echo "$BOOTSTRAP_DATABASE_URL"' not in workflow_step
+
+    assert f"{dispatcher_bootstrap} --repair" in ci_migration
 
     assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow
@@ -491,14 +549,27 @@ def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_gate
 
     production_sources = (
-        (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8"),
         (ROOT / ".github/workflows/production-deploy.yml").read_text(encoding="utf-8"),
     )
-    assert all(bootstrap not in source for source in production_sources)
-    for start, end in (
-        ("migrate:", "new-migration:"),
-        ("docker-migrate:", "# ─── Host-build fallback guard"),
-        ("prod-migrate:", "# ─── GHCR deploy"),
-    ):
-        production_recipe = makefile[makefile.index(start) : makefile.index(end)]
-        assert bootstrap not in production_recipe
+    assert all(commercial_bootstrap not in source for source in production_sources)
+    assert all(dispatcher_bootstrap not in source for source in production_sources)
+
+    production_deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    for bootstrap in (commercial_bootstrap, dispatcher_bootstrap):
+        assert f"{bootstrap} --verify-only" in production_deploy
+        assert production_deploy.index(f"{bootstrap} --verify-only") < (
+            production_deploy.index("Backing up database before migrations")
+        )
+        assert f"{bootstrap} --repair" in production_deploy
+        assert production_deploy.index(f"{bootstrap} --repair") < (
+            production_deploy.index("Backing up database before migrations")
+        )
+
+    for bootstrap in (commercial_bootstrap, dispatcher_bootstrap):
+        for start, end in (
+            ("migrate:", "new-migration:"),
+            ("docker-migrate:", "prod-build:"),
+            ("prod-migrate:", "deploy:"),
+        ):
+            production_recipe = makefile[makefile.index(start) : makefile.index(end)]
+            assert bootstrap not in production_recipe

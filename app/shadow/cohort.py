@@ -1,11 +1,17 @@
 """The Sub Thin Shadow cohort: 25 independently versioned owners, honestly stated.
 
-Every entry here is `source_only` with `authority_mode = none`, and that is not a
-placeholder waiting to be filled in — it is the accurate reading of the evidence:
+Every entry here has ``authority_mode = none``. Three commercial packages have
+travelled one step beyond source presence: Subscriptions, Billing and
+Collections are published, digest-pinned releases, but the Thin Shadow image
+does not compose them. They are therefore ``released_uncomposed`` — not
+``source_only`` and not ``installed_shadow``. The remaining entries are still
+``source_only``.
 
-* No cohort package is published to an index, so none has a digest-pinned
-  release identity, so none can be installed anywhere.
-* The shadow application runs the **pinned Sub baseline image**
+The distinction is load-bearing:
+
+* The checked-in Sub lock gives the exact wheel bytes for the three releases,
+  and the annotated Starter tags give their peeled source revisions.
+* The shadow application still runs the **pinned Sub baseline image**
   (`ghcr.io/michaelayoade/dotmac_sub@sha256:342a9b80…`, built from revision
   `9a5db5de…`, run 32216213910). That image contains none of these packages, and
   the shadow stack mounts no host paths, so there is no mechanism by which a
@@ -28,12 +34,14 @@ from __future__ import annotations
 from typing import Final
 
 from app.module_release_contracts import SUBSCRIPTIONS_RELEASE
+from app.shadow.identity import Digest
 from app.shadow.manifest import (
     BlockingPrerequisite,
     CohortManifest,
     ComparisonGate,
     DisplacedWriter,
     ModuleEntry,
+    ReleaseIdentity,
     RetirementRatchet,
 )
 from app.shadow.vocabulary import AdoptionState, AuthorityMode, PersistencePlane
@@ -44,6 +52,34 @@ COHORT_REVISION: Final[str] = "516c5a99d7331f1f3ca4e6da0b7305c9620b5733"
 #: Released Subscriptions a3 peeled-tag commit. Unlike `COHORT_REVISION`, this
 #: pin belongs only to the independently released Subscriptions distribution.
 SUBSCRIPTIONS_REVISION: Final[str] = SUBSCRIPTIONS_RELEASE.revision
+
+#: Released Billing a1 and Collections a1 peeled-tag commits. These are release
+#: source pins, not the older integrated cohort worktree snapshot above.
+BILLING_REVISION: Final[str] = "92a1626b16d7e068f92536d8cfcb2ef9b6f270c2"
+COLLECTIONS_REVISION: Final[str] = "6ecf518a6985b8bf4b163eccb3de2fef171ecccc"
+
+
+def _locked_wheel_release(*, filename: str, digest: str) -> ReleaseIdentity:
+    """Build the immutable identity recorded by Sub's checked-in Poetry lock."""
+    parsed = Digest.parse(digest)
+    return ReleaseIdentity(
+        artifact_ref=f"registry.dotmac.io/dotmac/pypi/{filename}@{parsed}",
+        digest=parsed,
+    )
+
+
+_SUBSCRIPTIONS_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
+    filename="dotmac_subscriptions-0.1.0a3-py3-none-any.whl",
+    digest="sha256:01fd4a2260a09e26a45cd105c474e1c90dd7f0aee23bd470790701c1677ac53d",
+)
+_BILLING_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
+    filename="dotmac_billing-0.1.0a1-py3-none-any.whl",
+    digest="sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b",
+)
+_COLLECTIONS_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
+    filename="dotmac_collections-0.1.0a1-py3-none-any.whl",
+    digest="sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b",
+)
 
 #: Network module suite snapshot (`agent/network-module-suite-snapshot`).
 #: Built against kernel 0.1.0a73 and unvalidated — see the blocking prerequisite
@@ -90,17 +126,22 @@ def _module(
     rollback: str,
     writers: tuple[DisplacedWriter, ...] = (),
     blocked: BlockingPrerequisite | None = None,
+    release: ReleaseIdentity | None = None,
 ) -> ModuleEntry:
-    """A cohort entry at its honest floor: source present, nothing claimed."""
+    """A cohort entry at its honest source or immutable-release floor."""
     return ModuleEntry(
         module=module,
         package=package,
         contract_version=version,
         source_revision=revision,
         persistence_plane=plane,
-        adoption_state=AdoptionState.SOURCE_ONLY,
+        adoption_state=(
+            AdoptionState.RELEASED_UNCOMPOSED
+            if release is not None
+            else AdoptionState.SOURCE_ONLY
+        ),
         authority_mode=AuthorityMode.NONE,
-        release=None,
+        release=release,
         blocking_prerequisite=blocked,
         comparison_gate=ComparisonGate(
             statement=gate, reconciliation_hash=None, satisfied=False
@@ -156,12 +197,13 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
         rollback="revert the coupled shadow watermark; Sub subscription authority never moved",
         writers=(_writer("access.subscription_lifecycle"),),
         blocked=_VENDOR_CP,
+        release=_SUBSCRIPTIONS_RELEASE_IDENTITY,
     ),
     _module(
         module="billing",
         package="dotmac-billing",
         version="0.1.0a1",
-        revision=_STARTER,
+        revision=BILLING_REVISION,
         plane=PersistencePlane.DUAL,
         gate=(
             "shadow invoice, settlement and allocation output reconciles hash-for-hash "
@@ -170,16 +212,18 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
         rollback="drop the coupled shadow watermark; Sub invoicing stays authoritative",
         writers=(_writer("financial.invoices"), _writer("financial.ledger")),
         blocked=_VENDOR_CP,
+        release=_BILLING_RELEASE_IDENTITY,
     ),
     _module(
         module="collections",
         package="dotmac-collections",
         version="0.1.0a1",
-        revision=_STARTER,
+        revision=COLLECTIONS_REVISION,
         plane=PersistencePlane.TENANT,
         gate="shadow dunning decisions match collections.lifecycle and financial.dunning",
         rollback="stop evaluating shadow dunning; no external consequence was ever delivered",
         writers=(_writer("collections.lifecycle"), _writer("financial.dunning")),
+        release=_COLLECTIONS_RELEASE_IDENTITY,
     ),
     # ── Stage 4: projects → work orders → surveys ───────────────────────────
     _module(
@@ -416,13 +460,15 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
 #: The cohort. `environment="shadow"` is a `Literal`, so this manifest shape
 #: cannot describe a production deployment at all.
 SHADOW_COHORT: Final[CohortManifest] = CohortManifest(
-    manifest_version="2026-08-19.1",
+    manifest_version="2026-08-27.1",
     environment="shadow",
     modules=_ENTRIES,
 )
 
 __all__ = [
+    "BILLING_REVISION",
     "COHORT_REVISION",
+    "COLLECTIONS_REVISION",
     "NETWORK_SNAPSHOT_REVISION",
     "SHADOW_COHORT",
     "SUBSCRIPTIONS_REVISION",

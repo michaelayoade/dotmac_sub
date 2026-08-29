@@ -32,6 +32,11 @@ class ReleaseContractErrorCode(str, Enum):
         "release_contract.hotfix_change_reference_required"
     )
     HOTFIX_REASON_REQUIRED = "release_contract.hotfix_reason_required"
+    ROLLBACK_REVISIONS_IDENTICAL = "release_contract.rollback_revisions_identical"
+    ROLLBACK_CHANGE_REFERENCE_REQUIRED = (
+        "release_contract.rollback_change_reference_required"
+    )
+    ROLLBACK_REASON_REQUIRED = "release_contract.rollback_reason_required"
 
 
 class ReleaseContractError(RuntimeError):
@@ -85,7 +90,7 @@ class GitCommitSha:
 
 @dataclass(frozen=True, slots=True)
 class GitTreeSha:
-    """Content identity used to prove dev and main contain the same tree."""
+    """Content identity used to prove staged source and release match."""
 
     value: str
 
@@ -197,9 +202,28 @@ class StagingAcceptanceEvidence:
 
 @dataclass(frozen=True, slots=True)
 class MainAuthorizationEvidence:
-    """Main-branch evidence authorizing an already-staged artifact."""
+    """Main-branch evidence authorizing an already-staged artifact.
+
+    Two revisions are deliberately distinct identities, and conflating them is
+    what forced a rebuild whenever `main` moved:
+
+    ``authorization_main_revision``
+        The protected `main` tip whose checked-in workflow and verifier code
+        performed this authorization. It identifies the AUTHORITY, never the
+        deployed application.
+    ``release_revision``
+        The exact staged candidate whose tree, digest, CI and staging
+        acceptance are being authorized. It identifies the ARTIFACT, and it is
+        what production actually runs.
+
+    They coincide only when nothing has landed on `main` since the candidate
+    was built. Requiring that coincidence is a freshness rule, not a safety
+    rule; safety comes from ``release_revision`` matching the staged candidate
+    exactly and remaining an ancestor of ``authorization_main_revision``.
+    """
 
     authorization_run_id: WorkflowRunId
+    authorization_main_revision: GitCommitSha
     release_revision: GitCommitSha
     release_tree: GitTreeSha
     required_ci_conclusion: EvidenceConclusion
@@ -215,6 +239,48 @@ class ReleaseCandidateRecord:
     main: MainAuthorizationEvidence | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionRollbackAuthorization:
+    """Explicit, transition-bound authority to deploy backwards.
+
+    Production normally refuses any deploy whose revision is not a descendant
+    of the revision already running: going backwards silently re-introduces
+    every defect fixed in between, and after migrations have run it can put
+    older code against a newer schema.
+
+    This is deliberately NOT a boolean escape. It names the exact transition,
+    so it authorizes one rollback rather than granting a standing permission:
+    a document that does not match the observed running revision and the
+    incoming staged revision is refused, and it cannot be reused for a later,
+    different rollback.
+    """
+
+    from_revision: GitCommitSha
+    to_revision: GitCommitSha
+    change_reference: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.from_revision == self.to_revision:
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.ROLLBACK_REVISIONS_IDENTICAL,
+                field="to_revision",
+                message="a rollback authorization must name two different revisions",
+            )
+        if not self.change_reference.strip():
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.ROLLBACK_CHANGE_REFERENCE_REQUIRED,
+                field="change_reference",
+                message="a rollback authorization requires a change reference",
+            )
+        if not self.reason.strip():
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.ROLLBACK_REASON_REQUIRED,
+                field="reason",
+                message="a rollback authorization requires a reason",
+            )
+
+
 class ProductionEligibilityBlocker(str, Enum):
     """Stable reasons an artifact cannot be promoted to production."""
 
@@ -228,7 +294,7 @@ class ProductionEligibilityBlocker(str, Enum):
     MAIN_CI_NOT_GREEN = "main_ci_not_green"
     MAIN_TREE_MISMATCH = "main_tree_mismatch"
     SOURCE_REVISION_NOT_IN_MAIN = "source_revision_not_in_main"
-    SOURCE_AND_RELEASE_REVISION_MATCH = "source_and_release_revision_match"
+    RELEASE_REVISION_NOT_STAGED = "release_revision_not_staged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +312,13 @@ class ProductionEligibilityOutcome:
 def evaluate_production_eligibility(
     candidate: ReleaseCandidateRecord,
 ) -> ProductionEligibilityOutcome:
-    """Require one green, staged digest and an identical authorized main tree."""
+    """Require one green staged digest, authorized from a main that contains it.
+
+    The authorization identity (``authorization_main_revision``) and the
+    artifact identity (``release_revision``) are checked separately: the
+    artifact must match the staged candidate exactly, and must still be
+    reachable from the authorizing ``main``.
+    """
 
     blockers: list[ProductionEligibilityBlocker] = []
     artifact = candidate.artifact
@@ -278,10 +350,11 @@ def evaluate_production_eligibility(
             blockers.append(ProductionEligibilityBlocker.MAIN_TREE_MISMATCH)
         if not main.source_revision_is_ancestor:
             blockers.append(ProductionEligibilityBlocker.SOURCE_REVISION_NOT_IN_MAIN)
-        if main.release_revision == artifact.source_revision:
-            blockers.append(
-                ProductionEligibilityBlocker.SOURCE_AND_RELEASE_REVISION_MATCH
-            )
+        # The authorized release must BE the staged candidate. Previously this
+        # was expressed as "must differ from it", which was only ever true
+        # because the candidate lived on another branch.
+        if main.release_revision != artifact.source_revision:
+            blockers.append(ProductionEligibilityBlocker.RELEASE_REVISION_NOT_STAGED)
 
     return ProductionEligibilityOutcome(
         candidate=candidate,

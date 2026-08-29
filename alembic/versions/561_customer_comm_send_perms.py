@@ -1,8 +1,8 @@
-"""Add explicit NCC report permissions.
+"""Add narrow customer communication send permissions.
 
-Revision ID: 560_ncc_report_permissions
-Revises: 559_upcoming_charges_indexes
-Create Date: 2026-08-28
+Revision ID: 561_customer_comm_send_perms
+Revises: 560_oidc_mobile_federation
+Create Date: 2026-08-27
 """
 
 from __future__ import annotations
@@ -15,14 +15,22 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "560_ncc_report_permissions"
-down_revision: str | None = "559_upcoming_charges_indexes"
+revision: str = "561_customer_comm_send_perms"
+down_revision: str | None = "560_oidc_mobile_federation"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 PERMISSIONS = (
-    ("reports:ncc:read", "View NCC regulatory reports"),
-    ("reports:ncc:export", "Export NCC regulatory report data and artifacts"),
+    (
+        "monitoring:outage_notify:send",
+        "Send outage notifications to affected customers",
+        "monitoring:write",
+    ),
+    (
+        "communications:customer:send",
+        "Send customer notifications to selected customer scopes",
+        "customer:write",
+    ),
 )
 
 CUSTOMER_EXPERIENCE_ROLE_NAMES = (
@@ -34,9 +42,9 @@ CUSTOMER_EXPERIENCE_ROLE_NAMES = (
 )
 
 GRANT_TABLES = (
-    "role_permissions",
-    "subscriber_permissions",
-    "system_user_permissions",
+    ("role_permissions", "role_id", None),
+    ("subscriber_permissions", "subscriber_id", "granted_by_subscriber_id"),
+    ("system_user_permissions", "system_user_id", "granted_by_system_user_id"),
 )
 
 
@@ -80,6 +88,71 @@ def _ensure_permission(bind, *, key: str, description: str, now: datetime) -> st
     return permission_id
 
 
+def _copy_holder_grants(
+    bind,
+    *,
+    tables: set[str],
+    table: str,
+    holder_column: str,
+    granted_by_column: str | None,
+    source_id: str,
+    target_id: str,
+    now: datetime,
+) -> None:
+    if table not in tables:
+        return
+    extra_columns = f", granted_at, {granted_by_column}" if granted_by_column else ""
+    rows = bind.execute(
+        sa.text(
+            f"SELECT {holder_column}{extra_columns} "
+            f"FROM {table} WHERE permission_id = :permission_id"
+        ),
+        {"permission_id": source_id},
+    ).fetchall()
+    for row in rows:
+        holder_id = row[0]
+        already = bind.execute(
+            sa.text(
+                f"SELECT 1 FROM {table} "
+                f"WHERE {holder_column} = :holder_id "
+                "AND permission_id = :permission_id"
+            ),
+            {"holder_id": holder_id, "permission_id": target_id},
+        ).scalar()
+        if already:
+            continue
+        if granted_by_column:
+            bind.execute(
+                sa.text(
+                    f"INSERT INTO {table} "
+                    f"(id, {holder_column}, permission_id, granted_at, "
+                    f"{granted_by_column}) "
+                    "VALUES (:id, :holder_id, :permission_id, :granted_at, "
+                    ":granted_by)"
+                ),
+                {
+                    "id": str(uuid4()),
+                    "holder_id": holder_id,
+                    "permission_id": target_id,
+                    "granted_at": row[1] or now,
+                    "granted_by": row[2],
+                },
+            )
+        else:
+            bind.execute(
+                sa.text(
+                    f"INSERT INTO {table} "
+                    f"(id, {holder_column}, permission_id) "
+                    "VALUES (:id, :holder_id, :permission_id)"
+                ),
+                {
+                    "id": str(uuid4()),
+                    "holder_id": holder_id,
+                    "permission_id": target_id,
+                },
+            )
+
+
 def _grant_permission_to_customer_experience_roles(
     bind, *, tables: set[str], permission_id: str
 ) -> None:
@@ -120,10 +193,23 @@ def upgrade() -> None:
         return
     now = datetime.now(UTC)
 
-    for key, description in PERMISSIONS:
+    for key, description, source_key in PERMISSIONS:
         permission_id = _ensure_permission(
             bind, key=key, description=description, now=now
         )
+        source_id = _permission_id(bind, source_key)
+        if source_id is not None:
+            for table, holder_column, granted_by_column in GRANT_TABLES:
+                _copy_holder_grants(
+                    bind,
+                    tables=tables,
+                    table=table,
+                    holder_column=holder_column,
+                    granted_by_column=granted_by_column,
+                    source_id=source_id,
+                    target_id=permission_id,
+                    now=now,
+                )
         _grant_permission_to_customer_experience_roles(
             bind, tables=tables, permission_id=permission_id
         )
@@ -134,11 +220,11 @@ def downgrade() -> None:
     tables = set(sa.inspect(bind).get_table_names())
     if "permissions" not in tables:
         return
-    for key, _description in PERMISSIONS:
+    for key, _description, _source_key in PERMISSIONS:
         permission_id = _permission_id(bind, key)
         if permission_id is None:
             continue
-        for table in GRANT_TABLES:
+        for table, _holder_column, _granted_by_column in GRANT_TABLES:
             if table in tables:
                 bind.execute(
                     sa.text("DELETE FROM " + table + " WHERE permission_id = :id"),

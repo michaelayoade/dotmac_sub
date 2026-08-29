@@ -11,6 +11,7 @@ from app.db import get_db
 from app.models.auth import UserCredential
 from app.models.field_vendor import FieldVendorUser
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.services import vendor_admin
 from app.services import web_vendors as web_vendors_service
 from app.services.operator_tenant import provision_operator_tenant
@@ -101,6 +102,55 @@ def test_vendor_detail_exposes_login_enablement_actions(db_session):
     assert "Portal user actions" in html
     assert "Edit portal user" in html
     assert "Password reset" in html
+
+
+def test_vendor_list_shows_portal_access_statuses(db_session):
+    active_vendor = vendor_admin.create_committed(
+        db_session,
+        name="Portal Active Vendor",
+        code=f"PAV-{uuid4().hex[:8]}",
+    )
+    no_users_vendor = vendor_admin.create_committed(
+        db_session,
+        name="No Users Vendor",
+        code=f"NUV-{uuid4().hex[:8]}",
+    )
+    disabled_vendor = vendor_admin.create_committed(
+        db_session,
+        name="Disabled Portal Vendor",
+        code=f"DPV-{uuid4().hex[:8]}",
+    )
+    no_profile_vendor = Vendor(
+        name="No Profile Vendor",
+        code=f"NPV-{uuid4().hex[:8]}",
+        is_active=True,
+    )
+    db_session.add(no_profile_vendor)
+    db_session.commit()
+
+    client = _client(db_session)
+    client.post(
+        f"/admin/vendors/{active_vendor.id}/users",
+        data={
+            "first_name": "Ada",
+            "last_name": "Obi",
+            "email": f"list-{uuid4().hex[:8]}@vendor.example",
+            "role": "field",
+        },
+        follow_redirects=False,
+    )
+    vendor_admin.deactivate_committed(db_session, disabled_vendor.id)
+
+    response = client.get("/admin/vendors")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Portal Access" in html
+    assert "Yes - 1 user" in html
+    assert "No users" in html
+    assert "Disabled" in html
+    assert "No portal profile" in html
+    assert no_users_vendor.name in html
 
 
 def test_admin_can_update_existing_vendor_user_role(db_session):

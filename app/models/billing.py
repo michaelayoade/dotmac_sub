@@ -1947,6 +1947,29 @@ class TopupIntent(Base):
         Index("ix_topup_intents_invoice_id", "invoice_id"),
         Index("uq_topup_intents_reference", "reference", unique=True),
         Index(
+            "ix_topup_intents_gateway_reconcile_due",
+            "provider_type",
+            "status",
+            "gateway_next_reconcile_at",
+            "gateway_last_reconcile_attempt_at",
+            "created_at",
+            postgresql_where=text(
+                "completed_payment_id IS NULL AND status IN "
+                "('pending', 'failed', 'abandoned', 'canceled', 'expired')"
+            ),
+            sqlite_where=text(
+                "completed_payment_id IS NULL AND status IN "
+                "('pending', 'failed', 'abandoned', 'canceled', 'expired')"
+            ),
+        ),
+        Index(
+            "ix_topup_intents_provider_reconcile_attempt",
+            "provider_type",
+            "gateway_last_reconcile_attempt_at",
+            postgresql_where=text("gateway_last_reconcile_attempt_at IS NOT NULL"),
+            sqlite_where=text("gateway_last_reconcile_attempt_at IS NOT NULL"),
+        ),
+        Index(
             "uq_topup_intents_deposit_idempotency",
             "account_id",
             "purpose",
@@ -2010,6 +2033,23 @@ class TopupIntent(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    gateway_last_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_last_outcome: Mapped[str | None] = mapped_column(String(40))
+    gateway_last_reason_code: Mapped[str | None] = mapped_column(String(80))
+    gateway_next_reconcile_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_last_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_reconcile_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    gateway_observation_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
 
     created_at: Mapped[datetime] = mapped_column(

@@ -65,14 +65,16 @@ def test_payment_reconciliation_has_complete_coordinator_contract() -> None:
     assert "financial.payment_reconciliation" not in baseline.splitlines()
 
 
-def test_each_reconciliation_consequence_is_one_typed_owner_command() -> None:
+def test_each_reconciliation_boundary_is_one_typed_owner_command() -> None:
     source = OWNER_PATH.read_text(encoding="utf-8")
     verified = _function("settle_verified_reconciled_topup")
     observation = _function("record_reconciled_gateway_observation")
+    attempt = _function("claim_topup_reconciliation_attempt")
 
-    assert source.count("execute_owner_command(") == 2
+    assert source.count("execute_owner_command(") == 3
     assert "execute_owner_command" in _name_calls(verified)
     assert "execute_owner_command" in _name_calls(observation)
+    assert "execute_owner_command" in _name_calls(attempt)
     assert "CommandContext" in source
     assert "OwnerCommandDefinition" in source
 
@@ -95,17 +97,94 @@ def test_reconciliation_composes_named_flush_only_participants() -> None:
 def test_sweep_separates_candidates_transport_and_consequence_transactions() -> None:
     source = OWNER_PATH.read_text(encoding="utf-8")
     sweep = _function("reconcile_pending_topups")
-    candidates = _function("_reconciliation_candidates")
     sweep_calls = _attribute_calls(sweep) | _name_calls(sweep)
+    claim_calls = [
+        child
+        for child in ast.walk(sweep)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Name)
+        and child.func.id == "claim_topup_reconciliation_attempt"
+    ]
+    provider_calls = [
+        child
+        for child in ast.walk(sweep)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Attribute)
+        and child.func.attr == "observe_verification"
+    ]
 
     assert "release_read_transaction" in sweep_calls
+    assert "claim_topup_reconciliation_attempt" in sweep_calls
     assert "observe_verification" in sweep_calls
     assert "settle_verified_reconciled_topup" in sweep_calls
     assert "record_reconciled_gateway_observation" in sweep_calls
+    assert len(claim_calls) == 1
+    assert len(provider_calls) == 1
+    assert claim_calls[0].lineno < provider_calls[0].lineno
     assert "SUPPORTED_PROVIDER_TYPES" in source
-    assert "topup_reconciliation_batch_size" in ast.unparse(candidates)
+    assert "topup_reconciliation_batch_size" in source
+    assert "topup_reconciliation_terminal_retry_hours" in source
+    assert "checked_pending" in source
+    assert "checked_terminal" in source
+    terminal_statuses = next(
+        node.value
+        for node in ast.parse(source).body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_TERMINAL_RECOVERY_STATUSES"
+            for target in node.targets
+        )
+    )
+    assert isinstance(terminal_statuses, ast.Tuple)
+    assert {
+        "TopupIntentStatus.failed",
+        "TopupIntentStatus.abandoned",
+        "TopupIntentStatus.canceled",
+        "TopupIntentStatus.expired",
+    } <= {ast.unparse(element) for element in terminal_statuses.elts}
     assert "_GATEWAY_PROVIDERS" not in source
     assert "_NOT_FOUND_STATUSES" not in source
+
+
+def test_reconciliation_contract_declares_mutual_lane_and_provider_fairness() -> None:
+    service = sot_relationships.service_relationship("financial.payment_reconciliation")
+
+    assert service.contract is not None
+    policy = " ".join(
+        (
+            service.notes,
+            service.contract.transaction.boundary,
+            service.contract.transaction.retries,
+        )
+    ).lower()
+    assert "reserved capacity" in policy
+    assert "pending" in policy
+    assert "terminal" in policy
+    assert "unused capacity" in policy
+    assert "provider" in policy
+    assert "interleave" in policy
+    assert "least recently served" in policy
+    assert "rotates provider priority" in policy
+    assert "before provider i/o" in policy
+
+
+def test_candidate_order_has_stable_attempt_created_and_id_tie_breakers() -> None:
+    source = OWNER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(OWNER_PATH))
+    order_by_calls = [
+        child
+        for child in ast.walk(tree)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Attribute)
+        and child.func.attr == "order_by"
+    ]
+
+    assert any(
+        "gateway_last_reconcile_attempt_at" in ast.unparse(call)
+        and "created_at" in ast.unparse(call)
+        and "TopupIntent.id" in ast.unparse(call)
+        for call in order_by_calls
+    )
 
 
 def test_reconciliation_retires_parallel_financial_and_access_paths() -> None:

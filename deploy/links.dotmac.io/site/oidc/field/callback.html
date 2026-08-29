@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dotmac Field &mdash; sign-in</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        padding: 2rem;
+      }
+      main { max-width: 30rem; text-align: center; }
+      h1 { font-size: 1.25rem; margin: 0 0 0.75rem; }
+      p { margin: 0 0 0.5rem; }
+      .muted { opacity: 0.7; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <!-- Browser fallback ONLY. On a device with a verified install of
+         io.dotmac.field this URL never renders: the OS hands it straight to the
+         app. Reaching this page means the app is absent, or its App Link /
+         Universal Link association has not verified.
+
+         This page deliberately carries NO script. It must never read the query
+         string, never forward an authorization code anywhere, and never attempt
+         to hand off through a custom scheme - that hand-off is exactly the
+         unverified path this boundary exists to remove. -->
+    <main>
+      <h1>Open this link on your work phone</h1>
+      <p>Sign-in finishes inside the Dotmac Field app.</p>
+      <p class="muted">
+        If you are already on your work phone and still seeing this page, the
+        app is not installed, or this build is not the signed release. Reinstall
+        from the managed distribution and try signing in again.
+      </p>
+    </main>
+  </body>
+</html>

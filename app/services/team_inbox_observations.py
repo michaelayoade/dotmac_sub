@@ -139,16 +139,29 @@ def inbound_location_observation(
 
 
 @dataclass(frozen=True, slots=True)
+class InboundPreparedFileObservation:
+    entity_type: str
+    entity_id: str
+    original_filename: str
+    storage_key: str
+    file_size: int
+    content_type: str
+    checksum: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class InboundAttachmentObservation:
     asset_type: str
     file_name: str | None = None
     mime_type: str | None = None
     provider_media_id: str | None = None
     source_url: str | None = None
+    content_base64: str | None = None
     caption: str | None = None
     file_size: int | None = None
     download_status: str | None = None
     location: InboundLocationObservation | None = None
+    prepared_file: InboundPreparedFileObservation | None = None
 
 
 @dataclass(frozen=True, slots=True)

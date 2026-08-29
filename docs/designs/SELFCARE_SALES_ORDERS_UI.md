@@ -44,7 +44,7 @@ The list page presents, in order:
 3. Search, period/date, source, lifecycle, payment, agent and lead-source
    filters.
 4. Sales-by-agent, payment-mix and source-mix summary panels.
-5. The paginated orders table and its View action.
+5. The paginated orders table, with each order number linking to its detail page.
 
 The detail page presents status and monetary facts first, then customer,
 ownership/source, linked quote/project, line items and notes. Edit and soft
@@ -71,8 +71,17 @@ fewer control. Desktop provides local agent search, shows ten matching agents
 initially, and exposes Show all/Show fewer only when more than ten match. The
 orders table groups date with order identity, agent with customer, lifecycle
 with payment status, and all monetary facts into a financial summary. Its
-minimum width is bounded to limit desktop horizontal scrolling. Ten orders are
-shown initially, with Show all/Show fewer when the current page contains more.
+desktop minimum width is bounded. On mobile the table is replaced by stacked
+order cards, so horizontal scrolling is never required. Each card preserves
+the order detail link, date, customer, agent, source, lifecycle and payment
+states, total, collected amount and balance due. Mobile cards label Order status
+and Payment status explicitly and present Source separately, so visually similar
+badges cannot be mistaken for the same state dimension. Ten orders are shown initially,
+with Show all/Show fewer when the current page contains more.
+The table header provides a local search across the currently loaded page by
+order, customer, agent, source and status; active search reveals every matching
+row on that page and presents a scoped no-results state without changing the
+server-owned filter or pagination contract.
 Both agent and order disclosures ease their container and newly revealed
 content over roughly 300ms. Reduced-motion preferences disable the scripted
 height animation while preserving the same disclosure behavior.

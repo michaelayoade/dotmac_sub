@@ -440,7 +440,9 @@ def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatc
                             "attachments": [
                                 {
                                     "type": "image",
-                                    "payload": {"url": "https://example.test/i.jpg"},
+                                    "payload": {
+                                        "url": "https://lookaside.facebook.com/i.jpg"
+                                    },
                                 }
                             ],
                         },
@@ -465,9 +467,12 @@ def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatc
     assert response["processed"] == 1
     assert message.body == "[image]"
     assert message.metadata_["attachments"][0]["type"] == "image"
-    assert message.metadata_["attachments"][0]["url"] == "https://example.test/i.jpg"
+    assert (
+        message.metadata_["attachments"][0]["url"]
+        == "https://lookaside.facebook.com/i.jpg"
+    )
     assert asset.asset_type == "image"
-    assert asset.source_url == "https://example.test/i.jpg"
+    assert asset.source_url == "https://lookaside.facebook.com/i.jpg"
     assert asset.download_status == "remote_available"
     assert timeline.messages[0].attachments[0].url is not None
     assert timeline.messages[0].attachments[0].url.startswith("/admin/inbox/media/")

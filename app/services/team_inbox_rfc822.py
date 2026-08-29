@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import html
 import re
 from collections.abc import Iterable
@@ -104,7 +103,15 @@ def html_to_readable_text(value: str | None) -> str:
 @dataclass(frozen=True)
 class ParsedInboundEmail:
     payload: team_inbox_receive.InboundEmailPayload
-    attachments: list[dict[str, Any]] = field(default_factory=list)
+    attachments: tuple[ParsedInboundAttachment, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedInboundAttachment:
+    file_name: str | None
+    mime_type: str
+    content: bytes
+    content_id: str | None = None
 
 
 def decode_header_value(value: str | None) -> str | None:
@@ -169,8 +176,8 @@ def extract_bodies(message: Message) -> tuple[str | None, str | None]:
     return text_body, html_body
 
 
-def extract_attachments(message: Message) -> list[dict[str, Any]]:
-    attachments: list[dict[str, Any]] = []
+def extract_attachments(message: Message) -> tuple[ParsedInboundAttachment, ...]:
+    attachments: list[ParsedInboundAttachment] = []
     for part in message.walk():
         if part.is_multipart():
             continue
@@ -183,15 +190,14 @@ def extract_attachments(message: Message) -> list[dict[str, Any]]:
         if not payload:
             continue
         attachments.append(
-            {
-                "file_name": decode_header_value(filename) if filename else None,
-                "mime_type": part.get_content_type(),
-                "file_size": len(payload),
-                "content_id": content_id,
-                "content_base64": base64.b64encode(payload).decode("ascii"),
-            }
+            ParsedInboundAttachment(
+                file_name=decode_header_value(filename) if filename else None,
+                mime_type=part.get_content_type(),
+                content=payload,
+                content_id=str(content_id) if content_id else None,
+            )
         )
-    return attachments
+    return tuple(attachments)
 
 
 # Retained verbatim, interpreted nowhere. Admission policy for inbound email

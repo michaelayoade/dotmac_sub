@@ -662,12 +662,47 @@ def _run_reconciliation(db):
     )
 
 
+def _set_reconciliation_batch_size(db, batch_size: int) -> None:
+    setting = (
+        db.query(DomainSetting)
+        .filter_by(
+            domain=SettingDomain.billing,
+            key="topup_reconciliation_batch_size",
+        )
+        .one_or_none()
+    )
+    if setting is None:
+        setting = DomainSetting(
+            domain=SettingDomain.billing,
+            key="topup_reconciliation_batch_size",
+            value_type=SettingValueType.integer,
+            value_text=str(batch_size),
+            is_active=True,
+        )
+        db.add(setting)
+    else:
+        setting.value_text = str(batch_size)
+        setting.is_active = True
+    db.commit()
+    SettingsCache.invalidate(
+        SettingDomain.billing.value,
+        "topup_reconciliation_batch_size",
+    )
+
+
 def _success_observation(transaction: PaymentGatewayTransaction):
     return PaymentGatewayVerificationObservation(
         outcome=PaymentGatewayVerificationOutcome.succeeded,
         transaction=transaction,
         provider_status=PaymentGatewayProviderStatus.success,
         reason_code=PaymentGatewayVerificationReason.provider_reported_success,
+    )
+
+
+def _unavailable_observation():
+    return PaymentGatewayVerificationObservation(
+        outcome=PaymentGatewayVerificationOutcome.unavailable,
+        reason_code=PaymentGatewayVerificationReason.provider_unavailable,
     )
 
 
@@ -685,6 +720,19 @@ def test_reconciliation_backlog_separates_eligible_and_outside_window(
         subscriber,
         reference="DMAC-RECON-BACKLOG-OUTSIDE",
     )
+    terminal_due = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-BACKLOG-TERMINAL",
+    )
+    terminal_due.status = "failed"
+    terminal_cooling_down = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-BACKLOG-COOLING",
+    )
+    terminal_cooling_down.status = "abandoned"
+    terminal_cooling_down.gateway_next_reconcile_at = observed_at + timedelta(hours=1)
     outside_window.created_at = observed_at - timedelta(days=8)
     db_session.commit()
 
@@ -694,10 +742,462 @@ def test_reconciliation_backlog_separates_eligible_and_outside_window(
     )
 
     assert backlog.pending == 2
-    assert backlog.eligible == 1
+    assert backlog.pending_total == 2
+    assert backlog.pending_eligible == 1
+    assert backlog.terminal_recovery_total == 2
+    assert backlog.terminal_recovery_due == 1
+    assert backlog.terminal_recovery_cooling_down == 1
+    assert backlog.eligible == 2
     assert backlog.outside_window == 1
     assert backlog.oldest_pending_at == outside_window.created_at
+    assert backlog.oldest_due_terminal_at == terminal_due.created_at
     assert eligible.created_at < backlog.stale_before.replace(tzinfo=None)
+
+
+def test_reconciliation_prioritizes_pending_over_older_terminal_rows(
+    db_session, subscriber
+):
+    _make_provider(db_session)
+    for index in range(60):
+        terminal = _stale_intent(
+            db_session,
+            subscriber,
+            reference=f"DMAC-RECON-TERMINAL-{index}",
+            minutes_old=4 * 24 * 60 + index,
+        )
+        terminal.status = "failed"
+    pending = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-PENDING-NOT-STARVED",
+        minutes_old=60,
+    )
+    db_session.commit()
+
+    seen: list[str] = []
+
+    def observe(_db, *, provider_type, reference):
+        assert provider_type == "paystack"
+        seen.append(reference)
+        return _unavailable_observation()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        result = _run_reconciliation(db_session)
+
+    assert result.checked == 50
+    assert result.checked_pending == 1
+    assert result.checked_terminal == 49
+    assert pending.reference in seen
+
+
+def test_reconciliation_reserves_terminal_capacity_under_sustained_pending_load(
+    db_session, subscriber
+):
+    _set_reconciliation_batch_size(db_session, 4)
+    pending_references = {
+        _stale_intent(
+            db_session,
+            subscriber,
+            reference=f"DMAC-RECON-PENDING-SUSTAINED-{index}",
+            minutes_old=120 + index,
+        ).reference
+        for index in range(8)
+    }
+    terminal_references: set[str] = set()
+    for index in range(3):
+        intent = _stale_intent(
+            db_session,
+            subscriber,
+            reference=f"DMAC-RECON-TERMINAL-RESERVED-{index}",
+            minutes_old=240 + index,
+        )
+        intent.status = "failed"
+        terminal_references.add(intent.reference)
+    db_session.commit()
+
+    seen: list[str] = []
+
+    def observe(_db, *, provider_type, reference):
+        assert provider_type == "paystack"
+        seen.append(reference)
+        return _unavailable_observation()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        result = _run_reconciliation(db_session)
+
+    assert result.checked == 4
+    assert result.checked_pending >= 1
+    assert result.checked_terminal >= 1
+    assert pending_references.intersection(seen)
+    assert terminal_references.intersection(seen)
+
+
+def test_reconciliation_rotates_after_transport_failures_to_never_attempted_rows(
+    db_session, subscriber
+):
+    _set_reconciliation_batch_size(db_session, 2)
+    references: set[str] = set()
+    for index in range(3):
+        intent = _stale_intent(
+            db_session,
+            subscriber,
+            reference=f"DMAC-RECON-TERMINAL-ROTATION-{index}",
+            minutes_old=180 + index,
+        )
+        intent.status = "failed"
+        references.add(intent.reference)
+    db_session.commit()
+
+    runs: list[list[str]] = [[], []]
+    current_run = 0
+
+    def observe(_db, *, provider_type, reference):
+        assert provider_type == "paystack"
+        runs[current_run].append(reference)
+        raise RuntimeError("gateway transport unavailable")
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        first = _run_reconciliation(db_session)
+        current_run = 1
+        second = _run_reconciliation(db_session)
+
+    assert first.checked == 2
+    assert first.errors == 2
+    assert second.checked == 1
+    assert second.errors == 1
+    assert set(runs[0]).isdisjoint(runs[1])
+    assert set(runs[0] + runs[1]) == references
+
+
+@pytest.mark.parametrize("failure_kind", ["transport", "domain"])
+def test_reconciliation_claim_survives_failure_and_prevents_immediate_recheck(
+    db_session, subscriber, failure_kind
+):
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session,
+        subscriber,
+        reference=f"DMAC-RECON-CLAIM-{failure_kind.upper()}",
+    )
+    intent.status = "failed"
+    db_session.commit()
+
+    if failure_kind == "transport":
+        side_effect = RuntimeError("gateway transport unavailable")
+        return_value = None
+    else:
+        side_effect = None
+        return_value = _success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="USD",
+                external_id="domain-rejected-terminal-success",
+                memo_prefix="Paystack",
+            )
+        )
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=side_effect,
+        return_value=return_value,
+    ) as verify_mock:
+        first = _run_reconciliation(db_session)
+        second = _run_reconciliation(db_session)
+
+    db_session.refresh(intent)
+    assert first.checked == 1
+    assert first.errors == 1
+    assert second.checked == 0
+    assert verify_mock.call_count == 1
+    assert intent.gateway_next_reconcile_at is not None
+    next_reconcile_at = intent.gateway_next_reconcile_at
+    comparison_now = (
+        datetime.now(UTC)
+        if next_reconcile_at.tzinfo is not None
+        else datetime.now(UTC).replace(tzinfo=None)
+    )
+    assert next_reconcile_at > comparison_now
+
+
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_reconciliation_interleaves_providers_with_stable_id_order_per_lane(
+    db_session, subscriber, status
+):
+    _set_reconciliation_batch_size(db_session, 4)
+    common_created_at = datetime.now(UTC) - timedelta(hours=3)
+    by_provider: dict[str, list[TopupIntent]] = {
+        "paystack": [],
+        "flutterwave": [],
+    }
+    for provider_type in by_provider:
+        for index in range(3):
+            intent = _stale_intent(
+                db_session,
+                subscriber,
+                reference=(
+                    f"DMAC-RECON-{status.upper()}-{provider_type.upper()}-{index}"
+                ),
+            )
+            intent.provider_type = provider_type
+            intent.status = status
+            intent.created_at = common_created_at
+            intent.gateway_next_reconcile_at = common_created_at
+            by_provider[provider_type].append(intent)
+    db_session.commit()
+
+    seen: list[tuple[str, str]] = []
+
+    def observe(_db, *, provider_type, reference):
+        seen.append((provider_type, reference))
+        return _unavailable_observation()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        result = _run_reconciliation(db_session)
+
+    expected: list[tuple[str, str]] = []
+    ordered = {
+        provider_type: sorted(intents, key=lambda intent: intent.id)
+        for provider_type, intents in by_provider.items()
+    }
+    for index in range(2):
+        expected.extend(
+            (
+                ("paystack", ordered["paystack"][index].reference),
+                ("flutterwave", ordered["flutterwave"][index].reference),
+            )
+        )
+
+    assert result.checked == 4
+    assert seen == expected
+
+
+def test_reconciliation_rotates_provider_priority_across_minimum_batches(
+    db_session, subscriber
+):
+    _set_reconciliation_batch_size(db_session, 2)
+    for provider_type in ("paystack", "flutterwave"):
+        for status in ("pending", "failed"):
+            provider_rows = 2 if provider_type == "paystack" else 1
+            for index in range(provider_rows):
+                intent = _stale_intent(
+                    db_session,
+                    subscriber,
+                    reference=(
+                        f"DMAC-RECON-MIN-BATCH-{provider_type.upper()}-"
+                        f"{status.upper()}-{index}"
+                    ),
+                )
+                intent.provider_type = provider_type
+                intent.status = status
+    db_session.commit()
+
+    runs: list[list[str]] = [[], []]
+    current_run = 0
+
+    def observe(_db, *, provider_type, reference):
+        del reference
+        runs[current_run].append(provider_type)
+        return _unavailable_observation()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        first = _run_reconciliation(db_session)
+        current_run = 1
+        second = _run_reconciliation(db_session)
+
+    assert first.checked == 2
+    assert second.checked == 2
+    assert runs == [["paystack", "paystack"], ["flutterwave", "flutterwave"]]
+
+
+def test_reconciliation_rotates_one_slot_lane_when_provider_clocks_would_tie(
+    db_session, subscriber
+):
+    _set_reconciliation_batch_size(db_session, 3)
+    for provider_type in ("paystack", "flutterwave"):
+        for status in ("pending", "failed"):
+            for index in range(3):
+                intent = _stale_intent(
+                    db_session,
+                    subscriber,
+                    reference=(
+                        f"DMAC-RECON-ONE-SLOT-{provider_type.upper()}-"
+                        f"{status.upper()}-{index}"
+                    ),
+                )
+                intent.provider_type = provider_type
+                intent.status = status
+    db_session.commit()
+
+    runs: list[list[str]] = [[], [], []]
+    current_run = 0
+
+    def observe(_db, *, provider_type, reference):
+        del reference
+        runs[current_run].append(provider_type)
+        return _unavailable_observation()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        side_effect=observe,
+    ):
+        summaries = []
+        for run in range(3):
+            current_run = run
+            summaries.append(_run_reconciliation(db_session))
+
+    assert [summary.checked for summary in summaries] == [3, 3, 3]
+    assert runs == [
+        ["paystack", "flutterwave", "paystack"],
+        ["flutterwave", "paystack", "flutterwave"],
+        ["paystack", "flutterwave", "paystack"],
+    ]
+
+
+def test_reconciliation_respects_terminal_recovery_cooldown(db_session, subscriber):
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-TERMINAL-COOLDOWN",
+    )
+    intent.status = "failed"
+    intent.gateway_next_reconcile_at = datetime.now(UTC) + timedelta(hours=23)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification"
+    ) as verify_mock:
+        result = _run_reconciliation(db_session)
+
+    assert result.checked == 0
+    verify_mock.assert_not_called()
+    db_session.refresh(intent)
+    assert intent.status == "failed"
+
+
+def test_reconciliation_sets_pending_unavailable_retry_without_hot_loop(
+    db_session, subscriber
+):
+    _make_provider(db_session)
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="DMAC-RECON-PENDING-UNAVAILABLE",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(intent)
+    db_session.commit()
+    intent.created_at = datetime.now(UTC) - timedelta(minutes=60)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_unavailable_observation(),
+    ) as verify_mock:
+        first = _run_reconciliation(db_session)
+        second = _run_reconciliation(db_session)
+
+    db_session.refresh(intent)
+    assert first.checked == 1
+    assert second.checked == 0
+    assert verify_mock.call_count == 1
+    assert intent.status == "pending"
+    assert intent.gateway_last_outcome == "unavailable"
+    assert intent.gateway_last_reason_code == "provider_unavailable"
+    assert intent.gateway_observation_count == 1
+    next_reconcile_at = intent.gateway_next_reconcile_at
+    assert next_reconcile_at is not None
+    comparison_now = (
+        datetime.now(UTC)
+        if next_reconcile_at.tzinfo is not None
+        else datetime.now(UTC).replace(tzinfo=None)
+    )
+    assert next_reconcile_at > comparison_now
+
+
+def test_reconciliation_still_settles_late_terminal_success(db_session, subscriber):
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-LATE-TERMINAL-SUCCESS",
+    )
+    intent.status = "abandoned"
+    intent.gateway_next_reconcile_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="NGN",
+                external_id="late-terminal-success",
+                memo_prefix="Paystack",
+            )
+        ),
+    ):
+        result = _run_reconciliation(db_session)
+
+    db_session.refresh(intent)
+    assert result.recovered == 1
+    assert result.checked_terminal == 1
+    assert intent.status == "completed"
+    assert intent.completed_payment_id is not None
+    assert intent.gateway_next_reconcile_at is None
+
+
+def test_reconciliation_still_settles_late_canceled_success(db_session, subscriber):
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-LATE-CANCELED-SUCCESS",
+    )
+    intent.status = "canceled"
+    intent.gateway_next_reconcile_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="NGN",
+                external_id="late-canceled-success",
+                memo_prefix="Paystack",
+            )
+        ),
+    ):
+        result = _run_reconciliation(db_session)
+
+    db_session.refresh(intent)
+    assert result.recovered == 1
+    assert result.checked_terminal == 1
+    assert intent.status == "completed"
+    assert intent.completed_payment_id is not None
+    assert intent.gateway_next_reconcile_at is None
 
 
 def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
@@ -872,7 +1372,11 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     specs = {
         "topup_reconciliation_stale_minutes": (15, 1, 1440),
         "topup_reconciliation_max_age_days": (7, 1, 30),
-        "topup_reconciliation_batch_size": (50, 1, 500),
+        "topup_reconciliation_batch_size": (50, 2, 500),
+        "topup_reconciliation_pending_retry_minutes": (30, 1, 1440),
+        "topup_reconciliation_terminal_retry_hours": (24, 1, 168),
+        "topup_reconciliation_processing_retry_minutes": (30, 1, 1440),
+        "topup_reconciliation_unavailable_retry_minutes": (60, 1, 1440),
     }
     for key, (default, min_value, max_value) in specs.items():
         spec = get_spec(SettingDomain.billing, key)

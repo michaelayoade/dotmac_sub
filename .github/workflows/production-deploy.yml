@@ -24,6 +24,35 @@ on:
         description: Required reason for a hotfix exception
         required: false
         type: string
+      rollback_from_revision:
+        description: "Rollback only: exact full SHA currently running in production"
+        required: false
+        type: string
+      rollback_to_revision:
+        description: "Rollback only: exact full SHA being deployed (must equal the authorized release revision)"
+        required: false
+        type: string
+      rollback_change_reference:
+        description: "Rollback only: incident or change reference"
+        required: false
+        type: string
+      rollback_reason:
+        description: "Rollback only: why production is being moved backwards"
+        required: false
+        type: string
+      resume_after_migration:
+        description: Resume a failed production run after backup and migrations already completed
+        required: true
+        default: false
+        type: boolean
+      failed_deployment_run_id:
+        description: Required prior failed production deploy run ID for resume
+        required: false
+        type: string
+      prior_backup_path:
+        description: Required on-host backup artifact path from the prior failed run
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -82,12 +111,17 @@ jobs:
               core.setFailed(`Run ${runId} is not accepted production authorization.`);
               return;
             }
-            core.setOutput("release_sha", run.head_sha);
+            // The authorization run's head_sha is the AUTHORIZING main commit
+            // -- the workflow/verifier code that produced the document. It is
+            // NOT the application revision being released; that lives inside
+            // the typed authorization as release_revision.
+            core.setOutput("authorization_main_sha", run.head_sha);
 
+      # Verifier code comes from the authorizing main commit ...
       - name: Checkout authorized release-control verifier
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.authorization-run.outputs.release_sha }}
+          ref: ${{ steps.authorization-run.outputs.authorization_main_sha }}
 
       - name: Download exact production authorization
         uses: actions/download-artifact@v4
@@ -110,7 +144,7 @@ jobs:
           python -m scripts.release_candidate_evidence verify-production \
             --path "${files[0]}" \
             --expected-authorization-run-id "$AUTHORIZATION_RUN_ID" \
-            --expected-release-revision "${{ steps.authorization-run.outputs.release_sha }}" \
+            --expected-authorization-main-revision "${{ steps.authorization-run.outputs.authorization_main_sha }}" \
             --github-output "$GITHUB_OUTPUT"
 
   deploy:
@@ -119,10 +153,13 @@ jobs:
     environment: production
     timeout-minutes: 45
     steps:
-      - name: Checkout authorized main release
+      # ... while the application release is the STAGED revision named by the
+      # authorization document, which is generally an earlier commit.
+      - name: Checkout authorized staged release
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.verify.outputs.release_revision }}
+          fetch-depth: 0
 
       - name: Download exact production authorization
         uses: actions/download-artifact@v4
@@ -151,15 +188,48 @@ jobs:
           HOTFIX: ${{ inputs.hotfix_no_migrations }}
           CHANGE_REFERENCE: ${{ inputs.change_reference }}
           HOTFIX_REASON: ${{ inputs.reason }}
+          ROLLBACK_FROM: ${{ inputs.rollback_from_revision }}
+          ROLLBACK_TO: ${{ inputs.rollback_to_revision }}
+          ROLLBACK_REF: ${{ inputs.rollback_change_reference }}
+          ROLLBACK_REASON: ${{ inputs.rollback_reason }}
+          RESUME_AFTER_MIGRATION: ${{ inputs.resume_after_migration }}
+          FAILED_DEPLOYMENT_RUN_ID: ${{ inputs.failed_deployment_run_id }}
+          PRIOR_BACKUP_PATH: ${{ inputs.prior_backup_path }}
+          AUTHORIZATION_RUN_ID: ${{ inputs.authorization_run_id }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+          DB_BACKUP_BASENAME: dotmac_sub_run_${{ github.run_id }}
         run: |
           set -euo pipefail
           mapfile -t files < <(find "$RUNNER_TEMP/authorization" -type f -name authorization.json)
           test "${#files[@]}" -eq 1
           args=("$IMAGE_DIGEST" "${files[0]}")
+          # A rollback is authorized by NAMING the exact transition, never by
+          # setting a flag. Partial attribution is refused rather than being
+          # quietly treated as "no rollback intended".
+          if [ -n "$ROLLBACK_FROM$ROLLBACK_TO$ROLLBACK_REF$ROLLBACK_REASON" ]; then
+            if [ -z "$ROLLBACK_FROM" ] || [ -z "$ROLLBACK_TO" ] \
+              || [ -z "$ROLLBACK_REF" ] || [ -z "$ROLLBACK_REASON" ]; then
+              echo "A rollback authorization requires from-revision, to-revision, change reference and reason." >&2
+              exit 1
+            fi
+            python -m scripts.release_candidate_evidence write-rollback-authorization \
+              --from-revision "$ROLLBACK_FROM" \
+              --to-revision "$ROLLBACK_TO" \
+              --change-reference "$ROLLBACK_REF" \
+              --reason "$ROLLBACK_REASON" \
+              --output "$RUNNER_TEMP/rollback-authorization.json"
+            args+=(--rollback-authorization "$RUNNER_TEMP/rollback-authorization.json")
+          fi
           if [ "$HOTFIX" = "true" ]; then
             args+=(--hotfix-no-migrations --change-reference "$CHANGE_REFERENCE" --reason "$HOTFIX_REASON")
           elif [ -n "$CHANGE_REFERENCE" ] || [ -n "$HOTFIX_REASON" ]; then
             echo "Hotfix attribution was supplied without hotfix_no_migrations." >&2
+            exit 1
+          fi
+          if [ "$RESUME_AFTER_MIGRATION" = "true" ]; then
+            args+=(--resume-after-migration --failed-run-id "$FAILED_DEPLOYMENT_RUN_ID" --backup-path "$PRIOR_BACKUP_PATH")
+          elif [ -n "$FAILED_DEPLOYMENT_RUN_ID" ] || [ -n "$PRIOR_BACKUP_PATH" ]; then
+            echo "Resume evidence was supplied without resume_after_migration." >&2
             exit 1
           fi
           REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \

@@ -41,9 +41,10 @@ repairing it would move authority, which this task does not do.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -60,10 +61,10 @@ from app.services.billing.receivable_cohort import (
     ParityDimension,
     ParityOutcome,
     ReceivableCohortWindow,
-    definition_seal,
     digest_payload,
 )
 from app.services.billing.receivable_projection import (
+    ApplyOutcome,
     ParityRunEvidence,
     ProjectionMode,
     ReconcileReceivableProjectionCommand,
@@ -120,6 +121,11 @@ class ReceivableParityReport:
     """The complete read-only parity result for one sealed cohort."""
 
     cohort_definition_seal: str
+    membership_digest: str
+    cohort_count: int
+    classification_counts: dict[str, int]
+    projection_outcomes: dict[str, int]
+    orphaned_count: int
     evaluated_count: int
     unprojected_count: int
     matched_count: int
@@ -130,6 +136,148 @@ class ReceivableParityReport:
     positions: tuple[PositionParity, ...]
     blockers: tuple[dict[str, str], ...]
     report_fingerprint: str
+
+    def compute_fingerprint(self) -> str:
+        """Recompute the seal over every readiness-relevant report field."""
+        return digest_payload(
+            {
+                "cohort_definition_seal": self.cohort_definition_seal,
+                "membership_digest": self.membership_digest,
+                "classification": self.classification_counts,
+                "projection_outcomes": self.projection_outcomes,
+                "orphaned_count": self.orphaned_count,
+                "unprojected_count": self.unprojected_count,
+                "by_dimension": self.by_dimension,
+                "reasons": self.not_expressible_reasons,
+                "keys": sorted(position.receivable_key for position in self.positions),
+                "blockers": self.blockers,
+            }
+        )
+
+    def consistency_errors(self) -> tuple[str, ...]:
+        """Return closed, PII-free reasons this report cannot be trusted.
+
+        The report is frozen but contains mappings, so a caller can still
+        mutate an aggregate after the original fingerprint was computed. A
+        concurrent projection writer can also move a row between the plan and
+        parity reads under PostgreSQL's default statement snapshots. Both must
+        block readiness rather than manufacture a clean comparison.
+        """
+        errors: list[str] = []
+        classification_names = {item.value for item in CohortClassification}
+        projection_names = {item.value for item in ApplyOutcome}
+        dimension_names = {item.value for item in ParityDimension}
+        outcome_names = {item.value for item in ParityOutcome}
+
+        scalar_counts = (
+            self.cohort_count,
+            self.orphaned_count,
+            self.evaluated_count,
+            self.unprojected_count,
+            self.matched_count,
+            self.diverged_count,
+            self.not_expressible_count,
+        )
+        mapping_counts = (
+            *self.classification_counts.values(),
+            *self.projection_outcomes.values(),
+            *self.not_expressible_reasons.values(),
+            *(
+                count
+                for outcomes in self.by_dimension.values()
+                for count in outcomes.values()
+            ),
+        )
+        if any(
+            type(count) is not int or count < 0
+            for count in (*scalar_counts, *mapping_counts)
+        ):
+            errors.append("invalid_count")
+
+        if set(self.classification_counts) != classification_names:
+            errors.append("classification_vocabulary")
+        if set(self.projection_outcomes) != projection_names:
+            errors.append("projection_outcome_vocabulary")
+        if set(self.by_dimension) != dimension_names:
+            errors.append("dimension_vocabulary")
+        if any(
+            set(outcomes) != outcome_names for outcomes in self.by_dimension.values()
+        ):
+            errors.append("parity_outcome_vocabulary")
+
+        count_shape_errors = {
+            "invalid_count",
+            "classification_vocabulary",
+            "projection_outcome_vocabulary",
+        }
+        if not any(error in count_shape_errors for error in errors):
+            if self.cohort_count != sum(self.classification_counts.values()):
+                errors.append("cohort_classification_total")
+            member_count = sum(
+                self.classification_counts[item.value]
+                for item in (
+                    CohortClassification.COVERED,
+                    CohortClassification.NOT_EXPRESSIBLE,
+                )
+            )
+            if sum(self.projection_outcomes.values()) != member_count:
+                errors.append("member_projection_total")
+            if self.evaluated_count + self.unprojected_count != member_count:
+                errors.append("member_comparison_total")
+            if (
+                self.unprojected_count
+                != self.projection_outcomes[ApplyOutcome.INSERTED.value]
+            ):
+                errors.append("unprojected_plan_total")
+
+        if self.evaluated_count != len(self.positions):
+            errors.append("position_total")
+        if len({position.receivable_key for position in self.positions}) != len(
+            self.positions
+        ):
+            errors.append("duplicate_position_key")
+
+        calculated_by_dimension: dict[str, Counter[str]] = {
+            dimension.value: Counter() for dimension in ParityDimension
+        }
+        calculated_reasons: Counter[str] = Counter()
+        calculated_totals: Counter[str] = Counter()
+        for position in self.positions:
+            verdict_dimensions = [
+                verdict.dimension.value for verdict in position.verdicts
+            ]
+            if (
+                len(verdict_dimensions) != len(dimension_names)
+                or set(verdict_dimensions) != dimension_names
+            ):
+                errors.append("position_dimension_vocabulary")
+            for verdict in position.verdicts:
+                calculated_by_dimension[verdict.dimension.value][
+                    verdict.outcome.value
+                ] += 1
+                calculated_totals[verdict.outcome.value] += 1
+                if verdict.reason is not None:
+                    calculated_reasons[verdict.reason.value] += 1
+
+        expected_by_dimension = {
+            dimension: {outcome: counts.get(outcome, 0) for outcome in outcome_names}
+            for dimension, counts in calculated_by_dimension.items()
+        }
+        if self.by_dimension != expected_by_dimension:
+            errors.append("dimension_totals")
+        if (
+            self.matched_count != calculated_totals.get(ParityOutcome.MATCHED.value, 0)
+            or self.diverged_count
+            != calculated_totals.get(ParityOutcome.DIVERGED.value, 0)
+            or self.not_expressible_count
+            != calculated_totals.get(ParityOutcome.NOT_EXPRESSIBLE.value, 0)
+        ):
+            errors.append("parity_totals")
+        if self.not_expressible_reasons != dict(sorted(calculated_reasons.items())):
+            errors.append("not_expressible_reason_totals")
+        if self.report_fingerprint != self.compute_fingerprint():
+            errors.append("report_fingerprint")
+        return tuple(sorted(set(errors)))
 
     def as_run_evidence(self) -> ParityRunEvidence:
         """The typed subset `billing.receivable_projection` records on a run."""
@@ -144,6 +292,171 @@ class ReceivableParityReport:
                 "report_fingerprint": self.report_fingerprint,
             },
         )
+
+
+class ReceivableReadinessBlockerCode(StrEnum):
+    """Closed reasons the sealed cohort is not ready for an authority review."""
+
+    EVIDENCE_INCONSISTENT = "evidence_inconsistent"
+    EMPTY_COMPARED_COHORT = "empty_compared_cohort"
+    COHORT_CLASSIFICATION = "cohort_classification"
+    PROJECTION_NOT_CONVERGED = "projection_not_converged"
+    PARITY_DIVERGED = "parity_diverged"
+    PARITY_NOT_EXPRESSIBLE = "parity_not_expressible"
+    STANDING_CONTRACT_BLOCKER = "standing_contract_blocker"
+
+
+@dataclass(frozen=True, slots=True)
+class ReceivableReadinessBlocker:
+    """One aggregate, non-PII reason the cohort cannot pass the readiness gate."""
+
+    code: ReceivableReadinessBlockerCode
+    count: int
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReceivableCutoverReadiness:
+    """Read-only verdict over one sealed receivable parity report.
+
+    `ready` means only that the shadow evidence is complete and internally
+    consistent. It is not a feature flag, migration state, writer switch, or
+    permission to retire an incumbent path.
+    """
+
+    ready: bool
+    cohort_definition_seal: str
+    membership_digest: str
+    report_fingerprint: str
+    readiness_fingerprint: str
+    blockers: tuple[ReceivableReadinessBlocker, ...]
+
+
+_NON_READY_CLASSIFICATIONS = (
+    CohortClassification.UNRESOLVED,
+    CohortClassification.AMBIGUOUS,
+    CohortClassification.UNEXPECTED_UNLINKED,
+    CohortClassification.DUPLICATE,
+    CohortClassification.NOT_EXPRESSIBLE,
+)
+
+_NON_CONVERGED_PROJECTION_OUTCOMES = (
+    ApplyOutcome.INSERTED,
+    ApplyOutcome.UPDATED,
+    ApplyOutcome.STALE_SKIPPED,
+    ApplyOutcome.AMBIGUOUS_WATERMARK,
+)
+
+
+def assess_receivable_cutover_readiness(
+    report: ReceivableParityReport,
+) -> ReceivableCutoverReadiness:
+    """Fail closed unless every member is projected and every dimension agrees.
+
+    `parity --strict` remains the drift/divergence regression check: a declared
+    `not_expressible` position is evidence, not a regression. This verdict
+    answers the stronger question a cutover review needs. It refuses a vacuous
+    empty cohort, unresolved candidates, projection work still required, every
+    semantic disagreement, every comparison that could not be made, and every
+    standing pinned contract blocker.
+    """
+
+    blockers: list[ReceivableReadinessBlocker] = []
+    consistency_errors = report.consistency_errors()
+    if consistency_errors:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.EVIDENCE_INCONSISTENT,
+                count=len(consistency_errors),
+                detail=(
+                    "the report seal or aggregate accounting is inconsistent: "
+                    + ", ".join(consistency_errors)
+                ),
+            )
+        )
+    if report.evaluated_count == 0:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.EMPTY_COMPARED_COHORT,
+                count=1,
+                detail="the sealed cohort contains no evaluated receivable position",
+            )
+        )
+
+    classification_count = sum(
+        report.classification_counts.get(classification.value, 0)
+        for classification in _NON_READY_CLASSIFICATIONS
+    )
+    if classification_count > 0:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.COHORT_CLASSIFICATION,
+                count=classification_count,
+                detail=(
+                    "candidate positions remain unresolved, ambiguous, unlinked, "
+                    "duplicated, or not expressible"
+                ),
+            )
+        )
+
+    projection_count = report.orphaned_count + sum(
+        report.projection_outcomes.get(outcome.value, 0)
+        for outcome in _NON_CONVERGED_PROJECTION_OUTCOMES
+    )
+    if projection_count > 0:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.PROJECTION_NOT_CONVERGED,
+                count=projection_count,
+                detail=(
+                    "the read-only plan still requires a projection insert or "
+                    "update, refuses a watermark, or observes an orphan"
+                ),
+            )
+        )
+
+    if report.diverged_count > 0:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.PARITY_DIVERGED,
+                count=report.diverged_count,
+                detail="semantic dimensions disagree with incumbent owner facts",
+            )
+        )
+    if report.not_expressible_count > 0:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.PARITY_NOT_EXPRESSIBLE,
+                count=report.not_expressible_count,
+                detail="semantic dimensions lack a truthful comparison counterparty",
+            )
+        )
+    if report.blockers:
+        blockers.append(
+            ReceivableReadinessBlocker(
+                code=ReceivableReadinessBlockerCode.STANDING_CONTRACT_BLOCKER,
+                count=len(report.blockers),
+                detail="the sealed cohort still carries a pinned contract blocker",
+            )
+        )
+
+    frozen = tuple(blockers)
+    readiness_fingerprint = digest_payload(
+        {
+            "cohort_definition_seal": report.cohort_definition_seal,
+            "membership_digest": report.membership_digest,
+            "report_fingerprint": report.report_fingerprint,
+            "blockers": [[item.code.value, item.count, item.detail] for item in frozen],
+        }
+    )
+    return ReceivableCutoverReadiness(
+        ready=not frozen,
+        cohort_definition_seal=report.cohort_definition_seal,
+        membership_digest=report.membership_digest,
+        report_fingerprint=report.report_fingerprint,
+        readiness_fingerprint=readiness_fingerprint,
+        blockers=frozen,
+    )
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -473,17 +786,21 @@ def evaluate_receivable_parity(
         }
         for blocker in STANDING_BLOCKERS
     )
-    fingerprint = digest_payload(
-        {
-            "by_dimension": by_dimension,
-            "reasons": dict(sorted(reasons.items())),
-            "keys": sorted(position.receivable_key for position in positions),
-        }
-    )
-    return ReceivableParityReport(
-        cohort_definition_seal=definition_seal(window),
+    classification_counts = dict(sorted(plan.classification_counts().items()))
+    planned = Counter(outcome.value for outcome in plan.planned_outcomes.values())
+    projection_outcomes = {
+        outcome.value: planned.get(outcome.value, 0) for outcome in ApplyOutcome
+    }
+    unprojected_count = len(member_keys - set(rows))
+    report = ReceivableParityReport(
+        cohort_definition_seal=plan.definition_seal,
+        membership_digest=plan.membership_digest,
+        cohort_count=len(plan.dispositions),
+        classification_counts=classification_counts,
+        projection_outcomes=projection_outcomes,
+        orphaned_count=len(plan.orphaned_keys),
         evaluated_count=len(positions),
-        unprojected_count=len(member_keys - set(rows)),
+        unprojected_count=unprojected_count,
         matched_count=totals.get(ParityOutcome.MATCHED.value, 0),
         diverged_count=totals.get(ParityOutcome.DIVERGED.value, 0),
         not_expressible_count=totals.get(ParityOutcome.NOT_EXPRESSIBLE.value, 0),
@@ -491,13 +808,18 @@ def evaluate_receivable_parity(
         not_expressible_reasons=dict(sorted(reasons.items())),
         positions=positions,
         blockers=blockers,
-        report_fingerprint=fingerprint,
+        report_fingerprint="",
     )
+    return replace(report, report_fingerprint=report.compute_fingerprint())
 
 
 __all__ = [
     "DimensionVerdict",
     "PositionParity",
+    "ReceivableCutoverReadiness",
     "ReceivableParityReport",
+    "ReceivableReadinessBlocker",
+    "ReceivableReadinessBlockerCode",
+    "assess_receivable_cutover_readiness",
     "evaluate_receivable_parity",
 ]

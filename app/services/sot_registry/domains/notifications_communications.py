@@ -2640,7 +2640,11 @@ DOMAIN = DomainSOT(
                         name="conversation reply target",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active unresolved conversation, channel, participant, subject, and team sender context.",
+                        source=(
+                            "Active unresolved conversation, channel, participant, "
+                            "subject, team sender context, and exact prior email "
+                            "Message-ID chronology."
+                        ),
                     ),
                     AuthorityInput(
                         name="communication intent lifecycle",
@@ -2664,7 +2668,9 @@ DOMAIN = DomainSOT(
                 "to the web transport, which schedules an after-response task on the "
                 "dedicated notifications_immediate queue. The periodic delivery runner "
                 "stays on notifications as the durable recovery sweep; each worker locks "
-                "and claims the exact eligible row before provider delivery."
+                "and claims the exact eligible row before provider delivery. Email "
+                "intents persist the thread-owner-derived Message-ID, In-Reply-To and "
+                "bounded References values; every retry serializes the same identity."
             ),
         ),
         SOTService(
@@ -3309,6 +3315,101 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.team_inbox_metrics",
+            module="app.services.team_inbox_metrics",
+            owns=(
+                "bounded Inbox team performance report projection",
+                "bounded Inbox agent performance report projection",
+                "current Inbox escalation candidate projection",
+            ),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "communications.team_inbox_routing",
+                "operations.service_team_lifecycle",
+                "operations.service_team_composition",
+                "auth.staff_provisioning",
+            ),
+            notes=(
+                "Performance cohorts default to 30 days and reject ranges over "
+                "366 days. "
+                "Escalations are current unresolved facts and are paginated in SQL."
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_metrics",
+                concerns=(
+                    (
+                        "bounded Inbox team performance report projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "bounded Inbox agent performance report projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "current Inbox escalation candidate projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="conversation and message chronology",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Conversation lifecycle and message direction, timestamp, "
+                            "and recorded sender provenance within the typed cohort."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="assignment routing and presence state",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Current and historical assignments, team links, and "
+                            "effective agent availability at the report "
+                            "observation time."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="service-team identity and lifecycle",
+                        owner="operations.service_team_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Canonical team identifiers, names, lifecycle, "
+                            "and SLA policy."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="service-team capability projection",
+                        owner="operations.service_team_composition",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Canonical capability composition for each report team.",
+                    ),
+                    AuthorityInput(
+                        name="staff identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Canonical active staff and person identity for agent rows."
+                        ),
+                    ),
+                ),
+                transaction_mode=TransactionMode.READ_ONLY,
+                domain_error_codes=("communications.team_inbox_metrics.invalid_query",),
+                projections=(
+                    "Thirty-day default bounded team response and queue cohort",
+                    "Thirty-day default bounded agent assignment and response cohort",
+                    "Current unresolved escalation reasons and aggregate counts",
+                ),
+                mapping_owner="Inbox report web and analytics API adapters",
+                test_refs=(
+                    "tests/test_team_inbox_metrics.py",
+                    "tests/test_crm_reporting.py",
+                    "tests/architecture/test_team_inbox_sot_contracts.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_ai_polish",
             module="app.services.team_inbox_ai_polish",
             owns=("context-aware Inbox composer polish advisory coordination",),
@@ -3489,7 +3590,11 @@ DOMAIN = DomainSOT(
                         name="SMTP envelope and RFC822 bytes",
                         owner="external:customer_mail_server",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                        source="Allowed recipient envelope and RFC822 bytes normalized before observation admission.",
+                        source=(
+                            "Allowed recipient envelope and RFC822 bytes normalized; "
+                            "validated attachment objects are stored privately before "
+                            "observation admission."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.NOT_APPLICABLE,

@@ -93,6 +93,8 @@ class TestNativeAgentWorkqueue:
         section = admin_page.locator("#workqueue-section-ticket")
         row = section.locator("article").filter(has_text=workqueue_ticket["title"])
         expect(row).to_have_count(1)
+        expect(row.get_by_role("link", name=workqueue_ticket["title"])).to_have_count(0)
+        expect(row.get_by_role("link", name="Open")).to_have_count(1)
         row.locator("summary").click()
         row.get_by_role("button", name="Claim for me").click()
 
@@ -128,6 +130,25 @@ class TestNativeAgentWorkqueue:
         expect(admin_page.get_by_label("Audience")).to_be_visible()
         expect(admin_page.get_by_label("Service team")).to_be_visible()
         expect(admin_page.get_by_role("link", name="Open Inbox")).to_be_visible()
+        section_nav = admin_page.get_by_role("navigation", name="Workqueue sections")
+        expect(section_nav).to_be_visible()
+        tickets_link = section_nav.get_by_role("link", name="Tickets")
+        tickets_link.click()
+        expect(tickets_link).to_have_attribute("aria-current", "location")
+        tickets_heading = admin_page.get_by_role("heading", name="Tickets")
+        expect(tickets_heading).to_be_in_viewport()
+        heading_is_below_nav = admin_page.evaluate(
+            """() => {
+                const nav = document.getElementById('workqueue-section-nav');
+                const heading = document.getElementById('section-ticket-heading');
+                return Boolean(
+                    nav && heading &&
+                    heading.getBoundingClientRect().top >=
+                        nav.getBoundingClientRect().bottom
+                );
+            }"""
+        )
+        assert heading_is_below_nav
         overflow = admin_page.evaluate(
             "() => document.documentElement.scrollWidth - window.innerWidth"
         )

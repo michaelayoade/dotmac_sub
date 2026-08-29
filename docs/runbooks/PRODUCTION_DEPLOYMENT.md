@@ -8,7 +8,9 @@ rollback boundary in one operation.
 
 - `nginx/selfcare.dotmac.io.conf` is installed and `nginx -t` passes.
 - The primary upstream is `127.0.0.1:8001`.
-- The deployment-only backup upstream is `127.0.0.1:18001`.
+- The long-running backup app bind is `127.0.0.1:18001`; it is not the deploy warm-candidate route.
+- The warm candidate upstream is `127.0.0.1:18002` by default. Do not reuse
+  `18001`; that port is reserved for the long-running backup app.
 - `.env` contains the production service configuration and approved secret
   references. Secret values are not copied into deployment commands or logs.
 - `.env` identifies the exact production host with `APP_ENV=production` and
@@ -21,6 +23,10 @@ rollback boundary in one operation.
   from Python's safe path, so a stale or locally modified `scripts/` package
   cannot interpret release evidence or decide backup policy.
 - The database backup and deploy locks are writable.
+- The commercial module prerequisite bootstrap has an elevated database
+  connection available only when repair is intended. `BOOTSTRAP_DATABASE_URL`
+  may be injected for the deploy process, but it is not an application
+  connection string and is never logged.
 - Host-side release-control modules execute from the exact authorized Actions
   checkout through `scripts/run_repo_module.sh`. `PYTHONPATH` alone is not an
   admissible checkout boundary because Python searches the current deploy
@@ -28,7 +34,7 @@ rollback boundary in one operation.
   the authorized verifier.
 
 The deployment refuses to start if the running Nginx configuration does not
-contain the backup upstream.
+contain the warm candidate upstream.
 
 ## Release sequence
 
@@ -42,32 +48,116 @@ contain the backup upstream.
 3. Require successful `CI` and `Mobile CI` GitHub push workflow runs for that
    exact full revision on `main`. Missing, pending, failed, wrong-branch, or
    unavailable evidence fails closed before backup or database mutation.
-4. Back up the database.
-5. Run candidate-image pre-migration state checks against the target database.
-6. Pin the immutable image and revision.
-7. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
-8. Verify registered schema contracts and reject every invalid or unready
+4. Verify the warm-candidate port is free. A port collision fails here before
+   backup or migration.
+5. Run database prerequisite bootstrap if `BOOTSTRAP_DATABASE_URL` is supplied,
+   then verify commercial module schemas and outbox dispatcher roles through
+   the restricted migration connection. Missing prerequisites fail here before
+   backup and before Alembic.
+6. Back up the database.
+7. Run candidate-image pre-migration state checks against the target database.
+8. Pin the immutable image and revision.
+9. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
+10. Verify registered schema contracts and reject every invalid or unready
    user-schema index.
-9. Verify every enabled integration installation pin resolves to a current or
+11. Verify every enabled integration installation pin resolves to a current or
    bounded historical definition in the new image. Unavailable pins block
    replacement; historical pins are reported for explicit adoption.
-10. Verify that an enabled `crm.ticket_pull` control has exactly one enabled
+12. Verify that an enabled `crm.ticket_pull` control has exactly one enabled
    `crm.ticket_observation.v1` binding and one active job bound to it. Complete
    the reviewed
    [`CRM_TICKET_CAPABILITY_CUTOVER.md`](CRM_TICKET_CAPABILITY_CUTOVER.md)
    procedure with the candidate image before deployment when this gate fails.
-11. Start and health-check the new application image on `127.0.0.1:18001`.
-12. Recreate the primary application and workers. Nginx uses the healthy
+13. Start and health-check the new application image on `127.0.0.1:18002`.
+14. Recreate the primary application and workers. Nginx uses the healthy
    candidate while the primary port is unavailable.
-13. Verify the primary image has no source-code bind mount and wait for its
+15. Verify the primary image has no source-code bind mount and wait for its
    health endpoint.
-14. Require every declared Celery worker to remain restart-free and answer a
+16. Require every declared Celery worker to remain restart-free and answer a
    node-specific ping, and require Celery Beat to remain running without
    restarts, across a bounded stabilization window.
-15. Gracefully drain the candidate and retain the configured rollback images.
+17. Gracefully drain the candidate and retain the configured rollback images.
 
 The candidate runs the same image, environment, and database schema as the
 primary. It is bound to localhost and exists only for the handoff window.
+
+## Commercial module database prerequisites
+
+Commercial modules are composed in shadow mode under owned `mod_*` schemas:
+`mod_payments`, `mod_billing`, `mod_coll`, `mod_serviceorders`, and
+`mod_subscriptions`. Their schemas and cluster roles are privileged deployment
+prerequisites. Alembic runs as the restricted migration role and only verifies
+that the prerequisites exist.
+
+Repair is explicit and idempotent:
+
+```bash
+BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+  python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+  python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+```
+
+Verification uses the restricted migration connection:
+
+```bash
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
+  python scripts/bootstrap_commercial_module_prereqs.py --verify-only
+
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
+  python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only
+```
+
+The deploy owner runs the same verification before backup and before
+`alembic upgrade heads`. It runs repair first only when `BOOTSTRAP_DATABASE_URL`
+is present in the deploy environment. Do not permanently grant database-level
+`CREATE` to `dotmac_app`; the bootstrap creates/adopts the schemas and Alembic
+skips already-present declared module schema creates.
+
+The outbox dispatcher bootstrap also owns the function-ownership prerequisites
+for migration `557_outbox_relay_prereq`. The restricted migration role must be
+able to become the definer, and the definer must be able to own functions in
+`public`:
+
+```bash
+SELECT pg_has_role('dotmac_app', 'app_admin', 'MEMBER');
+SELECT has_schema_privilege('app_admin', 'public', 'USAGE');
+SELECT has_schema_privilege('app_admin', 'public', 'CREATE');
+```
+
+Repair applies:
+
+```sql
+GRANT app_admin TO dotmac_app;
+GRANT USAGE, CREATE ON SCHEMA public TO app_admin;
+```
+
+Do not apply these manually as hidden deploy state. They belong to
+`scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
+preflight verifies them before backup.
+
+## Post-migration resume
+
+A failed production run may be resumed without another full backup only when
+the failure happened after the backup and after `alembic upgrade heads`
+completed. The workflow input is `resume_after_migration=true` with the prior
+failed run ID and the on-host backup artifact path from that same run.
+
+Resume is refused unless all of these are true:
+
+- the same production authorization run is used;
+- the same candidate digest is used;
+- the named backup artifact exists and names the failed run ID. The official
+  workflow sets `DB_BACKUP_BASENAME=dotmac_sub_run_<run-id>` so this is
+  machine-checkable;
+- database Alembic heads equal the candidate image heads;
+- the current app image is either the previous authorized image or the
+  candidate image.
+
+When accepted, the deploy skips backup and migration only. Candidate warm-up,
+service replacement, health gates, worker verification, and rollback handling
+still run.
 
 ## Service-extension duplicate reconciliation
 
@@ -163,6 +253,9 @@ tree drifted for days undetected.
 
 - Migration, schema verification, unavailable integration-pin, or CRM ticket
   capability-readiness failure occurs before service replacement.
+- Commercial module prerequisite or dispatcher-role failure occurs before
+  database backup and before Alembic. Run the explicit bootstrap repair, then
+  rerun the guarded deploy.
 - Candidate startup failure leaves the primary release serving traffic.
 - Primary health failure restores the previous image while the candidate
   continues serving, then removes the candidate after the rollback is healthy.

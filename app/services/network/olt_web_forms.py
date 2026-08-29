@@ -58,6 +58,32 @@ def _parse_int_or_none(raw: str) -> int | None:
     return int(raw) if raw.isdigit() else None
 
 
+def _config_pack_index_error(
+    values: Mapping[str, Any],
+    field: str,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> str | None:
+    """Validate optional numeric config-pack indexes parsed from the OLT form."""
+    value = values.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, int) or value < minimum or value > maximum:
+        return f"{label} must be between {minimum} and {maximum}"
+    return None
+
+
+def _is_huawei_olt(olt: object) -> bool:
+    """Detect Huawei OLTs for vendor-specific configuration-pack controls."""
+    identity = " ".join(
+        str(getattr(olt, field, "") or "")
+        for field in ("name", "hostname", "vendor", "model")
+    ).lower()
+    return "huawei" in identity or "ma560" in identity or "ma580" in identity
+
+
 def _parse_uuid_or_none(raw: str) -> str | None:
     """Parse string to UUID string, returning None for empty values."""
     raw = raw.strip() if raw else ""
@@ -198,6 +224,9 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "default_wan_config_profile_id": _parse_int_or_none(
             str(form.get("default_wan_config_profile_id", ""))
         ),
+        "pppoe_wcd_index": _parse_int_or_none(str(form.get("pppoe_wcd_index", ""))),
+        "mgmt_wcd_index": _parse_int_or_none(str(form.get("mgmt_wcd_index", ""))),
+        "voip_wcd_index": _parse_int_or_none(str(form.get("voip_wcd_index", ""))),
         "allow_zero_wan_config_profile_id": (
             str(form.get("allow_zero_wan_config_profile_id", "")).lower()
             in {"1", "true", "on", "yes"}
@@ -228,6 +257,33 @@ def validate_values(
         not isinstance(snmp_port, int) or snmp_port < 1 or snmp_port > 65535
     ):
         return "SNMP port must be between 1 and 65535"
+    for error in (
+        _config_pack_index_error(
+            values,
+            "default_internet_config_ip_index",
+            "Internet IP index",
+            minimum=0,
+            maximum=32,
+        ),
+        _config_pack_index_error(
+            values,
+            "default_wan_config_profile_id",
+            "WAN profile",
+            minimum=0,
+            maximum=65535,
+        ),
+        _config_pack_index_error(
+            values, "mgmt_wcd_index", "Management WCD index", minimum=1, maximum=32
+        ),
+        _config_pack_index_error(
+            values, "pppoe_wcd_index", "PPPoE WCD index", minimum=1, maximum=32
+        ),
+        _config_pack_index_error(
+            values, "voip_wcd_index", "VoIP WCD index", minimum=1, maximum=32
+        ),
+    ):
+        if error:
+            return error
     hostname = values.get("hostname")
     mgmt_ip = values.get("mgmt_ip")
     if hostname:
@@ -527,6 +583,9 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         default_tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
         default_internet_config_ip_index=pack.get("internet_config_ip_index"),
         default_wan_config_profile_id=pack.get("wan_config_profile_id"),
+        pppoe_wcd_index=pack.get("pppoe_wcd_index"),
+        mgmt_wcd_index=pack.get("mgmt_wcd_index"),
+        voip_wcd_index=pack.get("voip_wcd_index"),
         allow_zero_wan_config_profile_id=bool(
             pack.get("allow_zero_wan_config_profile_id")
         ),
@@ -543,6 +602,7 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         capabilities_source=getattr(olt, "capabilities_source", "auto"),
         manual_capability_override=getattr(olt, "capabilities_source", "auto")
         == "manual",
+        show_huawei_config_pack_fields=_is_huawei_olt(olt),
     )
 
 
@@ -708,4 +768,6 @@ def update_olt_with_audit(
 
 def snapshot(values: dict[str, object]) -> SimpleNamespace:
     """Build simple object for form re-render on errors."""
-    return SimpleNamespace(**values)
+    state = SimpleNamespace(**values)
+    state.show_huawei_config_pack_fields = _is_huawei_olt(state)
+    return state

@@ -12,6 +12,15 @@
 #      (which carries aps-environment) so the archive requests the push
 #      entitlement and Xcode Cloud's managed signing provisions it.
 # Both steps are idempotent.
+#
+# NOTE: step 2 is now a no-op in a normal checkout. CODE_SIGN_ENTITLEMENTS is
+# set directly in project.pbxproj for all three Runner configurations, because
+# Runner.entitlements also carries com.apple.developer.associated-domains -- the
+# Universal Link boundary for the OIDC callback -- which must be signed into
+# EVERY build, not only builds that happen to supply a Firebase secret. An
+# entitlements file the target does not sign with is inert, and the Universal
+# Link then fails silently. This step is kept so the wiring is still repaired if
+# the project file ever loses it.
 
 require 'xcodeproj'
 

@@ -796,6 +796,7 @@ def test_integrations_connector_lifecycle_require_permissions():
         ), path
     for path in (
         "/integrations/payment-gateways/{provider_type}",
+        "/integrations/payment-gateways/{provider_type}/webhook-policy",
         "/integrations/payment-gateways/{provider_type}/enable",
         "/integrations/payment-gateways/{provider_type}/disable",
     ):

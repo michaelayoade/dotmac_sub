@@ -1240,13 +1240,13 @@ def _lan_connection_request_pending(
 def _lan_connection_request_drain_still_pending(
     *,
     revision: OntServiceConfigurationRevision,
-    head: OntServiceConfigurationHead,
+    waiting_reason: str | None,
     result: ReconcileResult,
 ) -> bool:
     failure = result.failure
     if (
         not _force_lan_delivery(revision)
-        or head.waiting_reason != "awaiting_acs_task_drain"
+        or waiting_reason != "awaiting_acs_task_drain"
         or failure is None
     ):
         return False
@@ -1345,6 +1345,7 @@ def _execution_locked(
             message="Configuration was superseded before device delivery.",
         )
     assert assignment is not None and revision is not None
+    prior_waiting_reason = head.waiting_reason
     head.phase = OntServiceConfigurationPhase.applying
     revision.phase = OntServiceConfigurationPhase.applying
     head.waiting_reason = None
@@ -1458,7 +1459,7 @@ def _execution_locked(
             revision, result
         ) or _lan_connection_request_drain_still_pending(
             revision=revision,
-            head=head,
+            waiting_reason=prior_waiting_reason,
             result=result,
         )
         if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:

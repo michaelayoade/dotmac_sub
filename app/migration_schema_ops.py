@@ -44,19 +44,63 @@ silently doing nothing.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import sqlalchemy as sa
 
 from alembic import op
+from app.commercial_module_prereqs import COMMERCIAL_MODULE_SCHEMAS
 
 __all__ = [
     "columns_of",
     "constraint_exists",
     "index_exists",
     "install_idempotent_schema_ops",
+    "declared_idempotent_schema_create_target",
+    "schema_exists",
     "table_exists",
 ]
+
+_DECLARED_SCHEMA_CREATE = re.compile(
+    r"""
+    \A\s*
+    CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?
+    (?:
+        " (?P<quoted> [^"]+ ) "
+        |
+        (?P<bare> [A-Za-z_][A-Za-z0-9_]* )
+    )
+    (?:\s+AUTHORIZATION\s+(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))?
+    \s*;?\s*
+    \Z
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _statement_text(statement: Any) -> str | None:
+    if isinstance(statement, str):
+        return statement
+    text = getattr(statement, "text", None)
+    if isinstance(text, str):
+        return text
+    return None
+
+
+def declared_idempotent_schema_create_target(statement: Any) -> str | None:
+    """Return the declared ``mod_*`` schema a raw schema create targets."""
+
+    text = _statement_text(statement)
+    if text is None:
+        return None
+    match = _DECLARED_SCHEMA_CREATE.match(text)
+    if match is None:
+        return None
+    schema = match.group("quoted") or match.group("bare")
+    if schema not in COMMERCIAL_MODULE_SCHEMAS:
+        return None
+    return schema
 
 
 def columns_of(table_name: str, schema: str | None = None) -> set[str]:
@@ -73,6 +117,15 @@ def table_exists(table_name: str, schema: str | None = None) -> bool:
     try:
         inspector = sa.inspect(op.get_bind())
         return table_name in inspector.get_table_names(schema=schema)
+    except Exception:
+        return False
+
+
+def schema_exists(schema: str) -> bool:
+    """Whether the named schema exists; False if it cannot be read."""
+    try:
+        inspector = sa.inspect(op.get_bind())
+        return schema in inspector.get_schema_names()
     except Exception:
         return False
 
@@ -138,6 +191,7 @@ def install_idempotent_schema_ops() -> None:
     _original_create_unique_constraint = op.create_unique_constraint
     _original_create_check_constraint = op.create_check_constraint
     _original_create_foreign_key = op.create_foreign_key
+    _original_execute = op.execute
 
     def _safe_add_column(table_name: str, column: Any, *args: Any, **kwargs: Any):
         if column.name in columns_of(table_name, kwargs.get("schema")):
@@ -204,6 +258,12 @@ def install_idempotent_schema_ops() -> None:
             constraint_name, source_table, *args, **kwargs
         )
 
+    def _safe_execute(statement: Any, *args: Any, **kwargs: Any):
+        schema = declared_idempotent_schema_create_target(statement)
+        if schema is not None and schema_exists(schema):
+            return None
+        return _original_execute(statement, *args, **kwargs)
+
     op.add_column = _safe_add_column
     op.drop_column = _safe_drop_column
     op.create_table = _safe_create_table
@@ -213,3 +273,4 @@ def install_idempotent_schema_ops() -> None:
     op.create_unique_constraint = _safe_create_unique_constraint
     op.create_check_constraint = _safe_create_check_constraint
     op.create_foreign_key = _safe_create_foreign_key
+    op.execute = _safe_execute

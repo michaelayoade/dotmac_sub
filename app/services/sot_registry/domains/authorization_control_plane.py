@@ -21,7 +21,11 @@ from app.services.sot_registry.model import DomainSOT
 
 DOMAIN = DomainSOT(
     domain="authorization_control_plane",
-    authentication_mechanisms=("local",),
+    # `oidc` joins `local` here because this domain implements it: the
+    # ceremony/exchange owner below is the verifier, and `AuthenticationBinding`
+    # rows carry the code. Two issuers are two BINDINGS of this one code, which
+    # is why installing another does not touch this declaration.
+    authentication_mechanisms=("local", "oidc"),
     setting_domains=("auth",),
     services=(
         SOTService(
@@ -1879,7 +1883,9 @@ DOMAIN = DomainSOT(
                 "coordinator transaction. Canonical reseller and fallback "
                 "Subscriber initialization, portal identity and credential "
                 "bootstrap, assignment-owner grants, audit, and events commit "
-                "atomically. Invitations are deduplicated event consequences; "
+                "atomically. Customer and reseller contact emails may overlap; "
+                "only the local credential username is globally unique. "
+                "Invitations are deduplicated event consequences; "
                 "reset capabilities are minted only at transport time for the "
                 "exact principal and never persisted in the outbox."
             ),
@@ -2034,6 +2040,212 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_reseller_onboarding.py",
                     "tests/architecture/test_reseller_onboarding_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="auth.oidc_mobile_federation",
+            module="app.services.oidc_mobile_federation",
+            owns=(
+                "field mobile OIDC ceremony lifecycle",
+                "field mobile OIDC assertion admission",
+            ),
+            depends_on=(
+                "control.feature_registry",
+                "control.settings_spec",
+                "events.dispatcher",
+                "observability.audit_log",
+                "party.credential_authentication_projection",
+                "party.staff_authentication_reader",
+            ),
+            notes=(
+                "Sub remains the session authority; the identity provider is "
+                "a transport carrying one fact, that an issuer authenticated "
+                "a subject. External roles, groups and authorization scopes "
+                "have no effect: they are not read, stored or projected, so "
+                "there is no path from a token claim to an access decision. "
+                "This owner never mints a session itself — admission and "
+                "session issuance are two commits, in that order, and "
+                "AuthFlow stays the single issuance owner. It never "
+                "provisions: an unbound subject is refused, there is no "
+                "match-by-email and no just-in-time party creation."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="field mobile OIDC ceremony lifecycle",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "field mobile federation enablement",
+                            "field mobile federation configuration",
+                            "outstanding field mobile ceremony record",
+                        ),
+                        canonical_writer="auth.oidc_mobile_federation",
+                    ),
+                    ConcernContract(
+                        name="field mobile OIDC assertion admission",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "field mobile federation enablement",
+                            "field mobile federation configuration",
+                            "outstanding field mobile ceremony record",
+                            "verified identity provider assertion",
+                            "installed OIDC verifier binding",
+                            "eligible staff principal",
+                        ),
+                        canonical_writer="auth.oidc_mobile_federation",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="field mobile federation enablement",
+                        owner="control.feature_registry",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "the auth.oidc_mobile_federation control; default "
+                            "off and fail closed, so both endpoints refuse "
+                            "every request until an operator turns it on"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="field mobile federation configuration",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "auth-domain oidc_mobile_* settings; the issuer, "
+                            "client id, redirect URI, audience, verifier "
+                            "binding key and deployment id do not inherit "
+                            "across scopes"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="outstanding field mobile ceremony record",
+                        owner="auth.oidc_mobile_federation",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "oidc_mobile_ceremonies; a nonce hash and the "
+                            "pinned bindings, never the nonce and never a "
+                            "PKCE verifier"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="verified identity provider assertion",
+                        owner="external:oidc_issuer",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "one RS256 ID token whose signature, issuer, "
+                            "audience, authorized party, validity window, age "
+                            "and nonce have all been verified against the "
+                            "pinned issuer's JWKS"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="installed OIDC verifier binding",
+                        owner="party.credential_authentication_projection",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "the active authentication_bindings row for the "
+                            "configured binding key and its one active "
+                            "credential for the verified external subject"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="eligible staff principal",
+                        owner="party.staff_authentication_reader",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Party-keyed staff principal resolution from the "
+                            "credential's party_id, with system_user_id "
+                            "compared as the Sub-owned context assertion"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each endpoint enters execute_owner_command once on a "
+                        "transaction-free session. Admission burns the "
+                        "ceremony, stamps the credential, stages audit "
+                        "evidence and emits its event in that one "
+                        "transaction; the Sub session is minted AFTERWARDS by "
+                        "AuthFlow, which owns its own commit. A refusal is "
+                        "returned as a value rather than raised, so the burn "
+                        "commits and the ceremony cannot be redeemed again."
+                    ),
+                    locking=(
+                        "The ceremony row is selected FOR UPDATE and its "
+                        "unused/unexpired state re-read under that lock; the "
+                        "matching credential is selected FOR UPDATE in the "
+                        "same transaction. A unique index on the nonce hash "
+                        "and a partial unique index on (binding, subject) "
+                        "arbitrate what the locks cannot."
+                    ),
+                    idempotency=(
+                        "A ceremony is single use by column: a second "
+                        "exchange for the same ceremony finds consumed_at set "
+                        "and is refused as a replay. A repeated start "
+                        "supersedes that device's outstanding ceremony rather "
+                        "than stacking a second redeemable row."
+                    ),
+                    retries=(
+                        "A refused exchange is not retryable — the ceremony "
+                        "is burned and the device must run a fresh one. A "
+                        "bounded JWKS refresh failure is retryable after the "
+                        "configured minimum interval."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.oidc_mobile_federation.active_caller_transaction",
+                        "auth.oidc_mobile_federation.command_contract_violation",
+                        "auth.oidc_mobile_federation.configuration_incomplete",
+                        "auth.oidc_mobile_federation.invalid_command_context",
+                        "auth.oidc_mobile_federation.nested_owner_command",
+                        "auth.oidc_mobile_federation.nested_transaction_completion",
+                        "auth.oidc_mobile_federation.refused",
+                    ),
+                    mapping_owner="app.api.oidc_mobile",
+                    fail_closed_on=(
+                        "a disabled or unconfigured federation",
+                        "an unknown, expired or already-used ceremony",
+                        "any binding, nonce, signature or claim mismatch",
+                        "a verified subject with no active local binding",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "oidc_mobile_ceremony.started",
+                        "oidc_mobile_assertion.admitted",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 carries the ceremony, binding and "
+                        "deployment identities and the admitted principal. It "
+                        "carries no token, nonce, external subject or email, "
+                        "and a later version may not add one."
+                    ),
+                    replay=(
+                        "The ceremony row is the durable state and is single "
+                        "use, so a redelivered event cannot readmit anything."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.oidc_mobile_federation",
+                    verification=(
+                        "Behaviour tests over the full refusal vocabulary and "
+                        "an architecture boundary test."
+                    ),
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/OIDC_MOBILE_FEDERATION.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_oidc_mobile_federation.py",
+                    "tests/architecture/test_oidc_mobile_federation_boundary.py",
                 ),
             ),
         ),

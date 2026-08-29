@@ -154,7 +154,7 @@ def check(base: str, root: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default="origin/dev", help="base branch ref")
+    parser.add_argument("--base", default="origin/main", help="base branch ref")
     parser.add_argument(
         "--report-only",
         action="store_true",

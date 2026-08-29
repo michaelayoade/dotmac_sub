@@ -89,6 +89,7 @@ class PushDestination {
 /// reviewed act: it must map to a route this app already owns.
 const Map<String, PushIntent> _intentCodes = {
   // Live chat
+  'chat.message': PushIntent.chat,
   'chat': PushIntent.chat,
   'chat_message': PushIntent.chat,
   'message.outbound': PushIntent.chat,
@@ -97,11 +98,13 @@ const Map<String, PushIntent> _intentCodes = {
   'reseller_chat': PushIntent.resellerChat,
   'reseller_chat_message': PushIntent.resellerChat,
   // Support tickets
+  'ticket.closed': PushIntent.ticket,
   'ticket': PushIntent.ticket,
   'ticket_closed': PushIntent.ticket,
   'ticket_updated': PushIntent.ticket,
   'support': PushIntent.ticket,
   // Quotes
+  'quote.accepted': PushIntent.quotes,
   'quote': PushIntent.quotes,
   'quote_accepted': PushIntent.quotes,
   // Billing
@@ -117,13 +120,21 @@ const Map<String, PushIntent> _intentCodes = {
   'quota_threshold': PushIntent.usage,
   'data_cap': PushIntent.usage,
   // Explicit "just open the inbox"
+  'notification.open': PushIntent.inbox,
+  'operational.escalation': PushIntent.inbox,
   'notification': PushIntent.inbox,
   'account_notice': PushIntent.inbox,
 };
 
 /// Payload keys that may carry an intent code. Deliberately short, and
 /// deliberately excludes anything that could name a location.
-const List<String> _codeKeys = ['type', 'intent', 'event_type', 'category'];
+const List<String> _codeKeys = [
+  'intent_code',
+  'type',
+  'intent',
+  'event_type',
+  'category',
+];
 
 /// Keys a payload must NEVER be able to navigate with. Kept as a named
 /// constant so the regression test can assert each one is inert rather than
@@ -154,75 +165,48 @@ String? _validatedUuid(Object? value) {
 
 /// Resolve an FCM data payload to an app-owned destination.
 ///
-/// [title] and [body] are the notification's display text. They are used ONLY
-/// to *select* an intent from the closed set above when the sender named no
-/// code — the queued-push path (app/tasks/notifications.py) sends the
-/// notification's subject/body with no `type`, and that classification is the
-/// only thing routing invoice/usage/ticket alerts to their tabs today. Text
-/// can pick which of a handful of app-owned screens opens; it can never
-/// contribute a single character to the route string.
+/// [title] and [body] are display-only compatibility parameters. They never
+/// select navigation: PushIntentV1 requires the backend to state a typed
+/// intent, and a code-less or malformed payload opens the authenticated inbox.
 PushDestination resolvePushDestination(
   Map<String, dynamic> data, {
   String? title,
   String? body,
 }) {
-  final intent = _intentFor(data, title: title, body: body);
+  final intent = _intentFor(data);
   return PushDestination(intent, _routeFor(intent, data));
 }
 
-PushIntent _intentFor(
-  Map<String, dynamic> data, {
-  String? title,
-  String? body,
-}) {
+PushIntent _intentFor(Map<String, dynamic> data) {
+  final version = data['contract_version']?.toString().trim();
+  if (version != null && version != 'PushIntentV1') return PushIntent.inbox;
+  if (version == 'PushIntentV1') {
+    if (!_isCompleteV1(data)) return PushIntent.inbox;
+    final code = data['intent_code']?.toString().trim().toLowerCase();
+    return _intentCodes[code] ?? PushIntent.inbox;
+  }
   for (final key in _codeKeys) {
     final code = data[key]?.toString().trim().toLowerCase();
     if (code == null || code.isEmpty) continue;
     final intent = _intentCodes[code];
     if (intent != null) return intent;
   }
-  return _classifyText(data, title: title, body: body);
+  return PushIntent.inbox;
 }
 
-/// Fallback classifier for code-less payloads. Returns one of the enum
-/// members — never a string built from the input.
-PushIntent _classifyText(
-  Map<String, dynamic> data, {
-  String? title,
-  String? body,
-}) {
-  final hay = [
-    title,
-    body,
-    for (final entry in data.entries) entry.key,
-    for (final entry in data.entries) entry.value,
-  ].whereType<Object>().join(' ').toLowerCase();
-
-  bool has(List<String> words) => words.any(hay.contains);
-
-  if (has([
-    'message.outbound',
-    'message_outbound',
-    'message-new',
-    'message_new',
-    'chat_message',
-    'support message',
-    'new message',
-    'agent replied',
-    'agent message',
-    'live chat',
-    'chat',
-    'crm',
-  ])) {
-    return has(['reseller']) ? PushIntent.resellerChat : PushIntent.chat;
+bool _isCompleteV1(Map<String, dynamic> data) {
+  for (final key in const [
+    'intent_code',
+    'subject_kind',
+    'subject_id',
+    'tenant_id',
+    'principal_id',
+    'issued_at',
+  ]) {
+    final value = data[key]?.toString().trim();
+    if (value == null || value.isEmpty) return false;
   }
-  if (has(['quote'])) return PushIntent.quotes;
-  if (has(['ticket', 'support'])) return PushIntent.ticket;
-  if (has(['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
-    return PushIntent.billing;
-  }
-  if (has(['usage', 'quota', 'data', 'cap'])) return PushIntent.usage;
-  return PushIntent.inbox;
+  return DateTime.tryParse(data['issued_at'].toString())?.isUtc ?? false;
 }
 
 /// Build the route for [intent], interpolating a payload identifier only from
@@ -230,7 +214,11 @@ PushIntent _classifyText(
 String _routeFor(PushIntent intent, Map<String, dynamic> data) {
   switch (intent) {
     case PushIntent.ticket:
-      final id = _validatedUuid(data['ticket_id']);
+      final id = _validatedUuid(
+        data['subject_kind'] == 'ticket'
+            ? data['subject_id']
+            : data['ticket_id'],
+      );
       return id == null ? intent.baseRoute : '/support/$id';
     case PushIntent.chat:
     case PushIntent.resellerChat:

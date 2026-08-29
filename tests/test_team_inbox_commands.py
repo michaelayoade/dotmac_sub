@@ -214,8 +214,11 @@ def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_sessio
         ),
     )
 
-    assert presence.last_seen_at is not None
-    assert presence.last_seen_at > stale_seen_at
+    refreshed_seen_at = presence.last_seen_at
+    assert refreshed_seen_at is not None
+    if refreshed_seen_at.tzinfo is None:
+        refreshed_seen_at = refreshed_seen_at.replace(tzinfo=UTC)
+    assert refreshed_seen_at > stale_seen_at
 
 
 @pytest.mark.parametrize(

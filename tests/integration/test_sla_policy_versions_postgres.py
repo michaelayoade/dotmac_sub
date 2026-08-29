@@ -84,8 +84,15 @@ def engine():
 
 
 @pytest.fixture
-def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
-    """A disposable database built by the real Alembic chain.
+def freshly_migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
+    """A disposable database built by REPLAYING the real Alembic chain.
+
+    About 50 seconds per use, because it starts empty and walks all 601
+    revisions. Reserved for the three tests whose subject IS the act of
+    migrating -- the fresh-acceptance proof and the two incremental
+    predecessor-to-candidate proofs. Every other test in this module asserts
+    BEHAVIOUR on a migrated schema and takes `cloned_database` instead, which
+    copies a template the chain already built.
 
     `alembic/env.py` resolves its target from `app_config.settings`, NOT from
     the Config's `sqlalchemy.url`, so pointing the Config at the scratch
@@ -129,7 +136,8 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
 
 def _alembic(url: URL, revision: str) -> None:
     """Upgrade the scratch database. The target comes from the patched
-    `app_config.settings` (see `migrated_database`), which is what
+    `app_config.settings` (see `freshly_migrated_database` and the
+    `cloned_database` fixture), which is what
     `alembic/env.py` actually reads."""
 
     del url  # documented: env.py resolves the URL from settings, not Config
@@ -213,11 +221,11 @@ def _insert(conn, **overrides) -> None:
 
 
 def test_head_builds_the_table_with_its_migration_only_constraints(
-    engine, migrated_database
+    engine, freshly_migrated_database
 ):
-    _alembic(migrated_database, "heads")
+    _alembic(freshly_migrated_database, "heads")
 
-    found = _constraints(migrated_database)
+    found = _constraints(freshly_migrated_database)
     assert "ex_sla_policy_versions_no_overlap" in found
     assert found["ex_sla_policy_versions_no_overlap"] == "x", "must be EXCLUDE"
     for check in (
@@ -234,51 +242,53 @@ def test_head_builds_the_table_with_its_migration_only_constraints(
 # --- incremental acceptance -------------------------------------------------
 
 
-def test_existing_production_database_gains_the_constraints(engine, migrated_database):
+def test_existing_production_database_gains_the_constraints(
+    engine, freshly_migrated_database
+):
     """The proof that matters: predecessor → candidate, not baseline → head.
 
     Revision 001 builds from current `Base.metadata`, so a fresh upgrade would
     create this table even if 467 were a no-op. Stopping at 466 and stepping
     forward is what actually exercises the new DDL.
     """
-    _alembic(migrated_database, PREDECESSOR)
-    with psycopg.connect(_render(migrated_database)) as conn:
+    _alembic(freshly_migrated_database, PREDECESSOR)
+    with psycopg.connect(_render(freshly_migrated_database)) as conn:
         exists = conn.execute(
             "SELECT to_regclass('public.sla_policy_versions')"
         ).fetchone()[0]
     # Revision 001's metadata bootstrap may or may not have created it; either
     # way the constraint the candidate owns must be absent beforehand.
-    before = _constraints(migrated_database) if exists else {}
+    before = _constraints(freshly_migrated_database) if exists else {}
     assert "ex_sla_policy_versions_no_overlap" not in before
 
-    _alembic(migrated_database, CANDIDATE)
+    _alembic(freshly_migrated_database, CANDIDATE)
 
-    after = _constraints(migrated_database)
+    after = _constraints(freshly_migrated_database)
     assert "ex_sla_policy_versions_no_overlap" in after
 
 
 def test_existing_policy_table_gains_family_identity_constraints(
-    engine, migrated_database
+    engine, freshly_migrated_database
 ):
     """The actual 483 → 484 path replaces, rather than duplicates, identity."""
-    _alembic(migrated_database, FAMILY_PREDECESSOR)
+    _alembic(freshly_migrated_database, FAMILY_PREDECESSOR)
 
     # Revision 001 bootstraps from current model metadata. The PostgreSQL-only
     # identity definitions, unlike the nullable column, prove the real step.
-    before = _constraint_definitions(migrated_database)
+    before = _constraint_definitions(freshly_migrated_database)
     assert "plan_family" not in before["ex_sla_policy_versions_no_overlap"]
     assert "plan_family" not in before["ck_sla_policy_versions_key_is_derived"]
 
-    _alembic(migrated_database, FAMILY_CANDIDATE)
+    _alembic(freshly_migrated_database, FAMILY_CANDIDATE)
 
-    after = _constraint_definitions(migrated_database)
+    after = _constraint_definitions(freshly_migrated_database)
     assert "plan_family" in after["ex_sla_policy_versions_no_overlap"]
     assert "plan_family" in after["ck_sla_policy_versions_key_is_derived"]
     assert "ck_sla_policy_versions_plan_family_vocab" in after
 
-    _alembic_downgrade(migrated_database, FAMILY_PREDECESSOR)
+    _alembic_downgrade(freshly_migrated_database, FAMILY_PREDECESSOR)
 
-    with psycopg.connect(_render(migrated_database)) as conn:
+    with psycopg.connect(_render(freshly_migrated_database)) as conn:
         downgraded_column = conn.execute(
             """
             SELECT 1
@@ -289,7 +299,7 @@ def test_existing_policy_table_gains_family_identity_constraints(
             """
         ).fetchone()
     assert downgraded_column is None
-    restored = _constraint_definitions(migrated_database)
+    restored = _constraint_definitions(freshly_migrated_database)
     assert "plan_family" not in restored["ex_sla_policy_versions_no_overlap"]
     assert "plan_family" not in restored["ck_sla_policy_versions_key_is_derived"]
 
@@ -297,12 +307,12 @@ def test_existing_policy_table_gains_family_identity_constraints(
 # --- the constraints actually bite ------------------------------------------
 
 
-def test_overlapping_versions_of_one_policy_are_rejected(engine, migrated_database):
+def test_overlapping_versions_of_one_policy_are_rejected(engine, cloned_database):
     """Two versions covering the same instant would make "the policy in force
     at T" ambiguous. Only the database can enforce this against concurrency."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn, version=1, effective_from=NOW, effective_to=NOW + timedelta(days=30)
         )
@@ -316,13 +326,13 @@ def test_overlapping_versions_of_one_policy_are_rejected(engine, migrated_databa
     assert caught.value.diag.constraint_name == "ex_sla_policy_versions_no_overlap"
 
 
-def test_abutting_versions_of_one_policy_are_allowed(engine, migrated_database):
+def test_abutting_versions_of_one_policy_are_allowed(engine, cloned_database):
     """Half-open ranges must let one version end exactly where the next
     begins — otherwise a lawful policy change could not be recorded."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
     boundary = NOW + timedelta(days=30)
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(conn, version=1, effective_from=NOW, effective_to=boundary)
         _insert(conn, version=2, effective_from=boundary, effective_to=None)
 
@@ -333,10 +343,10 @@ def test_abutting_versions_of_one_policy_are_allowed(engine, migrated_database):
     assert count == 2
 
 
-def test_a_precedence_claim_requires_its_scope(engine, migrated_database):
-    _alembic(migrated_database, "heads")
+def test_a_precedence_claim_requires_its_scope(engine, cloned_database):
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         # subscription_contract with no subscription_id. The key is set to the
         # value COALESCE would derive, so the derived-key rule is satisfied and
         # ONLY the scope rule can fire — otherwise Postgres could report either.
@@ -353,14 +363,14 @@ def test_a_precedence_claim_requires_its_scope(engine, migrated_database):
     )
 
 
-def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database):
+def test_a_contractual_policy_may_not_omit_its_target(engine, cloned_database):
     """The design forbids inventing a target, so the schema forbids a
     contractual row without one — while still allowing the internal
     measurement policy to stay silent about what was promised."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
     subscription_id = uuid.uuid4()
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
             _insert(
                 conn,
@@ -378,7 +388,7 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
 
     # The other direction: internal_measurement legitimately has no target,
     # and the constraint must not block it.
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         # The key must be the derived one — `ck_sla_policy_versions_key_is_derived`
         # rejects an invented name, which is the point of that constraint.
         _insert(
@@ -398,15 +408,13 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
 # --- scope-bound identity and retention safety (review blockers 1 and 2) -----
 
 
-def test_two_series_cannot_cover_one_scope_for_the_same_period(
-    engine, migrated_database
-):
+def test_two_series_cannot_cover_one_scope_for_the_same_period(engine, cloned_database):
     """Keying the exclusion on policy_key alone would let two different keys
     target one subscription for the same period, producing two
     equal-precedence policies and an undefined resolver winner."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn,
             policy_key="internal_measurement:global",
@@ -434,22 +442,20 @@ def test_two_series_cannot_cover_one_scope_for_the_same_period(
     }
 
 
-def test_policy_key_must_match_the_derived_scope_identity(engine, migrated_database):
-    _alembic(migrated_database, "heads")
+def test_policy_key_must_match_the_derived_scope_identity(engine, cloned_database):
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
             _insert(conn, policy_key="something:invented")
     assert caught.value.diag.constraint_name == "ck_sla_policy_versions_key_is_derived"
 
 
-def test_distinct_plan_families_may_have_overlapping_defaults(
-    engine, migrated_database
-):
+def test_distinct_plan_families_may_have_overlapping_defaults(engine, cloned_database):
     """Family scope, not a global sentinel, owns the exclusion identity."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn,
             policy_key="plan_family:unlimited",
@@ -468,10 +474,10 @@ def test_distinct_plan_families_may_have_overlapping_defaults(
     assert count == 2
 
 
-def test_family_policy_key_is_derived_from_its_family(engine, migrated_database):
-    _alembic(migrated_database, "heads")
+def test_family_policy_key_is_derived_from_its_family(engine, cloned_database):
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
             _insert(
                 conn,
@@ -482,12 +488,10 @@ def test_family_policy_key_is_derived_from_its_family(engine, migrated_database)
     assert caught.value.diag.constraint_name == "ck_sla_policy_versions_key_is_derived"
 
 
-def test_family_scope_rejects_values_outside_the_sla_protocol(
-    engine, migrated_database
-):
-    _alembic(migrated_database, "heads")
+def test_family_scope_rejects_values_outside_the_sla_protocol(engine, cloned_database):
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
             _insert(
                 conn,
@@ -501,12 +505,12 @@ def test_family_scope_rejects_values_outside_the_sla_protocol(
 
 
 def test_family_history_makes_the_scope_migration_non_downgradable(
-    engine, migrated_database
+    engine, cloned_database
 ):
     """Append-only contractual history is refused, never silently discarded."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn,
             policy_key="plan_family:home_flex",
@@ -515,15 +519,15 @@ def test_family_history_makes_the_scope_migration_non_downgradable(
         )
 
     with pytest.raises(RuntimeError, match="plan_family SLA policy version"):
-        _alembic_downgrade(migrated_database, FAMILY_PREDECESSOR)
+        _alembic_downgrade(database, FAMILY_PREDECESSOR)
 
 
-def test_contractual_history_outlives_its_parents(engine, migrated_database):
+def test_contractual_history_outlives_its_parents(engine, cloned_database):
     """CASCADE would erase the record of what a customer was owed. The FKs
     must RESTRICT so a parent delete fails loudly instead."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database)) as conn:
+    with psycopg.connect(_render(database)) as conn:
         rows = conn.execute(
             """
             SELECT a.attname, c.confdeltype
@@ -542,12 +546,12 @@ def test_contractual_history_outlives_its_parents(engine, migrated_database):
         )
 
 
-def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database):
+def test_a_replayed_command_cannot_append_a_second_row(engine, cloned_database):
     """The fingerprint uniqueness is the durable backstop for replay, holding
     even when two processes retry concurrently."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         # Close the first range so the ranges abut rather than overlap — the
         # exclusion constraint must not fire first and mask the fingerprint.
         _insert(
@@ -567,13 +571,13 @@ def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database
 
 
 def test_concurrent_idempotency_key_reuse_is_arbitrated_by_the_database(
-    engine, migrated_database
+    engine, cloned_database
 ):
     """The read-side check cannot serialise two processes on its own, so the
     key carries a unique constraint as the real arbiter."""
-    _alembic(migrated_database, "heads")
+    database = cloned_database("heads")
 
-    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+    with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn,
             version=1,

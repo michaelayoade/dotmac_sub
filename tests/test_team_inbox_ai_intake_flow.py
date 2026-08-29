@@ -385,6 +385,34 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
     assert reasons == ["ai_intake_started", "ai_handoff_accepted"]
 
 
+def test_active_ai_session_keeps_following_inbound_in_ai_intake(db_session):
+    technical = _team(db_session, "Active AI Session Technical Team")
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
+
+    first = _receive(
+        db_session,
+        message_id="wamid-active-session-1",
+        body="Hello",
+    )
+    second = _receive(
+        db_session,
+        message_id="wamid-active-session-2",
+        body="Why are you suspending my office account again?",
+    )
+
+    first_message = db_session.get(InboxMessage, first.message_id)
+    second_message = db_session.get(InboxMessage, second.message_id)
+    conversation = db_session.get(InboxConversation, first.conversation_id)
+
+    assert conversation.metadata_["ai_handling"] is True
+    assert first_message.metadata_["ai_intake_status"] == "classifying"
+    assert second_message.metadata_["ai_intake_status"] == "classifying"
+    assert second_message.metadata_["ai_intake_reason"] == "classified"
+
+
 def test_receive_persists_ai_work_without_synchronous_ai_response(
     db_session, monkeypatch
 ):
@@ -1727,13 +1755,13 @@ def test_whatsapp_facebook_and_instagram_use_the_same_classifier(
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-fb",
+        scope_key="meta.social:page-fb",
         channel_type=InboxChannelType.facebook_messenger.value,
     )
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-ig",
+        scope_key="meta.social:page-ig",
         channel_type=InboxChannelType.instagram_dm.value,
     )
     gateway = _Gateway()
@@ -2018,6 +2046,66 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
     assert called is False
     assert preview.preview_mode == "simulation"
     assert preview.next_action in {"respond", "handoff", "continue_classifier"}
+
+
+def test_activation_rejects_first_turn_handoff_rule(db_session):
+    account_scope = f"phone-first-turn-handoff-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "First Turn Handoff Fallback")
+    technical = _team(db_session, "First Turn Handoff Technical")
+    fallback_id = fallback.id
+    technical_id = technical.id
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test first turn handoff rejection",
+    )
+    db_session.commit()
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback_id,
+            welcome_message="Hello.",
+            intent_team_mappings=(
+                {
+                    "intent": "technical_support",
+                    "service_team_id": str(technical_id),
+                    "enabled": True,
+                },
+            ),
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={"customer_lookup": {"enabled": True}},
+            conversation_policy={
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {
+                            "type": "turn_count",
+                            "operator": ">=",
+                            "value": 0,
+                        },
+                        "action": "handoff",
+                    }
+                ],
+            },
+        ),
+    )
+
+    outcome = ai_conversation_intake.validate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+
+    assert outcome.valid is False
+    assert "must not match the first turn" in outcome.errors[0]
 
 
 def test_activation_rejects_invalid_composable_rule_action(db_session):

@@ -40,6 +40,46 @@ Map<String, dynamic>? jwtClaims(String token) {
   }
 }
 
+/// What the client learned when it tried to make the stored session usable.
+///
+/// This type exists for one distinction, ADR-0067 § 4: a timeout, a DNS
+/// failure, a TLS failure and a 5xx are transport facts, and none of them ends
+/// a session or destroys a credential. Only an authoritative refusal on the
+/// refresh exchange itself does. Collapsing both into a bare `null` is what
+/// made a coverage hole indistinguishable from a revocation at cold start.
+sealed class SessionRefresh {
+  const SessionRefresh();
+}
+
+/// A usable access token: either the stored one, still current, or a rotated
+/// one the server has just issued.
+final class SessionFresh extends SessionRefresh {
+  const SessionFresh(this.accessToken);
+
+  final String accessToken;
+}
+
+/// Nothing is stored that could authenticate anyone. Not a failure — either
+/// nobody is signed in, or the session ended while this exchange was in
+/// flight and its result is no longer anybody's.
+final class SessionAbsent extends SessionRefresh {
+  const SessionAbsent();
+}
+
+/// The exchange never reached an authoritative answer. The stored refresh
+/// credential is untouched and a later attempt may well succeed; the device is
+/// offline, not signed out.
+final class SessionUnreachable extends SessionRefresh {
+  const SessionUnreachable();
+}
+
+/// The server refused the refresh exchange itself (401/403), or the stored
+/// credential is provably unusable without asking anyone — no refresh token to
+/// exchange, or a success response carrying no access token. Terminal.
+final class SessionRefused extends SessionRefresh {
+  const SessionRefused();
+}
+
 /// Dio wrapper that injects the bearer token, proactively refreshes it
 /// shortly before expiry, and retries once on 401 after a refresh.
 class ApiClient {
@@ -77,29 +117,65 @@ class ApiClient {
   // future and all receive the freshly-saved token, instead of one rotating
   // the refresh token while others replay the stale one (which trips the
   // server's reuse-detection and forces a spurious logout).
-  Future<String?>? _inFlight;
+  Future<SessionRefresh>? _inFlight;
 
-  Future<String?> ensureFreshToken() async {
+  // Bumped by [abandonSession]. A refresh captures it on entry and refuses to
+  // persist its result if it has moved by the time the server answers.
+  int _generation = 0;
+
+  /// The session owner is tearing this session down. A refresh already in
+  /// flight may still succeed at the server, and its rotated credential must
+  /// not be written back onto a device the wipe has just cleared. Nothing is
+  /// cancelled — the exchange is simply no longer anybody's.
+  void abandonSession() {
+    _generation++;
+    _inFlight = null;
+  }
+
+  /// The typed answer. Callers that need to tell "offline" from "refused" —
+  /// above all the cold-start restore — use this rather than the token-shaped
+  /// views below, whose `null` cannot carry the difference.
+  Future<SessionRefresh> ensureFreshSession() async {
     final access = await tokenStore.accessToken;
-    if (access == null) return null;
+    if (access == null) {
+      // No access token, but a refresh credential can still mint one; only the
+      // absence of both means there is no session to restore.
+      final refreshToken = await tokenStore.refreshToken;
+      if (refreshToken == null) return const SessionAbsent();
+      return refreshSession();
+    }
     final expiry = jwtExpiry(access);
     if (expiry == null ||
         expiry.isAfter(DateTime.now().toUtc().add(_refreshSkew))) {
-      return access;
+      return SessionFresh(access);
     }
-    return refresh();
+    return refreshSession();
   }
 
-  Future<String?> refresh() {
+  Future<SessionRefresh> refreshSession() {
     return _inFlight ??= _doRefresh().whenComplete(() => _inFlight = null);
   }
 
-  Future<String?> _doRefresh() async {
+  /// Token-shaped view for callers that only need the bearer value — the
+  /// request interceptor. A `null` here means "no token to send"; it has never
+  /// meant, and must not be read as, "the session is over".
+  Future<String?> ensureFreshToken() async =>
+      _bearerOf(await ensureFreshSession());
+
+  Future<String?> refresh() async => _bearerOf(await refreshSession());
+
+  String? _bearerOf(SessionRefresh outcome) =>
+      outcome is SessionFresh ? outcome.accessToken : null;
+
+  Future<SessionRefresh> _doRefresh() async {
+    final generation = _generation;
     try {
       final refreshToken = await tokenStore.refreshToken;
       if (refreshToken == null) {
+        // Decided locally, with no network involved: there is nothing left on
+        // the device that could ever mint an access token.
         onSessionExpired?.call();
-        return null;
+        return const SessionRefused();
       }
       final mode = await tokenStore.loginMode ?? LoginMode.staff;
       final path = mode == LoginMode.vendor
@@ -113,13 +189,19 @@ class ApiClient {
       final access = data['access_token'] as String?;
       if (access == null) {
         onSessionExpired?.call();
-        return null;
+        return const SessionRefused();
+      }
+      if (generation != _generation) {
+        // The session ended while this exchange was in flight. Saving the
+        // rotated credential now would put a live token back on a handset that
+        // has just been wiped, so it is dropped instead.
+        return const SessionAbsent();
       }
       await tokenStore.save(
         accessToken: access,
         refreshToken: data['refresh_token'] as String?,
       );
-      return access;
+      return SessionFresh(access);
     } on DioException catch (error) {
       // Only an authoritative authentication refusal ends the local session.
       // Timeouts, offline periods, and server failures must leave the rotating
@@ -127,8 +209,13 @@ class ApiClient {
       final status = error.response?.statusCode;
       if (status == 401 || status == 403) {
         onSessionExpired?.call();
+        return const SessionRefused();
       }
-      return null;
+      return const SessionUnreachable();
+    } on Object {
+      // A body that would not parse, a secure store that would not read: none
+      // of it is the server refusing the session, so none of it ends one.
+      return const SessionUnreachable();
     }
   }
 }

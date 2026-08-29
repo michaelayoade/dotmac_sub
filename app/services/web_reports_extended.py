@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.services.common import parse_date_filter as _parse_date
 from app.services.status_presentation import invoice_status_presentation
+from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -572,36 +574,79 @@ def build_bandwidth_report_export_csv(data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_revenue_categories_data(db: Session) -> dict:
+@dataclass(frozen=True, slots=True)
+class RevenueCategoryReportRow:
+    name: str
+    invoice_count: int
+    revenue: float
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueCategoriesReportData:
+    categories: tuple[RevenueCategoryReportRow, ...]
+    category_count: StateValue
+    total_revenue: StateValue
+    revenue_mix_chart: ChartProjection
+
+    @classmethod
+    def unavailable(cls) -> RevenueCategoriesReportData:
+        return cls(
+            categories=(),
+            category_count=StateValue.unavailable(),
+            total_revenue=StateValue.unavailable(),
+            revenue_mix_chart=ChartProjection.unavailable(
+                "Revenue category data is temporarily unavailable."
+            ),
+        )
+
+
+def get_revenue_categories_data(db: Session) -> RevenueCategoriesReportData:
     """Revenue segmented by offer service type (read owner: billing.reporting)."""
     from app.services.billing import reporting as billing_reporting
 
-    try:
-        rows = billing_reporting.get_revenue_by_service_type(db)
-        categories = [
-            {
-                "name": (
-                    r["service_type"].value
-                    if hasattr(r["service_type"], "value")
-                    else str(r["service_type"] or "Uncategorized")
-                ),
-                "invoice_count": r["invoice_count"],
-                "revenue": float(r["total"] or 0),
-            }
-            for r in rows
-        ]
-    except Exception as exc:
-        logger.warning("Could not query revenue categories: %s", exc)
-        categories = []
+    rows = billing_reporting.get_revenue_by_service_type(db=db)
+    categories = tuple(
+        RevenueCategoryReportRow(
+            name=(
+                row.service_type.value
+                if row.service_type is not None
+                else "Uncategorized"
+            ),
+            invoice_count=row.invoice_count,
+            revenue=float(row.total),
+        )
+        for row in rows
+    )
 
-    total_revenue = sum(c["revenue"] for c in categories)
-    return {
-        "categories": categories,
-        "total": len(categories),
-        "total_revenue": total_revenue,
-        "chart_labels": [c["name"] for c in categories],
-        "chart_values": [c["revenue"] for c in categories],
-    }
+    total_revenue = sum(category.revenue for category in categories)
+    chart_categories = tuple(
+        category for category in categories if category.revenue > 0
+    )
+    if not categories:
+        revenue_mix_chart = ChartProjection.empty(
+            "No categorized invoice revenue is available."
+        )
+    elif not chart_categories:
+        revenue_mix_chart = ChartProjection.empty(
+            "Categorized invoice lines contain no positive revenue."
+        )
+    else:
+        revenue_mix_chart = ChartProjection.present(
+            labels=tuple(category.name for category in chart_categories),
+            series=(
+                ChartSeries(
+                    label="Revenue",
+                    values=tuple(category.revenue for category in chart_categories),
+                ),
+            ),
+            as_of=datetime.now(UTC),
+        )
+    return RevenueCategoriesReportData(
+        categories=categories,
+        category_count=StateValue.present(len(categories)),
+        total_revenue=StateValue.present(total_revenue),
+        revenue_mix_chart=revenue_mix_chart,
+    )
 
 
 def get_custom_pricing_data(db: Session) -> dict:

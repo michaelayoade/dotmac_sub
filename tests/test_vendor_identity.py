@@ -17,9 +17,11 @@ import pytest
 
 from app.models.auth import UserCredential
 from app.models.field_vendor import FieldVendor, FieldVendorUser
+from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
+from app.services import party as party_registry
 from app.services import vendor_user_provisioning as provisioning
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field import vendor_capabilities as caps
@@ -455,6 +457,69 @@ def test_enable_login_repairs_legacy_unprojected_vendor_user(db_session):
     assert outcome.repaired_projection is True
     assert principal.person_party_id is not None
     assert credential.party_id == principal.person_party_id
+
+
+def test_enable_login_accepts_correct_projection_from_support_repair(db_session):
+    vendor = _vendor(db_session)
+    membership = _provision(db_session, vendor)
+    membership_id = membership.id
+    principal = db_session.get(SystemUser, membership.system_user_id)
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.system_user_id == principal.id)
+        .one()
+    )
+    original_source = "live_support_password_reset"
+    original_reason = "support verified existing vendor credential"
+    original_bound_at = credential.party_bound_at
+    credential.party_binding_source = original_source
+    credential.party_binding_reason = original_reason
+    db_session.commit()
+
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = provisioning.enable_login_committed(
+        db_session,
+        provisioning.EnableVendorUserLogin(membership_id=membership_id),
+    )
+
+    db_session.refresh(credential)
+    assert outcome.repaired_projection is False
+    assert outcome.party_id == principal.person_party_id
+    assert credential.party_binding_source == original_source
+    assert credential.party_binding_reason == original_reason
+    assert credential.party_bound_at == original_bound_at
+
+
+def test_enable_login_rejects_credential_projected_to_different_party(db_session):
+    vendor = _vendor(db_session)
+    membership = _provision(db_session, vendor)
+    membership_id = membership.id
+    principal = db_session.get(SystemUser, membership.system_user_id)
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.system_user_id == principal.id)
+        .one()
+    )
+    wrong_party = party_registry.create_party(
+        db_session,
+        party_type=PartyType.person,
+        display_name="Wrong Vendor Person",
+        data_classification=PartyDataClassification.production,
+        metadata={"test_projection_conflict": True},
+    )
+    credential.party_id = wrong_party.id
+    credential.party_binding_source = "live_support_password_reset"
+    credential.party_binding_reason = "support verified existing vendor credential"
+    db_session.commit()
+
+    db_session_adapter.release_read_transaction(db_session)
+    with pytest.raises(provisioning.VendorUserProvisioningError) as exc:
+        provisioning.enable_login_committed(
+            db_session,
+            provisioning.EnableVendorUserLogin(membership_id=membership_id),
+        )
+
+    assert exc.value.code == "credential_projection_conflict"
 
 
 def test_unknown_capability_is_a_programmer_error(db_session):

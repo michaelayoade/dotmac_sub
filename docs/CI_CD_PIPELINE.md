@@ -1,7 +1,10 @@
 # CI/CD pipeline
 
 The `CI` workflow is the deployment-quality owner for pull requests targeting
-`dev` or `main`, merge groups, and promotion through `dev` and `main`.
+`main` or a batch branch, merge groups, and pushes to the `main` release trunk.
+There is no `dev` branch: releases are selected from `main` by SHA and reach
+each environment by immutable digest. See
+`docs/runbooks/STAGING_PROMOTION.md`.
 
 ## Required gates
 
@@ -12,21 +15,29 @@ Application changes retain all release gates:
 - the complete non-integration suite, split deterministically across four
   runners, plus the explicit four-worker architecture suite;
 - Alembic and integration tests against PostgreSQL before merge and again on
-  promotion branches whenever the change can affect backend or deployed-schema
-  behavior; and
+  the resulting `main` push whenever the change can affect backend or
+  deployed-schema behavior; and
 - one production Docker build followed by migration and health checks.
 
 Pull requests receive the Docker migration and health gate. Branch pushes do
-not repeat that build in CI: `ghcr.yml` is the sole publisher for `dev` and
-`main` and remains the named trigger for staging deployment. Dev receives only
-its immutable SHA tag; only the default branch receives `latest`. The BuildKit
+not repeat that build in CI. Application images are published only by the
+explicit `Build release candidate once` workflow, which is dispatched against a
+chosen `main` SHA; `ghcr.yml` publishes only the pinned GenieACS runtime. A
+candidate receives only its immutable digest; `latest` is attached solely by
+`Promote staged digest for production`, after staging acceptance. The BuildKit
 cache scope `dotmac-sub-application` is shared by pre-merge validation and
 publication so unchanged layers are reused without unrelated builds
-overwriting the cache history.
+overwriting the cache history. Docker validation starts after change
+classification and runs alongside the test gates. It is independent evidence,
+so it may be green while another required context is red; branch protection
+still requires the complete set before merge.
 
-Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It pulls
-the immutable `sha-<commit>` image published by CI, rather than rebuilding it,
-and is not a per-change merge gate.
+Browser E2E remains nightly and manually dispatchable in `e2e.yml` and is not
+a per-change merge gate. Its current image reference is `sha-<short-commit>`,
+but no active publisher creates that tag: release candidates publish
+`candidate-<full-commit>` and `ghcr.yml` publishes only GenieACS. E2E image
+resolution therefore remains a known follow-up until the consumer and
+publisher contracts are aligned.
 
 ## Dependency reuse
 
@@ -101,8 +112,9 @@ workers, or database.
 
 The deployment owner independently verifies the exact immutable image revision
 before mutating a host. `scripts/deploy.sh` requires successful `CI` and
-`Mobile CI` push workflow runs for that full SHA on `main` in production or
-`dev` in staging. It performs this GitHub API check before the database backup,
+`Mobile CI` push workflow runs for that full SHA on `main`, in staging and in
+production alike — both environments release from the one trunk and are kept
+apart by digest and host contract, not by branch. It performs this GitHub API check before the database backup,
 migrations, or service replacement. The on-host schema, integration-readiness,
 web-health, and worker-health gates are runtime acceptance checks, not pytest.
 
@@ -111,7 +123,7 @@ The staging runner uses the dedicated persistent worktree
 agents, and diagnostic edits must use other worktrees. Sharing a checkout lets
 development writes race deployment verification, so the workflow pins the
 dedicated path and refuses tracked changes rather than discarding them. After
-verifying the fetched `origin/dev` commit, it checks out the exact candidate at
+verifying the fetched `origin/main` commit, it checks out the exact candidate at
 detached `HEAD`; it never moves a local branch pointer. Local branch history is
 therefore preserved but cannot become deployment authority or block an
 otherwise valid immutable candidate.

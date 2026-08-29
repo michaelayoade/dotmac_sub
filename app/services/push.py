@@ -22,14 +22,22 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.device_token import DeviceToken
-from app.models.notification import NotificationChannel, NotificationStatus
-from app.schemas.notification import NotificationCreate
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
+from app.schemas.notification import NotificationCreate, PushIntent, PushIntentV1
 from app.services.common import coerce_uuid
 from app.services.notification import notifications as notification_records
+from app.services.operator_tenant import operator_tenant_id
 
 logger = logging.getLogger(__name__)
 
 _FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+_GENERIC_PUSH_TITLE = "Dotmac update"
+_GENERIC_PUSH_BODY = "Open the app to view your update."
+_PUSH_INTENT_METADATA_KEY = "push_intent"
 
 
 # --- device-token registry -------------------------------------------------
@@ -188,13 +196,70 @@ def _access_token(cfg: dict) -> str | None:
     return creds.token
 
 
+def _fallback_intent(notification_id: str) -> PushIntent:
+    return PushIntent(
+        intent_code="notification.open",
+        subject_kind="notification",
+        subject_id=str(notification_id),
+    )
+
+
+def intent_for_notification(notification: Notification) -> PushIntent:
+    """Recover the typed intent stored with a queued notification.
+
+    Rows queued before PushIntentV1 deployment safely open the authenticated
+    inbox instead of deriving navigation from their subject/body prose.
+    """
+    raw = (notification.metadata_ or {}).get(_PUSH_INTENT_METADATA_KEY)
+    if isinstance(raw, dict):
+        try:
+            return PushIntent.model_validate(raw)
+        except ValueError:
+            logger.warning(
+                "push: notification %s carries an invalid intent; using inbox",
+                notification.id,
+            )
+    return _fallback_intent(str(notification.id))
+
+
+def _wire_intent(intent: PushIntent, *, principal_id: str) -> PushIntentV1:
+    return PushIntentV1(
+        **intent.model_dump(),
+        tenant_id=str(operator_tenant_id()),
+        principal_id=str(principal_id),
+        issued_at=datetime.now(UTC),
+    )
+
+
+def _fcm_payload(*, token: str, intent: PushIntentV1) -> dict:
+    """Build the only payload shape allowed to leave Sub for FCM.
+
+    Customer/staff content remains in authenticated Sub records. The display
+    text is deliberately generic and data is the closed PushIntentV1 model.
+    """
+    data = {
+        key: str(value)
+        for key, value in intent.model_dump(mode="json", exclude_none=True).items()
+    }
+    return {
+        "message": {
+            "token": token,
+            "notification": {
+                "title": _GENERIC_PUSH_TITLE,
+                "body": _GENERIC_PUSH_BODY,
+            },
+            "data": data,
+        }
+    }
+
+
 def send_push(
     db: Session,
     subscriber_id: str,
     title: str,
     body: str,
     *,
-    data: dict | None = None,
+    intent: PushIntent | None = None,
     notification_id: str | None = None,
 ) -> bool:
     """Send a push to all of a subscriber's active devices.
@@ -214,7 +279,18 @@ def send_push(
                 body=body,
                 event_type="direct.push",
                 category="general",
-                metadata_={"data": data or {}, "source": "push_service"},
+                metadata_={
+                    **(
+                        {
+                            _PUSH_INTENT_METADATA_KEY: intent.model_dump(
+                                mode="json", exclude_none=True
+                            )
+                        }
+                        if intent is not None
+                        else {}
+                    ),
+                    "source": "push_service",
+                },
             ),
         )
         return queued.status == NotificationStatus.queued
@@ -233,19 +309,14 @@ def send_push(
 
     url = f"https://fcm.googleapis.com/v1/projects/{cfg['project_id']}/messages:send"
     headers = {"Authorization": f"Bearer {access_token}"}
-    string_data = {k: str(v) for k, v in (data or {}).items()}
-    if notification_id:
-        string_data["notification_id"] = str(notification_id)
+    wire_intent = _wire_intent(
+        intent or _fallback_intent(notification_id),
+        principal_id=str(subscriber_id),
+    )
 
     ok = 0
     for token in tokens:
-        payload = {
-            "message": {
-                "token": token,
-                "notification": {"title": title, "body": body},
-                "data": string_data,
-            }
-        }
+        payload = _fcm_payload(token=token, intent=wire_intent)
         try:
             resp = httpx.post(url, headers=headers, json=payload, timeout=10)
             if resp.status_code == 200:
@@ -268,7 +339,7 @@ def send_push_to_system_user(
     title: str,
     body: str,
     *,
-    data: dict | None = None,
+    intent: PushIntent | None = None,
     notification_id: str | None = None,
 ) -> bool:
     """Send a push to all of a staff/system user's active devices."""
@@ -286,19 +357,14 @@ def send_push_to_system_user(
 
     url = f"https://fcm.googleapis.com/v1/projects/{cfg['project_id']}/messages:send"
     headers = {"Authorization": f"Bearer {access_token}"}
-    string_data = {k: str(v) for k, v in (data or {}).items()}
-    if notification_id:
-        string_data["notification_id"] = str(notification_id)
+    wire_intent = _wire_intent(
+        intent or _fallback_intent(notification_id or system_user_id),
+        principal_id=str(system_user_id),
+    )
 
     ok = 0
     for token in tokens:
-        payload = {
-            "message": {
-                "token": token,
-                "notification": {"title": title, "body": body},
-                "data": string_data,
-            }
-        }
+        payload = _fcm_payload(token=token, intent=wire_intent)
         try:
             resp = httpx.post(url, headers=headers, json=payload, timeout=10)
             if resp.status_code == 200:

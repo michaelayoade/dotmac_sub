@@ -95,14 +95,13 @@ test-ci-shard: assert-full-test-host ## Run one duration-balanced CI unit shard
 test-fast: assert-full-test-host ## Run the parallel non-integration suite, stopping on first failure
 	poetry run pytest $(UNIT_TEST_ARGS) -x --tb=short -q
 
-bootstrap-test-database-roles: ## Create/adopt dispatcher roles on an explicit disposable test database
+bootstrap-test-database-roles: ## Create/adopt module and dispatcher prerequisites on an explicit disposable test database
 	@test -n "$${TEST_DATABASE_URL:-}" || { \
 		echo "TEST_DATABASE_URL is required for the disposable role bootstrap." >&2; \
 		exit 2; \
 	}
 	@poetry run python -c 'import os; from scripts.ci.migrated_test_database import parse_test_database_target; parse_test_database_target(os.environ.get("TEST_DATABASE_URL"))'
-	@BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}" \
-		poetry run python scripts/bootstrap_outbox_dispatcher_roles.py
+	@poetry run python -m scripts.ci.bootstrap_test_database_prereqs
 
 test-integration: assert-full-test-host ## Run the PostgreSQL integration gate
 	@$(MAKE) --no-print-directory bootstrap-test-database-roles
@@ -111,13 +110,19 @@ test-integration: assert-full-test-host ## Run the PostgreSQL integration gate
 
 INTEGRATION_SHARD ?= 1
 INTEGRATION_SHARDS ?= 1
+CI_INTEGRATION_DURATIONS_FILE ?= .ci-cache/integration-test-durations.json
+CI_INTEGRATION_DURATIONS_OUTPUT ?= .ci-cache/integration-current.json
 
-test-integration-shard: assert-full-test-host ## Run one deterministic PostgreSQL integration shard
+test-integration-shard: assert-full-test-host ## Run one duration-balanced PostgreSQL integration shard
 	@$(MAKE) --no-print-directory bootstrap-test-database-roles
 	poetry run python -m scripts.ci.migrated_test_database
-	@paths="$$(poetry run python -m scripts.ci.select_integration_shard --shard $(INTEGRATION_SHARD) --shards $(INTEGRATION_SHARDS))"; \
+	@paths="$$(poetry run python -m scripts.ci.select_integration_shard \
+			--shard $(INTEGRATION_SHARD) --shards $(INTEGRATION_SHARDS) \
+			--durations-file "$(CI_INTEGRATION_DURATIONS_FILE)")"; \
 		test -n "$$paths"; \
-		poetry run pytest $$paths -v --tb=short -o "addopts="
+		PYTHONPATH="$(CURDIR)" poetry run pytest $$paths -v --tb=short -o "addopts=" \
+			-p scripts.ci.pytest_durations \
+			--ci-durations-output="$(CI_INTEGRATION_DURATIONS_OUTPUT)"
 
 test-architecture: assert-full-test-host ## Run architecture guards with the measured four-worker default
 	poetry run pytest tests/architecture -q -n 4 --durations=50
