@@ -5187,6 +5187,23 @@ Service intent:
    biller (`subscription.billing_cycle` -> offer/version price -> monthly). The
    offer price cadence is fallback-only; catalog offer-cadence immutability
    stays with `service_intent.catalog_billing_governance`.
+   It also owns **billing-period boundary geometry in both directions**:
+   `billing_cycle_end(period_start, cycle)` and
+   `billing_cycle_start(next_billing_at, cycle)` in
+   `app/services/catalog/subscriptions.py`, both reading the single total table
+   `_CYCLE_PERIOD_LENGTH` over `BillingCycle`. Boundaries use exact clamped
+   calendar arithmetic (`_add_months`, equivalent to
+   `dateutil.relativedelta`) and never a 30/90/365-day approximation; a cadence
+   absent from the table raises rather than defaulting to monthly. Any consumer
+   needing the period a subscription was last billed for — the cancellation
+   credit in `billing_automation.generate_cancellation_credit` is the live
+   one — calls `billing_cycle_start`. That consumer carried its own inline
+   reverse until 2026-08-29; the copy had no `quarterly` branch (a cancelled
+   quarterly subscription was credited against one month of a three-month
+   period, 2.9x over-issue) and used `datetime.replace(year=...)`, which raises
+   on 29 February and left the customer with no credit at all. Guarded by
+   `tests/architecture/test_cancellation_credit_cadence_ownership.py` and
+   `tests/test_cancellation_credit_cadence.py`.
 8. `service_intent.ont`: projects provisioning intent to ONT operations.
 
 Rule: catalog policy and subscription owners define commercial intent. Every

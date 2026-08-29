@@ -1336,6 +1336,15 @@ def cancel_subscription(
 
     Raises:
         ValueError: If subscription is already canceled.
+
+    Note:
+        Cancellation-credit generation is an optional participant consequence
+        run in its own savepoint. Its failure is logged with a traceback but is
+        NOT yet recorded as durable evidence, so a customer owed a credit can
+        still be missed silently. Closing that requires ``cancel_subscription``
+        to become a registered owner command and use
+        ``owner_commands.execute_owner_savepoint``; tracked separately from the
+        cadence fix.
     """
     subscription = db.execute(
         select(Subscription).where(Subscription.id == subscription_id).with_for_update()
@@ -1388,11 +1397,17 @@ def cancel_subscription(
             # transaction, not just the failed credit operation.
             with db.begin_nested():
                 generate_cancellation_credit(db, subscription)
-        except Exception as exc:
-            logger.warning(
-                "Cancellation credit generation failed for subscription %s: %s",
+        except Exception:
+            # A swallowed failure here means the customer silently receives no
+            # cancellation credit, so the traceback must survive: a bare
+            # `logger.warning(..., exc)` printed only `ValueError: day is out
+            # of range for month` with no frame, which is why the 29 February
+            # cadence crash went unnoticed. This still does not make the
+            # failure durable evidence — see the note in cancel_subscription's
+            # docstring.
+            logger.exception(
+                "Cancellation credit generation failed for subscription %s",
                 subscription_id,
-                exc,
             )
 
     compute_account_status(db, str(subscription.subscriber_id))

@@ -675,6 +675,7 @@ DOMAIN = DomainSOT(
                 "subscription cadence resolution "
                 "(subscription -> offer price -> monthly)",
                 "next-billing anchor computation",
+                "billing-period boundary geometry (cycle start and cycle end)",
             ),
             depends_on=("service_intent.catalog_policy",),
             notes=(
@@ -683,7 +684,16 @@ DOMAIN = DomainSOT(
                 "line and read by billing_automation. The offer/version "
                 "price cadence is fallback-only when the subscription's is "
                 "unset. Catalog offer-cadence immutability stays with "
-                "service_intent.catalog_billing_governance."
+                "service_intent.catalog_billing_governance. "
+                "Period boundaries in BOTH directions are this owner's: "
+                "billing_cycle_end and billing_cycle_start read one total "
+                "table over BillingCycle (_CYCLE_PERIOD_LENGTH) and use exact "
+                "clamped calendar arithmetic, never a 30/90/365-day "
+                "approximation. A consumer that needs the period a "
+                "subscription was last billed for calls billing_cycle_start; "
+                "the cancellation-credit path re-derived it inline until "
+                "2026-08-29, and that copy had no quarterly branch (2.9x "
+                "over-credit) and raised on 29 February (silent zero credit)."
             ),
         ),
         SOTService(
