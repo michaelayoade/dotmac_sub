@@ -19,7 +19,9 @@ from scripts.release_artifact_contract import (
     GitTreeSha,
     MainAuthorizationEvidence,
     OCIImageDigest,
+    ProductionBootstrapAuthorization,
     ProductionRollbackAuthorization,
+    ProductionServerName,
     ProductManifestDigest,
     ReleaseArtifactEvidence,
     ReleaseCandidateRecord,
@@ -35,6 +37,7 @@ _CANDIDATE_KIND = "dotmac.release_candidate"
 _STAGING_KIND = "dotmac.staging_acceptance"
 _PRODUCTION_KIND = "dotmac.production_authorization"
 _ROLLBACK_KIND = "dotmac.production_rollback_authorization"
+_BOOTSTRAP_KIND = "dotmac.production_bootstrap_authorization"
 
 
 class EvidenceDocumentError(ValueError):
@@ -396,6 +399,64 @@ def verify_rollback_authorization(
         )
 
 
+def write_bootstrap_authorization(
+    path: Path,
+    authorization: ProductionBootstrapAuthorization,
+) -> None:
+    """Write one host- and revision-bound first-deployment authorization."""
+
+    _write_document(
+        path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": _BOOTSTRAP_KIND,
+            "target_revision": authorization.target_revision.value,
+            "target_server": authorization.target_server.value,
+            "change_reference": authorization.change_reference,
+            "reason": authorization.reason,
+        },
+    )
+
+
+def read_bootstrap_authorization(path: Path) -> ProductionBootstrapAuthorization:
+    """Read and validate a first-deployment authorization document."""
+
+    document = _read_document(
+        path,
+        kind=_BOOTSTRAP_KIND,
+        fields={"target_revision", "target_server", "change_reference", "reason"},
+    )
+    try:
+        return ProductionBootstrapAuthorization(
+            target_revision=GitCommitSha(_required_string(document, "target_revision")),
+            target_server=ProductionServerName(
+                _required_string(document, "target_server")
+            ),
+            change_reference=_required_string(document, "change_reference"),
+            reason=_required_string(document, "reason"),
+        )
+    except ReleaseContractError as exc:
+        raise EvidenceDocumentError(f"invalid bootstrap authorization: {exc}") from exc
+
+
+def verify_bootstrap_authorization(
+    authorization: ProductionBootstrapAuthorization,
+    *,
+    target_revision: GitCommitSha,
+    target_server: ProductionServerName,
+) -> None:
+    """Bind bootstrap authority to the exact empty-host deployment."""
+
+    if authorization.target_revision != target_revision:
+        raise EvidenceDocumentError(
+            "bootstrap authorization does not name the deploying revision"
+        )
+    if authorization.target_server != target_server:
+        raise EvidenceDocumentError(
+            "bootstrap authorization does not name the production server"
+        )
+
+
 def verify_production_authorization(
     candidate: ReleaseCandidateRecord,
     *,
@@ -501,6 +562,18 @@ def _parser() -> argparse.ArgumentParser:
     verify_rollback.add_argument("--path", required=True, type=Path)
     verify_rollback.add_argument("--running-revision", required=True)
     verify_rollback.add_argument("--target-revision", required=True)
+
+    write_bootstrap = commands.add_parser("write-bootstrap-authorization")
+    write_bootstrap.add_argument("--target-revision", required=True)
+    write_bootstrap.add_argument("--target-server", required=True)
+    write_bootstrap.add_argument("--change-reference", required=True)
+    write_bootstrap.add_argument("--reason", required=True)
+    write_bootstrap.add_argument("--output", required=True, type=_document_path)
+
+    verify_bootstrap = commands.add_parser("verify-bootstrap-authorization")
+    verify_bootstrap.add_argument("--path", required=True, type=Path)
+    verify_bootstrap.add_argument("--target-revision", required=True)
+    verify_bootstrap.add_argument("--target-server", required=True)
 
     production = commands.add_parser("verify-production")
     production.add_argument("--path", required=True, type=Path)
@@ -624,6 +697,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             read_rollback_authorization(args.path),
             running_revision=GitCommitSha(args.running_revision),
             target_revision=GitCommitSha(args.target_revision),
+        )
+        return 0
+
+    if args.command == "write-bootstrap-authorization":
+        write_bootstrap_authorization(
+            args.output,
+            ProductionBootstrapAuthorization(
+                target_revision=GitCommitSha(args.target_revision),
+                target_server=ProductionServerName(args.target_server),
+                change_reference=args.change_reference,
+                reason=args.reason,
+            ),
+        )
+        return 0
+
+    if args.command == "verify-bootstrap-authorization":
+        verify_bootstrap_authorization(
+            read_bootstrap_authorization(args.path),
+            target_revision=GitCommitSha(args.target_revision),
+            target_server=ProductionServerName(args.target_server),
         )
         return 0
 

@@ -15,7 +15,9 @@ from scripts.release_artifact_contract import (
     MigrationGraphDigest,
     MigrationStateEvidence,
     OCIImageDigest,
+    ProductionBootstrapAuthorization,
     ProductionEligibilityBlocker,
+    ProductionServerName,
     ProductManifestDigest,
     ReleaseArtifactEvidence,
     ReleaseCandidateRecord,
@@ -389,6 +391,48 @@ def test_production_hotfix_evidence_requires_attribution(
             reason=values["reason"],
             migration_state=_migration_state(),
         )
+
+
+def test_production_server_name_is_exact() -> None:
+    assert ProductionServerName("dotmac-sub-prod").value == "dotmac-sub-prod"
+
+    with pytest.raises(ReleaseContractError) as exc_info:
+        ProductionServerName("dotmac-sub-staging")
+
+    assert exc_info.value.code is ReleaseContractErrorCode.INVALID_PRODUCTION_SERVER
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        (
+            "change_reference",
+            "",
+            ReleaseContractErrorCode.BOOTSTRAP_CHANGE_REFERENCE_REQUIRED,
+        ),
+        ("reason", " ", ReleaseContractErrorCode.BOOTSTRAP_REASON_REQUIRED),
+    ],
+)
+def test_production_bootstrap_requires_typed_attribution(
+    field: str,
+    value: str,
+    code: ReleaseContractErrorCode,
+) -> None:
+    values = {
+        "change_reference": "CHG-2026-0829",
+        "reason": "initialize the empty production application slot",
+    }
+    values[field] = value
+
+    with pytest.raises(ReleaseContractError) as exc_info:
+        ProductionBootstrapAuthorization(
+            target_revision=STAGED_SHA,
+            target_server=ProductionServerName("dotmac-sub-prod"),
+            change_reference=values["change_reference"],
+            reason=values["reason"],
+        )
+
+    assert exc_info.value.code is code
 
 
 def test_every_production_blocker_is_individually_reachable() -> None:

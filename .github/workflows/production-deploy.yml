@@ -40,6 +40,18 @@ on:
         description: "Rollback only: why production is being moved backwards"
         required: false
         type: string
+      bootstrap_target_revision:
+        description: "First deployment only: exact full SHA being deployed to an empty production host"
+        required: false
+        type: string
+      bootstrap_change_reference:
+        description: "First deployment only: approved change reference"
+        required: false
+        type: string
+      bootstrap_reason:
+        description: "First deployment only: why the empty production host is being initialized"
+        required: false
+        type: string
       resume_after_migration:
         description: Resume a failed production run after backup and migrations already completed
         required: true
@@ -192,6 +204,10 @@ jobs:
           ROLLBACK_TO: ${{ inputs.rollback_to_revision }}
           ROLLBACK_REF: ${{ inputs.rollback_change_reference }}
           ROLLBACK_REASON: ${{ inputs.rollback_reason }}
+          BOOTSTRAP_TARGET: ${{ inputs.bootstrap_target_revision }}
+          BOOTSTRAP_REF: ${{ inputs.bootstrap_change_reference }}
+          BOOTSTRAP_REASON: ${{ inputs.bootstrap_reason }}
+          TARGET_SERVER: ${{ inputs.target_server_name }}
           RESUME_AFTER_MIGRATION: ${{ inputs.resume_after_migration }}
           FAILED_DEPLOYMENT_RUN_ID: ${{ inputs.failed_deployment_run_id }}
           PRIOR_BACKUP_PATH: ${{ inputs.prior_backup_path }}
@@ -219,6 +235,27 @@ jobs:
               --reason "$ROLLBACK_REASON" \
               --output "$RUNNER_TEMP/rollback-authorization.json"
             args+=(--rollback-authorization "$RUNNER_TEMP/rollback-authorization.json")
+          fi
+          # Bootstrap is a distinct, typed authority for a confirmed empty
+          # host. Naming the exact revision prevents this from becoming a
+          # reusable "skip anti-rollback" flag.
+          if [ -n "$BOOTSTRAP_TARGET$BOOTSTRAP_REF$BOOTSTRAP_REASON" ]; then
+            if [ -z "$BOOTSTRAP_TARGET" ] || [ -z "$BOOTSTRAP_REF" ] \
+              || [ -z "$BOOTSTRAP_REASON" ]; then
+              echo "A bootstrap authorization requires target revision, change reference and reason." >&2
+              exit 1
+            fi
+            if [ -n "$ROLLBACK_FROM$ROLLBACK_TO$ROLLBACK_REF$ROLLBACK_REASON" ]; then
+              echo "Rollback and first-deployment bootstrap authorizations are mutually exclusive." >&2
+              exit 1
+            fi
+            python -m scripts.release_candidate_evidence write-bootstrap-authorization \
+              --target-revision "$BOOTSTRAP_TARGET" \
+              --target-server "$TARGET_SERVER" \
+              --change-reference "$BOOTSTRAP_REF" \
+              --reason "$BOOTSTRAP_REASON" \
+              --output "$RUNNER_TEMP/bootstrap-authorization.json"
+            args+=(--bootstrap-authorization "$RUNNER_TEMP/bootstrap-authorization.json")
           fi
           if [ "$HOTFIX" = "true" ]; then
             args+=(--hotfix-no-migrations --change-reference "$CHANGE_REFERENCE" --reason "$HOTFIX_REASON")

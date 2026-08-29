@@ -35,6 +35,26 @@ running revision — proven from the running container's own
 deliberate rollback requires a typed authorization bound to the exact
 transition, not a boolean escape.
 
+**Amended 2026-08-29 (fail-closed running-state observation):** an empty
+revision observation is not proof that production has never been deployed.
+The adapter first proves Docker daemon access and inventories the exact
+production container. An existing container must expose a valid full-SHA
+`org.opencontainers.image.revision` label; an unreadable daemon, failed
+inventory/inspection, absent label, or malformed label refuses deployment
+before anything touches the host: the gate is the first step after argument
+validation, so it precedes the hotfix migration-evidence collection (which
+pulls images and creates throwaway containers) as well as `deploy.sh`, the
+backup, and migrations.
+
+A genuine first deployment is a separate state: the Docker daemon is readable
+and the exact production container is confirmed absent. Even then deployment
+requires a typed bootstrap authorization naming `dotmac-sub-prod`, the exact
+staged target revision, a change reference, and a reason. The document is
+accepted only while the container is absent and cannot be combined with a
+rollback authorization, hotfix mode, or post-migration resume. Bootstrap is
+therefore explicit transition authority, not a reusable "skip anti-rollback"
+flag.
+
 **Amended 2026-08-28:** the release source branch changed from `dev` to `main`
 when the dev-first hop was retired. Nothing else in this decision changed: the
 image is still built once from an explicitly selected green SHA, staging still
@@ -76,15 +96,20 @@ the selected SHA and OCI digest remain the facts that deployment consumes.
 
 ## Ownership and authoritative evidence
 
-The release control plane owns candidate selection, artifact promotion, and
-production-eligibility decisions. Its authoritative inputs are:
+The release control plane owns candidate selection, artifact promotion,
+production-eligibility, anti-rollback, and first-deployment bootstrap
+decisions. Its authoritative inputs are:
 
 - GitHub-hosted CI workflow conclusions for exact source and release commits;
 - Git commit and tree identities supplied by GitHub;
 - the immutable OCI manifest digest published to GHCR;
 - the kernel-canonical product manifest embedded in that image and its
   `sha256:` document digest;
-- the GitHub staging deployment result for that exact digest; and
+- the GitHub staging deployment result for that exact digest;
+- the Docker daemon and exact-container observation from the named production
+  host, including the running image's full revision label;
+- explicit typed, exact-host/exact-revision bootstrap evidence when the
+  production container is confirmed absent; and
 - explicit, typed migration evidence for a production hotfix backup exception.
 
 GHCR owns artifact bytes and aliases; it does not decide whether an artifact is
