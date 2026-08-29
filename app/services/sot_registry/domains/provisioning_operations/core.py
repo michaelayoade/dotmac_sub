@@ -700,12 +700,16 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="operations.expense_requests",
         module="app.services.field.expense_requests",
-        owns=("field expense request submission",),
+        owns=(
+            "field expense request submission",
+            "field expense vendor picker",
+        ),
         depends_on=("operations.work_orders",),
         notes=(
             "One typed command creates and submits a technician expense request "
             "atomically. The client reference and normalized fingerprint make "
-            "network retries safe."
+            "network retries safe. The vendor picker is read-only and only "
+            "projects active vendor labels for field expense entry."
         ),
         contract=ServiceContract(
             concerns=(
@@ -714,6 +718,11 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=("canonical service work-order state",),
                     canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense vendor picker",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("legacy active vendor identity observation",),
                 ),
             ),
             authoritative_inputs=(
@@ -726,12 +735,22 @@ SERVICES: tuple[SOTService, ...] = (
                         "validated receipt attachment evidence"
                     ),
                 ),
+                AuthorityInput(
+                    name="legacy active vendor identity observation",
+                    owner="external:legacy_vendor_registry",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Active native Vendor rows carrying CRM-UUID-keyed vendor "
+                        "identity and display names"
+                    ),
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Create, submit, work-order activity marking, and optional ERP "
-                    "delivery staging complete in one owner transaction."
+                    "delivery staging complete in one owner transaction. The "
+                    "vendor picker performs a read-only session-scoped query."
                 ),
                 locking="The command locks the scoped active work order.",
                 idempotency=(

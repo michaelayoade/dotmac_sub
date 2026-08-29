@@ -477,6 +477,11 @@ class FieldExpenseCategoryRead(BaseModel):
     max_amount_per_claim: Decimal | None = None
 
 
+class FieldExpenseVendorRead(BaseModel):
+    id: UUID
+    label: str
+
+
 class FieldExpenseRequestCreate(WorkOrderCompatibilityInput):
     purpose: str = Field(min_length=1, max_length=500)
     expense_date: date | None = None
