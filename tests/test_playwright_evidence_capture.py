@@ -48,6 +48,11 @@ class FakeTracing:
     def stop(self, path: str | None = None) -> None:
         self.stopped = True
         self.stopped_to = path
+        # Real Playwright writes the trace to disk here. The double must too:
+        # these tests assert on the FILES the capture leaves behind, which is
+        # the only thing the CI artifact actually carries.
+        if path is not None:
+            Path(path).write_bytes(b"trace")
 
 
 class FakePage:
