@@ -37,6 +37,11 @@ class ReleaseContractErrorCode(str, Enum):
         "release_contract.rollback_change_reference_required"
     )
     ROLLBACK_REASON_REQUIRED = "release_contract.rollback_reason_required"
+    INVALID_PRODUCTION_SERVER = "release_contract.invalid_production_server"
+    BOOTSTRAP_CHANGE_REFERENCE_REQUIRED = (
+        "release_contract.bootstrap_change_reference_required"
+    )
+    BOOTSTRAP_REASON_REQUIRED = "release_contract.bootstrap_reason_required"
 
 
 class ReleaseContractError(RuntimeError):
@@ -168,6 +173,21 @@ class StagingDeploymentId:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionServerName:
+    """Exact production host identity accepted by the release control plane."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if self.value != "dotmac-sub-prod":
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.INVALID_PRODUCTION_SERVER,
+                field="production server name",
+                message="production server name must be dotmac-sub-prod",
+            )
+
+
 class EvidenceConclusion(str, Enum):
     """Normalized conclusion for external workflow/deployment observations."""
 
@@ -278,6 +298,38 @@ class ProductionRollbackAuthorization:
                 code=ReleaseContractErrorCode.ROLLBACK_REASON_REQUIRED,
                 field="reason",
                 message="a rollback authorization requires a reason",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionBootstrapAuthorization:
+    """Explicit authority for the first deploy to an empty production host.
+
+    Bootstrap is not inferred from a failed container inspection and is not a
+    standing boolean permission. It names the exact production host and staged
+    revision, so it can authorize only one confirmed container-absent deploy.
+    """
+
+    target_revision: GitCommitSha
+    target_server: ProductionServerName
+    change_reference: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.change_reference, str)
+            or _CHANGE_REFERENCE.fullmatch(self.change_reference) is None
+        ):
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.BOOTSTRAP_CHANGE_REFERENCE_REQUIRED,
+                field="bootstrap change reference",
+                message="bootstrap change reference must be a stable identifier",
+            )
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ReleaseContractError(
+                code=ReleaseContractErrorCode.BOOTSTRAP_REASON_REQUIRED,
+                field="bootstrap reason",
+                message="bootstrap reason is required",
             )
 
 

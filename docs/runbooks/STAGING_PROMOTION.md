@@ -374,5 +374,10 @@ existing staging backup files are unchanged.
   `from_revision`/`to_revision` transition plus a change reference and reason;
   there is no boolean override, and a document written for a different
   transition is refused rather than reused.
+- An empty running-revision observation never bypasses that gate. Docker daemon,
+  inventory, and inspection failures and missing/malformed labels fail closed.
+  Only a confirmed absent production container may use the separately typed
+  first-deployment authorization, which names the exact target revision,
+  `dotmac-sub-prod`, a change reference, and a reason.
 - Production deploys only a typed, authorized digest. The self-hosted production
   job runs bounded operational checks and no repository test suite.
