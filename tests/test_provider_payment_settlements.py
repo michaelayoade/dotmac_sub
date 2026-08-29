@@ -442,6 +442,7 @@ def test_recovery_completes_intent_after_cash_recording_when_allocation_fails(
             provider_fee=Decimal("20.00"),
             currency="NGN",
             memo_prefix="Paystack",
+            raw={"reference": intent.reference},
         ),
         observed_at=observed_at,
     )

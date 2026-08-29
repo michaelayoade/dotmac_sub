@@ -50,6 +50,7 @@ def test_payment_reconciliation_has_complete_coordinator_contract() -> None:
     assert service.contract.transaction.mode is TransactionMode.COORDINATOR_MANAGED
     assert {concern.role for concern in service.contract.concerns} == {
         OwnerRole.APPLICATION_COORDINATOR,
+        OwnerRole.AUTHORITATIVE_RECORD,
         OwnerRole.RESOLVER,
     }
     assert (
@@ -70,11 +71,13 @@ def test_each_reconciliation_boundary_is_one_typed_owner_command() -> None:
     verified = _function("settle_verified_reconciled_topup")
     observation = _function("record_reconciled_gateway_observation")
     attempt = _function("claim_topup_reconciliation_attempt")
+    outside_window = _function("confirm_paystack_outside_window_recovery")
 
-    assert source.count("execute_owner_command(") == 3
+    assert source.count("execute_owner_command(") == 4
     assert "execute_owner_command" in _name_calls(verified)
     assert "execute_owner_command" in _name_calls(observation)
     assert "execute_owner_command" in _name_calls(attempt)
+    assert "execute_owner_command" in _name_calls(outside_window)
     assert "CommandContext" in source
     assert "OwnerCommandDefinition" in source
 

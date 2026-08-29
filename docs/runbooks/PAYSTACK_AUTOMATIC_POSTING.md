@@ -16,7 +16,10 @@ invoice, subscription, or access state.
   policy reserves bounded capacity for both stale pending customer payments and
   terminal late-success recovery. Unused capacity flows to the other lane, and
   supported providers are interleaved within each lane starting with the least
-  recently served provider.
+  recently served provider. The same owner separately owns a singular,
+  fingerprint-bound preview and finance-reviewed command for an exact Paystack
+  reference outside the automatic maximum-age window. That command never widens
+  the scheduled candidate policy or creates a bulk recovery lane.
 - `financial.topup_intents` owns lifecycle transitions and the shared
   customer/admin blocker and retry projection, including separate typed gateway
   attempt and observation progress plus the next reconciliation time. Provider
@@ -184,9 +187,78 @@ oldest due age do not decrease across runs.
 
 ## Reconcile a stranded payment
 
-Before requesting reconciliation, verify the exact customer, intent reference,
-provider transaction identity, currency, gross amount, provider fee, and
-authorized deposit amount. Fail closed on any ambiguity.
+Use the scheduled fallback for work still inside its automatic window. The
+operator command accepts only an exact Paystack intent whose canonical status is
+`failed`, `abandoned`, `canceled`, or `expired` and whose creation time is older
+than the automatic maximum-age window. It rejects `pending`, processing, and
+every other non-terminal status even when the row is outside that window. Never
+change the maximum-age setting merely to make a historical cohort eligible.
+
+Preview is mandatory and read-only. Supply both the canonical intent UUID and
+its exact stored Paystack reference:
+
+```bash
+poetry run python -m scripts.billing.reconcile_paystack_reference \
+  --intent-id <uuid> \
+  --reference <exact-ref>
+```
+
+The owner resolves the exact intent, enabled version-pinned
+`payments.reconcile.v1` binding, and canonical active `PaymentProvider` through
+`financial.payment_gateway_finance`; gateway routing or presentment does not own
+that finance identity. It then obtains a fresh normalized Paystack observation
+and classifies canonical Payment and provider-event replay evidence. Review the
+returned `intent_id`, `reference`,
+`intent_status`, `disposition`, `actionable`, `fingerprint`, provider and binding
+identities, external transaction identity, gross amount, provider fee,
+authorized net amount, currency, provider status, reason code, and any existing
+Payment identity. The preview must fail closed or remain non-actionable for a
+missing or changed intent/reference, an intent still inside the automatic
+window, disabled or ambiguous provider configuration, stale or contradictory
+local evidence, provider not-found, pending/processing, failed/abandoned,
+unavailable/unknown, or incomplete monetary evidence.
+
+Finance must independently confirm the exact account/intent correlation,
+provider transaction identity, currency, gross amount, provider fee, authorized
+deposit amount, and duplicate absence. Record a non-secret review/change
+reference and a specific reason. Do not put credentials, raw provider payloads,
+or unnecessary customer identity in either value.
+
+Apply only the same actionable preview. Pass its SHA-256 unchanged and use a
+stable idempotency key for this reviewed recovery:
+
+```bash
+poetry run python -m scripts.billing.reconcile_paystack_reference \
+  --intent-id <uuid> \
+  --reference <exact-ref> \
+  --apply \
+  --fingerprint <sha256> \
+  --actor <finance-operator> \
+  --reason <review-reason> \
+  --review-reference <change-or-evidence-ref> \
+  --idempotency-key <stable-key> \
+  --confirm APPLY_REVIEWED_PAYSTACK_RECOVERY
+```
+
+Apply first returns an existing immutable recovery run when the same idempotency
+key and command fingerprint already succeeded. Otherwise it obtains a second
+fresh provider observation and local snapshot, releases that read transaction,
+then enters one owner transaction. That root locks and recomputes the preview,
+refuses a stale fingerprint, and atomically records the exact review provenance,
+canonical provider-event/payment/deposit/allocation/top-up consequences and the
+immutable recovery run. The result is either `recovered` or an exact `linked`
+replay and includes the durable recovery-run, intent and Payment identities. A
+changed or non-success provider observation is not money authority: obtain a new
+preview and finance decision if later evidence justifies another attempt.
+
+This command is a current-period posting path, not a backdating tool. When apply
+creates a new canonical Payment, its `paid_at` is the owner-command confirmation
+instant; where customer-subledger evidence is created, its `occurred_at` derives
+from that Payment instant. Linking or replaying an existing canonical Payment
+preserves its existing date. Neither intent creation nor an unauthenticated
+historic Paystack timestamp becomes the accounting date. If finance requires a
+historic-period restatement, stop and use a separately approved accounting-owner
+process rather than this recovery command.
 
 Use the canonical top-up reconciliation owner. Do not insert a payment, mutate
 an invoice, add account credit, or unsuspend a subscriber directly. The owner is
@@ -194,9 +266,13 @@ idempotent across webhook delivery and scheduled recovery: replaying the same
 provider transaction must reuse the canonical settlement rather than create
 duplicate money.
 
-Pending and terminal intents outside the configured automatic maximum-age
-window require explicit finance review. The operational evidence reports them
-separately so they are not mistaken for an empty or healthy queue.
+The adapter accepts exactly one eligible terminal intent/reference pair. It has
+no cohort, limit, date-range, provider-wide, or bulk-apply option. Pending intents
+outside the configured automatic maximum-age window remain visible in
+operational evidence but cannot be previewed or applied through this command;
+they require a separate approved owner/policy decision. Eligible terminal rows
+also remain visible until their canonical state changes. Preview does not remove
+either class or make it scheduled work.
 
 ## Incident evidence
 
@@ -209,6 +285,9 @@ Record only non-secret evidence:
 - pending and terminal partition counts, oldest due ages, and selected/checked
   plus durable attempt progress;
 - canonical payment and intent identifiers;
+- exact recovery preview fingerprint, finance actor, reason, non-secret
+  review/change reference and idempotency key;
+- durable recovery-run identity and replay flag when apply succeeds;
 - owner outcome or domain rejection code.
 
 Never record signing secrets, credentials, raw private payloads, or unnecessary

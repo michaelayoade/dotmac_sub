@@ -560,16 +560,23 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "stranded top-up reconciliation",
             "scheduled top-up reconciliation execution",
+            "outside-window exact-reference recovery preview and classification",
+            "finance-reviewed exact-reference outside-window top-up recovery",
+            "finance-reviewed exact-reference recovery evidence",
             "verified provider settlement then allocation orchestration",
             "top-up reconciliation backlog, progress, and age projection",
         ),
         depends_on=(
             "control.settings_spec",
+            "events.dispatcher",
+            "integration.installations",
             "integration.runtime",
             "financial.account_credit_deposits",
+            "financial.payment_gateway_finance",
             "financial.payments",
             "financial.payment_provider_events",
             "financial.topup_intents",
+            "observability.audit_log",
         ),
         notes=(
             "The bounded sweep uses a work-conserving two-lane policy with reserved "
@@ -581,6 +588,16 @@ SERVICES: tuple[SOTService, ...] = (
             "I/O, which rotates provider priority across sweeps, then gateway "
             "verification is treated as an "
             "external fact. "
+            "The automatic maximum-age policy is never widened for recovery: one "
+            "outside-window Paystack intent whose canonical status is failed, "
+            "abandoned, canceled, or expired may be rechecked only through the same "
+            "owner's exact-reference preview and a fingerprint-bound finance confirmation "
+            "carrying durable actor, reason, and evidence-reference provenance. "
+            "Pending and other non-terminal outside-window intents are ineligible for "
+            "this operator command. "
+            "Each successful reviewed command writes one immutable, append-only "
+            "recovery-run record that owns its review, idempotency, normalized money, "
+            "canonical result, and command-lineage evidence. "
             "Each consequence is a separate typed coordinator transaction that "
             "composes canonical financial participants."
         ),
@@ -606,6 +623,60 @@ SERVICES: tuple[SOTService, ...] = (
                         "typed gateway reconciliation progress",
                         "external gateway verification observation",
                     ),
+                ),
+                ConcernContract(
+                    name=(
+                        "outside-window exact-reference recovery preview and "
+                        "classification"
+                    ),
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical top-up reconciliation policy",
+                        "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
+                        "typed exact-reference recovery request",
+                        "enabled version-pinned reconciliation capability binding",
+                        "canonical payment provider identity",
+                        "external gateway verification observation",
+                        "canonical payment replay evidence",
+                        "canonical provider-event replay evidence",
+                        "canonical exact-reference recovery evidence",
+                    ),
+                ),
+                ConcernContract(
+                    name=(
+                        "finance-reviewed exact-reference outside-window top-up "
+                        "recovery"
+                    ),
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical top-up reconciliation policy",
+                        "canonical reconcilable top-up intent",
+                        "typed gateway reconciliation progress",
+                        "finance-reviewed exact-reference recovery confirmation",
+                        "enabled version-pinned reconciliation capability binding",
+                        "canonical payment provider identity",
+                        "external gateway verification observation",
+                        "canonical payment replay evidence",
+                        "canonical provider-event replay evidence",
+                        "canonical exact-reference recovery evidence",
+                        "canonical account-credit deposit protocol",
+                        "canonical provider-event settlement protocol",
+                        "canonical top-up completion protocol",
+                        "canonical gateway observation lifecycle protocol",
+                    ),
+                ),
+                ConcernContract(
+                    name="finance-reviewed exact-reference recovery evidence",
+                    role=OwnerRole.AUTHORITATIVE_RECORD,
+                    input_names=(
+                        "canonical reconcilable top-up intent",
+                        "finance-reviewed exact-reference recovery confirmation",
+                        "external gateway verification observation",
+                        "canonical payment replay evidence",
+                        "canonical provider-event replay evidence",
+                    ),
+                    canonical_writer="financial.payment_reconciliation",
                 ),
                 ConcernContract(
                     name=("verified provider settlement then allocation orchestration"),
@@ -643,6 +714,49 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="typed exact-reference recovery request",
+                    owner="financial.payment_reconciliation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "one exact failed, abandoned, canceled, or expired Paystack "
+                        "top-up intent identity, stored reference, and explicit "
+                        "observation time, older than the automatic maximum-age window; "
+                        "pending and other non-terminal intents are ineligible, and the "
+                        "request never names a cohort or changes that policy"
+                    ),
+                ),
+                AuthorityInput(
+                    name="finance-reviewed exact-reference recovery confirmation",
+                    owner="financial.payment_reconciliation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "the exact intent, provider and stored reference, reviewed "
+                        "preview SHA-256 and normalized provider-evidence fingerprint, "
+                        "plus actor, reason, evidence or change reference, command, "
+                        "correlation, and idempotency identity"
+                    ),
+                ),
+                AuthorityInput(
+                    name="enabled version-pinned reconciliation capability binding",
+                    owner="integration.installations",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "enabled installation and payments.reconcile.v1 capability "
+                        "binding for the intent's pinned or provider-resolved connector"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment provider identity",
+                    owner="financial.payment_gateway_finance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked local PaymentProvider row whose provider type matches "
+                        "the exact intent and whose active state admits verified "
+                        "reconciliation; resolved through the finance identity owner, "
+                        "not gateway routing or presentment policy"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical reconcilable top-up intent",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -670,6 +784,37 @@ SERVICES: tuple[SOTService, ...] = (
                         "allowlisted Paystack or Flutterwave transaction status and "
                         "safe reason; successful observations additionally carry "
                         "transaction identity, gross amount, fee, and currency"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment replay evidence",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active succeeded Payment identity, provider, external "
+                        "transaction, gross amount, fee, currency, paid-at accounting "
+                        "instant, settlement, and top-up completion link used to "
+                        "classify exact replay"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical provider-event replay evidence",
+                    owner="financial.payment_provider_events",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "canonical provider-event trust source, normalized evidence "
+                        "digest, processing result, and linked payment or invoice"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical exact-reference recovery evidence",
+                    owner="financial.payment_reconciliation",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "immutable recovery-run identity, intent/payment/provider-event "
+                        "and binding links, idempotency and command fingerprints, review "
+                        "reference, actor, reason, normalized external transaction and "
+                        "gross/fee/net/currency facts, disposition, and command lineage"
                     ),
                 ),
                 AuthorityInput(
@@ -709,13 +854,21 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary=(
-                    "Candidate selection completes its read transaction, then each "
-                    "candidate enters a dedicated execute_owner_command root. Only a "
-                    "successful atomic claim durably advances attempt progress and "
-                    "proceeds to a gateway call; a concurrent claim loss does neither. "
-                    "Each definitive observation later enters exactly one separate "
-                    "execute_owner_command root that commits or rolls back settlement, "
-                    "provider event, intent projection, audit, and domain events."
+                    "Scheduled candidate selection completes its read transaction, and "
+                    "each candidate uses a dedicated pre-I/O claim root before the "
+                    "existing definitive-observation root. Exact-reference preview is "
+                    "read-only. Reviewed apply first replays matching immutable recovery "
+                    "evidence without provider I/O; otherwise it obtains a second fresh "
+                    "provider observation and local snapshot, releases that read "
+                    "transaction, then enters one execute_owner_command root. That root "
+                    "locks and recomputes the fingerprint and atomically commits or "
+                    "rolls back settlement, provider event, intent completion, immutable "
+                    "recovery evidence, audit, and domain events. A newly created "
+                    "Payment uses that current confirmation as its paid-at accounting "
+                    "instant, and any customer-subledger posting derives occurred-at "
+                    "from it; exact link or replay preserves the existing canonical "
+                    "Payment date. The command never backdates to intent creation or an "
+                    "unauthenticated provider timestamp."
                 ),
                 locking=(
                     "The coordinator locks the canonical subscriber or billing-account "
@@ -726,9 +879,13 @@ SERVICES: tuple[SOTService, ...] = (
                     "Provider type plus intent reference reuses the webhook provider-"
                     "event identity. Provider transaction identity and canonical "
                     "participant keys prevent duplicate cash, allocation, and intent "
-                    "consequences. One successfully claimed intent advances attempt "
-                    "progress once for its typed attempt identity before transport is "
-                    "invoked."
+                    "consequences. A reviewed recovery additionally binds one evidence "
+                    "or change reference and idempotency key to the exact preview and "
+                    "normalized provider-evidence fingerprints. Its immutable recovery "
+                    "run is append-only; exact replay returns that result, while a reused "
+                    "key with changed command or preview evidence conflicts. One successfully "
+                    "claimed intent advances attempt progress once for its typed "
+                    "attempt identity before transport is invoked."
                 ),
                 retries=(
                     "Unavailable or unknown evidence fails closed until canonical "
@@ -742,7 +899,13 @@ SERVICES: tuple[SOTService, ...] = (
                     "neither a busy lane nor a repeated provider error can pin the "
                     "queue. Each candidate "
                     "is an independent transaction, so one rejection cannot roll back "
-                    "or repeat another candidate's completed consequence."
+                    "or repeat another candidate's completed consequence. The reviewed "
+                    "outside-window command is limited to failed, abandoned, canceled, "
+                    "or expired Paystack intents and never admits pending or other "
+                    "non-terminal work. Eligible work is never re-enqueued as a cohort: "
+                    "a non-success, unavailable, unknown, stale, or conflicting result "
+                    "is returned for that one reviewed reference and requires a new "
+                    "current preview before any later operator confirmation."
                 ),
             ),
             errors=ErrorContract(
@@ -750,15 +913,18 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_reconciliation.policy_missing",
                     "financial.payment_reconciliation.provider_mismatch",
                     "financial.payment_reconciliation.reference_mismatch",
+                    "financial.payment_reconciliation.provider_reference_mismatch",
                     "financial.payment_reconciliation.transaction_identity_invalid",
                     "financial.payment_reconciliation.amount_invalid",
                     "financial.payment_reconciliation.provider_fee_invalid",
                     "financial.payment_reconciliation.currency_invalid",
                     "financial.payment_reconciliation.currency_mismatch",
                     "financial.payment_reconciliation.invoice_correlation_invalid",
+                    "financial.payment_reconciliation.authorized_net_mismatch",
                     "financial.payment_reconciliation.completion_conflict",
                     "financial.payment_reconciliation.provider_not_configured",
                     "financial.payment_reconciliation.provider_configuration_mismatch",
+                    "financial.payment_reconciliation.provider_configuration_ambiguous",
                     "financial.payment_reconciliation.deposit_rejected",
                     "financial.payment_reconciliation.provider_event_rejected",
                     "financial.payment_reconciliation.settlement_unlinked",
@@ -766,13 +932,36 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_reconciliation.outcome_invalid",
                     "financial.payment_reconciliation.observation_incomplete",
                     "financial.payment_reconciliation.attempt_claim_rejected",
+                    "financial.payment_reconciliation.recovery_reference_invalid",
+                    "financial.payment_reconciliation.recovery_reference_mismatch",
+                    "financial.payment_reconciliation.recovery_provider_invalid",
+                    "financial.payment_reconciliation.recovery_status_invalid",
+                    "financial.payment_reconciliation.recovery_status_ineligible",
+                    "financial.payment_reconciliation.recovery_already_completed",
+                    "financial.payment_reconciliation.recovery_scope_invalid",
+                    "financial.payment_reconciliation.recovery_inside_automatic_window",
+                    "financial.payment_reconciliation.recovery_intent_not_found",
+                    "financial.payment_reconciliation.recovery_scope_forbidden",
+                    "financial.payment_reconciliation.recovery_actor_invalid",
+                    "financial.payment_reconciliation.recovery_confirmation_required",
+                    "financial.payment_reconciliation.recovery_fingerprint_invalid",
+                    "financial.payment_reconciliation.recovery_review_reference_invalid",
+                    "financial.payment_reconciliation.recovery_reason_invalid",
+                    "financial.payment_reconciliation.recovery_idempotency_key_invalid",
+                    "financial.payment_reconciliation.recovery_idempotency_conflict",
+                    "financial.payment_reconciliation.recovery_stale_preview",
+                    "financial.payment_reconciliation.recovery_not_actionable",
+                    "financial.payment_reconciliation.recovery_settlement_incomplete",
                     "financial.payment_reconciliation.invalid_command_context",
                     "financial.payment_reconciliation.command_contract_violation",
                     "financial.payment_reconciliation.nested_owner_command",
                     "financial.payment_reconciliation.active_caller_transaction",
                     "financial.payment_reconciliation.nested_transaction_completion",
                 ),
-                mapping_owner="scheduled payment reconciliation task adapter",
+                mapping_owner=(
+                    "scheduled payment reconciliation task and finance-reviewed "
+                    "exact-reference recovery adapters"
+                ),
                 retryable_codes=(
                     "financial.payment_reconciliation.provider_not_configured",
                     "financial.payment_reconciliation.settlement_unlinked",
@@ -784,7 +973,32 @@ SERVICES: tuple[SOTService, ...] = (
                     "successful observation without linked payment evidence",
                     "a selected intent whose lifecycle, provider, reference, or due "
                     "state changed before durable attempt progress",
+                    "missing finance review, evidence reference, exact intent/reference "
+                    "correlation, or current preview fingerprint",
+                    "a reviewed intent that is pending, otherwise non-terminal, or not "
+                    "outside the automatic window, or "
+                    "reviewed provider/payment/event evidence that is stale, ambiguous, "
+                    "or contradictory",
                     "active caller transaction or manifest mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "payment_reconciliation.paystack_outside_window_recovered",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries the immutable recovery-run, intent, Payment, "
+                    "provider-event, finance-provider and optional capability-binding "
+                    "identities; exact reference/external identity; gross, fee, "
+                    "authorized net and currency; disposition; non-secret review "
+                    "reference; preview fingerprint; and command lineage without raw "
+                    "provider payloads or customer identity."
+                ),
+                replay=(
+                    "Exact command replay returns the immutable recovery run and emits "
+                    "no second event or financial consequence."
                 ),
             ),
             projections=(
@@ -841,18 +1055,25 @@ SERVICES: tuple[SOTService, ...] = (
                     "Gateway outcome, deposit, invoice, consolidated, existing-payment, "
                     "expiry, reserved-lane and provider fairness, pre-I/O attempt "
                     "progress, exhaustive backlog partition, age/progress telemetry, "
-                    "replay, transaction-boundary, manifest, and task-adapter tests."
+                    "exact-reference preview/classification, finance-reviewed "
+                    "outside-window replay and refusal, transaction-boundary, manifest, "
+                    "and task/operator-adapter tests."
                 ),
                 cutover_gate=(
                     "The task owns only session lifecycle and serialization; the sweep "
                     "uses both reserved lanes, advances each successfully claimed "
                     "intent before provider I/O, and submits typed immutable evidence "
-                    "to per-intent coordinator roots."
+                    "to per-intent coordinator roots. Outside-window recovery accepts "
+                    "only one exact current preview and finance confirmation for a "
+                    "failed, abandoned, canceled, or expired Paystack intent; it rejects "
+                    "pending and other non-terminal intents and never widens or bypasses "
+                    "scheduled candidate policy."
                 ),
                 fallback_retirement=(
                     "Service commit/rollback/session creation, direct payment creation, "
                     "private provider lookup, guessed invoice allocation, synchronous "
-                    "prepaid settlement, and access restoration are absent."
+                    "prepaid settlement, access restoration, direct SQL repair, and "
+                    "unreviewed or bulk outside-window replay are absent."
                 ),
             ),
             steward="finance operations",
@@ -864,6 +1085,8 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_payment_webhook_settlement.py",
                 "tests/test_reconcile_honours_invoice_intent.py",
+                "tests/test_paystack_outside_window_recovery.py",
+                "tests/test_reconcile_paystack_reference_cli.py",
                 "tests/architecture/test_payment_reconciliation_ownership.py",
                 "tests/architecture/test_payment_settlement_participants.py",
             ),
