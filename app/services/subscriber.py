@@ -435,9 +435,7 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
         val = settings_spec.resolve_value(db, SettingDomain.billing, billing_day_key)
         if val is not None:
             billing_day = int(str(val))
-            if billing_day > 0:
-                subscriber.billing_day = billing_day
-            else:
+            if billing_day <= 0:
                 # 0 means "day of activation". The activation day can be the
                 # 29th, 30th or 31st, which is OUTSIDE the domain this very
                 # setting declares (max_value=28) and the admin form enforces
@@ -450,10 +448,14 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
                 # is not focusable" to the console. The admin pressed Update and
                 # nothing happened, with no error anywhere on the server.
                 # 28 is also the only late day every month actually has.
-                subscriber.billing_day = min(
+                billing_day = min(
                     datetime.now(UTC).day,
                     _declared_max_billing_day(billing_day_key),
                 )
+            # Resolved above rather than assigned in each branch: this stays
+            # ONE cohort write site (tests/architecture/test_isp_cohort_source_writers.py),
+            # and the frozen source baseline should not move for a bug fix.
+            subscriber.billing_day = billing_day
 
     if subscriber.payment_due_days is None:
         val = settings_spec.resolve_value(
