@@ -96,7 +96,7 @@ def test_adapters_select_root_or_participant_by_transaction_ownership() -> None:
     )
     reconciliation = _function(
         "app/services/payment_reconciliation.py",
-        "_stage_verified_settlement",
+        "_stage_verified_settlement_for_intent",
     )
     webhook = _function(
         "app/services/payment_webhook_commands.py",

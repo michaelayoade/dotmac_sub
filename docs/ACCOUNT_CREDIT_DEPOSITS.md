@@ -6,14 +6,13 @@ runtime dependency.
 ## Contract and owners
 
 `financial.account_credit_deposits` owns eligibility, preview, typed intent,
-provider correlation and atomic settlement. Customer gateway verification and
-gateway reconciliation enter the owner-managed
-`SettleAccountCreditDepositCommand` on a transaction-free session. Payment
-webhook ingestion and payment-proof review already own wider evidence
-transactions, so they compose the same typed `stage_verified_settlement`
-participant, which flushes but never commits or rolls back. Callers cannot
-select transaction behavior or pass a transport-shaped gateway object into the
-domain owner.
+provider correlation and atomic settlement. Customer gateway verification
+enters the owner-managed `SettleAccountCreditDepositCommand` on a
+transaction-free session. Payment reconciliation, webhook ingestion and
+payment-proof review already own wider evidence transactions, so they compose
+the same typed `stage_verified_settlement` participant, which flushes but never
+commits or rolls back. Callers cannot select transaction behavior or pass a
+transport-shaped gateway object into the domain owner.
 
 Payment-proof review also composes the canonical
 `financial.topup_intents` reviewed-proof participant in the same transaction.

@@ -1154,6 +1154,7 @@ def test_reconciliation_still_settles_late_terminal_success(db_session, subscrib
                 currency="NGN",
                 external_id="late-terminal-success",
                 memo_prefix="Paystack",
+                raw={"reference": intent.reference},
             )
         ),
     ):
@@ -1187,6 +1188,7 @@ def test_reconciliation_still_settles_late_canceled_success(db_session, subscrib
                 currency="NGN",
                 external_id="late-canceled-success",
                 memo_prefix="Paystack",
+                raw={"reference": intent.reference},
             )
         ),
     ):
@@ -1213,6 +1215,7 @@ def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
                 currency="NGN",
                 external_id="660001",
                 memo_prefix="Paystack",
+                raw={"reference": intent.reference},
             )
         ),
     ):
@@ -1265,6 +1268,7 @@ def test_reconciliation_routes_typed_deposit_through_deposit_owner(
                 currency="NGN",
                 external_id="typed-reconciliation-deposit-payment",
                 memo_prefix="Paystack",
+                raw={"reference": intent.reference},
             )
         ),
     ):
@@ -1286,17 +1290,18 @@ def test_reconciliation_routes_typed_deposit_through_deposit_owner(
 def test_reconciliation_links_existing_payment_without_duplicating(
     db_session, subscriber
 ):
-    _make_provider(db_session)
+    provider = _make_provider(db_session)
     intent = _stale_intent(db_session, subscriber, reference="DMAC-RECON-2")
-    billing_service.payments.create(
+    billing_service.payments.record_verified_provider_settlement(
         db_session,
-        PaymentCreate(
-            account_id=subscriber.id,
-            amount=Decimal("5000.00"),
-            currency="NGN",
-            status=PaymentStatus.succeeded,
-            external_id="660002",
-        ),
+        account_id=subscriber.id,
+        provider_id=provider.id,
+        external_id="660002",
+        gross_amount=Decimal("5000.00"),
+        provider_fee=Decimal("0.00"),
+        net_amount=Decimal("5000.00"),
+        currency="NGN",
+        memo="Existing verified Paystack settlement",
     )
 
     with patch(
@@ -1308,6 +1313,7 @@ def test_reconciliation_links_existing_payment_without_duplicating(
                 currency="NGN",
                 external_id="660002",
                 memo_prefix="Paystack",
+                raw={"reference": intent.reference},
             )
         ),
     ):

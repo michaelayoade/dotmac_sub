@@ -27,6 +27,7 @@ SERVICES: tuple[SOTService, ...] = (
             "gateway finance provider identity bootstrap",
             "gateway settlement-channel bootstrap",
             "Integrator installation provider mapping",
+            "active gateway finance identity resolution",
         ),
         notes=(
             "This flush-only participant ensures finance attribution "
@@ -62,6 +63,11 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical payment provider identity",
                     ),
                     canonical_writer="financial.payment_gateway_finance",
+                ),
+                ConcernContract(
+                    name="active gateway finance identity resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("canonical payment provider identity",),
                 ),
             ),
             authoritative_inputs=(
@@ -128,14 +134,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_gateway_finance.provider_name_conflict",
                     "financial.payment_gateway_finance.channel_name_conflict",
                     "financial.payment_gateway_finance.provider_not_found",
+                    "financial.payment_gateway_finance.provider_identity_mismatch",
+                    "financial.payment_gateway_finance.provider_inactive",
                     "financial.payment_gateway_finance.integrator_installation_conflict",
                 ),
-                mapping_owner="payment gateway admin adapter",
+                mapping_owner=(
+                    "payment gateway admin adapters and verified-payment coordinators"
+                ),
                 retryable_codes=(),
                 fail_closed_on=(
                     "multiple provider identities",
                     "multiple provider-linked settlement channels",
                     "canonical provider or channel name collision",
+                    "inactive or checkout-mismatched provider identity",
                     "unknown provider or duplicate Integrator installation mapping",
                 ),
             ),
@@ -184,6 +195,7 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_web_integrations_payment_gateways.py",
                 "tests/test_payment_routing.py",
+                "tests/test_paystack_outside_window_recovery.py",
                 "tests/test_integrator_payment_provider_mapping.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
                 "tests/architecture/test_integrator_settlement_boundary.py",

@@ -71,6 +71,9 @@ class EventType(enum.Enum):
     payment_gateway_integrator_mapping_changed = (
         "payment_gateway.integrator_mapping_changed"
     )
+    paystack_outside_window_recovered = (
+        "payment_reconciliation.paystack_outside_window_recovered"
+    )
     integration_installation_manifest_adopted = (
         "integration.installation.manifest_adopted"
     )
