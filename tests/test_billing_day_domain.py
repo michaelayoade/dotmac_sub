@@ -99,16 +99,17 @@ def test_an_in_domain_activation_day_is_never_altered():
 def test_the_caller_owns_the_timezone_and_the_clock_shows_it():
     """The day depends on the instant the CALLER passes, not on a wall clock.
 
-    Late on the 29th in Lagos is already the 30th in UTC. Both land inside the
-    domain here, so the assertion is about which instant was used, not about
-    the clamp — that is the property that makes the rule testable at any date.
+    Shortly after midnight in Lagos is still the previous day in UTC. Both
+    land inside the domain here, so the assertion is about which timezone the
+    caller supplied, not about the clamp — that is the property that makes the
+    rule testable at any date.
     """
 
     lagos = timezone(timedelta(hours=1))
-    local_evening = datetime(2026, 1, 15, 23, 30, tzinfo=lagos)
+    local_morning = datetime(2026, 1, 16, 0, 30, tzinfo=lagos)
 
-    assert resolve_activation_day(local_evening, DOMAIN) == 15
-    assert resolve_activation_day(local_evening.astimezone(UTC), DOMAIN) == 16
+    assert resolve_activation_day(local_morning, DOMAIN) == 16
+    assert resolve_activation_day(local_morning.astimezone(UTC), DOMAIN) == 15
 
 
 # --- change rules ----------------------------------------------------------
