@@ -939,6 +939,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_reconciliation.recovery_status_ineligible",
                     "financial.payment_reconciliation.recovery_already_completed",
                     "financial.payment_reconciliation.recovery_scope_invalid",
+                    "financial.payment_reconciliation.recovery_structural_invoice_required",
                     "financial.payment_reconciliation.recovery_inside_automatic_window",
                     "financial.payment_reconciliation.recovery_intent_not_found",
                     "financial.payment_reconciliation.recovery_scope_forbidden",

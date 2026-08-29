@@ -628,6 +628,38 @@ def test_legacy_preview_preserves_owner_authorized_amount_when_fee_is_merchant_a
     assert preview.authorized_net_amount == AUTHORIZED_NET
 
 
+def test_preview_rejects_metadata_only_invoice_instruction_before_provider_io(
+    db_session, subscriber, paystack_configuration, monkeypatch
+):
+    provider, binding = paystack_configuration
+    intent = _intent(
+        db_session,
+        subscriber,
+        provider,
+        binding,
+        purpose=None,
+    )
+    intent.metadata_ = {
+        "payment_flow": "invoice_payment",
+        "invoice_id": str(uuid4()),
+    }
+    db_session.commit()
+    observe = Mock()
+    monkeypatch.setattr(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        observe,
+    )
+
+    with pytest.raises(
+        PaymentReconciliationError,
+        match="metadata-only or mismatched invoice instruction",
+    ) as exc_info:
+        preview_paystack_outside_window_recovery(db_session, _query(intent))
+
+    assert exc_info.value.code.endswith("recovery_structural_invoice_required")
+    observe.assert_not_called()
+
+
 def test_preview_rejects_untrusted_or_failed_existing_provider_event_evidence(
     db_session, subscriber, paystack_configuration, monkeypatch
 ):

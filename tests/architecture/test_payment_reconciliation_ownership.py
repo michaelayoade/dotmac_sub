@@ -83,7 +83,7 @@ def test_each_reconciliation_boundary_is_one_typed_owner_command() -> None:
 
 
 def test_reconciliation_composes_named_flush_only_participants() -> None:
-    verified = _function("_stage_verified_settlement")
+    verified = _function("_stage_verified_settlement_for_intent")
     observation = _function("_stage_gateway_observation")
     verified_calls = _attribute_calls(verified) | _name_calls(verified)
     observation_calls = _attribute_calls(observation) | _name_calls(observation)

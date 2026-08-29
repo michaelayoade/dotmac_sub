@@ -206,7 +206,10 @@ poetry run python -m scripts.billing.reconcile_paystack_reference \
 The owner resolves the exact intent, enabled version-pinned
 `payments.reconcile.v1` binding, and canonical active `PaymentProvider` through
 `financial.payment_gateway_finance`; gateway routing or presentment does not own
-that finance identity. It then obtains a fresh normalized Paystack observation
+that finance identity. Exact recovery uses only the structural
+`TopupIntent.invoice_id` as an invoice instruction and refuses a metadata-only
+or mismatched legacy invoice link; metadata cannot select a financial target.
+It then obtains a fresh normalized Paystack observation
 and classifies canonical Payment and provider-event replay evidence. Review the
 returned `intent_id`, `reference`,
 `intent_status`, `disposition`, `actionable`, `fingerprint`, provider and binding

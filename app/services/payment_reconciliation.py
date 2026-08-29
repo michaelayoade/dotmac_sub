@@ -656,13 +656,14 @@ def _participant_context(
     )
 
 
-def _stage_verified_settlement(
+def _stage_verified_settlement_for_intent(
     db: Session,
     command: ReconcileVerifiedTopupCommand,
     *,
     context: CommandContext,
+    intent: TopupIntent,
+    invoice_id: UUID | None,
 ) -> ReconciledTopupResult:
-    intent = lock_topup_intent_scope(db, command.candidate.intent_id)
     _validate_candidate(intent, command.candidate)
     provider = _active_provider_for_intent(db, intent)
     external_id, amount, provider_fee, currency = _normalized_transaction(command)
@@ -701,7 +702,6 @@ def _stage_verified_settlement(
             disposition=TopupReconciliationDisposition.linked,
         )
 
-    invoice_id = _target_invoice_id(intent)
     event_key = f"{command.candidate.provider_type.value}-{intent.reference}"
     existing_payment_id = db.scalar(
         select(Payment.id)
@@ -830,6 +830,24 @@ def _stage_verified_settlement(
     )
 
 
+def _stage_verified_settlement(
+    db: Session,
+    command: ReconcileVerifiedTopupCommand,
+    *,
+    context: CommandContext,
+) -> ReconciledTopupResult:
+    """Preserve the scheduled legacy invoice instruction at its existing boundary."""
+
+    intent = lock_topup_intent_scope(db, command.candidate.intent_id)
+    return _stage_verified_settlement_for_intent(
+        db,
+        command,
+        context=context,
+        intent=intent,
+        invoice_id=_target_invoice_id(intent),
+    )
+
+
 def settle_verified_reconciled_topup(
     db: Session,
     command: ReconcileVerifiedTopupCommand,
@@ -899,6 +917,13 @@ def _validate_outside_window_intent(
         raise _error(
             "recovery_scope_invalid",
             "Top-up intent must identify exactly one customer billing scope",
+            intent_id=str(query.intent_id),
+        )
+    legacy_invoice_id = _target_invoice_id(intent)
+    if legacy_invoice_id is not None and legacy_invoice_id != intent.invoice_id:
+        raise _error(
+            "recovery_structural_invoice_required",
+            "Reviewed recovery refuses a metadata-only or mismatched invoice instruction",
             intent_id=str(query.intent_id),
         )
     max_age_days = _resolve_reconciliation_int_setting(
@@ -1441,7 +1466,7 @@ def _stage_paystack_outside_window_recovery(
             "Only exact, complete Paystack success evidence can be recovered",
             disposition=current.disposition.value,
         )
-    settlement = _stage_verified_settlement(
+    settlement = _stage_verified_settlement_for_intent(
         db,
         ReconcileVerifiedTopupCommand(
             candidate=TopupReconciliationCandidate(
@@ -1454,6 +1479,8 @@ def _stage_paystack_outside_window_recovery(
             observed_at=query.observed_at,
         ),
         context=command.context,
+        intent=intent,
+        invoice_id=intent.invoice_id,
     )
     if settlement.payment_id is None or settlement.provider_event_id is None:
         raise _error(
