@@ -899,6 +899,12 @@ def verify_deposit(
 
     Acceptance is native or CRM write-through per the
     ``quotes_native_write_enabled`` flag (module docstring).
+
+    On the CRM write-through branch the acceptance transport is checked BEFORE
+    the payment is recorded, so the deposit is never taken for an acceptance
+    that cannot complete. The CRM/Omni runtime was decommissioned on
+    2026-08-29; until this branch is retired by the native write flip, that
+    check is what keeps a dead transport from charging a customer.
     """
     if _native_write_enabled(db):
         return _verify_deposit_native(
@@ -909,6 +915,22 @@ def verify_deposit(
             reference=reference,
             provider=provider,
         )
+
+    # Fail closed BEFORE any money moves. ``verify_and_record_payment`` below
+    # commits a ledger entry, and on this branch the ONLY consequence that
+    # turns that payment into a service is the CRM quote acceptance at the
+    # tail. If that transport cannot complete, recording the deposit would
+    # leave the customer charged with no accepted quote, no sales order and no
+    # install project -- the exact partial state this preflight forbids.
+    # The quote command owner decides; this owner only asks it first.
+    quotes_mirror.ensure_portal_quote_commands_available(
+        db,
+        audit_context=quotes_mirror.PortalQuoteAuditContext(
+            action=quotes_mirror.PORTAL_QUOTE_DEPOSIT_PREFLIGHT_REFUSED,
+            subscriber_id=str(subscriber_id),
+            details={"quote_id": str(quote_id)},
+        ),
+    )
 
     row = _quote_row(db, subscriber_id, quote_id)
     try:

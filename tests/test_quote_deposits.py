@@ -21,8 +21,25 @@ from app.models.project import ProjectTemplate
 from app.models.quote_mirror import QuoteMirror
 from app.models.sales import Quote, QuoteDepositInvoiceLink, SalesOrder
 from app.models.subscriber import Subscriber
-from app.services import quote_deposits
+from app.services import quote_deposits, quotes_mirror
 from app.services.sales import quote_acceptance, selfserve
+
+
+@pytest.fixture(autouse=True)
+def _crm_quote_transport_enabled():
+    """Satisfy the CRM write-through precondition for the legacy-path tests.
+
+    ``verify_deposit`` now asks the portal quote command owner whether the
+    acceptance transport can complete BEFORE it records the payment. Every
+    pre-existing test here exercises the branch as it behaved while the CRM was
+    live, so the precondition is satisfied by default; the fail-closed test
+    below overrides this with an explicit refusal.
+    """
+    with patch(
+        "app.services.quote_deposits.quotes_mirror."
+        "ensure_portal_quote_commands_available"
+    ):
+        yield
 
 
 def _subscriber(db) -> Subscriber:
@@ -504,3 +521,48 @@ def test_initiate_native_flag_is_subscriber_scoped(db_session):
                 db_session, _customer(other), str(other.id), str(quote.id)
             )
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The money invariant: a deposit is never recorded for an acceptance that
+# cannot complete.
+# ---------------------------------------------------------------------------
+
+
+def test_verify_deposit_refuses_before_recording_any_payment(db_session):
+    """CRM is gone -> refuse FIRST, so the customer is not charged for nothing.
+
+    Before this guard, ``verify_and_record_payment`` committed a ledger entry
+    and only then discovered that the CRM acceptance was unreachable, leaving
+    the customer charged with no accepted quote, no sales order and no install
+    project -- and a 502 that read as "try again in a minute".
+    """
+    sub = _subscriber(db_session)
+    row = _quote(db_session, sub)
+    refusal = quotes_mirror.PortalQuoteCommandError(
+        code="sales.portal_quote.transport_unavailable",
+        message=quotes_mirror.PORTAL_QUOTE_UNAVAILABLE_MESSAGE,
+    )
+    with (
+        patch(
+            "app.services.quote_deposits.quotes_mirror."
+            "ensure_portal_quote_commands_available",
+            side_effect=refusal,
+        ),
+        patch(
+            "app.services.quote_deposits.payments.verify_and_record_payment"
+        ) as record_payment,
+        patch("app.services.quote_deposits.quotes_mirror.accept_quote") as accept_fn,
+        pytest.raises(quotes_mirror.PortalQuoteCommandError) as exc,
+    ):
+        quote_deposits.verify_deposit(
+            db_session,
+            _customer(sub),
+            str(sub.id),
+            row.crm_quote_id,
+            reference="ref_1",
+        )
+
+    assert exc.value.code == "sales.portal_quote.transport_unavailable"
+    record_payment.assert_not_called()
+    accept_fn.assert_not_called()
