@@ -112,6 +112,27 @@ def test_the_caller_owns_the_timezone_and_the_clock_shows_it():
     assert resolve_activation_day(local_morning.astimezone(UTC), DOMAIN) == 15
 
 
+def test_a_timezone_choice_at_a_month_boundary_changes_the_clamped_day():
+    """The same instant yields 1 or 28 depending on the zone the caller passes.
+
+    Just after midnight on 1 January in Lagos is still 31 December in UTC, and
+    31 is out of domain — so the timezone decides between a billing day of 1
+    and a clamped 28. That is the strongest form of the property: the zone is
+    not cosmetic, it moves the stored value. Dotmac operates in Africa/Lagos
+    (UTC+1), so this is the real boundary rather than a contrived one.
+
+    The case above deliberately keeps both sides in domain, which proves the
+    instant is respected but not that the choice matters. This one bites.
+    """
+
+    lagos = timezone(timedelta(hours=1))
+    new_year_lagos = datetime(2026, 1, 1, 0, 30, tzinfo=lagos)
+
+    assert new_year_lagos.astimezone(UTC).day == 31
+    assert resolve_activation_day(new_year_lagos, DOMAIN) == 1
+    assert resolve_activation_day(new_year_lagos.astimezone(UTC), DOMAIN) == 28
+
+
 # --- change rules ----------------------------------------------------------
 
 
