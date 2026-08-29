@@ -27,6 +27,7 @@ does one that starts firing on a cadence that was never broken.
 
 from __future__ import annotations
 
+import importlib
 from calendar import monthrange
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,21 @@ from app.services.catalog.subscriptions import (
 )
 
 CycleStart = Callable[[datetime, BillingCycle], datetime]
+
+
+def _owner_module():
+    """The cadence-owner MODULE, not the ``Subscriptions()`` singleton.
+
+    ``app/services/catalog/__init__.py`` binds ``subscriptions = Subscriptions()``,
+    so ``from app.services.catalog import subscriptions`` hands back the service
+    instance and shadows the submodule. Monkeypatching that instance silently
+    patches nothing the production code reads.
+    """
+    module = importlib.import_module("app.services.catalog.subscriptions")
+    assert hasattr(module, "_CYCLE_PERIOD_LENGTH"), (
+        "resolved the service singleton, not the cadence-owner module"
+    )
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +301,13 @@ def prop_timezone_is_preserved(cycle_start: CycleStart) -> None:
         0,
     )
     assert dst_anchor.utcoffset() != dst_start.utcoffset()
-    assert (dst_anchor - dst_start) == timedelta(days=90) - timedelta(hours=1)
+    # The wall clock is kept, so the ABSOLUTE span is 90 days minus the DST
+    # hour. It has to be measured in UTC: CPython's datetime subtraction
+    # ignores tzinfo entirely when both operands share the same tzinfo object,
+    # so `dst_anchor - dst_start` reports a flat 90 days and would hide this.
+    assert dst_anchor.astimezone(UTC) - dst_start.astimezone(UTC) == timedelta(
+        days=90
+    ) - timedelta(hours=1)
 
     naive = datetime(2026, 4, 1, 12, 0)
     assert cycle_start(naive, BillingCycle.quarterly).tzinfo is None
@@ -473,7 +495,7 @@ def test_an_undeclared_cadence_fails_closed_instead_of_defaulting_to_monthly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sensitivity proof for the table itself: drop a row, the money path refuses."""
-    from app.services.catalog import subscriptions as owner
+    owner = _owner_module()
 
     trimmed = dict(_CYCLE_PERIOD_LENGTH)
     del trimmed[BillingCycle.quarterly]
@@ -633,8 +655,8 @@ class TestCancellationCreditMoney:
     ):
         """Sensitivity proof for the two tests above, through the real path."""
         from app.services import billing_automation
-        from app.services.catalog import subscriptions as owner
 
+        owner = _owner_module()
         monkeypatch.setattr(owner, "billing_cycle_start", _legacy_billing_cycle_start)
 
         _bill_one_quarter(
