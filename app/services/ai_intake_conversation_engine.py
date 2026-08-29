@@ -95,10 +95,17 @@ SUPPORTED_RULE_ACTIONS = frozenset(
         "mark_resolved",
     }
 )
-IDENTIFIER_REQUEST_SEQUENCE: tuple[str, ...] = (
-    "portal_id",
-    "registered_email",
+SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset(
+    {
+        "portal_id",
+        "registered_email",
+        "registered_phone",
+    }
+)
+DEFAULT_IDENTIFIER_REQUEST_ORDER: tuple[str, ...] = (
     "registered_phone",
+    "registered_email",
+    "portal_id",
 )
 PLAYBOOK_POLICY_KEYS: tuple[str, ...] = ("first_line_playbooks", "playbooks")
 ACCOUNT_BOUND_INTENTS = frozenset(
@@ -794,7 +801,7 @@ def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
     policy["permitted_identifiers"] = (
         metadata.get("permitted_identifiers")
         or policy.get("permitted_identifiers")
-        or IDENTIFIER_REQUEST_SEQUENCE
+        or DEFAULT_IDENTIFIER_REQUEST_ORDER
     )
     policy["require_identity_before_tools"] = bool(
         policy.get("require_identity_before_tools", True)
@@ -897,12 +904,9 @@ def _identify_customer(
 ) -> None:
     if state.subscriber_id:
         return
-    for identifier_type, value in (
-        ("portal_id", state.portal_id),
-        ("registered_email", state.registered_email),
-        ("registered_phone", state.registered_phone),
-    ):
-        if not value or identifier_type not in _permitted_identifiers(policy):
+    for identifier_type in _permitted_identifiers(policy):
+        value = _identifier_value(state, identifier_type)
+        if not value:
             continue
         result = execute_tool(
             db,
@@ -977,11 +981,8 @@ def _should_retry_missing_identifier_response(
 def _latest_reply_supplied_identifier(
     latest_facts: dict[str, object], policy: dict[str, object]
 ) -> bool:
-    permitted = set(_permitted_identifiers(policy))
     return any(
-        latest_facts.get(identifier)
-        for identifier in ("registered_phone", "registered_email", "portal_id")
-        if identifier in permitted
+        latest_facts.get(identifier) for identifier in _permitted_identifiers(policy)
     )
 
 
@@ -1235,7 +1236,7 @@ def _playbook_response(
 
 
 def _field_question(field: str) -> str:
-    if field in {"portal_id", "registered_email", "registered_phone"}:
+    if field in SUPPORTED_IDENTIFIER_TYPES:
         return _identifier_question(field)
     if field == "router_powered":
         return "Is your router or ONU powered on right now?"
@@ -1603,13 +1604,19 @@ def _identifier_question(identifier_type: str) -> str:
     if identifier_type == "registered_phone":
         return "Please send the registered phone number on the account."
     if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
-        return _identifier_question("portal_id")
+        return (
+            "Please send the registered phone number, registered email, or "
+            "Portal ID on the account."
+        )
     return "Please share that detail so I can continue checking this."
 
 
 def _identifier_retry_question(identifier_type: str) -> str:
     if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
-        return _identifier_retry_question("portal_id")
+        return (
+            "I still need the registered phone number, registered email, or "
+            "Portal ID on the account. Please send one of those details."
+        )
     if identifier_type == "portal_id":
         return "I still need the Portal ID or account number for the service."
     if identifier_type == "registered_email":
@@ -1642,28 +1649,39 @@ def _next_identifier_to_request(
     return None
 
 
-def _identifier_supplied(state: ConversationalState, identifier_type: str) -> bool:
+def _identifier_value(state: ConversationalState, identifier_type: str) -> str | None:
     if identifier_type == "portal_id":
-        return bool(state.portal_id)
+        return state.portal_id
     if identifier_type == "registered_email":
-        return bool(state.registered_email)
+        return state.registered_email
     if identifier_type == "registered_phone":
-        return bool(state.registered_phone)
-    return False
+        return state.registered_phone
+    return None
+
+
+def _identifier_supplied(state: ConversationalState, identifier_type: str) -> bool:
+    return bool(_identifier_value(state, identifier_type))
 
 
 def _permitted_identifiers(policy: dict[str, object]) -> tuple[str, ...]:
+    """Return the identifier request order the policy declared.
+
+    The declared order is authoritative and is the single source consumed by
+    both prompting (`_next_identifier_to_request`) and identification lookup
+    (`_identify_customer`). Values are kept in declaration order,
+    de-duplicated by first occurrence, and unsupported values are dropped
+    without reordering the valid ones. The engine never imposes a canonical
+    order over a declared one; when no order is configured the historical
+    default applies.
+    """
     raw = policy.get("permitted_identifiers")
     if isinstance(raw, str):
         raw = [raw]
-    allowed = set(_list(raw)) & set(IDENTIFIER_REQUEST_SEQUENCE)
-    if not allowed:
-        return IDENTIFIER_REQUEST_SEQUENCE
-    return tuple(
-        identifier
-        for identifier in IDENTIFIER_REQUEST_SEQUENCE
-        if identifier in allowed
-    )
+    declared: list[str] = []
+    for item in _list(raw):
+        if item in SUPPORTED_IDENTIFIER_TYPES and item not in declared:
+            declared.append(item)
+    return tuple(declared) or DEFAULT_IDENTIFIER_REQUEST_ORDER
 
 
 def _tool_enabled(policy: dict[str, object], key: str) -> bool:

@@ -177,14 +177,19 @@ The approved tool catalogue is backend-owned. Current tools are:
   state, live-session and equipment status where available. An unavailable
   result must not become a diagnosis.
 
-Policy versions may select which identifiers can be requested and which
-approved tools are enabled. Customer identity prompts are asked one at a time in
-the fixed support order: Portal/account ID, then registered email, then
-registered phone. AI intake asks the next identifier only when the previous one
-is absent or did not identify the account. The UI cannot create arbitrary tools
-or executable conditions. If a customer explicitly asks for a human, AI intake
-records `human_requested=true`, stops troubleshooting and requests handoff while
-preserving already collected facts.
+Policy versions may select which identifiers can be requested, and in which
+order. Customer identity prompts are asked one at a time, and the policy's
+declared `permitted_identifiers` order is authoritative: it is preserved
+exactly, de-duplicated by first occurrence, and unsupported values are dropped
+without reordering the remaining ones. The engine never imposes a canonical
+order over a declared one. When a policy declares no identifiers, the default
+order is registered phone, then registered email, then Portal/account ID. AI
+intake asks the next identifier only when the previous one is absent or did not
+identify the account, and identification lookup attempts identifiers in that
+same declared order, so prompting and lookup can never disagree. The UI cannot
+create arbitrary tools or executable conditions. If a customer explicitly asks
+for a human, AI intake records `human_requested=true`, stops troubleshooting and
+requests handoff while preserving already collected facts.
 
 Policy versions may define bounded first-line playbooks. A playbook matches an
 intent and optional category, then runs configured steps in order: request one
