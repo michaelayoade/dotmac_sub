@@ -100,7 +100,7 @@ class _Gateway:
         )
 
 
-def test_identifier_prompt_accepts_any_approved_identifier():
+def test_identifier_prompt_uses_required_sequential_order():
     state = ai_intake_conversation_engine.ConversationalState(
         conversation_id=str(uuid4()),
         session_id=str(uuid4()),
@@ -117,18 +117,32 @@ def test_identifier_prompt_accepts_any_approved_identifier():
 
     requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
 
-    assert requested == ai_intake_conversation_engine.CUSTOMER_IDENTIFIER_REQUEST
+    assert requested == "portal_id"
     assert ai_intake_conversation_engine._identifier_question(requested) == (
-        "Please send the registered phone number, registered email, or "
-        "Portal ID on the account."
+        "Please send your Portal ID or account number so I can identify the service."
     )
 
-    state.already_requested_fields = (requested,)
+    state.already_requested_fields = ("portal_id",)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "registered_email"
+    )
+
+    state.already_requested_fields = ("portal_id", "registered_email")
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "registered_phone"
+    )
+
+    state.already_requested_fields = (
+        "portal_id",
+        "registered_email",
+        "registered_phone",
+    )
     assert (
         ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
     )
 
-    state.already_requested_fields = ()
     state.registered_email = "customer@example.test"
     assert (
         ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None

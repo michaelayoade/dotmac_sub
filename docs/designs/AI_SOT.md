@@ -178,10 +178,21 @@ The approved tool catalogue is backend-owned. Current tools are:
   result must not become a diagnosis.
 
 Policy versions may select which identifiers can be requested and which
-approved tools are enabled. The UI cannot create arbitrary tools or executable
-conditions. If a customer explicitly asks for a human, AI intake records
-`human_requested=true`, stops troubleshooting and requests handoff while
+approved tools are enabled. Customer identity prompts are asked one at a time in
+the fixed support order: Portal/account ID, then registered email, then
+registered phone. AI intake asks the next identifier only when the previous one
+is absent or did not identify the account. The UI cannot create arbitrary tools
+or executable conditions. If a customer explicitly asks for a human, AI intake
+records `human_requested=true`, stops troubleshooting and requests handoff while
 preserving already collected facts.
+
+Policy versions may define bounded first-line playbooks. A playbook matches an
+intent and optional category, then runs configured steps in order: request one
+missing field, provide configured guidance, invoke an approved read-only tool,
+mark resolved, or request handoff. Playbook wording, including empathy or
+acknowledgement text, is policy data curated from approved support patterns; the
+engine supplies only generic fallback field prompts and does not hardcode a
+category-specific conversation path.
 
 Policy versions may opt into immediate handoff after classification through
 `conversation_policy.handoff_after_classification`. The default is false for
