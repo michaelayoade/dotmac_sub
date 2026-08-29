@@ -19,10 +19,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.subscriber import Subscriber
 from app.schemas.notification import PushIntent
-from app.services.audit_adapter import record_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
@@ -80,6 +81,17 @@ class QuoteReadResult:
 
 #: Audit ``entity_type`` for every refused portal quote command.
 PORTAL_QUOTE_COMMAND_ENTITY = "portal_quote_command"
+
+#: The typed audit principal for a refusal. A refusal is decided by this owner
+#: from local configuration, not by whoever happened to make the request, so the
+#: honest actor is the service. Deliberately no ``party_id``: accountability
+#: enrichment may describe the person behind a user, but it must never turn a
+#: service actor into a person.
+PORTAL_QUOTE_COMMAND_ACTOR = AuditActor(
+    actor_type=AuditActorType.system,
+    actor_id="service:sales.portal_quote",
+    label="Portal quote command owner",
+)
 
 #: Audit ``action`` values. One per refusal site, so an operator can tell a
 #: refused request apart from a refused acceptance apart from a deposit that
@@ -152,6 +164,7 @@ def _audit_portal_quote_refusal(
             action=context.action,
             entity_type=PORTAL_QUOTE_COMMAND_ENTITY,
             entity_id=context.subscriber_id,
+            actor=PORTAL_QUOTE_COMMAND_ACTOR,
             metadata=metadata,
             status_code=409,
             is_success=False,
