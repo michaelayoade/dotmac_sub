@@ -415,6 +415,112 @@ def test_rich_first_message_extracts_existing_facts(db_session):
     assert "router_restarted" not in decision.state.already_requested_fields
 
 
+def test_configured_no_internet_playbook_asks_first_line_steps(db_session):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "first_line_playbooks": [
+                    {
+                        "key": "technical_support_no_internet",
+                        "intent": "technical_support",
+                        "category": "no_internet",
+                        "acknowledgement": "Sorry about the downtime.",
+                        "steps": [
+                            {
+                                "action": "request_field",
+                                "field": "router_powered",
+                                "response": "Is your router or ONU powered on right now?",
+                            },
+                            {
+                                "condition": {
+                                    "type": "field_value",
+                                    "field": "router_powered",
+                                    "value": True,
+                                },
+                                "action": "request_field",
+                                "field": "los_status",
+                                "response": "Are you seeing any red LOS warning light?",
+                            },
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet for the past one month.",
+        classification=_classification(),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="The router is powered on.",
+        classification=_classification(),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "playbook_required_field"
+    assert "Sorry about the downtime." in (first.response_text or "")
+    assert "router or ONU powered" in (first.response_text or "")
+    assert "router_powered" in first.state.already_requested_fields
+    assert second.action == "respond"
+    assert "red LOS" in (second.response_text or "")
+    assert "Sorry about the downtime." not in (second.response_text or "")
+    assert "los_status" in second.state.already_requested_fields
+
+
+def test_no_internet_without_playbook_does_not_auto_handoff_after_classification(
+    db_session,
+):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet.",
+        classification=_classification(),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.response_text is None
+
+
 def test_monitoring_troubleshooting_then_red_los_handoff_retains_state(db_session):
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session, subscriber_id=subscriber.id)

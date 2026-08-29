@@ -669,13 +669,21 @@ def _troubleshoot(runtime: _GraphRuntime):
     def node(state: AiIntakeGraphState) -> AiIntakeGraphState:
         dotmac_state = _dotmac_state(state)
         policy = _policy(state)
-        decision = engine._configured_troubleshooting_decision(
+        decision = engine._configured_playbook_decision(
             runtime.db,
             dotmac_state,
             policy,
             conversation=runtime.conversation,
             tool_mode=runtime.tool_mode,
         )
+        if decision is None:
+            decision = engine._configured_troubleshooting_decision(
+                runtime.db,
+                dotmac_state,
+                policy,
+                conversation=runtime.conversation,
+                tool_mode=runtime.tool_mode,
+            )
         if decision is not None:
             _log_node(
                 "troubleshoot",
