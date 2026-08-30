@@ -124,7 +124,9 @@ the last step of this procedure is to move that field to RETIRED.
 
 ## The sequence, and why the gate comes before the deletion
 
-1. Set `CRM_TICKET_PULL_ENABLED=false` at its configuration owner.
+1. Turn the `crm.ticket_pull` control **off through the canonical settings
+   owner** — see "Where the switch actually is" below. Setting the environment
+   variable does nothing.
 2. Observe at least **two** five-minute intervals.
 3. Prove no CRM calls and no new CRM-derived writes — **with a positive
    control**, see below.
@@ -137,6 +139,77 @@ the last step of this procedure is to move that field to RETIRED.
 Steps 1-3 are production operations and are the gate. Do not begin step 4
 until step 3 has produced its evidence: once the code is gone, the flag is
 moot and the observation can never be made.
+
+## Where the switch actually is
+
+**`CRM_TICKET_PULL_ENABLED` is inert. Setting it to `false` is a no-op.** An
+earlier revision of this runbook said to set it, and that instruction would
+have produced a poller that kept running while everyone believed it had been
+stopped — the worst possible input to step 3.
+
+The evidence, in the order it settles the question:
+
+- `control_registry._resolve_own_flag_with_source` reads exactly one thing: the
+  `domain_settings` row `domain='modules'`, `key='crm_ticket_pull'`, falling
+  back to the registry `on_missing` default. Its docstring says it plainly —
+  *"Retired environment and database aliases are deliberately ignored."*
+- The `LegacyAlias(_SCH, "crm_ticket_pull_enabled", "CRM_TICKET_PULL_ENABLED")`
+  on the control is **declaration-only**. Nothing in `app/` ever reads a
+  `Control.legacy` attribute.
+- Migration `309_retire_feature_aliases` materialised the old
+  `scheduler.crm_ticket_pull_enabled` row into the canonical
+  `modules.crm_ticket_pull` row, preserving its truthiness, and **deleted the
+  legacy row** (its `retain_legacy` flag is `False`).
+- The only consumer is `app/services/scheduler_config.py:2109`, calling
+  `control_registry.is_enabled(session, "crm.ticket_pull")`.
+
+So **the explicit source enabling the poller is a `domain_settings` row**, not
+an environment seed:
+
+```sql
+-- The one row that decides. Expect value_text = 'true'.
+SELECT id, domain, key, value_type, value_text, is_active, created_at, updated_at
+  FROM domain_settings
+ WHERE domain = CAST('modules' AS settingdomain)
+   AND key = 'crm_ticket_pull';
+-- Zero rows, or is_active false => the control is already off by registry
+-- default (on_missing = False) and something else is running the poller.
+```
+
+**Change it through the canonical writer, never by editing the registry
+default.** The default is already `False` and is correct; changing it would
+both fix the wrong thing and mask whatever is overriding it. The canonical
+writer is `control_registry.update_canonical_feature_controls`, whose single
+production adapter is the admin system-settings POST at
+`app/web/admin/system.py:433` (guarded by `system:settings:*`). It runs
+`validate_feature_control_changes` first and returns a before/after record of
+stored value, effective value and source — keep that record, it is part of the
+retirement receipt.
+
+### There is a second, independent gate
+
+Even with the control on, the schedule is only registered if
+`resolve_crm_ticket_pull_readiness` passes, which requires **all** of: an
+`enabled` `dotmac.crm` installation, an `enabled` `crm.ticket_observation.v1`
+binding, and an active bound job. So the poller can already be stopped by the
+installation being disabled, and `scheduler_config.py:2137` would be logging
+`crm_ticket_pull_not_ready` every beat instead.
+
+Check both before concluding anything from step 3, and note that disabling the
+installation or binding is a second kill switch — and the one that also retires
+the transport for containment item 4.
+
+### A dead control the orphan guard cannot see
+
+`scheduler.crm_ticket_pull_enabled` is still a registered `SettingSpec` with
+`env_var="CRM_TICKET_PULL_ENABLED"` (`app/services/settings_spec.py:1594`), so
+the generic settings UI still offers it and nothing reads it.
+`tests/architecture/test_no_orphan_settings.py` does not catch it, because the
+guard counts any quoted occurrence of the key under `app/` as a reader — and
+the `LegacyAlias` declaration that records the key as *retired* is itself such
+an occurrence. Removing the spec is CRM-surface deletion and belongs to the
+owning slice, not to containment; it is noted here so nobody reads that toggle
+as live.
 
 ## Step 3: the observation, and the control that makes it mean anything
 
