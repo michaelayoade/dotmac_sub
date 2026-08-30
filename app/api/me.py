@@ -953,9 +953,9 @@ def my_chat_session(
 ):
     """Open (or resume) a live-chat session with support.
 
-    The sub asserts the authenticated subscriber's identity to the CRM and
-    returns an opaque visitor token plus the URLs the client uses to talk to the
-    CRM chat widget directly (WebSocket for real-time, REST for send/history).
+    The sub asserts the authenticated subscriber's identity to its own Team
+    Inbox and returns an opaque visitor token plus the URLs the client uses:
+    ``/ws/inbox`` for real time, ``/widget`` for send and history.
 
     Pass ``ticket_id`` or ``project_id`` to start the chat about that record —
     the reference rides in the session so the agent has context.

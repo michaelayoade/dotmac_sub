@@ -676,8 +676,8 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         health=HealthManifest(operation="connection.validate.v1"),
     ),
     _dotmac_crm_manifest(
-        version="1.1.0",
-        include_chat_session=True,
+        version="1.2.0",
+        include_chat_session=False,
     ),
     _whatsapp_manifest(
         version="1.1.0",
@@ -812,9 +812,20 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     # ERP 1.0.0 remains executable while installations explicitly adopt the
     # workforce attendance capability introduced in 1.1.0.
     _dotmac_erp_manifest(version="1.0.0", include_workforce_attendance=False),
-    # CRM 1.0.0 remains executable while production adopts the explicit
-    # temporary chat-session capability in 1.1.0.
+    # CRM 1.0.0 predates the temporary chat-session capability. It remains
+    # executable because a deployed pin is an immutable compatibility fact.
     _dotmac_crm_manifest(version="1.0.0", include_chat_session=False),
+    # CRM 1.1.0 is the ONLY manifest that ever declared `crm.chat_session.v1`
+    # (ADR 0006, retired 2026-08-30 with the CRM itself). 1.2.0 drops the
+    # capability. This exact 1.1.0 digest is retained UNCHANGED rather than
+    # edited or deleted: an installation adopts by digest, so rewriting a
+    # published version would make one version name two contracts, and
+    # removing it would make an existing production pin unidentifiable and
+    # take every OTHER CRM capability down with it. Retention is not
+    # reachability -- Sub has no caller for `crm.chat_session.v1` any more, and
+    # the runner no longer maps it to an action, so a 1.1.0-pinned binding for
+    # it now fails closed with `capability_not_supported`.
+    _dotmac_crm_manifest(version="1.1.0", include_chat_session=True),
     # The original Meta Social 1.0.0 pin did not declare the aggregate
     # auth_mode field. Production installations may retain this exact pin
     # until explicit adoption, so later manifest changes cannot rewrite it.

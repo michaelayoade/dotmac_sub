@@ -53,7 +53,6 @@ TRANSPORT_MODULES = {
 #: deleting its line here -- is the unit of progress. Adding a line is a
 #: regression, and CI will not tell you off for it, so reviewers must.
 LEDGER_BYPASS_BACKLOG = {
-    "app/api/crm_webhooks.py",
     "app/services/billing_payment_receipts.py",
     "app/services/crm_ticket_pull.py",
     "app/services/notification_adapter.py",
