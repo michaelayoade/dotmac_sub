@@ -572,23 +572,31 @@ def test_the_owner_mints_a_distinct_secret_per_account_and_accepts_none(
     )
 
     monkeypatch.setenv("JWT_SECRET", "reseller-mint-test-secret")
-    hashes = []
+    results = []
     for index in (1, 2):
         owner, assignment = _contexts(f"mint-{index}")
-        result = reseller_onboarding.create_reseller(
-            db_session,
-            reseller_onboarding.CreateResellerCommand(
-                context=owner,
-                reseller=ResellerCreate(
-                    name=f"Mint Reseller {index}", code=f"MINT-RSL-{index}"
+        # An owner command must be entered on a transaction-free session, and
+        # the previous iteration's reads opened one.
+        db_session.commit()
+        results.append(
+            reseller_onboarding.create_reseller(
+                db_session,
+                reseller_onboarding.CreateResellerCommand(
+                    context=owner,
+                    reseller=ResellerCreate(
+                        name=f"Mint Reseller {index}", code=f"MINT-RSL-{index}"
+                    ),
+                    portal_user=_user(
+                        email=f"mint.reseller.{index}@example.com",
+                        send_invite=False,
+                    ),
+                    assignment_context=assignment,
                 ),
-                portal_user=_user(
-                    email=f"mint.reseller.{index}@example.com",
-                    send_invite=False,
-                ),
-                assignment_context=assignment,
-            ),
+            )
         )
+
+    hashes = []
+    for result in results:
         credential = (
             db_session.query(UserCredential)
             .filter(UserCredential.reseller_user_id == result.principal_id)
