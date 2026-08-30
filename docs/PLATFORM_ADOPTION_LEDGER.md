@@ -161,6 +161,54 @@ resume after a post-migration failure is explicit and evidence-bound: it
 requires the same authorization, digest, prior run, backup artifact, candidate
 heads and database heads before skipping only backup and migration.
 
+**2026-08-30 — `dotmac-inbox==0.1.0a1` composed, conversation authority
+unchanged.** Sub exact-pins the published Inbox a1 artifacts recorded in the
+Poetry lock, and `alembic.ini` declares the installed
+`dotmac_inbox.migrations:versions` resource so the single `ib_0001_conversations`
+revision creates `mod_inbox`. The annotated Starter tag `dotmac-inbox-v0.1.0a1`
+is the publication oracle; it was written only after the version was published
+to the private index and installed back. Locking moved nothing else — the
+`poetry.lock` diff contains this package alone —
+
+| distribution | version | wheel SHA256 | sdist SHA256 |
+| --- | --- | --- | --- |
+| `dotmac-inbox` | 0.1.0a1 | `d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873` | `d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e` |
+
+No kernel move was needed: Inbox floors at `0.1.0a85` and Sub already pins a94.
+No new prerequisite migration was needed either: the module declares exactly
+`tenant_scope_catalog.v1` and `module_database_roles.v1`, which
+`app/migration_bindings.py` already binds to migrations 545 and 546, so
+`ASSEMBLY_PREREQUISITE_BINDINGS` is UNCHANGED. Inbox is atomic tenant-only, so
+it correctly has no `ModulePlaneSelection` entry.
+
+`app/commercial_module_prereqs.py` gains `mod_inbox`, which the architecture
+gate requires to match the composed-lineage set exactly. That contract is
+verified by `scripts/deploy.sh` with the restricted migration connection BEFORE
+Alembic, so **the next production deploy needs the elevated
+`BOOTSTRAP_DATABASE_URL` bootstrap supplied once** to create the schema — the
+same step the five existing composed modules took. The contract's name is now
+wider than its contents; the constant is keyed to composed lineages, not to the
+commercial domain.
+
+**Composition is not adoption, and this entry claims only composition.** Sub's
+`public.inbox_conversations`, `public.inbox_messages` and
+`public.inbox_conversation_read_states` remain the only authority for every
+conversation, message and read cursor. `app/services/inbox_channels.py`
+declares Sub's channel traits against `dotmac_inbox.channels` and is imported
+by nothing under `app/`; `tests/architecture/test_inbox_module_composition.py`
+allows exactly one importer of the package, allows it only the declaration
+surface, and fails the moment a second module or a service import appears. No
+route, job, webhook, reader, writer, backfill or dual write is added, and the
+runtime import graph is unchanged.
+
+The authority move is ruled by `docs/adr/0013-inbox-conversation-authority.md`
+and designed in `docs/designs/INBOX_MODULE_ADOPTION.md`. It is gated on a
+production-shaped census that has not been run, on four named module gaps that
+are not yet released, and on `dotmac-inbox 0.1.0a2` — which carries the
+identity-preserving history seam the backfill requires and is recorded
+`declared-unpublished` in the Starter baseline. `dotmac-inbox-operations` is a
+separate package and a separate decision; nothing here authorises it.
+
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
 the Poetry lock and its required `dotmac-kernel==0.1.0a94`. The annotated
