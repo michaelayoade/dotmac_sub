@@ -186,6 +186,64 @@ production adapter is the admin system-settings POST at
 stored value, effective value and source — keep that record, it is part of the
 retirement receipt.
 
+### Which route: the adapter, and the reason is attribution not authorization
+
+The canonical writer is `control_registry.update_canonical_feature_controls`.
+The admin POST at `app/web/admin/system.py` is **one adapter over it**, not the
+owner — so "go through the canonical writer" is, on its face, satisfied by
+calling the function inside the running application container. Most of what you
+need does come from the service:
+
+| | service called in-container | via the admin adapter |
+|---|---|---|
+| the state change | yes | yes |
+| `validate_feature_control_changes` | yes — called inside the service | yes (also re-checked in the route) |
+| before/after stored value, effective value, source | yes — built by the service and returned | yes |
+| `domain_setting_history` row | yes — recorded at the MODEL boundary by `app/services/setting_history.py`, so every writer is covered | yes |
+| `changed_by_party_id` on that history row | **NULL** | set |
+| `audit_events` row `feature_controls.update` with `actor_id` | **not written at all** | written by the adapter |
+
+**The last two rows are why the adapter is the right route here.** The audit
+event exists only on the HTTP path, and history attribution comes from
+`set_change_context`, which the caller must set explicitly — the history
+recorder is an ORM event with no access to the caller, and *nothing guesses*.
+
+For an ordinary toggle that gap is tolerable. For this one it is not. ADR 0018
+rule 1 field 5 requires the barrier to write **an attributed record — actor,
+timestamp, resource, old owner, new owner** — and the reason that field exists
+is the CRM chat cutover, whose barrier "wrote nothing durable. No audit row, no
+metric, no counter." Retiring the last CRM writer through an unattributed path
+would reproduce, in the act of retirement, the exact defect that made the
+previous cutover unanswerable. The receipt would not be able to name who
+performed it.
+
+**If the adapter is genuinely unavailable** and the change must be made
+in-container, it can still be attributed — but only deliberately:
+
+```python
+from app.services.setting_history import (
+    SettingChangeContext, set_change_context, reset_change_context,
+)
+
+token = set_change_context(SettingChangeContext(
+    actor_party_id=<operator party id or None>,
+    reason="CRM ticket-pull retirement, containment item 2",
+    request_id=<change ticket reference>,
+))
+try:
+    changes = control_registry.update_canonical_feature_controls(
+        db, payload={"crm.ticket_pull": False}
+    )
+finally:
+    reset_change_context(token)
+```
+
+That fills `domain_setting_history`, and `changes` is the receipt material.
+It still does **not** write the `feature_controls.update` audit event, so
+record that omission explicitly on the receipt rather than letting the gap pass
+unmentioned. An in-container change made *without* the context block is an
+unattributed production change and must not be used for this retirement.
+
 ### There is a second, independent gate
 
 Even with the control on, the schedule is only registered if
