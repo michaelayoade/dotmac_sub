@@ -155,7 +155,9 @@ ignore = [
     "E712",   # boolean comparison against True/False
     "E741",   # ambiguous variable names in legacy/tests
     "F841",   # assigned but unused local variable
-    "S105",   # possible hardcoded password string
+    "S105",   # possible hardcoded password string — too noisy on field
+              # names and enum members; the real shape is gated by
+              # tests/architecture/test_credential_literals.py
     "S110",   # try/except/pass
     "S112",   # try/except/continue
     "S507",   # paramiko host key policy warning
@@ -322,6 +324,11 @@ disable_error_code = ["override"]
 exclude_dirs = ["tests", "alembic", "scripts", "mobile"]
 skips = [
     "B101",  # assert_used: handled by mypy/pytest; legacy/assertive code paths remain
+    # B105/B106/B107 are skipped for false positives on field names,
+    # placeholders and empty defaults. The shape they aim at — a
+    # credential-named binding whose value is a string literal — is gated
+    # instead by tests/architecture/test_credential_literals.py, which is
+    # AST-based, ratcheted, and carries no sample of any value.
     "B105",  # hardcoded_password_string: false positives on field names/placeholders
     "B106",  # hardcoded_password_funcarg: false positives on configured/default labels
     "B107",  # hardcoded_password_default: false positives on empty auth defaults
