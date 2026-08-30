@@ -53,7 +53,7 @@ from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
-from app.services import auth_cache, staff_party_authentication
+from app.services import auth_cache, staff_party_authentication, team_inbox_assignment
 from app.services import radius_auth as radius_auth_service
 from app.services.capability_recipient import resolve_capability_recipient
 from app.services.common import coerce_uuid
@@ -1919,6 +1919,15 @@ class AuthFlow(ListResponseMixin):
             session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
         db.flush()
+        if principal_type == "system_user":
+            team_inbox_assignment.record_agent_signed_in_presence(
+                db,
+                command=team_inbox_assignment.AgentSignedInPresenceCommand(
+                    system_user_id=principal_uuid,
+                    auth_session_id=session.id,
+                    signed_in_at=now,
+                ),
+            )
         session_id = str(session.id)
         db.commit()
         access_token = _encode_access_token(

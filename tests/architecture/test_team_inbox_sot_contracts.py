@@ -66,6 +66,30 @@ def test_observation_owner_contracts_collision_quarantine() -> None:
     assert "ObservationCollisionPolicy.quarantine" in smtp
 
 
+def test_routing_owner_contracts_signed_in_agent_presence() -> None:
+    service = service_relationship("communications.team_inbox_routing")
+    assert service.contract is not None
+    assert {
+        "current agent presence state and freshness",
+        "agent presence transitions",
+        "immutable agent presence transition evidence",
+    } <= set(service.owns)
+    input_owners = {
+        item.name: item.owner for item in service.contract.authoritative_inputs
+    }
+    assert input_owners["successful staff session issuance"] == "app_sessions.auth"
+    assert input_owners["active staff principal"] == "auth.staff_provisioning"
+
+    auth_flow = (ROOT / "app/services/auth_flow.py").read_text(encoding="utf-8")
+    projection = (ROOT / "app/services/team_inbox_projection.py").read_text(
+        encoding="utf-8"
+    )
+    assert "AgentSignedInPresenceCommand(" in auth_flow
+    assert "record_agent_signed_in_presence(" in auth_flow
+    assert "InboxAgentPresence(" not in auth_flow
+    assert "agent_availability_snapshots(" in projection
+
+
 def test_legacy_catch_all_is_retired() -> None:
     baseline = (
         ROOT / "tests/architecture/sot_manifest_legacy_baseline.txt"
