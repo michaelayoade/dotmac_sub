@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from app.models.admin_alert import AdminNotification
 from app.models.notification import Notification, NotificationChannel
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.schemas.project import ProjectCreate
 from app.schemas.support import TicketCreate
 from app.services.staff_notifications import (
-    queue_staff_assignment_notifications,
+    StaffAssignmentEventType,
+    StaffNotificationError,
+    StageStaffAssignmentNotifications,
     resolve_assignment_users,
+    stage_staff_assignment_notifications,
 )
 from tests.staff_identity_fixtures import add_bound_staff_user
 
@@ -43,12 +48,24 @@ def test_assignment_audience_combines_users_and_service_teams(db_session) -> Non
 
     assert {user.id for user in users} == {direct.id, member.id}
 
-    queue_staff_assignment_notifications(
-        db_session,
-        users=users,
+    source_event_id = uuid4()
+    source_entity_id = uuid4()
+    target_url = f"/admin/support/tickets/{source_entity_id}"
+    command = StageStaffAssignmentNotifications(
+        system_user_ids=tuple(user.id for user in users),
+        source_event_id=source_event_id,
+        source_entity_id=source_entity_id,
+        event_type=StaffAssignmentEventType.ticket_assignment,
         subject="Assigned",
         body="Please review",
+        target_url=target_url,
     )
+
+    outcome = stage_staff_assignment_notifications(
+        db_session,
+        command,
+    )
+    replay = stage_staff_assignment_notifications(db_session, command)
     rows = db_session.query(Notification).all()
     assert {(row.channel, row.recipient) for row in rows} == {
         (NotificationChannel.push, str(direct.id)),
@@ -56,6 +73,44 @@ def test_assignment_audience_combines_users_and_service_teams(db_session) -> Non
         (NotificationChannel.push, str(member.id)),
         (NotificationChannel.email, member.email),
     }
+    assert set(outcome.notified_system_user_ids) == {direct.id, member.id}
+    assert replay == outcome
+    assert db_session.query(AdminNotification).count() == 2
+    assert {
+        row.target_url for row in db_session.query(AdminNotification).all()
+    } == {target_url}
+
+    with pytest.raises(
+        StaffNotificationError,
+        match="already staged with different data",
+    ):
+        stage_staff_assignment_notifications(
+            db_session,
+            replace(command, target_url=f"/admin/support/tickets/{uuid4()}"),
+        )
+
+
+def test_assignment_notification_rejects_dashboard_fallback(db_session) -> None:
+    user, _person = add_bound_staff_user(
+        db_session, email=f"assigned-{uuid4()}@example.com"
+    )
+
+    with pytest.raises(
+        StaffNotificationError,
+        match="require an exact admin target",
+    ):
+        stage_staff_assignment_notifications(
+            db_session,
+            StageStaffAssignmentNotifications(
+                system_user_ids=(user.id,),
+                source_event_id=uuid4(),
+                source_entity_id=uuid4(),
+                event_type=StaffAssignmentEventType.ticket_assignment,
+                subject="Assigned",
+                body="Please review",
+                target_url="/admin",
+            ),
+        )
 
 
 @pytest.mark.parametrize(

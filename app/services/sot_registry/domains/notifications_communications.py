@@ -1368,8 +1368,346 @@ DOMAIN = DomainSOT(
                 "staff review inbox materialization",
             ),
             depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
                 "communications.notification_service",
                 "operations.sla_escalation",
+            ),
+            notes=(
+                "Business owners supply typed assignment or review requests. This "
+                "participant validates the exact target, stages channel rows, and "
+                "materializes the personal admin inbox without completing transactions."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="admin/staff notification creation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "validated staff assignment notification command",
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "permission-targeted staff notification audience resolution"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "validated staff assignment notification command",
+                            "canonical staff account identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="staff review inbox materialization",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="validated staff assignment notification command",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed source event, entity, staff recipients, safe copy, "
+                            "and exact internal target supplied by an authorized business "
+                            "owner and validated at the notification boundary."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active SystemUser identity and current staff email.",
+                    ),
+                    AuthorityInput(
+                        name="canonical internal notification row",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Channel-scoped Notification identity, delivery state, "
+                            "metadata, and deterministic dedupe key."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Authorized business command owners call typed staging helpers; "
+                        "this service flushes and never commits or rolls back."
+                    ),
+                    locking=(
+                        "Channel and deterministic source-event dedupe identity prevent "
+                        "duplicate delivery rows; source-notification uniqueness prevents "
+                        "duplicate personal inbox rows."
+                    ),
+                    idempotency=(
+                        "Source event, event type, staff recipient, and channel form the "
+                        "durable assignment notification identity."
+                    ),
+                    retries=(
+                        "Owner-command replay converges on the same staged rows; delivery "
+                        "workers retain channel-specific retry responsibility."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communications.staff_notifications.invalid_assignment_request",
+                        "communications.staff_notifications.invalid_assignment_target",
+                        "communications.staff_notifications.assignment_replay_conflict",
+                    ),
+                    mapping_owner="calling business command owner",
+                    fail_closed_on=(
+                        "missing assignment notification content",
+                        "dashboard-only, external, or ambiguous navigation target",
+                        "idempotency-key replay with different notification data",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("ticket.assignment", "project.assignment"),
+                    schema_version=1,
+                    delivery_owner="communications.notification_service",
+                    compatibility=(
+                        "Version 1 identifies the source command, entity, staff recipient, "
+                        "channel, and exact internal navigation target."
+                    ),
+                    replay=(
+                        "Deterministic per-source-event, recipient, and channel keys "
+                        "reproduce the same Notification and AdminNotification rows."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="staff review inbox materialization",
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        writer="communications.staff_notifications",
+                        freshness="Transaction-current with the source notification row.",
+                        stale_behavior=(
+                            "Missing inbox rows are never inferred from email or external "
+                            "delivery state."
+                        ),
+                        drift_signal=(
+                            "A personal push Notification without its source-linked "
+                            "AdminNotification row."
+                        ),
+                        rebuild_operation=(
+                            "Replay new typed source-event staging requests by their "
+                            "deterministic identity; legacy dashboard-only assignment "
+                            "rows use the bounded exact-reference repair command."
+                        ),
+                        repair_owner=(
+                            "communications.staff_notification_read_state"
+                        ),
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="untyped staff assignment notification helper arguments",
+                    new_owner="communications.staff_notifications",
+                    verification=(
+                        "Typed assignment staging, exact-target behavior, replay, and "
+                        "manifest contract tests."
+                    ),
+                    cutover_gate=(
+                        "Ticket and project assignment owners use the typed staging "
+                        "boundary and supply an exact detail target."
+                    ),
+                    fallback_retirement=(
+                        "No assignment caller relies on the legacy /admin target default."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/NOTIFICATION_CHANNEL_POLICY.md",
+                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                ),
+                test_refs=(
+                    "tests/test_staff_assignment_notifications.py",
+                    "tests/test_support_services.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.staff_notification_read_state",
+            module="app.services.staff_notification_read_state",
+            owns=(
+                "personal staff notification menu and unread count",
+                "personal staff notification open and legacy target repair",
+            ),
+            depends_on=(
+                "auth.staff_provisioning",
+                "communications.staff_notifications",
+                "events.dispatcher",
+                "operations.project_lifecycle",
+                "support.ticket_lifecycle",
+            ),
+            notes=(
+                "The query is scoped to one authenticated SystemUser. The typed open "
+                "command owns the atomic read-state transition. Dashboard-only legacy "
+                "assignment rows are repaired once from an unambiguous canonical ticket "
+                "or project reference before navigation."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="personal staff notification menu and unread count",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "current personal staff inbox identity and target",
+                            "current personal staff notification read state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name=(
+                            "personal staff notification open and legacy target repair"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "typed personal notification open command",
+                            "canonical staff account identity",
+                            "current personal staff inbox identity and target",
+                            "current personal staff notification read state",
+                            "canonical ticket assignment reference",
+                            "canonical project assignment reference",
+                        ),
+                        canonical_writer=(
+                            "communications.staff_notification_read_state"
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed personal notification open command",
+                        owner="communications.staff_notification_read_state",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Authenticated SystemUser, exact AdminNotification UUID, "
+                            "and CommandContext supplied by the user-scoped web adapter."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Authenticated active SystemUser identity.",
+                    ),
+                    AuthorityInput(
+                        name="current personal staff inbox identity and target",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "User-scoped AdminNotification identity, stored target, "
+                            "copy, and creation time."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current personal staff notification read state",
+                        owner="communications.staff_notification_read_state",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The nullable read_at transition for each user-scoped "
+                            "AdminNotification."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical ticket assignment reference",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Ticket UUID or unique ticket number.",
+                    ),
+                    AuthorityInput(
+                        name="canonical project assignment reference",
+                        owner="operations.project_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Project UUID or unambiguous project number.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "The open command enters execute_owner_command once on a "
+                        "transaction-free adapter session; menu queries are read-only."
+                    ),
+                    locking=(
+                        "Exact notification and SystemUser identity scope the update; "
+                        "repeated read transitions write the same read state."
+                    ),
+                    idempotency=(
+                        "Opening an already-read notification returns its existing target "
+                        "without changing read_at; a legacy target is rewritten once to "
+                        "the same canonical detail URL."
+                    ),
+                    retries=(
+                        "Safe command retries converge on the existing read_at value; "
+                        "query refreshes are side-effect free."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "communications.staff_notification_read_state"
+                    ),
+                    mapping_owner="admin notifications and alerts web adapters",
+                    fail_closed_on=(
+                        "notification assigned to another user",
+                        "missing or malformed authenticated staff identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("staff_notification.opened",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 contains only notification and SystemUser UUIDs; "
+                        "notification copy and navigation targets remain private."
+                    ),
+                    replay=(
+                        "The event is staged only on the first unread-to-read transition; "
+                        "reopening an already-read row emits nothing."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "app.services.admin_alerts menu query and helper-level commit"
+                    ),
+                    new_owner="communications.staff_notification_read_state",
+                    verification=(
+                        "User-scoped menu, unread badge refresh, new exact-target, legacy "
+                        "target repair, and owner command tests."
+                    ),
+                    cutover_gate=(
+                        "Both notification-open routes and the bell menu use the typed "
+                        "read-state owner."
+                    ),
+                    fallback_retirement=(
+                        "The legacy admin_alerts menu and mark-read helpers are removed. "
+                        "Remove the bounded title-reference repair after a backfill audit "
+                        "finds no dashboard-only ticket or project assignment rows."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_web_admin_notifications_service.py",
+                    "tests/test_payment_proof_reviewer_notifications.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                ),
             ),
         ),
         SOTService(
