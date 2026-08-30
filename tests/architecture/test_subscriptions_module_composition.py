@@ -124,6 +124,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
         "%(here)s/alembic/versions",
         "dotmac_billing.migrations:versions",
         "dotmac_collections.migrations:versions",
+        "dotmac_inbox.migrations:versions",
         "dotmac_payments.migrations:versions",
         "dotmac_service_orders.migrations:versions",
         "dotmac_subscriptions.migrations:versions",

@@ -180,8 +180,14 @@ reply.
 Ticket assignment consequences are independent of the legacy customer-support
 notification toggle. Newly assigned direct users and active members of an
 assigned Service Team receive an in-app notification and, when an email address
-exists, a queued email. Explicit comment mentions use the same individual and
-Service Team group semantics and the same two channels. The retired Site
+exists, a queued email. The typed assignment request carries the owner command
+identity, Ticket UUID, and exact `/admin/support/tickets/{ticket_id}` target;
+the staff-notification participant rejects a dashboard-only or external target.
+Opening the personal inbox item marks only that user's row read before following
+the stored Ticket target. A pre-cutover dashboard-only assignment target is
+repaired once from its unambiguous stored ticket reference. Explicit comment
+mentions use the same individual and Service Team group semantics and the same
+two channels. The retired Site
 Project Coordinator column remains readable and filterable on historical
 Tickets, but new-ticket input and assignment configuration no longer populate
 it.

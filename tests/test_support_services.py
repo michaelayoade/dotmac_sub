@@ -1065,6 +1065,28 @@ def test_assignment_notifications_send_push_and_email_without_legacy_toggle(
         (NotificationChannel.push, str(manager.id)),
         (NotificationChannel.email, manager.email),
     }
+    inbox_items = db_session.query(AdminNotification).all()
+    assert len(inbox_items) == 2
+    assert {item.target_url for item in inbox_items} == {
+        f"/admin/support/tickets/{ticket.id}"
+    }
+
+    from app.web.admin.notifications import notification_inbox_open
+
+    selected = inbox_items[0]
+    selected.target_url = "/admin"
+    db_session.commit()
+    response = notification_inbox_open(
+        selected.id,
+        db_session,
+        {
+            "principal_id": str(selected.system_user_id),
+            "principal_type": "system_user",
+        },
+    )
+    assert response.headers["location"] == f"/admin/support/tickets/{ticket.id}"
+    db_session.refresh(selected)
+    assert selected.target_url == f"/admin/support/tickets/{ticket.id}"
 
 
 def test_ticket_assignments_accept_system_user_ids(db_session, subscriber):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import and_, or_
@@ -28,6 +28,8 @@ from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
 from app.schemas.notification import NotificationCreate
 from app.services import admin_alerts
+from app.services.branding_config import get_brand
+from app.services.domain_errors import DomainError
 from app.services.notification import notifications as notifications_svc
 
 
@@ -44,7 +46,7 @@ class PermissionReviewNotificationResult:
     sla_delivery_count: int
 
 
-class StaffTagTargetKind(str, Enum):
+class StaffTagTargetKind(StrEnum):
     person = "person"
     team = "team"
 
@@ -72,6 +74,412 @@ class StaffTagNotificationCommand:
 class StaffTagNotificationOutcome:
     target_count: int
     notification_count: int
+
+
+class StaffDirectEventType(StrEnum):
+    """Bounded staff-only events that create a personal notification."""
+
+    team_inbox_private_note_mention = "team_inbox.private_note_mention"
+
+
+class StaffNotificationError(DomainError):
+    """Safe rejection from the typed staff-notification participant."""
+
+
+@dataclass(frozen=True, slots=True)
+class StageStaffDirectNotification:
+    """Typed request to stage one staff member's in-app and email notice."""
+
+    system_user_id: UUID
+    source_event_id: UUID
+    event_type: StaffDirectEventType
+    subject: str
+    body: str
+    target_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class StaffDirectNotificationResult:
+    admin_notification_id: UUID
+    push_notification_id: UUID
+    email_notification_id: UUID | None
+
+
+class StaffAssignmentEventType(StrEnum):
+    """Bounded business events that produce staff assignment notices."""
+
+    ticket_assignment = "ticket.assignment"
+    project_assignment = "project.assignment"
+
+
+@dataclass(frozen=True, slots=True)
+class StageStaffAssignmentNotifications:
+    """Typed request to stage one assignment occurrence for active staff."""
+
+    system_user_ids: tuple[UUID, ...]
+    source_event_id: UUID
+    source_entity_id: UUID
+    event_type: StaffAssignmentEventType
+    subject: str
+    body: str
+    target_url: str
+    actor_identity_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StaffAssignmentNotificationResult:
+    notified_system_user_ids: tuple[UUID, ...]
+    push_notification_ids: tuple[UUID, ...]
+    email_notification_ids: tuple[UUID, ...]
+
+
+def _raise_assignment_replay_conflict() -> None:
+    raise StaffNotificationError(
+        code="communications.staff_notifications.assignment_replay_conflict",
+        message="This assignment notification was already staged with different data.",
+    )
+
+
+def _validate_notification_replay(
+    notification: Notification,
+    command: StageStaffAssignmentNotifications,
+    *,
+    recipient: str,
+) -> None:
+    metadata = dict(notification.metadata_ or {})
+    if (
+        notification.recipient != recipient
+        or notification.subject != command.subject
+        or notification.body != command.body
+        or notification.event_type != command.event_type.value
+        or metadata.get("source_event_id") != str(command.source_event_id)
+        or metadata.get("source_entity_id") != str(command.source_entity_id)
+        or metadata.get("target_url") != command.target_url
+    ):
+        _raise_assignment_replay_conflict()
+
+
+def _assignment_notification_dedupe_key(
+    command: StageStaffAssignmentNotifications,
+    *,
+    system_user_id: UUID,
+    channel: NotificationChannel,
+) -> str:
+    return ":".join(
+        (
+            "staff-assignment",
+            command.event_type.value,
+            str(command.source_event_id),
+            str(system_user_id),
+            channel.value,
+        )
+    )
+
+
+def _direct_notification_dedupe_key(
+    command: StageStaffDirectNotification,
+    channel: NotificationChannel,
+) -> str:
+    return ":".join(
+        (
+            "staff-direct",
+            command.event_type.value,
+            str(command.source_event_id),
+            str(command.system_user_id),
+            channel.value,
+        )
+    )
+
+
+def _absolute_staff_url(target_url: str) -> str:
+    value = str(target_url or "").strip()
+    if value.startswith(("https://", "http://")):
+        return value
+    app_url = str(get_brand().get("app_url") or "").rstrip("/")
+    return f"{app_url}/{value.lstrip('/')}" if app_url else value
+
+
+def stage_staff_direct_notification(
+    db: Session,
+    command: StageStaffDirectNotification,
+) -> StaffDirectNotificationResult:
+    """Stage idempotent in-app and email notices in the caller's transaction."""
+
+    if (
+        not command.subject.strip()
+        or not command.body.strip()
+        or not command.target_url
+    ):
+        raise StaffNotificationError(
+            code="communications.staff_notifications.invalid_request",
+            message="Staff notification content and target are required.",
+        )
+    user = db.get(SystemUser, command.system_user_id)
+    if user is None or not user.is_active:
+        raise StaffNotificationError(
+            code="communications.staff_notifications.invalid_recipient",
+            message="Active staff notification recipient not found.",
+        )
+
+    push_dedupe_key = _direct_notification_dedupe_key(command, NotificationChannel.push)
+    push_notification = (
+        db.query(Notification)
+        .filter(
+            Notification.channel == NotificationChannel.push,
+            Notification.dedupe_key == push_dedupe_key,
+        )
+        .one_or_none()
+    )
+    if push_notification is None:
+        push_notification = queue_staff_notification(
+            db,
+            channel=NotificationChannel.push,
+            recipient=str(user.id),
+            subject=command.subject,
+            body=command.body,
+            delivered=True,
+            event_type=command.event_type.value,
+            category="support",
+            audience_type="system_user",
+            audience_id=user.id,
+            metadata={
+                "source_event_id": str(command.source_event_id),
+                "target_url": command.target_url,
+                "internal_only": True,
+            },
+        )
+        if push_notification is None:  # pragma: no cover - recipient is validated.
+            raise RuntimeError("Staff in-app notification was not staged")
+        push_notification.dedupe_key = push_dedupe_key
+
+    admin_notification = (
+        db.query(AdminNotification)
+        .filter(AdminNotification.source_notification_id == push_notification.id)
+        .one_or_none()
+    )
+    if admin_notification is None:
+        admin_notification = AdminNotification(
+            source_notification_id=push_notification.id,
+            system_user_id=user.id,
+            title=command.subject[:180],
+            body=command.body,
+            target_url=command.target_url,
+        )
+        db.add(admin_notification)
+        db.flush()
+
+    email_notification: Notification | None = None
+    if user.email:
+        email_dedupe_key = _direct_notification_dedupe_key(
+            command, NotificationChannel.email
+        )
+        email_notification = (
+            db.query(Notification)
+            .filter(
+                Notification.channel == NotificationChannel.email,
+                Notification.dedupe_key == email_dedupe_key,
+            )
+            .one_or_none()
+        )
+        if email_notification is None:
+            open_url = f"/admin/notifications/inbox/{admin_notification.id}/open"
+            email_notification = queue_staff_notification(
+                db,
+                channel=NotificationChannel.email,
+                recipient=user.email,
+                subject=command.subject,
+                body=(
+                    f"{command.body}\n\nOpen the note: {_absolute_staff_url(open_url)}"
+                ),
+                event_type=command.event_type.value,
+                category="support",
+                audience_type="system_user",
+                audience_id=user.id,
+                metadata={
+                    "source_event_id": str(command.source_event_id),
+                    "target_url": open_url,
+                    "internal_only": True,
+                },
+            )
+            if email_notification is not None:
+                email_notification.dedupe_key = email_dedupe_key
+
+    db.flush()
+    return StaffDirectNotificationResult(
+        admin_notification_id=admin_notification.id,
+        push_notification_id=push_notification.id,
+        email_notification_id=(
+            email_notification.id if email_notification is not None else None
+        ),
+    )
+
+
+def _validate_assignment_notification(
+    command: StageStaffAssignmentNotifications,
+) -> None:
+    if not command.subject.strip() or not command.body.strip():
+        raise StaffNotificationError(
+            code="communications.staff_notifications.invalid_assignment_request",
+            message="Staff assignment notification content is required.",
+        )
+    target_url = command.target_url.strip()
+    if (
+        not target_url.startswith("/admin/")
+        or target_url.startswith("//")
+        or target_url == "/admin"
+    ):
+        raise StaffNotificationError(
+            code="communications.staff_notifications.invalid_assignment_target",
+            message="Staff assignment notifications require an exact admin target.",
+        )
+
+
+def stage_staff_assignment_notifications(
+    db: Session,
+    command: StageStaffAssignmentNotifications,
+) -> StaffAssignmentNotificationResult:
+    """Stage idempotent in-app and email notices in the owner's transaction."""
+
+    _validate_assignment_notification(command)
+    requested_user_ids = tuple(dict.fromkeys(command.system_user_ids))
+    if not requested_user_ids:
+        return StaffAssignmentNotificationResult((), (), ())
+
+    users = (
+        db.query(SystemUser)
+        .filter(SystemUser.id.in_(requested_user_ids))
+        .filter(SystemUser.is_active.is_(True))
+        .order_by(SystemUser.id.asc())
+        .all()
+    )
+    notified_user_ids: list[UUID] = []
+    push_notification_ids: list[UUID] = []
+    email_notification_ids: list[UUID] = []
+    category = (
+        "support"
+        if command.event_type is StaffAssignmentEventType.ticket_assignment
+        else "operations"
+    )
+
+    for user in users:
+        if command.actor_identity_id is not None and command.actor_identity_id in {
+            user.id,
+            user.person_party_id,
+        }:
+            continue
+        push_dedupe_key = _assignment_notification_dedupe_key(
+            command,
+            system_user_id=user.id,
+            channel=NotificationChannel.push,
+        )
+        push_notification = (
+            db.query(Notification)
+            .filter(Notification.channel == NotificationChannel.push)
+            .filter(Notification.dedupe_key == push_dedupe_key)
+            .one_or_none()
+        )
+        if push_notification is None:
+            push_notification = queue_staff_notification(
+                db,
+                channel=NotificationChannel.push,
+                recipient=str(user.id),
+                subject=command.subject,
+                body=command.body,
+                delivered=True,
+                event_type=command.event_type.value,
+                category=category,
+                audience_type="system_user",
+                audience_id=user.id,
+                metadata={
+                    "source_event_id": str(command.source_event_id),
+                    "source_entity_id": str(command.source_entity_id),
+                    "target_url": command.target_url,
+                    "internal_only": True,
+                },
+            )
+            if push_notification is None:  # pragma: no cover - IDs are validated.
+                continue
+            push_notification.dedupe_key = push_dedupe_key
+        else:
+            _validate_notification_replay(
+                push_notification,
+                command,
+                recipient=str(user.id),
+            )
+
+        admin_notification = (
+            db.query(AdminNotification)
+            .filter(AdminNotification.source_notification_id == push_notification.id)
+            .one_or_none()
+        )
+        if admin_notification is None:
+            db.add(
+                AdminNotification(
+                    source_notification_id=push_notification.id,
+                    system_user_id=user.id,
+                    title=command.subject[:180],
+                    body=command.body,
+                    target_url=command.target_url,
+                )
+            )
+        elif (
+            admin_notification.system_user_id != user.id
+            or admin_notification.title != command.subject[:180]
+            or admin_notification.body != command.body
+            or admin_notification.target_url != command.target_url
+        ):
+            _raise_assignment_replay_conflict()
+        push_notification_ids.append(push_notification.id)
+
+        if user.email:
+            email_dedupe_key = _assignment_notification_dedupe_key(
+                command,
+                system_user_id=user.id,
+                channel=NotificationChannel.email,
+            )
+            email_notification = (
+                db.query(Notification)
+                .filter(Notification.channel == NotificationChannel.email)
+                .filter(Notification.dedupe_key == email_dedupe_key)
+                .one_or_none()
+            )
+            if email_notification is None:
+                email_notification = queue_staff_notification(
+                    db,
+                    channel=NotificationChannel.email,
+                    recipient=user.email,
+                    subject=command.subject,
+                    body=command.body,
+                    event_type=command.event_type.value,
+                    category=category,
+                    audience_type="system_user",
+                    audience_id=user.id,
+                    metadata={
+                        "source_event_id": str(command.source_event_id),
+                        "source_entity_id": str(command.source_entity_id),
+                        "target_url": command.target_url,
+                        "internal_only": True,
+                    },
+                )
+                if email_notification is not None:
+                    email_notification.dedupe_key = email_dedupe_key
+            else:
+                _validate_notification_replay(
+                    email_notification,
+                    command,
+                    recipient=user.email,
+                )
+            if email_notification is not None:
+                email_notification_ids.append(email_notification.id)
+
+        notified_user_ids.append(user.id)
+
+    db.flush()
+    return StaffAssignmentNotificationResult(
+        notified_system_user_ids=tuple(notified_user_ids),
+        push_notification_ids=tuple(push_notification_ids),
+        email_notification_ids=tuple(email_notification_ids),
+    )
 
 
 def resolve_assignment_users(
@@ -247,36 +655,6 @@ def queue_staff_tag_notifications(
         target_count=len(targets),
         notification_count=notified,
     )
-
-
-def queue_staff_assignment_notifications(
-    db: Session,
-    *,
-    users: list[SystemUser],
-    subject: str,
-    body: str,
-    actor_id: str | None = None,
-) -> tuple[str, ...]:
-    """Queue in-app and email assignment notifications for active staff."""
-    notified: list[str] = []
-    for user in users:
-        if actor_id and str(user.id) == str(actor_id):
-            continue
-        queue_staff_push(
-            db,
-            recipient=str(user.id),
-            subject=subject,
-            body=body,
-        )
-        if user.email:
-            queue_staff_email(
-                db,
-                recipient=user.email,
-                subject=subject,
-                body=body,
-            )
-        notified.append(str(user.id))
-    return tuple(notified)
 
 
 def queue_staff_notification(

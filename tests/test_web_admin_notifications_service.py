@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.models.admin_alert import AdminNotification
@@ -61,8 +62,21 @@ def test_notifications_menu_only_renders_current_staff_inbox(db_session, monkeyp
         },
     )
 
-    body = web_admin_notifications.notifications_menu(request, db_session).body.decode()
+    response = web_admin_notifications.notifications_menu(request, db_session)
+    body = response.body.decode()
 
     assert "My assignment" in body
     assert "Other staff secret" not in body
     assert "Recent notifications" not in body
+    assert "1 unread notifications" in body
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_notification_badge_loads_before_bell_open_and_refreshes() -> None:
+    layout = (
+        Path(__file__).parents[1] / "templates" / "layouts" / "admin.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'hx-get="/admin/notifications"' in layout
+    assert 'hx-trigger="load, every 30s"' in layout
+    assert 'hx-trigger="intersect once"' not in layout
