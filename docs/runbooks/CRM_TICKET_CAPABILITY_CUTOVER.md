@@ -244,6 +244,39 @@ record that omission explicitly on the receipt rather than letting the gap pass
 unmentioned. An in-container change made *without* the context block is an
 unattributed production change and must not be used for this retirement.
 
+### Who can perform it: a named human operator, and there is no service principal
+
+Searched, so nobody repeats it:
+
+- `system:settings:read` / `system:settings:write` are RBAC permissions seeded
+  by `scripts/seed/seed_rbac.py` onto **staff roles**. They are held by system
+  users who authenticate with a `UserCredential`.
+- The route is `POST /admin/system/modules`, form-driven, guarded by
+  `require_permission("system:settings:write")` → `require_user_auth`, and
+  `_system_actor_id(request)` stamps that authenticated principal into the
+  audit row.
+- **Every OpenBao pointer in this repository is application material**, not a
+  portal login: `secret/settings/auth`, `secret/settings/crypto`,
+  `secret/settings/machine_auth`, `secret/database`, `secret/redis`,
+  `secret/s3`, `secret/paystack`, `secret/radius`, `secret/notifications`,
+  `secret/genieacs`, `secret/integrations/meta_social`.
+  `secret/settings/machine_auth` is the **HMAC key**
+  (`machine_credential_hmac_key`) that `dotmac_kernel.machine_auth` uses to
+  hash integration-platform machine credentials — not an admin credential and
+  not a principal.
+
+**There is no service or automation principal holding `system:settings:*`.**
+This step is performed by a named human operator signing in as themselves.
+
+That is a property of the design, not a gap to route around, and it follows
+from what the audit row is *for*. The row records **who engaged the barrier**.
+Performing the change under someone else's credential would produce a row that
+is attributed and **wrong** — authoritative-looking, and naming a person who
+did not make the change. That is worse than an unattributed change, not better,
+and it would corrupt the very field the receipt depends on. Do not borrow a
+credential to satisfy the attribution requirement; the requirement is that the
+attribution be *true*.
+
 ### There is a second, independent gate
 
 Even with the control on, the schedule is only registered if
