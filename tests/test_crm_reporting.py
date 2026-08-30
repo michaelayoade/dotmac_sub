@@ -30,9 +30,13 @@ def test_expected_operational_inventory_is_complete_and_exclusions_stay_excluded
         for section in report_routes.REPORT_HUB_SECTIONS
         for link in section["links"]
     }
-    assert {
-        definition.title for definition in crm_reporting.REPORT_DEFINITIONS.values()
-    } <= hub_names
+    active_report_titles = {
+        definition.title
+        for slug, definition in crm_reporting.REPORT_DEFINITIONS.items()
+        if slug is not crm_reporting.CrmReportSlug.CRM_PERFORMANCE
+    }
+    assert active_report_titles <= hub_names
+    assert "CRM Performance" not in hub_names
     assert "Quarterly Report" not in hub_names
     assert "Customer Retention" in hub_names
     assert "Lead Performance" in hub_names
@@ -76,7 +80,14 @@ def test_expected_operational_inventory_is_complete_and_exclusions_stay_excluded
     assert "CREATE INDEX CONCURRENTLY" in analytics_migration
 
 
-@pytest.mark.parametrize("slug", list(crm_reporting.CrmReportSlug))
+@pytest.mark.parametrize(
+    "slug",
+    [
+        slug
+        for slug in crm_reporting.CrmReportSlug
+        if slug is not crm_reporting.CrmReportSlug.CRM_PERFORMANCE
+    ],
+)
 def test_every_operational_report_has_a_typed_empty_state(db_session, slug):
     report = crm_reporting.get_report(
         db_session,
@@ -87,7 +98,8 @@ def test_every_operational_report_has_a_typed_empty_state(db_session, slug):
     assert report.definition.slug == slug
     assert report.total >= 0
     assert len(report.columns) > 0
-    assert crm_reporting.build_csv(report).startswith(report.columns[0])
+    expected_header = (report.export_columns or report.columns)[0]
+    assert crm_reporting.build_csv(report).startswith(expected_header)
 
 
 def test_agent_performance_period_defaults_and_presets_use_lagos_boundaries():

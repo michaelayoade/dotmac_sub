@@ -450,20 +450,26 @@ implementation.
   Team Inbox assignment, message, status-transition, team, and staff-identity
   owners retain their underlying facts. Routes and templates are adapters.
 - First viewport: current Africa/Lagos month by default, Today/Current
-  week/Custom controls, agent search on the administrative view, page size,
-  export, and stable lazy-loading KPI/table placeholders.
-- Metrics and table: Agents, Chats assigned, Chats resolved, Active now, Avg
-  resolution, and Avg first response precede Agent, Team, Assigned, Resolved,
-  Active now, Avg resolution, and Avg first response columns. Agent is a
-  display name with first/last-name then email fallback; UUID is never a visible
-  identity.
+  week/Custom controls, active service-team filter, agent search on the
+  administrative view, page size, export, and stable lazy-loading placeholders.
+- Metrics and table: Active member agents, agents with activity, Assigned chats,
+  Resolved chats, Active now, Avg first response, and nullable SLA adherence
+  precede a compact Agent, Team, Assigned, Resolved, Active now, Avg first
+  response, and Status/score table. Without configured SLA, existing workload
+  and timing metrics remain visible and SLA is explicitly not scored.
+- Agent names link to an admin detail report that preserves the originating
+  period and team filter. The detail and signed-in-only My Performance views
+  add average resolution, SLA met/breached evidence, needs-attention indicators,
+  multi-team breakdown, and a bounded conversation evidence table.
 - The dedicated Inbox Performance page's Agent Load table uses the same staff
   display-name fallback. Its internal person UUID is never rendered as the
   Agent value.
 - Cohort semantics: inclusive local dates become UTC half-open bounds.
   Assignment, resolution, and first-response facts use their authoritative
-  event times. Active now is explicitly current position. Filters, summary,
-  SQL pagination, personal scope, and CSV use one typed query contract.
+  event times. Active now includes only current valid active service-team-member
+  assignments; legacy unmatched rows are excluded without mutation. Filters,
+  summary, pagination, personal scope, detail links, and CSV use one typed query
+  contract.
 - States: loading, empty, timing unavailable, read failure with retry,
   unauthorized, and missing personal identity are distinct. Read failure never
   displays cached or estimated values.
