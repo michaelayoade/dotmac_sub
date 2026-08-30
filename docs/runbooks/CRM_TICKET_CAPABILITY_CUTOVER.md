@@ -140,6 +140,60 @@ Steps 1-3 are production operations and are the gate. Do not begin step 4
 until step 3 has produced its evidence: once the code is gone, the flag is
 moot and the observation can never be made.
 
+## READ THE ROW FIRST — it has been Off since 2026-08-18
+
+Everything below about *how* to turn the control off remains correct, and on
+2026-08-30 none of it was needed. Authenticated observation of the system
+modules screen:
+
+```
+CRM module          Disabled
+crm.ticket_pull     stored Off
+effective value     Off
+owner / source      database row modules.crm_ticket_pull
+canonical change    2026-08-18 23:37 WAT
+```
+
+Production carries `CRM_TICKET_PULL_ENABLED=true` in its environment. That is
+**stale lower-precedence residue, not proof the canonical control is enabled** —
+nothing reads it (see the section below, and
+`tests/architecture/test_crm_ticket_pull_resolution.py`, which pins that no
+path from the environment exists).
+
+**The lesson, recorded because it cost a day.** Two readers established
+correctly *which* input governs — the row, not the variable — and neither read
+what the row said. Establishing which input is authoritative is not the same as
+reading it, and the second step is by far the cheaper one. Read the row before
+reasoning about what might be setting it:
+
+```sql
+SELECT value_text, is_active, updated_at
+  FROM domain_settings
+ WHERE domain = CAST('modules' AS settingdomain) AND key = 'crm_ticket_pull';
+```
+
+### What this changes about the receipt
+
+The retirement's `effective_time` is **2026-08-18**, when the control was
+actually turned off — not the date anyone confirmed it. The attribution is the
+`audit_events` row `feature_controls.update` carrying `actor_id` at that
+timestamp, written by whoever made the change.
+
+**If that audit row is absent, say so.** Record the attribution as
+`unavailable`, with the authenticated observation of 2026-08-30 and the
+interval evidence standing in its place.
+
+> **Never toggle the control on and off to manufacture an attributed event.**
+
+That temptation is real, because a clean attributed pair would look like a
+better record than an absent one. It would be a fabricated event describing a
+state change that did not happen for the reason the record implies, in a
+receipt whose entire purpose is to be trustworthy about what happened. An
+honest *"disabled 2026-08-18, attribution not recoverable, confirmed by
+authenticated observation on 2026-08-30 plus two clean intervals"* is worth
+more, and it is the same discipline that put `unavailable` in
+`final_sync_watermark` and `runtime_observation` rather than inferring them.
+
 ## Where the switch actually is
 
 **`CRM_TICKET_PULL_ENABLED` is inert. Setting it to `false` is a no-op.** An
