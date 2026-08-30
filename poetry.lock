@@ -1184,6 +1184,27 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-inbox"
+version = "0.1.0a1"
+description = "Dotmac Inbox — tenant-scoped conversation, message, lifecycle, threading, and read-state ownership"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_inbox-0.1.0a1-py3-none-any.whl", hash = "sha256:d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873"},
+    {file = "dotmac_inbox-0.1.0a1.tar.gz", hash = "sha256:d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a85"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-integration-client"
 version = "0.2.0"
 description = "Canonical HTTP transport for Dotmac inter-service integration edges: policy-driven retry with jitter, Retry-After, reachability circuit, idempotency keys, request-id propagation, and metrics hooks."
@@ -6183,4 +6204,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "af969fb54d1e80025886c22962c0296c683b3ff8d7ab41c3f751061c5bba7d3a"
+content-hash = "45bd6888a8bf7c4525413e2f11b27550625efc13c65327bd9d9de69011df1041"
