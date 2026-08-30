@@ -794,6 +794,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",
+        "communications.staff_notifications",
         "operations.work_order_status",
         "observability.audit_log",
     )

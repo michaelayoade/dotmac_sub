@@ -429,6 +429,7 @@ DOMAIN = DomainSOT(
                 "ticket lifecycle timestamps and consequences",
                 "ticket team and person assignment",
                 "ticket assignment and mention staff notification consequence",
+                "ticket staff/team tag notification consequence",
                 "ticket comments mentions and attachments",
                 "ticket customer publication visibility",
                 "ticket links duplicates and merges",
@@ -515,6 +516,15 @@ DOMAIN = DomainSOT(
                             "typed ticket command",
                             "canonical ticket state",
                             "active assigned staff contact identity",
+                            "staff notification delivery queue",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket staff/team tag notification consequence",
+                        role=OwnerRole.EVENT_POLICY,
+                        input_names=(
+                            "typed ticket command",
+                            "canonical ticket state",
                             "staff notification delivery queue",
                         ),
                     ),
