@@ -25,6 +25,12 @@ RETIRED_PATHS = (
     "app/models/crm_webhook_delivery.py",
     "app/models/integration_hook.py",
     "app/models/webhook.py",
+    # ADR 0006's temporary external live-chat transport, retired 2026-08-30
+    # with the CRM itself. The full guard is
+    # tests/architecture/test_single_chat_authority.py; these two entries keep
+    # the module paths themselves in this file's retired-path sweep.
+    "app/services/chat_session_authority.py",
+    "app/services/crm_chat_session.py",
     "app/services/crm_native_sync.py",
     "app/services/crm_webhook_deliveries.py",
     "app/services/flutterwave.py",

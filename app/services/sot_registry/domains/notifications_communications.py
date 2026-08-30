@@ -3211,16 +3211,17 @@ DOMAIN = DomainSOT(
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "party.registry",
-                "control.settings_spec",
             ),
             notes=(
-                "ADR 0006 temporarily assigns portal live-chat authority to CRM "
-                "when comms.chat_session_authority=crm. This native command owner "
-                "then fails closed for both new and previously issued widget tokens; "
-                "it never mirrors or falls back to a local write. Anonymous fiber-site "
-                "sessions are exact-origin and rate controlled by the adapter, use "
-                "Party-first prospect capture only for unmatched identity, and retain "
-                "ambiguous identity for human review."
+                "The SOLE live-chat authority for every portal and public "
+                "surface. ADR 0006 temporarily assigned that authority to an "
+                "external CRM behind a comms.chat_session_authority selector; "
+                "the selector, the external transport and the setting were "
+                "removed on 2026-08-30 and there is no second chat writer to "
+                "arbitrate between. Anonymous fiber-site sessions are "
+                "exact-origin and rate controlled by the adapter, use "
+                "Party-first prospect capture only for unmatched identity, and "
+                "retain ambiguous identity for human review."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_widget",
@@ -3270,16 +3271,6 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Native chat-widget conversation and message chronology.",
                     ),
-                    AuthorityInput(
-                        name="live-chat authority selection",
-                        owner="control.settings_spec",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "Database-authoritative "
-                            "comms.chat_session_authority control; native commands "
-                            "are accepted only when the value resolves to selfcare."
-                        ),
-                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -3289,13 +3280,14 @@ DOMAIN = DomainSOT(
                 design_refs=(
                     "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
                     "docs/adr/0006-temporary-crm-chat-authority.md",
-                    "docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md",
+                    "docs/CHAT_LIVE_SETUP.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                 ),
                 test_refs=(
                     "tests/test_chat_session.py",
                     "tests/test_team_inbox_widget_native.py",
+                    "tests/architecture/test_single_chat_authority.py",
                     "tests/architecture/test_team_inbox_boundaries.py",
                     "tests/architecture/test_team_inbox_sot_contracts.py",
                 ),

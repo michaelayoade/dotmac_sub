@@ -18495,13 +18495,6 @@
     "200": "81656e6decf1"
    }
   },
-  "POST /api/v1/webhooks/crm/chat": {
-   "params": [],
-   "request": null,
-   "responses": {
-    "200": "c0a9f39f491e"
-   }
-  },
   "POST /api/v1/webhooks/crm/customers": {
    "params": [],
    "request": null,
