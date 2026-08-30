@@ -373,6 +373,15 @@ class InboxAgentOption:
     presence_status: str
     email: str = ""
     team_ids: tuple[UUID, ...] = ()
+    active_conversation_count: int = 0
+    max_concurrent_conversations: int = (
+        team_inbox_assignment.DEFAULT_MAX_CONCURRENT_CONVERSATIONS
+    )
+    available_capacity: int = 0
+    assignment_eligible: bool = False
+    unavailability_reason: (
+        team_inbox_assignment.InboxAgentUnavailabilityReason | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,14 +612,11 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
         .all()
     )
     user_ids = [row.id for row in rows]
-    presence_rows = (
-        db.query(InboxAgentPresence)
-        .filter(InboxAgentPresence.person_id.in_(user_ids))
-        .all()
-        if user_ids
-        else []
+    availability_by_person = team_inbox_assignment.agent_availability_snapshots(
+        db,
+        user_ids,
+        now=observed_at,
     )
-    presence_by_person = {row.person_id: row for row in presence_rows}
     person_party_ids = [row.person_party_id for row in rows]
     membership_rows = (
         db.query(ServiceTeamMember)
@@ -634,13 +640,7 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
                 or row.email
             ),
             initials=_initials(row.first_name, row.last_name, row.display_name),
-            presence_status=(
-                team_inbox_assignment.effective_presence_status(
-                    presence, now=observed_at
-                )
-                if (presence := presence_by_person.get(row.id)) is not None
-                else InboxAgentPresenceStatus.offline.value
-            ),
+            presence_status=availability_by_person[row.id].presence_status.value,
             email=row.email,
             team_ids=tuple(
                 sorted(
@@ -649,6 +649,15 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
             )
             if row.person_party_id is not None
             else (),
+            active_conversation_count=(
+                availability_by_person[row.id].active_conversation_count
+            ),
+            max_concurrent_conversations=(
+                availability_by_person[row.id].max_concurrent_conversations
+            ),
+            available_capacity=availability_by_person[row.id].available_capacity,
+            assignment_eligible=availability_by_person[row.id].assignment_eligible,
+            unavailability_reason=availability_by_person[row.id].unavailability_reason,
         )
         for row in rows
     )

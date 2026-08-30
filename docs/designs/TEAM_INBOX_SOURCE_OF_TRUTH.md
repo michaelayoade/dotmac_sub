@@ -183,6 +183,16 @@ overrides it. Capacity counts active human assignments on `open`, human-owned
 `pending`, and `snoozed` conversations while ownership remains active. It
 excludes resolved conversations and unassigned AI-pending conversations.
 
+Successful staff session issuance submits one typed, flush-only sign-in command
+to the routing owner in the same transaction. That command sets the signed-in
+SystemUser's presence to `online`, clears any availability override left by the
+prior session, refreshes `last_seen_at`, and records native transition evidence
+when the effective state changes. The owner locks the active SystemUser row to
+serialize concurrent first-presence creation for the same agent. Subscriber and
+reseller sessions do not write agent presence. Operators may still select
+another availability after sign-in; the existing 30-minute freshness and
+assignment-capacity rules are unchanged.
+
 Queue communication is also owned by Team Inbox routing. `inbox_queue_notifications`
 records initial position notices, movement updates, fifteen-minute unchanged
 heartbeats, handoff notices, dedupe keys, delivery outcome and outbound message
@@ -500,7 +510,11 @@ stale. Realtime has no replay authority.
   owner-provided eligibility and never reconstruct lifecycle rules. Operators
   may set their own availability to `online`, `away`, or `offline`; automatic
   conversation assignment selects only effectively-online agents and queues work
-  at the team when no eligible agent is available.
+  at the team when no eligible agent is available. The teammate picker renders
+  the routing owner's typed active-count, capacity-limit, remaining-capacity,
+  eligibility, and refusal reason. An online agent at capacity remains visible
+  with the exact `active / maximum` load and is disabled rather than being
+  offered as an assignable target.
 - States: empty, no-results, permission/error redirect, best-effort realtime
   stale state, and normal loading follow
   `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`.

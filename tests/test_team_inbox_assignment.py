@@ -101,8 +101,22 @@ def test_available_team_agents_ignore_full_members(db_session):
     db_session.commit()
 
     candidates = team_inbox_assignment.list_available_team_agents(db_session, team.id)
+    availability = team_inbox_assignment.agent_availability_snapshots(
+        db_session,
+        (full, free),
+    )
 
     assert [candidate.person_id for candidate in candidates] == [str(free)]
+    assert availability[full].active_conversation_count == 1
+    assert availability[full].max_concurrent_conversations == 1
+    assert availability[full].available_capacity == 0
+    assert availability[full].assignment_eligible is False
+    assert (
+        availability[full].unavailability_reason
+        is team_inbox_assignment.InboxAgentUnavailabilityReason.at_capacity
+    )
+    assert availability[free].available_capacity == 1
+    assert availability[free].assignment_eligible is True
 
 
 def test_assign_conversation_escalates_to_team_and_online_agent(db_session):
@@ -244,10 +258,36 @@ def test_manual_assignment_rejects_offline_team_member(db_session):
 
     assert result.kind == "agent_unavailable"
     assert result.reason == (
-        "Agent must be online with recent presence evidence and available capacity "
-        "before assignment."
+        "Agent is not currently available for assignment (status: offline)."
     )
     assert db_session.query(InboxConversationAssignment).count() == 0
+
+
+def test_manual_assignment_reports_exact_agent_capacity(db_session):
+    team = _team(db_session, "Support")
+    full_agent = _member(db_session, team, max_concurrent=1)
+    existing = _conversation(db_session)
+    target = _conversation(db_session)
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=existing.id,
+            service_team_id=team.id,
+            person_id=full_agent,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    result = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=target,
+        service_team_id=team.id,
+        person_id=full_agent,
+    )
+
+    assert result.kind == "agent_unavailable"
+    assert result.reason == "Agent is at capacity (1 of 1 active conversations)."
+    assert db_session.query(InboxConversationAssignment).count() == 1
 
 
 def test_assign_conversation_queues_when_no_agent_available(db_session):
@@ -419,3 +459,70 @@ def test_set_agent_presence_creates_manual_override(db_session):
     assert presence.status == InboxAgentPresenceStatus.away.value
     assert presence.manual_override_status == InboxAgentPresenceStatus.away.value
     assert presence.last_seen_at is not None
+
+
+def test_staff_sign_in_defaults_presence_online_and_clears_prior_override(db_session):
+    system_user, _person = add_bound_staff_user(db_session)
+    signed_in_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    auth_session_id = uuid4()
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user.id,
+            status=InboxAgentPresenceStatus.away.value,
+            manual_override_status=InboxAgentPresenceStatus.away.value,
+            last_seen_at=signed_in_at - timedelta(minutes=5),
+        )
+    )
+    db_session.flush()
+
+    outcome = team_inbox_assignment.record_agent_signed_in_presence(
+        db_session,
+        command=team_inbox_assignment.AgentSignedInPresenceCommand(
+            system_user_id=system_user.id,
+            auth_session_id=auth_session_id,
+            signed_in_at=signed_in_at,
+        ),
+    )
+
+    presence = db_session.query(InboxAgentPresence).one()
+    event = db_session.query(InboxAgentPresenceEvent).one()
+    assert outcome.status is InboxAgentPresenceStatus.online
+    assert outcome.transition_recorded is True
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+    assert presence.last_seen_at == signed_in_at
+    assert event.previous_status == InboxAgentPresenceStatus.away.value
+    assert event.status == InboxAgentPresenceStatus.online.value
+    assert event.reason_code == team_inbox_assignment.InboxPresenceReason.staff_sign_in
+    assert event.source_id == f"auth-session:{auth_session_id}"
+    assert (presence.metadata_ or {}).get("manual_status_history") is None
+
+
+def test_staff_sign_in_refreshes_online_presence_without_false_transition(db_session):
+    system_user, _person = add_bound_staff_user(db_session)
+    signed_in_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user.id,
+            status=InboxAgentPresenceStatus.online.value,
+            manual_override_status=InboxAgentPresenceStatus.online.value,
+            last_seen_at=signed_in_at - timedelta(minutes=5),
+        )
+    )
+    db_session.flush()
+
+    outcome = team_inbox_assignment.record_agent_signed_in_presence(
+        db_session,
+        command=team_inbox_assignment.AgentSignedInPresenceCommand(
+            system_user_id=system_user.id,
+            auth_session_id=uuid4(),
+            signed_in_at=signed_in_at,
+        ),
+    )
+
+    presence = db_session.query(InboxAgentPresence).one()
+    assert outcome.transition_recorded is False
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+    assert presence.last_seen_at == signed_in_at
+    assert db_session.query(InboxAgentPresenceEvent).count() == 0

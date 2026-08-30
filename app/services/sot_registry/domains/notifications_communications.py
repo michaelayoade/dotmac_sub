@@ -2214,9 +2214,14 @@ DOMAIN = DomainSOT(
                 "durable FIFO queue admission and promotion",
                 "durable per-team round-robin cursor",
                 "customer-visible FIFO queue notification evidence",
+                "current agent presence state and freshness",
+                "agent presence transitions",
+                "immutable agent presence transition evidence",
             ),
             depends_on=(
                 "ai.intake",
+                "app_sessions.auth",
+                "auth.staff_provisioning",
                 "communications.team_inbox_threads",
                 "operations.sla_escalation",
                 "auth.permission_gate",
@@ -2245,6 +2250,15 @@ DOMAIN = DomainSOT(
                         "customer-visible FIFO queue notification evidence",
                         OwnerRole.COMMAND_WRITER,
                     ),
+                    (
+                        "current agent presence state and freshness",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    ("agent presence transitions", OwnerRole.COMMAND_WRITER),
+                    (
+                        "immutable agent presence transition evidence",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
@@ -2271,6 +2285,25 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Approved intent, category, confidence, department, and fallback policy.",
                     ),
+                    AuthorityInput(
+                        name="successful staff session issuance",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The exact active AuthSession UUID and bound active "
+                            "SystemUser UUID after successful credential and MFA "
+                            "verification."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="active staff principal",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The active SystemUser accepted by staff authentication; "
+                            "subscriber and reseller principals are excluded."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -2280,6 +2313,9 @@ DOMAIN = DomainSOT(
                 ),
                 projections=("FIFO queue position and notification due state",),
                 test_refs=(
+                    "tests/test_admin_inbox_slice4_workflows.py",
+                    "tests/test_auth_flow.py",
+                    "tests/test_team_inbox_assignment.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
                 ),
