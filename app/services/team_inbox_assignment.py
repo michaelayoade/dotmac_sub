@@ -369,7 +369,7 @@ def agent_availability_snapshots(
         .filter(InboxAgentPresence.person_id.in_(person_ids))
         .all()
     }
-    active_counts = dict(
+    active_count_rows = (
         db.query(
             InboxConversationAssignment.person_id,
             func.count(InboxConversationAssignment.id),
@@ -385,6 +385,10 @@ def agent_availability_snapshots(
         .group_by(InboxConversationAssignment.person_id)
         .all()
     )
+    active_counts: dict[UUID, int] = {
+        person_id: int(assignment_count)
+        for person_id, assignment_count in active_count_rows
+    }
     snapshots: dict[UUID, InboxAgentAvailabilitySnapshot] = {}
     for person_id in person_ids:
         presence = presences.get(person_id)
