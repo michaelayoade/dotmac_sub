@@ -118,6 +118,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
             "568_paystack_recovery_evidence",
             "bi_0001_billing",
             "cl_0001_collections",
+            "ib_0001_conversations",
             "pm_0001_payment_intents",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
