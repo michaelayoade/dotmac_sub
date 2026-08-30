@@ -429,6 +429,7 @@ DOMAIN = DomainSOT(
                 "ticket lifecycle timestamps and consequences",
                 "ticket team and person assignment",
                 "ticket assignment and mention staff notification consequence",
+                "ticket staff/team tag notification consequence",
                 "ticket comments mentions and attachments",
                 "ticket customer publication visibility",
                 "ticket links duplicates and merges",

@@ -1182,6 +1182,7 @@ SERVICES: tuple[SOTService, ...] = (
             "project and task assignment and scheduling",
             "project manager assistant manager service-team and task-assignee changes",
             "project and task staff assignment notification consequence",
+            "project and task staff/team tag notification consequence",
             "Project-to-ProjectTask and project/task-to-work-order relationships",
             "project audit records and transactional domain events",
             "project derived-state reconciliation",
