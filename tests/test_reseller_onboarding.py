@@ -64,7 +64,6 @@ def _user(
         last_name="Owner",
         email=email,
         username=email,
-        password="InitialSecret123!",  # noqa: S106 - fixture-only credential
         role_name=role_name,
         send_invite=send_invite,
     )
@@ -336,7 +335,6 @@ def test_shared_subscriber_email_does_not_block_reseller_principal(
                 last_name="Owner",
                 email=" Existing.Reseller@Example.com ",
                 username="shared-email-reseller",
-                password="InitialSecret123!",  # noqa: S106 - fixture-only credential
             ),
             assignment_context=assignment,
         ),
@@ -379,7 +377,6 @@ def test_existing_local_username_blocks_reseller_principal(
                     last_name="Owner",
                     email="shared-contact@example.com",
                     username="existing-local-username",
-                    password="InitialSecret123!",  # noqa: S106 - fixture-only credential
                 ),
                 assignment_context=assignment,
             ),
@@ -546,3 +543,59 @@ def test_invite_intent_record_contains_no_capability(
     )
     assert "token" not in str(intent.metadata_).lower()
     assert intent.body is None
+
+
+def test_the_owner_mints_a_distinct_secret_per_account_and_accepts_none(
+    db_session, monkeypatch
+):
+    """No caller may choose a reseller's initial password, and no two share one.
+
+    A dead-but-live capability is what produced the incident behind #2825: the
+    owner accepted a caller-supplied ``password`` that NO production caller
+    ever passed, so the only things that could reach it were an ad-hoc call, a
+    REPL or a one-off script — and one of those handed a single chosen value to
+    a whole cohort of resellers, which was then emailed to them. The parameter
+    is gone; this is what keeps it gone.
+    """
+
+    import dataclasses
+
+    assert "password" not in {
+        field.name
+        for field in dataclasses.fields(reseller_onboarding.ResellerPortalUserSpec)
+    }, (
+        "ResellerPortalUserSpec accepts a caller-chosen password again. The "
+        "owner must mint a per-account secret; a caller that can choose one "
+        "can give the same one to everybody."
+    )
+
+    monkeypatch.setenv("JWT_SECRET", "reseller-mint-test-secret")
+    hashes = []
+    for index in (1, 2):
+        owner, assignment = _contexts(f"mint-{index}")
+        result = reseller_onboarding.create_reseller(
+            db_session,
+            reseller_onboarding.CreateResellerCommand(
+                context=owner,
+                reseller=ResellerCreate(
+                    name=f"Mint Reseller {index}", code=f"MINT-RSL-{index}"
+                ),
+                portal_user=_user(
+                    email=f"mint.reseller.{index}@example.com",
+                    send_invite=False,
+                ),
+                assignment_context=assignment,
+            ),
+        )
+        credential = (
+            db_session.query(UserCredential)
+            .filter(UserCredential.reseller_user_id == result.principal_id)
+            .one()
+        )
+        assert credential.must_change_password is True
+        hashes.append(credential.password_hash)
+
+    assert hashes[0] != hashes[1], (
+        "two resellers provisioned through the owner share a password hash — "
+        "the per-account mint has been replaced by a shared value"
+    )
