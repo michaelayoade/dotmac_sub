@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.integration_platform import IntegrationInbox
-from app.schemas.notification import PushIntent
 from app.services import quotes_mirror
 from app.services.crm_customers import CRMCustomerObservation, observe_customer
 from app.services.integrations import inbox as integration_inbox
@@ -29,7 +28,11 @@ DELIVERY_HEADER = "X-Webhook-Delivery-Id"
 
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
-CHAT_EVENTS = {"message.outbound"}
+# `message.outbound` and the `/webhooks/crm/chat` receiver were REMOVED on
+# 2026-08-30 with ADR 0006. They existed only to wake a mobile device when the
+# CRM -- not Sub -- held the live-chat conversation. Sub's native Team Inbox is
+# the sole live-chat authority again and pushes its own notifications, so an
+# inbound CRM chat event has no consequence left to apply.
 QUOTE_EVENTS = {
     "quote.created",
     "quote.updated",
@@ -270,68 +273,6 @@ async def receive_crm_event(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to apply CRM ticket observation.",
         ) from exc
-
-
-@router.post("/chat")
-async def receive_crm_chat_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    event_type, payload, receipt, should_process = await _receive_verified(
-        request, db, default_event="message.outbound"
-    )
-    prior = _existing(receipt, should_process)
-    if prior is not None:
-        return prior
-    try:
-        if event_type not in CHAT_EVENTS:
-            return _complete(db, receipt, {"status": "ignored", "event": event_type})
-        body = _body(payload)
-        from app.services import push as push_service
-
-        preview = str(body.get("preview") or "").strip() or "You have a new message."
-        conversation_id = str(body.get("conversation_id") or "")
-
-        def wake(subscriber_id: str) -> None:
-            push_service.send_push(
-                db,
-                subscriber_id,
-                title="New message from support",
-                body=preview,
-                intent=PushIntent(
-                    intent_code="chat.message",
-                    subject_kind="conversation",
-                    subject_id=conversation_id or str(receipt.id),
-                ),
-            )
-
-        subscriber_id = str(body.get("subscriber_id") or "").strip()
-        if subscriber_id:
-            wake(subscriber_id)
-            return _complete(db, receipt, {"status": "ok", "event": event_type})
-        reseller_id = str(body.get("reseller_id") or "").strip()
-        if reseller_id:
-            from app.services import reseller_portal
-
-            subscriber_ids = reseller_portal.portal_user_subscriber_ids(db, reseller_id)
-            for target_id in subscriber_ids:
-                wake(target_id)
-            return _complete(
-                db,
-                receipt,
-                {
-                    "status": "ok" if subscriber_ids else "ignored",
-                    "event": event_type,
-                },
-            )
-        return _complete(
-            db,
-            receipt,
-            {"status": "ignored", "reason": "no_target", "event": event_type},
-        )
-    except Exception as exc:
-        _failed(db, receipt, exc)
-        raise
 
 
 async def _receive_mirror_event(

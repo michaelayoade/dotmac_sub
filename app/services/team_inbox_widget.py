@@ -37,10 +37,6 @@ from app.services import (
     team_inbox_routing,
     team_inbox_status,
 )
-from app.services.chat_session_authority import (
-    ChatSessionAuthority,
-    resolve_chat_session_authority,
-)
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
     default_country_code,
@@ -123,14 +119,17 @@ class FiberWidgetSessionOutcome:
     replayed: bool
 
 
-def _require_enabled(db: Session) -> None:
+def _require_enabled() -> None:
+    """The one availability gate. There is no second live-chat authority.
+
+    This used to take a `Session` and additionally re-check
+    `comms.chat_session_authority`, failing closed whenever an external CRM
+    held the write barrier (ADR 0006, retired 2026-08-30). The selector is
+    gone and so is the database read: `chat_live_enabled` is the whole gate.
+    """
+
     if not settings.chat_live_enabled:
         raise _error("disabled", "Live chat is not enabled.")
-    if resolve_chat_session_authority(db).authority != ChatSessionAuthority.SELFCARE:
-        raise _error(
-            "authority_external",
-            "Live chat is currently handled by the CRM.",
-        )
 
 
 def _jwt_payload(
@@ -409,7 +408,7 @@ def broker_customer_session(
     ticket_id: str | None = None,
     project_id: str | None = None,
 ) -> dict[str, str | None]:
-    _require_enabled(db)
+    _require_enabled()
     sub = db.get(Subscriber, coerce_uuid(subscriber_id))
     if sub is None:
         raise _error("subscriber_not_found", "Subscriber not found.")
@@ -480,7 +479,7 @@ def broker_reseller_session(
     ticket_id: str | None = None,
     project_id: str | None = None,
 ) -> dict[str, str | None]:
-    _require_enabled(db)
+    _require_enabled()
     reseller = db.get(Reseller, coerce_uuid(reseller_id))
     if reseller is None:
         raise _error("reseller_not_found", "Reseller not found.")
@@ -644,7 +643,7 @@ def broker_fiber_visitor_session(
 
     from app.services import team_inbox_fiber_receive
 
-    _require_enabled(db)
+    _require_enabled()
     external_message_id = f"fiber-chat:{command.client_session_id}:initial"
     existing_message = (
         db.query(InboxMessage)
@@ -884,7 +883,7 @@ def add_visitor_message(
     body: str,
     client_message_id: str | None = None,
 ) -> dict[str, Any]:
-    _require_enabled(db)
+    _require_enabled()
     clean_body = str(body or "").strip()
     if not clean_body:
         raise _error("message_required", "Message body is required.")

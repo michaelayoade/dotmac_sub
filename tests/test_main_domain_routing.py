@@ -127,7 +127,7 @@ def test_audit_middleware_skips_webhooks_without_db(monkeypatch):
 
     response = _run_async(
         main.audit_middleware(
-            _request(path="/api/v1/webhooks/crm/chat", method="POST"),
+            _request(path="/api/v1/webhooks/crm", method="POST"),
             _downstream_response,
         )
     )
