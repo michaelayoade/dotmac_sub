@@ -312,6 +312,99 @@ item 4.
 calls. It keeps passing against a dead host until the rows are removed, so it
 is not evidence about the poller and must not be cited as any.
 
+## There are TWO schedule entries, and one of them is daily
+
+`build_beat_schedule()` registers **both** of these behind the single
+`crm_ticket_readiness.schedule_enabled` gate
+(`app/services/scheduler_config.py:2125-2136`):
+
+| Entry | Cadence | Task |
+|---|---|---|
+| `crm_ticket_pull` | every `crm_ticket_pull_interval_minutes` (default 5) | `pull_crm_tickets` |
+| `crm_ticket_pull_full` | **daily, `crontab(hour=3, minute=40)`** | `pull_crm_tickets(full=True)` |
+
+Turning the control off removes both, because both sit behind the same gate.
+But **two five-minute intervals do not observe the daily entry at all** — it
+simply was not due. A receipt claiming "no schedule execution" on the strength
+of a ten-minute window has said nothing about `crm_ticket_pull_full`, and
+saying so is the difference between an observation and an assumption.
+
+### Prove the schedule is gone instead of waiting a day for it
+
+Do not extend the window to 24 hours. The schedule is *rendered*, so read it:
+
+```
+# On the app host, against the production database, read-only.
+python -c "from app.services.scheduler_config import build_beat_schedule; \
+           s = build_beat_schedule(); \
+           print([k for k in s if 'crm' in k])"
+# Expect []. Before the flip, expect ['crm_ticket_pull', 'crm_ticket_pull_full'].
+```
+
+`build_beat_schedule()` is the single builder — `app/celery_app.py:51` sets it
+at boot and `app/celery_scheduler.py:86` reloads it. An empty list is direct
+evidence that neither entry can fire again, and it is available the moment the
+control flips rather than after a day. Run it **before** the flip too: that is
+the positive control for this instrument, exactly as query 1 is for the run
+ledger.
+
+## Item 4: the revocation inventory, and the part this repository cannot close
+
+`old_writer_retirement` cannot move to RETIRED until each of these has an
+explicit disposition. Sub can name the first three precisely. It cannot name
+the fourth at all.
+
+| Target | Where it lives | Disposition |
+|---|---|---|
+| **Control** | `domain_settings`, `domain='modules'`, `key='crm_ticket_pull'` | set false via `update_canonical_feature_controls` |
+| **Capability binding** | `integration_capability_bindings`, `capability_id='crm.ticket_observation.v1'`, `state='enabled'` | disable — the second kill switch |
+| **Installation** | `integration_installations`, `connector_key='dotmac.crm'`, `state='enabled'` | disable — this is what retires the transport |
+| **Job** | `integration_jobs` bound to that binding, `is_active` | deactivate |
+| **Transport / DNS** | `integration_config_revisions.config_json ->> 'base_url'` on that installation — the dead `crm.dotmac.io` host | the revision rows are append-only history; disabling the installation is what stops them being used. Do **not** rewrite historical revisions |
+| **Credential** | `integration_config_revisions.secret_refs ->> 'service_credentials'` — a **pointer**, resolved only inside connection validation | revoke at the store the pointer names. Record the pointer, never the value |
+| **Webhook transport** | the `sync_crm_ticket` path — see the observation section | **turning the scheduler control off does not disable this.** Only revoking the webhook transport does |
+| **Monitoring binding** | **not in this repository** | see below |
+
+### The monitoring binding cannot be closed from Sub
+
+There is no Prometheus, alert-rule, blackbox or scrape configuration anywhere
+in this repository — a search of `deploy/`, `docker/`, `config/` and `nginx/`
+for CRM references returns nothing. That surface belongs to Observer, in
+Observer's own repository and on Observer's host.
+
+This matters more than it looks. A scrape or alert still pointed at a retired
+transport keeps the dependency alive in Observer's view of the world, so the
+decommission claim would be contradicted by the monitoring system itself. Under
+ADR 0018 rule 2 that item still needs a disposition, and it cannot be given one
+here: **carry it as an open STILL LIVE entry owned by Observer's lane** until
+Observer records its retirement. Closing this runbook's other items does not
+close that one, and a receipt that quietly omits it is the "absence is never a
+disposition" failure the rule names.
+
+## Evidence each live change must produce
+
+Per change, not per session — the sequence is only as good as its weakest
+recorded step:
+
+1. **Snapshot.** The exact prior state: the control row's `value_text` and
+   `is_active`; the installation, binding and job states; the rendered beat
+   schedule keys; the run-ledger cadence from query 1.
+2. **Apply**, through the canonical owner only. Keep the writer's returned
+   before/after record — `update_canonical_feature_controls` returns stored
+   value, effective value and source for each key it changed.
+3. **Re-observe.** Queries 3 and 4, plus the rendered-schedule check, plus the
+   readiness issue codes.
+4. **Rollback path**, written down before applying, and reachable by the same
+   canonical owner rather than by direct SQL.
+5. **Exact restoration evidence** if rolled back: the same snapshot fields,
+   re-read, matching.
+
+If any one of those cannot be produced, stop and report rather than continuing.
+A half-executed revocation across a control, an installation, a credential
+store, DNS and a monitoring system is worse than none: it leaves a dependency
+alive while the receipt says it is gone, which is precisely the failure ADR
+0018 exists to prevent.
+
 ## Steps 4-6: what the removal touches, including six things that bite
 
 `crm_ticket_pull` appears in 37 tracked files. Most are ordinary. These are
