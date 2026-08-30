@@ -316,7 +316,15 @@ rebuild exclusion. Hard deletion must not make authoritative history or repair
 impossible unless the approved retention policy requires it.
 
 Secrets never enter tracked files, logs, events, reports, prompts, or durable
-memory. Store only an OpenBao path or approved local pointer.
+memory. Store only an OpenBao path or approved local pointer. Binding a
+credential-named identifier to a string literal is the tracked-file form of
+that mistake and is refused by `tests/architecture/test_credential_literals.py`,
+which matches the SHAPE of such a binding and holds no sample of any value —
+a scanner that recognised secrets by their text would have to store them to
+work. A credential that reached a real system is rotated, not merely deleted:
+removing the line does not recall what already left. Test fixtures are outside
+that scan on a stated premise, and the reviewed exemptions each have a premise
+asserted by a named test.
 
 ## 13. Typing, imports, and module shape
 
