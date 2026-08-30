@@ -35,6 +35,11 @@
 #
 #
 #
+#
+#
+#
+#
+#
 # --- app: 251 files ---
 app/api/campaigns.py
 app/api/crm.py
@@ -361,7 +366,7 @@ alembic/versions_archive/k2l3m4n5o6p7_add_crm_social_comment_replies.py
 alembic/versions_archive/l1m2n3o4p5q6_add_inbound_message_dedupe_index.py
 alembic/versions_archive/p0q1r2s3t4u5_add_integration_connector_model.py
 #
-# --- docs: 106 files ---
+# --- docs: 107 files ---
 docs/ACCOUNT_CREDIT_DEPOSITS.md
 docs/CHAT_LIVE_SETUP.md
 docs/CODING_STANDARD.md
@@ -437,6 +442,7 @@ docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md
 docs/designs/SOT_CODING_STANDARDS_REFACTOR.md
 docs/designs/SPLYNX_RETIREMENT.md
 docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md
+docs/designs/SUB_DEPLOYMENT_EXECUTOR_CENSUS.md
 docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md
 docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md
 docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md
@@ -754,4 +760,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 709 files
+# TOTAL: 710 files
