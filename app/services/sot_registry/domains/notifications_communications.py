@@ -1368,8 +1368,167 @@ DOMAIN = DomainSOT(
                 "staff review inbox materialization",
             ),
             depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
                 "communications.notification_service",
                 "operations.sla_escalation",
+            ),
+            notes=(
+                "Business command owners pass typed, authorized staff recipients. "
+                "This participant stages the canonical notification rows and the "
+                "per-user admin inbox projection without completing transactions."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="admin/staff notification creation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "validated staff notification request",
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "permission-targeted staff notification audience resolution"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "validated staff notification request",
+                            "canonical staff account identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="staff review inbox materialization",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="validated staff notification request",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed recipient, event identity, safe staff-only copy, "
+                            "and target URL supplied by an authorized business owner."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active SystemUser identity and current staff email address.",
+                    ),
+                    AuthorityInput(
+                        name="canonical internal notification row",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Channel-scoped Notification identity, delivery state, and "
+                            "deterministic dedupe key."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Authorized business command owners call typed staging helpers; "
+                        "this service flushes and never commits or rolls back."
+                    ),
+                    locking=(
+                        "Channel and deterministic dedupe identity prevent duplicate "
+                        "outbox rows; source-notification uniqueness prevents duplicate "
+                        "admin inbox rows."
+                    ),
+                    idempotency=(
+                        "The source event, staff recipient, event type, and channel form "
+                        "the durable notification dedupe identity."
+                    ),
+                    retries=(
+                        "Delivery workers retry queued channel rows; in-app projection "
+                        "materialization is transaction-local and replay-safe."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communications.staff_notifications.invalid_request",
+                        "communications.staff_notifications.invalid_recipient",
+                    ),
+                    mapping_owner="calling business command owner",
+                    fail_closed_on=(
+                        "inactive or missing staff recipient",
+                        "ambiguous source-event identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("team_inbox.private_note_mention",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 identifies the source event, staff recipient, "
+                        "channel, and safe navigation target without private note text."
+                    ),
+                    replay=(
+                        "Notification and AdminNotification rows plus deterministic "
+                        "dedupe keys reproduce staged staff delivery state."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="staff review inbox materialization",
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        writer="communications.staff_notifications",
+                        freshness="Transaction-current with the source notification row.",
+                        stale_behavior=(
+                            "Missing rows are never inferred from email or external chat."
+                        ),
+                        drift_signal=(
+                            "A personal push Notification without its source-linked "
+                            "AdminNotification row."
+                        ),
+                        rebuild_operation=(
+                            "Replay the typed source-event staging request by its "
+                            "deterministic dedupe identity."
+                        ),
+                        repair_owner="communications.staff_notifications",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="untyped staff notification helper arguments",
+                    new_owner="communications.staff_notifications",
+                    verification=(
+                        "Typed direct-notification behavior and manifest contract tests."
+                    ),
+                    cutover_gate=(
+                        "Materially changed direct staff events use the typed staging "
+                        "boundary."
+                    ),
+                    fallback_retirement=(
+                        "No private-note route or Team Inbox command writes staff "
+                        "notification rows directly."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/NOTIFICATION_CHANNEL_POLICY.md",
+                    "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                ),
+                test_refs=(
+                    "tests/test_team_inbox_readiness_gate.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                ),
             ),
         ),
         SOTService(
@@ -2750,6 +2909,8 @@ DOMAIN = DomainSOT(
             owns=("operator conversation and collaboration commands",),
             depends_on=(
                 "auth.permission_gate",
+                "communications.nextcloud_talk_staff",
+                "communications.staff_notifications",
                 "communications.team_inbox_threads",
                 "communications.team_inbox_contact_resolution",
                 "communications.team_inbox_routing",
@@ -2805,6 +2966,24 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_operator_state",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Per-person read cursor and unread cohort.",
+                    ),
+                    AuthorityInput(
+                        name="staff notification staging outcome",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Idempotent in-app and email Notification rows plus the "
+                            "source-linked per-user AdminNotification row."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="optional staff Talk admission outcome",
+                        owner="communications.nextcloud_talk_staff",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Feature-gated Nextcloud Talk notification staging result "
+                            "isolated by the command owner's approved savepoint."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,

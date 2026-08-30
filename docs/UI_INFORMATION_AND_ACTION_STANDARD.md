@@ -449,6 +449,27 @@ implementation.
 - Responsive behavior: the filter rail wraps, KPI cards stack, and the
   seven-column table remains horizontally accessible without hiding agent
   identity or metric meaning.
+## Inbox Private Note Mention Contract
+
+- Authority: `communications.team_inbox_commands` validates the active
+  conversation, exact staff identifiers, and team visibility, then writes the
+  private note. `communications.staff_notifications` stages the personal Inbox
+  and email notices. `communications.nextcloud_talk_staff` owns optional Talk
+  admission and delivery. Routes, templates, and browser code are adapters.
+- Typing `@` exposes active colleagues who can access the conversation, including
+  the initial unfiltered list. The list is appended to the document viewport,
+  opens above or below the composer based on available space, and remains usable
+  by keyboard, pointer, touch, zoom, and the mobile visual viewport.
+- A selected mention retains its stable system-user ID. Removing its visible
+  token or its chip removes the submitted recipient; the server revalidates every
+  ID and rejects stale or inaccessible recipients.
+- Saving a note stages one idempotent Inbox notice and one email for each
+  mentioned colleague other than the author. When enabled, Talk staging runs as
+  an optional owner savepoint and cannot roll back the note or other notices.
+- Notification copy never includes the private note or customer data. Its link
+  marks the personal Inbox item read, opens the exact conversation, scrolls to
+  the note, and provides a temporary accessible highlight. Mentioning never
+  assigns, transfers, or changes conversation status.
 
 ## ONT Configure Page Contract
 

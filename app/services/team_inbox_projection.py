@@ -671,8 +671,6 @@ def list_mentionable_users(
     limit: int = 10,
 ) -> tuple[InboxAgentOption, ...]:
     term = str(search or "").strip()
-    if not term:
-        return ()
     conversation = db.get(InboxConversation, conversation_id)
     if conversation is None or not conversation.is_active:
         return ()
@@ -685,8 +683,7 @@ def list_mentionable_users(
         active_team_ids = [conversation.primary_service_team_id]
     if not active_team_ids:
         return ()
-    like = f"%{term}%"
-    rows = (
+    query = (
         db.query(SystemUser)
         .join(
             ServiceTeamMember,
@@ -695,13 +692,17 @@ def list_mentionable_users(
         .filter(SystemUser.is_active.is_(True))
         .filter(ServiceTeamMember.is_active.is_(True))
         .filter(ServiceTeamMember.team_id.in_(active_team_ids))
-        .filter(
+    )
+    if term:
+        like = f"%{term}%"
+        query = query.filter(
             (SystemUser.display_name.ilike(like))
             | (SystemUser.first_name.ilike(like))
             | (SystemUser.last_name.ilike(like))
             | (SystemUser.email.ilike(like))
         )
-        .distinct()
+    rows = (
+        query.distinct()
         .order_by(SystemUser.first_name.asc(), SystemUser.last_name.asc())
         .limit(max(1, min(int(limit), 20)))
         .all()
