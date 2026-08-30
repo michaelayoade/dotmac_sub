@@ -1804,6 +1804,33 @@ class Tickets:
             )
 
     @staticmethod
+    def _queue_tag_notifications(
+        db: Session,
+        ticket: Ticket,
+        *,
+        previous_tags: tuple[str, ...],
+        actor_id: str | None,
+    ) -> None:
+        from app.services.staff_notifications import (
+            StaffTagNotificationCommand,
+            queue_staff_tag_notifications,
+        )
+
+        queue_staff_tag_notifications(
+            db,
+            StaffTagNotificationCommand(
+                entity_kind="ticket",
+                entity_id=str(ticket.id),
+                entity_reference=ticket.number or str(ticket.id),
+                entity_title=ticket.title,
+                target_url=f"/admin/support/tickets/{ticket.id}",
+                current_tags=tuple(str(tag) for tag in (ticket.tags or ())),
+                previous_tags=previous_tags,
+                actor_person_id=actor_id,
+            ),
+        )
+
+    @staticmethod
     def _assignment_user_ids(db: Session, ticket: Ticket) -> frozenset[str]:
         from app.services.staff_notifications import resolve_assignment_users
 
@@ -2435,6 +2462,12 @@ class Tickets:
                 ),
             )
 
+            Tickets._queue_tag_notifications(
+                db,
+                ticket,
+                previous_tags=(),
+                actor_id=actor_id,
+            )
             Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
         audit_metadata = {
@@ -3444,6 +3477,7 @@ class Tickets:
         ticket = Tickets.get(db, ticket_id)
         _ensure_not_merged_source(ticket)
         previous_assignment_user_ids = Tickets._assignment_user_ids(db, ticket)
+        previous_tags = tuple(str(tag) for tag in (ticket.tags or ()))
 
         before = {
             "title": ticket.title,
@@ -3589,6 +3623,12 @@ class Tickets:
                 db, ticket, AutomationTrigger.priority_changed
             )
 
+        Tickets._queue_tag_notifications(
+            db,
+            ticket,
+            previous_tags=previous_tags,
+            actor_id=actor_id,
+        )
         if changes and any(
             key in changes
             for key in [

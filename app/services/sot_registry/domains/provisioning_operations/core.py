@@ -493,9 +493,11 @@ SERVICES: tuple[SOTService, ...] = (
             "work-order as-built evidence requirement",
             "work-order assignment decisions and projection",
             "work-order assignment-queue transitions",
+            "work-order staff/team tag notification consequence",
         ),
         depends_on=(
             "customer.identity_scope",
+            "communications.staff_notifications",
             "operations.work_order_status",
             "observability.audit_log",
         ),
@@ -508,7 +510,10 @@ SERVICES: tuple[SOTService, ...] = (
             "provenance only; field execution statuses remain "
             "owned by operations.field_completion. Native project-binding "
             "and evidence-policy rejections are transport-neutral "
-            "WorkOrderCommandError values mapped only by the app boundary."
+            "WorkOrderCommandError values mapped only by the app boundary. "
+            "Staff/team tag tokens stage in-app notifications through "
+            "communications.staff_notifications; ordinary descriptive tags "
+            "remain local work-order metadata."
         ),
     ),
     SOTService(
@@ -1278,6 +1283,14 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical project aggregate",
                         "active project assignment audience",
+                        "staff notification delivery queue",
+                    ),
+                ),
+                ConcernContract(
+                    name="project and task staff/team tag notification consequence",
+                    role=OwnerRole.EVENT_POLICY,
+                    input_names=(
+                        "canonical project aggregate",
                         "staff notification delivery queue",
                     ),
                 ),

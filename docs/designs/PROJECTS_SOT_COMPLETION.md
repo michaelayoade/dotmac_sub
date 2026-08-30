@@ -65,6 +65,12 @@ semantics across projects and tasks. The retired Site Project Coordinator
 column remains readable on historical records but is absent from new-project
 input and is no longer populated by regional or assignment rules.
 
+Staff/team tag tokens on Project and ProjectTask tags stage in-app staff
+notifications for newly added targets. `person:`, `user:`, and `staff:` tokens
+address an individual staff user; `team:` and `group:` tokens address active
+Service Team members. The notification links back to the tagged project or task.
+Ordinary descriptive tags remain metadata and do not notify anyone.
+
 `operations.work_order_commands` remains the writer of WorkOrder bindings. The
 project owner validates the native Project-to-ProjectTask side; neither owner
 may infer a relationship from a CRM identifier. CRM and other external
@@ -182,6 +188,8 @@ Project and task comment creation now participates in the same typed Project
 owner boundary as attachment staging, audit evidence, and explicit-mention
 notification staging. Task assignment and explicit project/task comment
 mentions may stage one deduplicated `nextcloud_talk` row per mapped staff user.
+Project and task staff/team tag notifications remain in-app notifications owned
+by the Project lifecycle command and do not create Talk delivery rows.
 The feature defaults disabled, and no Nextcloud HTTP occurs before the Project
 transaction commits; delivery, room reuse, stale-room repair, and retry policy
 belong to `communications.nextcloud_talk_staff`.

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.admin_alert import AdminNotification
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
@@ -839,6 +840,60 @@ def test_field_visit_tag_is_descriptive_and_does_not_issue_work(db_session, subs
         actor_id=str(subscriber.id),
     )
     assert db_session.query(WorkOrder).count() == 0
+
+
+def test_ticket_staff_and_team_tags_create_staff_inbox_notifications(
+    db_session, subscriber
+):
+    direct, _direct_person = add_bound_staff_user(
+        db_session, email=f"ticket-direct-tag-{uuid4()}@example.test"
+    )
+    team_member, team_person = add_bound_staff_user(
+        db_session, email=f"ticket-team-tag-{uuid4()}@example.test"
+    )
+    team = ServiceTeam(name=f"Ticket Tag Team {uuid4()}", is_active=True)
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=team_person.id))
+    db_session.commit()
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Tagged ticket",
+            description="Tag staff",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            tags=[f"person:{direct.id}", f"group:{team.id}", "field_visit"],
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    rows = (
+        db_session.query(AdminNotification)
+        .order_by(AdminNotification.title.asc())
+        .all()
+    )
+    assert {(row.system_user_id, row.title, row.target_url) for row in rows} == {
+        (
+            direct.id,
+            "You were tagged in this ticket",
+            f"/admin/support/tickets/{ticket.id}",
+        ),
+        (
+            team_member.id,
+            "Your team was tagged in this ticket",
+            f"/admin/support/tickets/{ticket.id}",
+        ),
+    }
+
+    support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(tags=[f"person:{direct.id}", f"group:{team.id}", "urgent"]),
+        actor_id=str(subscriber.id),
+    )
+    assert db_session.query(AdminNotification).count() == 2
 
 
 def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscriber):

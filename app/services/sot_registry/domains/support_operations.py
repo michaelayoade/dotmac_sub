@@ -518,6 +518,15 @@ DOMAIN = DomainSOT(
                             "staff notification delivery queue",
                         ),
                     ),
+                    ConcernContract(
+                        name="ticket staff/team tag notification consequence",
+                        role=OwnerRole.EVENT_POLICY,
+                        input_names=(
+                            "typed ticket command",
+                            "canonical ticket state",
+                            "staff notification delivery queue",
+                        ),
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(

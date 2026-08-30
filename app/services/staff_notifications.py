@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from uuid import UUID
 
 from sqlalchemy import and_, or_
@@ -41,6 +42,36 @@ class PermissionReviewNotificationResult:
     whatsapp_count: int
     sla_policy_count: int
     sla_delivery_count: int
+
+
+class StaffTagTargetKind(str, Enum):
+    person = "person"
+    team = "team"
+
+
+@dataclass(frozen=True, slots=True)
+class StaffTagTarget:
+    kind: StaffTagTargetKind
+    target_id: UUID
+    token: str
+
+
+@dataclass(frozen=True, slots=True)
+class StaffTagNotificationCommand:
+    entity_kind: str
+    entity_id: str
+    entity_reference: str
+    entity_title: str | None
+    target_url: str
+    current_tags: tuple[str, ...]
+    previous_tags: tuple[str, ...] = ()
+    actor_person_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StaffTagNotificationOutcome:
+    target_count: int
+    notification_count: int
 
 
 def resolve_assignment_users(
@@ -86,6 +117,135 @@ def resolve_assignment_users(
         .filter(SystemUser.id.in_(user_ids))
         .order_by(SystemUser.id.asc())
         .all()
+    )
+
+
+def _normalized_staff_tag_token(value: str) -> str:
+    kind, _, identifier = value.strip().partition(":")
+    if not identifier:
+        return ""
+    kind = kind.strip().lower()
+    identifier = identifier.strip().lower()
+    if kind in {"person", "user", "staff"}:
+        return f"person:{identifier}"
+    if kind in {"team", "group"}:
+        return f"team:{identifier}"
+    return ""
+
+
+def _staff_tag_targets(tags: tuple[str, ...]) -> tuple[StaffTagTarget, ...]:
+    targets: list[StaffTagTarget] = []
+    seen: set[str] = set()
+    for raw in tags:
+        token = _normalized_staff_tag_token(str(raw or ""))
+        if not token or token in seen:
+            continue
+        kind, _, identifier = token.partition(":")
+        try:
+            target_id = UUID(identifier)
+        except ValueError:
+            continue
+        seen.add(token)
+        targets.append(
+            StaffTagTarget(
+                kind=(
+                    StaffTagTargetKind.person
+                    if kind == StaffTagTargetKind.person.value
+                    else StaffTagTargetKind.team
+                ),
+                target_id=target_id,
+                token=token,
+            )
+        )
+    return tuple(targets)
+
+
+def queue_staff_tag_notifications(
+    db: Session,
+    command: StaffTagNotificationCommand,
+) -> StaffTagNotificationOutcome:
+    """Queue in-app notifications for newly added staff or team tag tokens."""
+    previous_tokens = {
+        _normalized_staff_tag_token(value) for value in command.previous_tags
+    }
+    targets = tuple(
+        target
+        for target in _staff_tag_targets(command.current_tags)
+        if target.token not in previous_tokens
+    )
+    if not targets:
+        return StaffTagNotificationOutcome(target_count=0, notification_count=0)
+
+    direct_user_ids = {
+        target.target_id
+        for target in targets
+        if target.kind is StaffTagTargetKind.person
+    }
+    team_ids = {
+        target.target_id for target in targets if target.kind is StaffTagTargetKind.team
+    }
+
+    users_by_id: dict[UUID, SystemUser] = {}
+    direct_matched: set[UUID] = set()
+    if direct_user_ids:
+        users = (
+            db.query(SystemUser)
+            .filter(SystemUser.id.in_(direct_user_ids))
+            .filter(SystemUser.is_active.is_(True))
+            .all()
+        )
+        for user in users:
+            users_by_id[user.id] = user
+            direct_matched.add(user.id)
+
+    team_user_ids: set[UUID] = set()
+    if team_ids:
+        team_users = (
+            db.query(SystemUser)
+            .select_from(ServiceTeamMember)
+            .join(ServiceTeam, ServiceTeam.id == ServiceTeamMember.team_id)
+            .join(SystemUser, SystemUser.person_party_id == ServiceTeamMember.person_id)
+            .filter(ServiceTeam.id.in_(team_ids))
+            .filter(ServiceTeam.is_active.is_(True))
+            .filter(ServiceTeamMember.is_active.is_(True))
+            .filter(SystemUser.is_active.is_(True))
+            .all()
+        )
+        for user in team_users:
+            users_by_id[user.id] = user
+            team_user_ids.add(user.id)
+
+    entity_label = command.entity_kind.replace("_", " ")
+    notified = 0
+    actor_id = str(command.actor_person_id) if command.actor_person_id else None
+    for user_id in sorted(users_by_id, key=str):
+        user = users_by_id[user_id]
+        if actor_id and actor_id in {str(user.id), str(user.person_party_id)}:
+            continue
+        direct = user.id in direct_matched
+        team = user.id in team_user_ids and not direct
+        if not direct and not team:
+            continue
+        subject = (
+            f"You were tagged in this {entity_label}"
+            if direct
+            else f"Your team was tagged in this {entity_label}"
+        )
+        body = f"{subject}: {command.entity_reference}" + (
+            f" - {command.entity_title}" if command.entity_title else ""
+        )
+        queue_staff_push(
+            db,
+            recipient=str(user.id),
+            subject=subject,
+            body=body,
+            target_url=command.target_url,
+        )
+        notified += 1
+
+    return StaffTagNotificationOutcome(
+        target_count=len(targets),
+        notification_count=notified,
     )
 
 
