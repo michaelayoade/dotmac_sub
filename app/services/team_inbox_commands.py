@@ -7,11 +7,13 @@ routes never become a parallel writer.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import partial
 from html import escape
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -22,7 +24,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.notification import Notification, NotificationChannel
 from app.models.organization import Organization
 from app.models.party import (
     Party,
@@ -46,7 +47,6 @@ from app.models.team_inbox import (
     InboxMessageDirection,
     InboxSavedFilter,
 )
-from app.schemas.notification import NotificationCreate
 from app.schemas.sales import (
     LeadCapturePartyCreate,
     LeadCaptureRequest,
@@ -72,11 +72,11 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.domain_errors import DomainError
-from app.services.notification import Notifications
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
     owner_command_active,
 )
 from app.services.sales import account_conversion
@@ -84,6 +84,7 @@ from app.services.sales import capture as sales_capture
 from app.services.validation_api import validate_email_format
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 OWNER = "communications.team_inbox_commands"
@@ -211,6 +212,23 @@ class ReplyCommand:
     whatsapp_template_name: str | None = None
     whatsapp_template_language: str | None = None
     whatsapp_template_components: tuple[WhatsAppTemplateComponent, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CreateInternalNoteCommand:
+    context: CommandContext
+    conversation_id: UUID
+    body: str
+    actor_person_id: UUID | None
+    actor_system_user_id: UUID
+    mention_user_ids: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CreateInternalNoteOutcome:
+    conversation_id: UUID
+    note_id: UUID
+    mentioned_user_ids: tuple[UUID, ...]
 
 
 @dataclass(frozen=True)
@@ -2000,24 +2018,22 @@ def merge_contact(
 
 def create_internal_note(
     db: Session,
-    *,
-    conversation_id: str | UUID,
-    body: str,
-    actor_person_id: str | UUID | None = None,
-    mention_user_ids: Sequence[str | UUID] = (),
-) -> None:
-    def action() -> None:
-        conversation = _active_conversation(db, conversation_id)
+    command: CreateInternalNoteCommand,
+) -> CreateInternalNoteOutcome:
+    def action() -> CreateInternalNoteOutcome:
+        conversation = _active_conversation(
+            db, command.conversation_id, for_update=True
+        )
         mentions = _eligible_mention_users(
             db,
             conversation=conversation,
-            mention_user_ids=mention_user_ids,
+            mention_user_ids=command.mention_user_ids,
         )
         note = team_inbox_operations.create_internal_note(
             db,
             conversation=conversation,
-            body=body,
-            actor_person_id=actor_person_id,
+            body=command.body,
+            actor_person_id=command.actor_person_id,
             metadata={"mentions": [str(user.id) for user in mentions]}
             if mentions
             else None,
@@ -2027,10 +2043,21 @@ def create_internal_note(
             conversation=conversation,
             note=note,
             users=mentions,
-            actor_person_id=actor_person_id,
+            actor_person_id=command.actor_person_id,
+            actor_system_user_id=command.actor_system_user_id,
+        )
+        return CreateInternalNoteOutcome(
+            conversation_id=conversation.id,
+            note_id=note.id,
+            mentioned_user_ids=tuple(
+                user.id
+                for user in mentions
+                if user.id != command.actor_system_user_id
+                and user.person_party_id != command.actor_person_id
+            ),
         )
 
-    _commit(db, action)
+    return _commit(db, action, context=command.context)
 
 
 def _eligible_mention_users(
@@ -2087,42 +2114,80 @@ def _notify_internal_note_mentions(
     conversation: InboxConversation,
     note: InboxMessage,
     users: Sequence[SystemUser],
-    actor_person_id: str | UUID | None,
+    actor_person_id: UUID | None,
+    actor_system_user_id: UUID,
 ) -> None:
-    actor_uuid = coerce_uuid(actor_person_id)
+    from app.services import nextcloud_talk_staff, staff_notifications
+
+    direct_event_type = (
+        staff_notifications.StaffDirectEventType.team_inbox_private_note_mention
+    )
+    talk_event_type = (
+        nextcloud_talk_staff.StaffTalkEventType.team_inbox_private_note_mention
+    )
     for user in users:
-        if user.id == actor_uuid:
+        if user.id == actor_system_user_id or user.person_party_id == actor_person_id:
             continue
-        dedupe_key = f"inbox-note-mention:{note.id}:{user.id}"
-        existing = (
-            db.query(Notification)
-            .filter(Notification.channel == NotificationChannel.email)
-            .filter(Notification.dedupe_key == dedupe_key)
-            .one_or_none()
+        target_url = (
+            f"/admin/inbox?conversation_id={conversation.id}&message_id={note.id}"
         )
-        if existing is not None:
-            continue
-        notification = Notifications.queue_internal_notification(
+        subject = "You were mentioned in a Team Inbox note"
+        body = "A colleague mentioned you in a private Team Inbox note."
+        direct_result = staff_notifications.stage_staff_direct_notification(
             db,
-            NotificationCreate(
-                channel=NotificationChannel.email,
-                audience_type="system_user",
-                audience_id=user.id,
-                recipient=user.email,
-                event_type="team_inbox.private_note_mention",
-                category="support",
-                subject="You were mentioned in a Team Inbox note",
-                body="A colleague mentioned you in a private Team Inbox note.",
-                metadata_={
-                    "conversation_id": str(conversation.id),
-                    "message_id": str(note.id),
-                    "target_url": f"/admin/inbox?c={conversation.id}",
-                    "actor_person_id": str(actor_uuid) if actor_uuid else None,
-                    "internal_only": True,
-                },
+            staff_notifications.StageStaffDirectNotification(
+                system_user_id=user.id,
+                source_event_id=note.id,
+                event_type=direct_event_type,
+                subject=subject,
+                body=body,
+                target_url=target_url,
             ),
         )
-        notification.dedupe_key = dedupe_key
+        notification_open_url = (
+            f"/admin/notifications/inbox/{direct_result.admin_notification_id}/open"
+        )
+        talk_command = nextcloud_talk_staff.StageStaffTalkNotification(
+            system_user_id=user.id,
+            source_event_id=note.id,
+            event_type=talk_event_type,
+            subject=subject,
+            body=body,
+            target_url=notification_open_url,
+            source_entity_type="inbox_message",
+            source_entity_id=note.id,
+        )
+
+        try:
+            execute_owner_savepoint(
+                db,
+                partial(
+                    nextcloud_talk_staff.stage_staff_talk_notification,
+                    db,
+                    talk_command,
+                ),
+            )
+        except Exception:
+            metadata = dict(note.metadata_ or {})
+            failures = list(metadata.get("mention_notification_failures") or [])
+            failures.append(
+                {
+                    "channel": "nextcloud_talk",
+                    "code": "staging_failed",
+                    "system_user_id": str(user.id),
+                }
+            )
+            metadata["mention_notification_failures"] = failures
+            note.metadata_ = metadata
+            db.flush()
+            logger.warning(
+                "Team Inbox private-note Talk notification staging failed",
+                extra={
+                    "inbox_note_id": str(note.id),
+                    "notification_channel": "nextcloud_talk",
+                },
+                exc_info=True,
+            )
 
 
 def create_comment(

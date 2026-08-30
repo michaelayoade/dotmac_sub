@@ -53,6 +53,13 @@ Common conversation actions: reply, add private note, assign, change status,
 change priority, snooze, mute, apply labels, retry a failed message, open
 contact context, and start a ticket handoff.
 
+The private-note mention picker is a viewport-level listbox so the composer and
+scrolling workspace cannot clip it. It opens above or below according to the
+current visual viewport, supports keyboard and touch selection, and presents
+selected recipients as removable chips backed by stable system-user IDs. A
+notification deep link selects the conversation, scrolls to the exact note, and
+temporarily highlights it; it does not alter assignment or workflow state.
+
 Reply submission preserves one browser-generated idempotency key until the
 owner returns a committed outcome. If another conversation mutation already
 holds the authoritative row, the owner fails fast with a retryable busy result;

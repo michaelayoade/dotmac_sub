@@ -20,6 +20,9 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    # Staff notification events
+    staff_notification_opened = "staff_notification.opened"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"

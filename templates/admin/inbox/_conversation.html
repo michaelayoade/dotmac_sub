@@ -496,7 +496,9 @@
         <form method="post" action="/admin/inbox/{{ timeline.id }}/note" x-show="mode === 'note'" x-cloak @submit="sending = true" class="space-y-2">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="mention_user_ids" data-mention-user-ids value="">
-            <textarea name="body_text" rows="3" required placeholder="Add a private note. Type @ to mention a colleague. It will never be sent to the customer." data-inbox-note-mentions data-mention-endpoint="/admin/inbox/{{ timeline.id }}/mentionable-users" class="w-full rounded-xl border-amber-300 bg-amber-50/60 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-amber-800 dark:bg-amber-950/20"></textarea>
+            <div data-mention-selected class="hidden flex-wrap gap-1.5" aria-label="Mentioned colleagues"></div>
+            <textarea name="body_text" rows="3" required placeholder="Add a private note. Type @ to mention a colleague. It will never be sent to the customer." data-inbox-note-mentions data-mention-endpoint="/admin/inbox/{{ timeline.id }}/mentionable-users" aria-label="Private note" aria-autocomplete="list" aria-expanded="false" class="w-full rounded-xl border-amber-300 bg-amber-50/60 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-amber-800 dark:bg-amber-950/20"></textarea>
+            <p data-mention-status class="sr-only" role="status" aria-live="polite"></p>
             <div class="flex items-center justify-between"><p class="text-xs font-medium text-amber-800 dark:text-amber-200">Only internal agents can see this note.</p><button type="submit" class="min-h-11 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white">Save private note</button></div>
         </form>
     </div>

@@ -4,6 +4,7 @@ import uuid
 from types import SimpleNamespace
 
 from app.models.admin_alert import AdminAlert, AdminNotification
+from app.models.event_store import EventStore
 from app.models.network_monitoring import AlertStatus
 from app.models.notification import (
     Notification,
@@ -358,6 +359,19 @@ def test_inbox_open_is_scoped_to_the_assigned_system_user(db_session) -> None:
         f"/admin/billing/payment-proofs/{proof['id']}"
     )
     assert notification.read_at is not None
+
+    replay = notification_inbox_open(
+        notification.id,
+        db_session,
+        {"principal_id": str(reviewer.id), "principal_type": "system_user"},
+    )
+    assert replay.headers["location"] == allowed.headers["location"]
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "staff_notification.opened")
+        .count()
+        == 1
+    )
 
 
 def test_submission_survives_when_no_reviewer_is_configured(db_session) -> None:
