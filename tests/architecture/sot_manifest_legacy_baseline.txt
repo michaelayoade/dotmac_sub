@@ -22,7 +22,6 @@ communications.eligibility
 communications.ephemeral_actions
 communications.intents
 communications.notification_service
-communications.staff_notifications
 control.domain_settings
 control.feature_registry
 control.module_manager

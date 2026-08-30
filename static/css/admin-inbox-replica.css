@@ -203,6 +203,21 @@
   margin-inline: auto;
 }
 
+.inbox-mention-menu {
+  z-index: 210;
+  overscroll-behavior: contain;
+}
+
+.inbox-message-target {
+  border-radius: 0.75rem;
+  outline: 3px solid rgb(245 158 11 / 0.72);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 8px rgb(245 158 11 / 0.14);
+  transition:
+    outline-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
 @media (min-width: 640px) {
   .inbox-content-wrapper {
     padding-inline: 1.5rem;

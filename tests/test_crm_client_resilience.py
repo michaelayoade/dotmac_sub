@@ -287,8 +287,3 @@ class TestResponseCache:
             c.list_tickets(subscriber_id="s1")
 
         assert calls["n"] == 2  # no cache → each call goes upstream
-
-
-# ---------------------------------------------------------------------------
-# Widget chat session
-# ---------------------------------------------------------------------------

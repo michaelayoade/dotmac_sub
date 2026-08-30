@@ -93,6 +93,16 @@ COMMERCIAL_MODULE_SCHEMA_CONTRACT: Final[tuple[ModuleSchemaContract, ...]] = (
         import_name="dotmac_collections",
         schema="mod_coll",
     ),
+    # Not a commercial owner. The contract is keyed to the COMPOSED LINEAGE
+    # set (tests/architecture/test_commercial_module_prerequisites.py requires
+    # the two to match exactly), so every module whose lineage Sub composes is
+    # declared here regardless of domain.
+    ModuleSchemaContract(
+        module="inbox",
+        distribution="dotmac-inbox",
+        import_name="dotmac_inbox",
+        schema="mod_inbox",
+    ),
     ModuleSchemaContract(
         module="payments",
         distribution="dotmac-payments",

@@ -17,6 +17,7 @@ def test_commercial_module_schema_manifest_names_every_composed_module() -> None
     expected = {
         "dotmac-billing": "mod_billing",
         "dotmac-collections": "mod_coll",
+        "dotmac-inbox": "mod_inbox",
         "dotmac-payments": "mod_payments",
         "dotmac-service-orders": "mod_serviceorders",
         "dotmac-subscriptions": "mod_subscriptions",

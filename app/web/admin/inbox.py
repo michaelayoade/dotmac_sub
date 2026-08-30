@@ -2465,18 +2465,36 @@ def team_inbox_internal_note(
     mention_user_ids: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    actor_system_user_id = _system_user_uuid_from_request(request)
+    actor_person_id = _actor_uuid_from_request(request)
+    try:
+        parsed_mention_user_ids = tuple(
+            UUID(item.strip())
+            for item in (_query_text(mention_user_ids) or "").split(",")
+            if item.strip()
+        )
+    except ValueError:
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message="One or more mentioned colleagues are invalid.",
+        )
     _prepare_mutation(db)
     try:
         team_inbox_commands.create_internal_note(
             db,
-            conversation_id=conversation_id,
-            body=body_text,
-            actor_person_id=_actor_id_from_request(request),
-            mention_user_ids=[
-                item.strip()
-                for item in (_query_text(mention_user_ids) or "").split(",")
-                if item.strip()
-            ],
+            team_inbox_commands.CreateInternalNoteCommand(
+                context=CommandContext.system(
+                    actor=f"system-user:{actor_system_user_id}",
+                    scope="team-inbox:private-note",
+                    reason="authorized operator saved a private Team Inbox note",
+                ),
+                conversation_id=conversation_id,
+                body=body_text,
+                actor_person_id=actor_person_id,
+                actor_system_user_id=actor_system_user_id,
+                mention_user_ids=parsed_mention_user_ids,
+            ),
         )
     except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
