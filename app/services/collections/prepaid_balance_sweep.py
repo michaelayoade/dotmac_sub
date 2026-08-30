@@ -254,6 +254,47 @@ def _reconcile_stale_prepaid_locks(db: Session, account: Subscriber) -> str:
     return "restored" if repaired else "state_drift"
 
 
+def _repair_missing_prepaid_lock(
+    db: Session,
+    account: Subscriber,
+    now: datetime,
+    cfg: PrepaidEnforcementPolicy,
+    *,
+    balance: Decimal,
+    threshold: Decimal,
+    notice_suppression_reason: str | None,
+) -> str:
+    """Recreate a missing prepaid lock for an already marked deactivation."""
+    suspended = _suspend_account(
+        db,
+        str(account.id),
+        reason=EnforcementReason.prepaid,
+        source=_SOURCE,
+    )
+    if not suspended:
+        logger.warning(
+            "prepaid_balance_sweep missing prepaid lock repair blocked for account %s",
+            account.id,
+        )
+        return "state_drift"
+    if account.prepaid_deactivation_at is None:
+        mark_prepaid_deactivated(db, account.id, deactivated_at=now)
+    _queue_notice(
+        db,
+        account,
+        cfg.deactivation_subject,
+        cfg.deactivation_body,
+        balance,
+        threshold,
+        suppression_reason=notice_suppression_reason,
+    )
+    logger.info(
+        "prepaid_balance_sweep repaired missing prepaid lock for account %s",
+        account.id,
+    )
+    return "suspended"
+
+
 def _reconcile_low(
     db: Session,
     account: Subscriber,
@@ -437,6 +478,16 @@ def _process_account(
     if decision.action == PrepaidEnforcementAction.shielded:
         return "shielded"
     if decision.action == PrepaidEnforcementAction.state_drift:
+        if decision.reason == "deactivation_marker_missing_prepaid_lock":
+            return _repair_missing_prepaid_lock(
+                db,
+                account,
+                now,
+                cfg,
+                balance=decision.available_balance,
+                threshold=decision.required_balance,
+                notice_suppression_reason=decision.notice_suppression_reason,
+            )
         logger.warning(
             "prepaid_balance_sweep skipped account %s: enforcement state drift (%s)",
             account.id,

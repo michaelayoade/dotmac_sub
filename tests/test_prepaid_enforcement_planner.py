@@ -320,7 +320,7 @@ def test_plan_reports_deactivation_marker_without_prepaid_lock_as_drift(
     assert item.reason == "deactivation_marker_missing_prepaid_lock"
 
 
-def test_sweep_does_not_mutate_enforcement_state_drift(
+def test_sweep_repairs_deactivation_marker_without_prepaid_lock(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
@@ -330,11 +330,16 @@ def test_sweep_does_not_mutate_enforcement_state_drift(
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
-    assert result["state_drift"] == 1
+    assert result["state_drift"] == 0
+    assert result["suspended"] == 1
     db_session.refresh(subscriber_account)
     db_session.refresh(subscription)
     assert subscriber_account.prepaid_deactivation_at is not None
-    assert subscription.status == SubscriptionStatus.active
+    assert subscription.status == SubscriptionStatus.suspended
+    locks = get_active_locks(db_session, subscription_id=str(subscription.id))
+    assert len(locks) == 1
+    assert locks[0].reason == EnforcementReason.prepaid
+    assert locks[0].source == "prepaid_balance_sweep"
 
 
 def test_zero_grace_suspends_even_when_notice_is_fault_suppressed(
