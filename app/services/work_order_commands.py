@@ -145,6 +145,34 @@ def _audit(
     )
 
 
+def _queue_work_order_tag_notifications(
+    db: Session,
+    work_order: WorkOrder,
+    *,
+    previous_tags: tuple[str, ...],
+    auth: dict[str, Any] | None,
+) -> None:
+    from app.services.staff_notifications import (
+        StaffTagNotificationCommand,
+        queue_staff_tag_notifications,
+    )
+
+    _actor_type, actor_id = _actor(auth)
+    queue_staff_tag_notifications(
+        db,
+        StaffTagNotificationCommand(
+            entity_kind="work order",
+            entity_id=str(work_order.id),
+            entity_reference=work_order.public_id,
+            entity_title=work_order.title,
+            target_url=f"/admin/dispatch/work-orders/{work_order.public_id}",
+            current_tags=tuple(str(tag) for tag in (work_order.tags or ())),
+            previous_tags=previous_tags,
+            actor_person_id=actor_id,
+        ),
+    )
+
+
 def _validate_status(value: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized not in WORK_ORDER_STATUSES:
@@ -480,6 +508,12 @@ class WorkOrderCommands:
                     },
                 },
             )
+            _queue_work_order_tag_notifications(
+                db,
+                row,
+                previous_tags=(),
+                auth=auth,
+            )
             if commit:
                 db.commit()
                 db.refresh(row)
@@ -549,6 +583,7 @@ class WorkOrderCommands:
         request_id: str | None = None,
     ) -> WorkOrder:
         row = _get_work_order(db, public_id, lock=True)
+        previous_tags = tuple(str(tag) for tag in (row.tags or ()))
         data = _data(payload, exclude_unset=True)
         project_supplied = "project_id" in data
         project_task_supplied = "project_task_id" in data
@@ -708,6 +743,12 @@ class WorkOrderCommands:
                     for key in data
                 },
             },
+        )
+        _queue_work_order_tag_notifications(
+            db,
+            row,
+            previous_tags=previous_tags,
+            auth=auth,
         )
         db.commit()
         db.refresh(row)

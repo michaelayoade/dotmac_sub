@@ -192,6 +192,12 @@ Project Coordinator column remains readable and filterable on historical
 Tickets, but new-ticket input and assignment configuration no longer populate
 it.
 
+Staff/team tag tokens on `Ticket.tags` also stage in-app staff notifications
+for newly added targets. `person:`, `user:`, and `staff:` tokens address an
+individual staff user; `team:` and `group:` tokens address active Service Team
+members. The notification links back to the ticket detail page. Ordinary
+descriptive tags remain Ticket metadata and do not notify anyone.
+
 Explicit mention identity is stored in `support_ticket_comment_mentions`, not
 in display text. Each row names exactly one `SystemUser` or `ServiceTeam`, with
 database uniqueness per comment and target; the owner requires the target to be
