@@ -1,8 +1,10 @@
 """Keep CRM business state read-only from Sub.
 
-ADR 0006 temporarily permits identified widget-session minting as an
-authentication transport. It creates no CRM business record by itself and is
-retired with the temporary portal-chat capability.
+ADR 0006 temporarily permitted identified widget-session minting as an
+authentication transport for portal live chat. That capability was retired on
+2026-08-30 with the CRM itself, so `create_widget_session` is gone from
+`CRMClient` and no longer exempt below. `create_portal_session` is the only
+remaining session-minting exemption.
 """
 
 from __future__ import annotations
@@ -57,9 +59,11 @@ def test_deferred_mutations_are_still_present_and_tracked() -> None:
 def test_no_new_crm_business_writes_are_added() -> None:
     """Guard against a new Sub -> CRM write creeping in.
 
-    Portal and temporary widget session minting are deliberately exempt: they
-    mint authentication sessions, not business state. CRM business records
-    remain read-only from Sub.
+    Portal session minting is deliberately exempt: it mints an authentication
+    session, not business state. CRM business records remain read-only from
+    Sub. The widget-session exemption was REMOVED with ADR 0006's retirement --
+    re-adding a `create_*_session` name here needs the same argument made
+    again, in review.
     """
     write_verbs = (
         "create_",
@@ -70,7 +74,7 @@ def test_no_new_crm_business_writes_are_added() -> None:
         "accept_",
         "request_",
     )
-    non_mutations = {"create_portal_session", "create_widget_session"}
+    non_mutations = {"create_portal_session"}
     present = {
         name
         for name in dir(CRMClient)

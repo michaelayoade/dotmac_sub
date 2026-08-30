@@ -365,7 +365,7 @@ def customer_portal_chat_session(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Open a CRM live-chat session for a browser-authenticated portal user."""
+    """Open a native live-chat session for a browser-authenticated portal user."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         raise HTTPException(status_code=401, detail="Unauthorized")

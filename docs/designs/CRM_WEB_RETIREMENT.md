@@ -158,17 +158,25 @@ Work proceeds in coherent domain slices:
 8. delete the corresponding CRM routes, templates, services, jobs, and finally
    the CRM deployment.
 
-### Temporary portal-chat authority exception
+### Portal-chat authority exception — CLOSED 2026-08-30
 
-ADR 0006 temporarily pauses the portal-chat portion of CRM retirement. Until
-the staffed Inbox cutover gate is ready, CRM owns customer and reseller portal
-live chat through the typed `crm.chat_session.v1` transport capability.
-Selfcare does not mirror messages in this mode, and its native widget command
-fails closed for old and new tokens. The bounded history import and reversal
-gates are defined in
-`docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md`. This exception does not advance
-any ledger route to `retired`; final CRM removal still requires reconciliation,
-traffic evidence, capability cutover, fallback retirement, and source deletion.
+ADR 0006 temporarily paused the portal-chat portion of CRM retirement. That
+exception is closed, and not by the cutover gate it named: the CRM was
+decommissioned on 2026-08-29, so the transport it assigned authority to no
+longer exists.
+
+Portal and public live chat is owned outright by
+`communications.team_inbox_widget`. The `crm.chat_session.v1` capability is
+removed from the current `dotmac.crm` manifest (1.2.0), the
+`comms.chat_session_authority` selector and the CRM broker are deleted, and
+`tests/architecture/test_single_chat_authority.py` prevents a second chat
+authority returning. Retirement record: `docs/adr/0006-temporary-crm-chat-authority.md`.
+
+This closes the exception; it does not by itself advance a ledger route to
+`retired`. Final CRM removal still requires reconciliation, traffic evidence,
+capability cutover, fallback retirement, and source deletion for the remaining
+CRM surfaces — ticket observation, subscriber observation, portal session, the
+quote command write-through, and the inbound `/api/v1/crm/*` API Sub serves.
 
 Each slice updates the ledger, the owning design and relationship-map entries,
 the executable SOT registry when an owner changes, behavior tests, architecture
