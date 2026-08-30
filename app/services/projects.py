@@ -2551,10 +2551,15 @@ def _notify_project_assignments(
     db: Session,
     project: Project,
     *,
+    context: CommandContext,
     actor_id: str | None,
     previous_user_ids: frozenset[str] = frozenset(),
 ) -> None:
-    from app.services.staff_notifications import queue_staff_assignment_notifications
+    from app.services.staff_notifications import (
+        StaffAssignmentEventType,
+        StageStaffAssignmentNotifications,
+        stage_staff_assignment_notifications,
+    )
 
     users = [
         user
@@ -2562,12 +2567,18 @@ def _notify_project_assignments(
         if str(user.id) not in previous_user_ids
     ]
     reference = project.number or str(project.id)
-    queue_staff_assignment_notifications(
+    stage_staff_assignment_notifications(
         db,
-        users=users,
-        subject=f"Project assigned: {reference}",
-        body=f"You were assigned to project {reference}: {project.name}.",
-        actor_id=actor_id,
+        StageStaffAssignmentNotifications(
+            system_user_ids=tuple(user.id for user in users),
+            source_event_id=context.command_id,
+            source_entity_id=project.id,
+            event_type=StaffAssignmentEventType.project_assignment,
+            subject=f"Project assigned: {reference}",
+            body=f"You were assigned to project {reference}: {project.name}.",
+            target_url=f"/admin/projects/{project.id}",
+            actor_identity_id=coerce_uuid(actor_id),
+        ),
     )
 
 
@@ -3087,6 +3098,7 @@ class Projects(ListResponseMixin):
         _notify_project_assignments(
             db,
             project,
+            context=context,
             actor_id=str(payload.created_by_person_id)
             if payload.created_by_person_id
             else None,
@@ -3493,6 +3505,7 @@ class Projects(ListResponseMixin):
             _notify_project_assignments(
                 db,
                 project,
+                context=context,
                 actor_id=str(actor_id) if actor_id else None,
                 previous_user_ids=previous_assignment_user_ids,
             )

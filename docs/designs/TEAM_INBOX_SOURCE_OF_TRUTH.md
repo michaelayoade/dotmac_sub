@@ -400,9 +400,16 @@ stale. Realtime has no replay authority.
   render countdown and expired-state actions from that projection only; browser
   timers are presentation helpers and do not authorize a send.
 - Private notes are internal messages written by the operator command owner.
-  Mention metadata stores stable system-user identifiers, and internal mention
-  notifications use the existing notification owner with deterministic dedupe
-  keys. Private notes and mentions never create provider delivery intents.
+  Mention metadata stores stable system-user identifiers after the command owner
+  revalidates active conversation-team visibility. The same transaction stages
+  deterministic per-recipient in-app and email rows through
+  `communications.staff_notifications`. Optional Nextcloud Talk staging uses
+  `execute_owner_savepoint`; a staging failure is recorded on note metadata and
+  cannot roll back the private note. Notification copy excludes note and customer
+  content. Its personal Inbox-open link marks the notice read, then targets the
+  exact conversation and message for browser scroll and highlight. The author is
+  not notified. Mentions never assign, transfer, change status, or create a
+  customer/provider delivery intent.
 - Lifecycle activity appears as subtle inline system timeline entries ordered by
   occurrence time with messages. The template must distinguish system entries
   from customer, agent, and private-note messages and must not delete or rewrite
