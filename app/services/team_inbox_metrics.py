@@ -21,7 +21,7 @@ from sqlalchemy import (
     true,
 )
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.elements import ColumnElement, SQLColumnExpression
 from sqlalchemy.sql.selectable import CTE
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
@@ -1786,8 +1786,8 @@ def agent_performance_report(
 def _analytics_duration_seconds(
     db: Session,
     *,
-    started_at: ColumnElement[datetime],
-    ended_at: ColumnElement[datetime],
+    started_at: SQLColumnExpression[datetime | None],
+    ended_at: SQLColumnExpression[datetime | None],
 ) -> ColumnElement[float | None]:
     """Return a portable SQL expression for a non-negative duration."""
 
@@ -1802,7 +1802,7 @@ def _analytics_duration_seconds(
 
 
 def _team_sla_expression(
-    team_column: ColumnElement[UUID],
+    team_column: SQLColumnExpression[UUID],
     thresholds: dict[UUID, int],
 ) -> ColumnElement[int | None]:
     """Build a portable SQL expression for per-team SLA thresholds."""
@@ -2648,12 +2648,11 @@ def agent_performance_evidence(
         return ()
 
     conversation_ids = [assignment.conversation_id for assignment, _, _ in records]
-    bounded_messages = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.conversation_id.in_(conversation_ids))
+    bounded_messages = db.scalars(
+        select(InboxMessage)
+        .where(InboxMessage.conversation_id.in_(conversation_ids))
         .order_by(InboxMessage.created_at.asc())
         .limit(1000)
-        .all()
     )
     messages: dict[UUID, list[InboxMessage]] = {}
     for message in bounded_messages:

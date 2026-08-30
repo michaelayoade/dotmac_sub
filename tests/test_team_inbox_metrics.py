@@ -595,8 +595,8 @@ def test_crm_agent_performance_report_includes_resolved_conversations(db_session
 
     assert "Resolved" in report.columns
     metric_values = {metric.label: metric.value for metric in report.metrics}
-    assert metric_values["Chats assigned"] == "1"
-    assert metric_values["Chats resolved"] == "1"
+    assert metric_values["Assigned chats"] == "1"
+    assert metric_values["Resolved chats"] == "1"
     assert report.rows == (
         (
             "Test Staff",
