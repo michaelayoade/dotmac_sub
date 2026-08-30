@@ -454,14 +454,31 @@ the fourth at all.
 | **Transport / DNS** | `integration_config_revisions.config_json ->> 'base_url'` on that installation — the dead `crm.dotmac.io` host | the revision rows are append-only history; disabling the installation is what stops them being used. Do **not** rewrite historical revisions |
 | **Credential** | `integration_config_revisions.secret_refs ->> 'service_credentials'` — a **pointer**, resolved only inside connection validation | revoke at the store the pointer names. Record the pointer, never the value |
 | **Webhook transport** | the `sync_crm_ticket` path — see the observation section | **turning the scheduler control off does not disable this.** Only revoking the webhook transport does |
-| **Monitoring binding** | **not in this repository** | see below |
+| **Monitoring binding** | not in this repository — Observer owns it | **RETIRED** 2026-08-30, Observability PR #13 (`393e8703`) — see below |
 
-### The monitoring binding cannot be closed from Sub
+### The monitoring binding — RETIRED, and it was resolved rather than assumed
 
 There is no Prometheus, alert-rule, blackbox or scrape configuration anywhere
 in this repository — a search of `deploy/`, `docker/`, `config/` and `nginx/`
 for CRM references returns nothing. That surface belongs to Observer, in
 Observer's own repository and on Observer's host.
+
+**Closed 2026-08-30 by the Observability lane, Observability PR #13
+(`393e8703`).** Zero CRM references across Prometheus, alert rules,
+Alertmanager, Loki, Promtail, compose **and `grafana.db`** — each sweep
+carrying a positive control proving it read what it claimed to. The Grafana
+question two earlier sweeps left as "unknown, not absent" was settled by
+reading `grafana.db` directly as a read-only copy, needing no credentials: it
+holds zero dashboards of any kind. What survives is retained series and log
+streams that age out with retention; nothing scrapes, ships, routes or alerts
+on them. It is now a **standing property** — a `retired` declaration whose gate
+reads rendered bytes and cannot pass by reading nothing — rather than a
+one-time grep.
+
+Note what made that answer trustworthy, because it is the same standard this
+runbook applies elsewhere: they did not inherit the UNKNOWN, and they did not
+prove absence by finding nothing. Each sweep had to demonstrate it *would* have
+seen a reference.
 
 This matters more than it looks. A scrape or alert still pointed at a retired
 transport keeps the dependency alive in Observer's view of the world, so the
