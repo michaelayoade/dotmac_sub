@@ -604,8 +604,8 @@ def test_crm_agent_performance_report_includes_resolved_conversations(db_session
             "1",
             "1",
             "0",
-            "30.0m",
             "7.0m",
+            "Low evidence / Not scored",
         ),
     )
 
