@@ -762,6 +762,8 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("communications.team_inbox_commands") == (
         "auth.permission_gate",
+        "communications.nextcloud_talk_staff",
+        "communications.staff_notifications",
         "communications.team_inbox_threads",
         "communications.team_inbox_contact_resolution",
         "communications.team_inbox_routing",

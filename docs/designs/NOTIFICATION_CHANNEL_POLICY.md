@@ -84,6 +84,24 @@ defaults off, while connector URL, notifier username, timeout, and the
 app-password secret reference belong to the version-pinned integration
 installation.
 
+## Personal staff notification inbox
+
+`communications.staff_notifications` stages assignment delivery and the
+source-linked personal `AdminNotification` projection. Ticket and project
+owners must use the typed assignment request and supply an exact internal detail
+target; `/admin` is not an actionable assignment target.
+
+`communications.staff_notification_read_state` owns the user-scoped menu,
+unread count, and atomic mark-read transition. The bell loads that personal
+projection when an admin page opens and refreshes it every 30 seconds. Global
+queue totals and another staff member's unread rows never drive the red dot.
+Opening an item rechecks its `SystemUser` owner, marks it read, and follows only
+the stored internal target. For pre-cutover ticket/project assignments that
+still store `/admin`, the open command may repair that row once when its title
+contains an unambiguous canonical ticket or project reference. The repair is
+retired after a backfill audit finds no remaining dashboard-only assignment
+rows.
+
 ## Related
 
 - `docs/SOT_RELATIONSHIP_MAP.md` — `notifications_communications` domain

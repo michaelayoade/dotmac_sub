@@ -325,6 +325,27 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
+## Personal Staff Notification Bell Contract
+
+- Audience and task: authenticated staff need to see pending personal work and
+  open the exact assigned entity without first opening the bell menu.
+- Authority: `communications.staff_notification_read_state` owns the typed
+  personal menu, unread count, and mark-read transition.
+  `communications.staff_notifications` owns source-linked inbox materialization;
+  the assigning business owner supplies the exact internal detail target.
+- Initial and fresh state: every admin page loads the personal unread projection
+  immediately and refreshes it at most 30 seconds later while the page remains
+  open. Global delivery-queue totals never drive the personal red dot.
+- Navigation: opening an item is scoped to the authenticated `SystemUser`, marks
+  only that row read, and follows its stored target. A legacy ticket/project
+  assignment whose stored target is only `/admin` is repaired once from an
+  unambiguous canonical entity reference before navigation. Missing,
+  ambiguous, or cross-user items fail closed without exposing another target.
+- States and accessibility: zero unread removes the red dot; non-zero unread
+  supplies an accessible count. Empty, loading, unread, read, and unauthorized
+  states remain distinct, and notification identity is never communicated by
+  color alone inside the menu.
+
 ## Inbox Lead Intake And Catalogue Action Contract
 
 - Audience and task: a prospect who is neither a customer nor a customer contact
