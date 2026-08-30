@@ -546,7 +546,9 @@ def test_invite_intent_record_contains_no_capability(
 
 
 def test_the_owner_mints_a_distinct_secret_per_account_and_accepts_none(
-    db_session, monkeypatch
+    db_session,
+    first_class_principal_mode,
+    monkeypatch,
 ):
     """No caller may choose a reseller's initial password, and no two share one.
 
