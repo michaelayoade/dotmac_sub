@@ -37,7 +37,8 @@ from pathlib import Path
 
 import pytest
 
-from app.models.notification import Notification
+from app.models.admin_alert import AdminNotification
+from app.models.notification import Notification, NotificationChannel
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxAgentPresence,
@@ -53,6 +54,7 @@ from app.models.team_inbox import (
     InboxStatusTransitionEvent,
 )
 from app.services import team_inbox_commands, team_inbox_projection, team_inbox_read
+from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 ROUTES_SOURCE = Path("app/web/admin/inbox.py").read_text()
@@ -197,6 +199,28 @@ def _conversation_id(db_session, *, team_id=None):
     return captured
 
 
+def _private_note_command(
+    *,
+    conversation_id,
+    body,
+    actor_person_id,
+    actor_system_user_id=None,
+    mention_user_ids=(),
+):
+    return team_inbox_commands.CreateInternalNoteCommand(
+        context=CommandContext.system(
+            actor="test:team-inbox-private-note",
+            scope="team-inbox:private-note",
+            reason="exercise private note behavior",
+        ),
+        conversation_id=conversation_id,
+        body=body,
+        actor_person_id=actor_person_id,
+        actor_system_user_id=actor_system_user_id or uuid.uuid4(),
+        mention_user_ids=tuple(mention_user_ids),
+    )
+
+
 def test_a_private_note_records_its_author(db_session, actor):
     """A note is an InboxMessage with direction='internal', and its author is
     in metadata rather than a column."""
@@ -204,9 +228,11 @@ def test_a_private_note_records_its_author(db_session, actor):
 
     team_inbox_commands.create_internal_note(
         db_session,
-        conversation_id=conversation_id,
-        body="Checked the ONT.",
-        actor_person_id=actor,
+        _private_note_command(
+            conversation_id=conversation_id,
+            body="Checked the ONT.",
+            actor_person_id=actor,
+        ),
     )
 
     note = (
@@ -236,10 +262,15 @@ def test_private_note_mentions_store_user_ids_and_notify_once(db_session, actor)
 
     team_inbox_commands.create_internal_note(
         db_session,
-        conversation_id=conversation_id,
-        body=f"Please review this @{mentioned_user.display_name or mentioned_user.email}",
-        actor_person_id=actor,
-        mention_user_ids=(mentioned_user.id, mentioned_user.id),
+        _private_note_command(
+            conversation_id=conversation_id,
+            body=(
+                f"Please review this "
+                f"@{mentioned_user.display_name or mentioned_user.email}"
+            ),
+            actor_person_id=actor,
+            mention_user_ids=(mentioned_user.id, mentioned_user.id),
+        ),
     )
 
     note = (
@@ -249,10 +280,172 @@ def test_private_note_mentions_store_user_ids_and_notify_once(db_session, actor)
     )
     notifications = db_session.query(Notification).all()
     assert (note.metadata_ or {}).get("mentions") == [str(mentioned_user.id)]
-    assert len(notifications) == 1
-    assert notifications[0].event_type == "team_inbox.private_note_mention"
-    assert notifications[0].dedupe_key == (
-        f"inbox-note-mention:{note.id}:{mentioned_user.id}"
+    assert len(notifications) == 2
+    assert {item.channel for item in notifications} == {
+        NotificationChannel.push,
+        NotificationChannel.email,
+    }
+    assert {item.event_type for item in notifications} == {
+        "team_inbox.private_note_mention"
+    }
+    assert all(str(note.id) in str(item.dedupe_key) for item in notifications)
+    admin_notification = db_session.query(AdminNotification).one()
+    assert admin_notification.system_user_id == mentioned_user.id
+    assert admin_notification.target_url == (
+        f"/admin/inbox?conversation_id={conversation_id}&message_id={note.id}"
+    )
+    assert [
+        option.id
+        for option in team_inbox_projection.list_mentionable_users(
+            db_session,
+            conversation_id=conversation_id,
+            search="",
+        )
+    ] == [mentioned_user.id]
+
+
+def test_private_note_self_mention_does_not_notify(db_session):
+    actor_user, actor_person = add_bound_staff_user(
+        db_session,
+        email="self-mention-agent@example.test",
+    )
+    team = ServiceTeam(
+        name="Self Mention Team", team_type=ServiceTeamType.support.value
+    )
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=actor_person.id,
+            is_active=True,
+        )
+    )
+    conversation_id = _conversation_id(db_session, team_id=team.id)
+
+    outcome = team_inbox_commands.create_internal_note(
+        db_session,
+        _private_note_command(
+            conversation_id=conversation_id,
+            body="@Self review",
+            actor_person_id=actor_person.id,
+            actor_system_user_id=actor_user.id,
+            mention_user_ids=(actor_user.id,),
+        ),
+    )
+
+    assert outcome.mentioned_user_ids == ()
+    assert db_session.query(Notification).count() == 0
+    assert db_session.query(AdminNotification).count() == 0
+
+
+def test_private_note_talk_staging_failure_does_not_lose_note(
+    db_session, actor, monkeypatch
+):
+    from app.services import nextcloud_talk_staff
+
+    mentioned_user, mentioned_person = add_bound_staff_user(
+        db_session,
+        email="talk-failure-agent@example.test",
+    )
+    team = ServiceTeam(
+        name="Talk Failure Team", team_type=ServiceTeamType.support.value
+    )
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=mentioned_person.id,
+            is_active=True,
+        )
+    )
+    conversation_id = _conversation_id(db_session, team_id=team.id)
+
+    def fail_talk_staging(*_args, **_kwargs):
+        raise RuntimeError("Talk unavailable")
+
+    monkeypatch.setattr(
+        nextcloud_talk_staff,
+        "stage_staff_talk_notification",
+        fail_talk_staging,
+    )
+
+    team_inbox_commands.create_internal_note(
+        db_session,
+        _private_note_command(
+            conversation_id=conversation_id,
+            body="@Agent please review",
+            actor_person_id=actor,
+            mention_user_ids=(mentioned_user.id,),
+        ),
+    )
+
+    note = db_session.query(InboxMessage).one()
+    assert (note.metadata_ or {}).get("mention_notification_failures") == [
+        {
+            "channel": "nextcloud_talk",
+            "code": "staging_failed",
+            "system_user_id": str(mentioned_user.id),
+        }
+    ]
+    assert db_session.query(AdminNotification).count() == 1
+
+
+def test_private_note_stages_talk_with_notification_open_link(
+    db_session, actor, monkeypatch
+):
+    from app.services import nextcloud_talk_staff
+
+    mentioned_user, mentioned_person = add_bound_staff_user(
+        db_session,
+        email="talk-mention-agent@example.test",
+    )
+    team = ServiceTeam(
+        name="Talk Mention Team", team_type=ServiceTeamType.support.value
+    )
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=mentioned_person.id,
+            is_active=True,
+        )
+    )
+    conversation_id = _conversation_id(db_session, team_id=team.id)
+    staged_commands = []
+
+    def capture_talk_staging(_db, command):
+        staged_commands.append(command)
+        return None
+
+    monkeypatch.setattr(
+        nextcloud_talk_staff,
+        "stage_staff_talk_notification",
+        capture_talk_staging,
+    )
+
+    outcome = team_inbox_commands.create_internal_note(
+        db_session,
+        _private_note_command(
+            conversation_id=conversation_id,
+            body="@Agent please review",
+            actor_person_id=actor,
+            mention_user_ids=(mentioned_user.id,),
+        ),
+    )
+
+    assert len(staged_commands) == 1
+    talk_command = staged_commands[0]
+    assert talk_command.event_type is (
+        nextcloud_talk_staff.StaffTalkEventType.team_inbox_private_note_mention
+    )
+    assert talk_command.source_event_id == outcome.note_id
+    assert talk_command.system_user_id == mentioned_user.id
+    admin_notification = db_session.query(AdminNotification).one()
+    assert talk_command.target_url == (
+        f"/admin/notifications/inbox/{admin_notification.id}/open"
     )
 
 
@@ -271,10 +464,12 @@ def test_private_note_mentions_reject_users_without_conversation_visibility(
     with pytest.raises(team_inbox_commands.InboxCommandRejected):
         team_inbox_commands.create_internal_note(
             db_session,
-            conversation_id=conversation_id,
-            body="@Outsider should not resolve",
-            actor_person_id=actor,
-            mention_user_ids=(outsider_user.id,),
+            _private_note_command(
+                conversation_id=conversation_id,
+                body="@Outsider should not resolve",
+                actor_person_id=actor,
+                mention_user_ids=(outsider_user.id,),
+            ),
         )
 
     assert db_session.query(InboxMessage).count() == 0

@@ -76,8 +76,9 @@ both the config key lists and the templates.
 ## Internal Nextcloud Talk delivery
 
 `nextcloud_talk` is an internal staff transport and is intentionally excluded
-from `SELECTABLE_CHANNELS`. Ticket/project assignment and explicit-mention
-owners stage it through `communications.nextcloud_talk_staff`; customer channel
+from `SELECTABLE_CHANNELS`. Ticket/project assignment, ticket/project comment
+mentions, and Team Inbox private-note mentions stage it through
+`communications.nextcloud_talk_staff`; customer channel
 preferences and the customer channel policy do not apply. The feature flag
 defaults off, while connector URL, notifier username, timeout, and the
 app-password secret reference belong to the version-pinned integration

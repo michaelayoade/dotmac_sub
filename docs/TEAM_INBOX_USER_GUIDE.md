@@ -228,8 +228,18 @@ conversation is resolved.
 ### Private notes and mentions
 
 Switch the composer to **Note** to add information that must remain internal.
-Type `@` to mention a colleague. A private note never reaches the customer and
-does not count as an agent response to the customer.
+Type `@` to open the eligible-colleague list, then choose a colleague with a
+mouse, touch, Enter, or Tab. The list stays within the visible screen and opens
+above the composer when there is not enough room below it. Selected colleagues
+appear as removable chips; removing the name from the note also removes its
+notification recipient.
+
+When the note is saved, each mentioned colleague receives an Inbox bell item
+and an email. If internal Nextcloud Talk notifications are enabled and that
+colleague has a staff mapping, they also receive a Talk direct message. Opening
+any notification marks the Inbox item read and opens the exact conversation and
+highlighted note. A private note never reaches the customer, does not assign or
+change the conversation, and does not count as an agent response to the customer.
 
 ### Team comments
 

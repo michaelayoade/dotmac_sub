@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi import BackgroundTasks
 from starlette.requests import Request
@@ -28,7 +29,9 @@ def _request() -> Request:
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    return Request({"type": "http", "method": "POST", "path": "/"}, receive)
+    request = Request({"type": "http", "method": "POST", "path": "/"}, receive)
+    request.state.user = SimpleNamespace(id=uuid.uuid4())
+    return request
 
 
 def _subscriber(db_session, *, first_name: str = "Ada") -> Subscriber:

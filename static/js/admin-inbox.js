@@ -2664,24 +2664,118 @@
     textarea.dataset.mentionsReady = "true";
     const form = textarea.closest("form");
     const hidden = form?.querySelector("[data-mention-user-ids]");
+    const selectedContainer = form?.querySelector("[data-mention-selected]");
+    const status = form?.querySelector("[data-mention-status]");
     const menu = document.createElement("div");
     menu.className =
-      "absolute z-40 hidden max-h-48 w-72 overflow-auto rounded-lg border border-slate-200 bg-white p-1 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900";
+      "inbox-mention-menu fixed hidden overflow-auto rounded-lg border border-slate-200 bg-white p-1 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900";
+    menu.id = `inbox-mention-menu-${Math.random().toString(36).slice(2)}`;
     menu.setAttribute("role", "listbox");
-    textarea.parentElement?.classList.add("relative");
-    textarea.parentElement?.appendChild(menu);
+    menu.setAttribute("aria-label", "Eligible colleagues");
+    document.body.appendChild(menu);
+    textarea.setAttribute("role", "combobox");
+    textarea.setAttribute("aria-haspopup", "listbox");
+    textarea.setAttribute("aria-controls", menu.id);
     const selected = new Map();
     let activeIndex = -1;
     let searchSequence = 0;
     let searchController = null;
 
+    const announce = (message) => {
+      if (status) status.textContent = message;
+    };
     const syncHidden = () => {
       if (hidden) hidden.value = Array.from(selected.keys()).join(",");
+    };
+    const removeMention = (id) => {
+      const item = selected.get(id);
+      if (!item) return;
+      selected.delete(id);
+      const label = `@${item.name}`;
+      const index = textarea.value.indexOf(label);
+      if (index >= 0) {
+        textarea.value =
+          textarea.value.slice(0, index) +
+          textarea.value.slice(index + label.length).replace(/^ /, "");
+      }
+      renderSelected();
+      textarea.focus();
+      announce(`${item.name} removed from mentions.`);
+    };
+    const renderSelected = () => {
+      if (!selectedContainer) {
+        syncHidden();
+        return;
+      }
+      selectedContainer.innerHTML = "";
+      selected.forEach((item, id) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className =
+          "inline-flex min-h-9 items-center gap-1 rounded-full bg-amber-100 px-3 text-xs font-semibold text-amber-900 hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:bg-amber-900/40 dark:text-amber-100";
+        chip.setAttribute("aria-label", `Remove mention of ${item.name}`);
+        chip.textContent = `@${item.name} ×`;
+        chip.addEventListener("click", () => removeMention(id));
+        selectedContainer.appendChild(chip);
+      });
+      selectedContainer.classList.toggle("hidden", selected.size === 0);
+      selectedContainer.classList.toggle("flex", selected.size > 0);
+      syncHidden();
+    };
+    const reconcileSelected = () => {
+      let changed = false;
+      selected.forEach((item, id) => {
+        if (!textarea.value.includes(`@${item.name}`)) {
+          selected.delete(id);
+          changed = true;
+        }
+      });
+      if (changed) renderSelected();
+    };
+    const positionMenu = () => {
+      if (menu.classList.contains("hidden") || !document.contains(textarea)) return;
+      const viewport = window.visualViewport;
+      const viewportLeft = viewport?.offsetLeft || 0;
+      const viewportTop = viewport?.offsetTop || 0;
+      const viewportWidth = viewport?.width || window.innerWidth;
+      const viewportHeight = viewport?.height || window.innerHeight;
+      const margin = 8;
+      const gap = 6;
+      const rect = textarea.getBoundingClientRect();
+      const width = Math.min(
+        320,
+        viewportWidth - margin * 2,
+        Math.max(240, rect.width || 320),
+      );
+      const below = viewportTop + viewportHeight - rect.bottom - gap - margin;
+      const above = rect.top - viewportTop - gap - margin;
+      const naturalHeight = Math.min(menu.scrollHeight || 192, 240);
+      const openBelow = below >= Math.min(naturalHeight, 160) || below >= above;
+      const available = Math.max(
+        48,
+        Math.min(viewportHeight - margin * 2, openBelow ? below : above),
+      );
+      const height = Math.min(naturalHeight, available);
+      const left = Math.min(
+        Math.max(rect.left, viewportLeft + margin),
+        viewportLeft + viewportWidth - width - margin,
+      );
+      const top = openBelow
+        ? Math.min(
+            rect.bottom + gap,
+            viewportTop + viewportHeight - height - margin,
+          )
+        : Math.max(viewportTop + margin, rect.top - gap - height);
+      menu.style.width = `${width}px`;
+      menu.style.maxHeight = `${available}px`;
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
     };
     const close = () => {
       menu.classList.add("hidden");
       menu.innerHTML = "";
       activeIndex = -1;
+      textarea.setAttribute("aria-expanded", "false");
       textarea.removeAttribute("aria-activedescendant");
     };
     const options = () => Array.from(menu.querySelectorAll("[data-mention-option]"));
@@ -2702,22 +2796,26 @@
     const queryAtCursor = () => {
       const pos = textarea.selectionStart || 0;
       const before = textarea.value.slice(0, pos);
-      const match = before.match(/(^|\s)@([A-Za-z0-9._ -]{0,40})$/);
+      const match = before.match(/(^|\s)@([^\r\n@]{0,60})$/u);
       return match ? { text: match[2], start: pos - match[2].length - 1, end: pos } : null;
     };
     const choose = (item, token) => {
-      selected.set(String(item.id), item.name);
+      selected.set(String(item.id), { id: String(item.id), name: item.name });
+      const insertion = `@${item.name} `;
       textarea.value =
         textarea.value.slice(0, token.start) +
-        `@${item.name} ` +
+        insertion +
         textarea.value.slice(token.end);
       textarea.focus();
-      syncHidden();
+      const caret = token.start + insertion.length;
+      textarea.setSelectionRange(caret, caret);
+      renderSelected();
+      announce(`${item.name} will be notified when the note is saved.`);
       close();
     };
     const search = async () => {
       const token = queryAtCursor();
-      if (!token || token.text.length < 1) {
+      if (!token) {
         searchController?.abort();
         close();
         return;
@@ -2726,7 +2824,9 @@
       searchController?.abort();
       searchController = new AbortController();
       menu.classList.remove("hidden");
+      textarea.setAttribute("aria-expanded", "true");
       menu.innerHTML = '<div class="px-3 py-2 text-slate-500">Searching...</div>';
+      positionMenu();
       try {
         const url = new URL(textarea.dataset.mentionEndpoint, window.location.origin);
         url.searchParams.set("q", token.text);
@@ -2746,6 +2846,7 @@
         const users = Array.isArray(data.users) ? data.users : [];
         if (!users.length) {
           menu.innerHTML = '<div class="px-3 py-2 text-slate-500">No eligible colleagues</div>';
+          positionMenu();
           return;
         }
         menu.innerHTML = "";
@@ -2757,20 +2858,26 @@
           button.setAttribute("role", "option");
           button.setAttribute("aria-selected", "false");
           button.className =
-            "block min-h-10 w-full rounded-md px-3 text-left hover:bg-amber-50 dark:hover:bg-slate-800";
+            "block min-h-11 w-full touch-manipulation rounded-md px-3 text-left hover:bg-amber-50 focus:outline-none dark:hover:bg-slate-800";
           button.textContent = `${item.name} (${item.email})`;
           button.addEventListener("click", () => choose(item, token));
           button.addEventListener("mouseenter", () => setActive(index));
           menu.appendChild(button);
         });
         setActive(0);
+        positionMenu();
       } catch (error) {
         if (error?.name === "AbortError") return;
         menu.innerHTML = '<div class="px-3 py-2 text-rose-600">Mentions unavailable</div>';
+        positionMenu();
       }
     };
 
-    textarea.addEventListener("input", search);
+    const handleInput = () => {
+      reconcileSelected();
+      search();
+    };
+    textarea.addEventListener("input", handleInput);
     textarea.addEventListener("keydown", (event) => {
       const items = options();
       if (event.key === "Escape") {
@@ -2788,7 +2895,7 @@
         setActive(activeIndex - 1);
         return;
       }
-      if (event.key === "Enter" && activeIndex >= 0) {
+      if ((event.key === "Enter" || event.key === "Tab") && activeIndex >= 0) {
         event.preventDefault();
         items[activeIndex]?.click();
       }
@@ -2797,9 +2904,19 @@
       if (!menu.contains(event.target) && event.target !== textarea) close();
     };
     document.addEventListener("click", closeOnOutsideClick);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    window.visualViewport?.addEventListener("resize", positionMenu);
+    window.visualViewport?.addEventListener("scroll", positionMenu);
     textarea.__inboxMentionCleanup = () => {
       searchController?.abort();
       document.removeEventListener("click", closeOnOutsideClick);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+      window.visualViewport?.removeEventListener("resize", positionMenu);
+      window.visualViewport?.removeEventListener("scroll", positionMenu);
+      textarea.removeEventListener("input", handleInput);
+      menu.remove();
       textarea.__inboxMentionCleanup = null;
     };
   }
@@ -3000,14 +3117,40 @@
     );
   }
 
+  function revealTargetInboxMessage() {
+    const messageId = new URLSearchParams(window.location.search).get("message_id");
+    if (!messageId) return;
+    const message = document.querySelector(
+      `[data-inbox-message-id="${CSS.escape(messageId)}"]`,
+    );
+    if (!message || message.dataset.targetMessageRevealed === "true") return;
+    message.dataset.targetMessageRevealed = "true";
+    const hadTabIndex = message.hasAttribute("tabindex");
+    message.setAttribute("tabindex", "-1");
+    message.classList.add("inbox-message-target");
+    message.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+      block: "center",
+    });
+    message.focus({ preventScroll: true });
+    window.setTimeout(() => {
+      message.classList.remove("inbox-message-target");
+      if (!hadTabIndex) message.removeAttribute("tabindex");
+    }, 4000);
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     initReplyWindows();
     initMentions();
     initWhatsAppTemplateReopenForms();
+    revealTargetInboxMessage();
   });
   document.body?.addEventListener("htmx:afterSwap", (event) => {
     initReplyWindows(event.target);
     initMentions(event.target);
     initWhatsAppTemplateReopenForms(event.target);
+    revealTargetInboxMessage();
   });
 })();
