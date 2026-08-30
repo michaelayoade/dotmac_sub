@@ -290,6 +290,23 @@ Record the four results, the flip time and the observation time. That set is
 the `runtime_observation` for this retirement's receipt — the field the chat
 cutover could not fill, and the reason this procedure exists in this shape.
 
+**Why query 4 is not redundant with query 3, and a retry cannot slip past
+either.** Every *scheduled* invocation goes through `run_scheduled_pull`, which
+writes its `IntegrationRun` row before doing anything else — so query 3 counts
+beats, manual triggers and retries alike, at the run level rather than the
+schedule level. `pull_crm_tickets` declares no `autoretry_for`, so a failed
+poll does not reschedule itself, but a retry introduced later would still
+appear as a run.
+
+The second task is the gap. `app.tasks.crm_ticket_pull.sync_crm_ticket` is
+webhook-driven and calls `sync_ticket_by_id` **directly**, never touching
+`run_scheduled_pull` — so it can write a `support_tickets` row while leaving no
+`IntegrationRun` behind at all. Query 3 cannot see it. That is precisely why
+the observation also checks the destination: **do not drop query 4 as
+duplicative of query 3.** Disabling the scheduler control does not disable this
+task either; only revoking the webhook transport does, which is containment
+item 4.
+
 **Note what the deploy gate will not tell you.**
 `scripts/integrations/verify_crm_ticket_readiness` makes **zero** network
 calls. It keeps passing against a dead host until the rows are removed, so it
