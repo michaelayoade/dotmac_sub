@@ -769,6 +769,169 @@ def test_agent_performance_analytics_paginates_agent_team_rows_in_sql(db_session
     assert second.has_previous is True
 
 
+def test_agent_performance_analytics_without_sla_keeps_current_metrics(db_session):
+    team = _team(db_session)
+    user, person = add_bound_staff_user(db_session)
+    db_session.add(
+        ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True)
+    )
+    base = datetime(2026, 8, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.outbound.value,
+        at=base + timedelta(minutes=5),
+        sent_by_person_id=user.id,
+    )
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=conversation.id,
+            service_team_id=team.id,
+            person_id=user.id,
+            assigned_at=base,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    page = team_inbox_metrics.agent_performance_analytics(
+        db_session,
+        query=team_inbox_metrics.InboxAgentPerformanceQuery(
+            start_at=base - timedelta(minutes=1),
+            end_at=base + timedelta(days=1),
+            per_page=10,
+        ),
+    )
+
+    assert page.summary.assigned_conversation_count == 1
+    assert page.summary.active_assignment_count == 1
+    assert page.summary.average_first_response_seconds == 300
+    assert page.summary.sla_configured is False
+    assert page.rows[0].first_response_sla_seconds is None
+    assert page.rows[0].resolution_sla_seconds is None
+
+
+def test_agent_performance_analytics_returns_sla_met_and_breached_counts(db_session):
+    team = _team(db_session)
+    team.metadata_ = {
+        "inbox_sla": {
+            "first_response_seconds": 600,
+            "resolution_sla_seconds": 1200,
+        }
+    }
+    user, person = add_bound_staff_user(db_session)
+    db_session.add(
+        ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True)
+    )
+    base = datetime(2026, 8, 10, 8, 0, tzinfo=UTC)
+    for index, (response_minutes, resolution_minutes) in enumerate(((5, 15), (15, 30))):
+        first_at = base + timedelta(hours=index)
+        conversation = _conversation(db_session, team, first_at=first_at)
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.inbound.value,
+            at=first_at,
+        )
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.outbound.value,
+            at=first_at + timedelta(minutes=response_minutes),
+            sent_by_person_id=user.id,
+        )
+        db_session.add(
+            InboxConversationAssignment(
+                conversation_id=conversation.id,
+                service_team_id=team.id,
+                person_id=user.id,
+                assigned_at=first_at,
+                is_active=False,
+            )
+        )
+        team_inbox_status.apply_status_transition(
+            db_session,
+            conversation=conversation,
+            status=InboxConversationStatus.resolved,
+            actor_person_id=user.id,
+            reason=team_inbox_status.InboxStatusReason.operator_change,
+            source_id=f"test:agent-sla:{index}",
+            occurred_at=first_at + timedelta(minutes=resolution_minutes),
+        )
+    db_session.commit()
+
+    page = team_inbox_metrics.agent_performance_analytics(
+        db_session,
+        query=team_inbox_metrics.InboxAgentPerformanceQuery(
+            start_at=base - timedelta(minutes=1),
+            end_at=base + timedelta(days=1),
+            per_page=10,
+        ),
+    )
+    row = page.rows[0]
+
+    assert row.first_response_sla_met_count == 1
+    assert row.first_response_sla_breached_count == 1
+    assert row.first_response_sla_rate == 0.5
+    assert row.resolution_sla_met_count == 1
+    assert row.resolution_sla_breached_count == 1
+    assert row.resolution_sla_rate == 0.5
+    assert page.summary.sla_configured is True
+
+
+def test_agent_team_filter_limits_totals_and_combines_with_search(db_session):
+    support = _team(db_session, "Support")
+    billing = _team(db_session, "Billing")
+    base = datetime(2026, 8, 10, 8, 0, tzinfo=UTC)
+    for index, (team, display_name) in enumerate(
+        ((support, "Ada Support"), (billing, "Bola Billing"))
+    ):
+        user, person = add_bound_staff_user(
+            db_session, email=f"agent-filter-{index}@example.test"
+        )
+        user.display_name = display_name
+        db_session.add(
+            ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True)
+        )
+        conversation = _conversation(db_session, team, first_at=base)
+        db_session.add(
+            InboxConversationAssignment(
+                conversation_id=conversation.id,
+                service_team_id=team.id,
+                person_id=user.id,
+                assigned_at=base,
+                is_active=True,
+            )
+        )
+    db_session.commit()
+
+    page = team_inbox_metrics.agent_performance_analytics(
+        db_session,
+        query=team_inbox_metrics.InboxAgentPerformanceQuery(
+            start_at=base - timedelta(minutes=1),
+            end_at=base + timedelta(days=1),
+            per_page=10,
+            service_team_id=support.id,
+            search="Ada",
+        ),
+    )
+
+    assert page.total == 1
+    assert page.summary.agent_count == 1
+    assert page.summary.activity_agent_count == 1
+    assert page.summary.assigned_conversation_count == 1
+    assert page.summary.active_assignment_count == 1
+    assert page.rows[0].service_team_id == support.id
+    assert page.rows[0].agent_name == "Ada Support"
+
+
 def test_analytics_api_returns_inbox_team_performance(db_session):
     team = _team(db_session)
     base = datetime.now(UTC) - timedelta(days=1)

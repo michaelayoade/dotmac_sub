@@ -27,7 +27,6 @@ _CRM_REPORT_CONCERNS = (
     "subscriber billing-risk report projection",
     "subscriber revenue and pipeline report projection",
     "postpaid customer report projection",
-    "CRM team performance report projection",
     "administrative agent performance report projection",
     "personal agent performance report projection",
     "operations SLA violation report projection",
@@ -78,7 +77,9 @@ DOMAIN = DomainSOT(
             notes=(
                 "Read-only Self-Care report projections compose native owner facts. "
                 "They never copy CRM retention notes, dispositions, follow-ups, "
-                "campaign state, outreach history, or engagement records."
+                "campaign state, outreach history, or engagement records. Agent "
+                "analytics include only active service-team members, retain nullable "
+                "SLA configuration, and never rewrite legacy assignment rows."
             ),
             contract=ServiceContract(
                 concerns=tuple(
@@ -112,7 +113,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "inclusive dates, Africa/Lagos day/week/month/custom "
-                            "periods, bounded pagination, search, and personal-agent scope"
+                            "periods, service-team and agent filters, bounded pagination, "
+                            "export, and personal-agent scope"
                         ),
                     ),
                     AuthorityInput(
@@ -173,7 +175,10 @@ DOMAIN = DomainSOT(
                         name="native inbox records",
                         owner="communications.team_inbox_projection",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="inbox conversations, assignments, queues, messages, and recorded classifications",
+                        source=(
+                            "inbox conversations, active service-team membership, "
+                            "assignments, messages, status events, and team SLA metadata"
+                        ),
                     ),
                     AuthorityInput(
                         name="bounded inbox performance projections",
@@ -181,7 +186,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
                             "Typed date-bounded team and agent response cohorts with "
-                            "set-based aggregation and database pagination"
+                            "nullable SLA scoring and bounded evidence"
                         ),
                     ),
                     AuthorityInput(
@@ -219,7 +224,7 @@ DOMAIN = DomainSOT(
                     mapping_owner="app.web.admin.reports operational report adapter",
                     fail_closed_on=(
                         "missing exact report permission",
-                        "invalid report slug, date, or pagination input",
+                        "invalid report slug, period, service team, or pagination input",
                         "missing signed-in identity for personal reporting",
                     ),
                 ),
@@ -232,7 +237,10 @@ DOMAIN = DomainSOT(
                         "metric parity, empty/error state, SQL pagination, and export tests"
                     ),
                     cutover_gate="report-by-report comparison against the retained CRM surface",
-                    fallback_retirement="CRM routes retire only under the CRM web retirement gate",
+                    fallback_retirement=(
+                        "The duplicate CRM Performance builder is unreachable while "
+                        "Agent Performance, My Performance, and Inbox Performance remain."
+                    ),
                 ),
                 steward="Self-Care reporting",
                 design_refs=(
@@ -243,6 +251,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_crm_reporting.py",
+                    "tests/test_crm_agent_performance_sla.py",
                     "tests/test_team_inbox_metrics.py",
                 ),
                 projections=(

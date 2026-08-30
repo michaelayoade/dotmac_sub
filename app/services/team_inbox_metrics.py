@@ -155,6 +155,7 @@ class InboxAgentPerformanceQuery:
     page: int = 1
     per_page: int | None = 50
     person_id: UUID | None = None
+    service_team_id: UUID | None = None
     search: str | None = None
 
     def __post_init__(self) -> None:
@@ -183,6 +184,17 @@ class InboxAgentPerformanceAnalyticsRow:
     active_assignment_count: int
     average_resolution_seconds: float | None
     average_first_response_seconds: float | None
+    resolution_observation_count: int = 0
+    first_response_observation_count: int = 0
+    first_response_sla_seconds: int | None = None
+    resolution_sla_seconds: int | None = None
+    first_response_sla_met_count: int = 0
+    first_response_sla_breached_count: int = 0
+    first_response_sla_rate: float | None = None
+    resolution_sla_met_count: int = 0
+    resolution_sla_breached_count: int = 0
+    resolution_sla_rate: float | None = None
+    currently_overdue_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +205,22 @@ class InboxAgentPerformanceSummary:
     active_assignment_count: int
     average_resolution_seconds: float | None
     average_first_response_seconds: float | None
+    activity_agent_count: int = 0
+    first_response_observation_count: int = 0
+    resolution_observation_count: int = 0
+    first_response_sla_met_count: int = 0
+    first_response_sla_breached_count: int = 0
+    first_response_sla_rate: float | None = None
+    resolution_sla_met_count: int = 0
+    resolution_sla_breached_count: int = 0
+    resolution_sla_rate: float | None = None
+    currently_overdue_count: int = 0
+    first_response_sla_configured: bool = False
+    resolution_sla_configured: bool = False
+
+    @property
+    def sla_configured(self) -> bool:
+        return self.first_response_sla_configured or self.resolution_sla_configured
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +240,19 @@ class InboxAgentPerformanceAnalyticsPage:
     @property
     def has_next(self) -> bool:
         return self.page * self.per_page < self.total
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentConversationEvidence:
+    conversation_id: UUID
+    subject: str
+    service_team_id: UUID
+    service_team_name: str
+    assigned_at: datetime
+    resolved_at: datetime | None
+    is_active_assignment: bool
+    first_response_seconds: float | None
+    resolution_seconds: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +372,28 @@ def response_sla_seconds_for_team(
         candidates.extend(
             [nested.get("response_sla_seconds"), nested.get("first_response_seconds")]
         )
+    for candidate in candidates:
+        parsed = _positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return fallback
+
+
+def resolution_sla_seconds_for_team(
+    team: ServiceTeam,
+    *,
+    fallback: int | None = None,
+) -> int | None:
+    """Return the team's configured Inbox resolution SLA, when present."""
+
+    metadata = team.metadata_ or {}
+    nested = metadata.get("inbox_sla")
+    candidates = [
+        metadata.get("inbox_resolution_sla_seconds"),
+        metadata.get("resolution_sla_seconds"),
+    ]
+    if isinstance(nested, dict):
+        candidates.append(nested.get("resolution_sla_seconds"))
     for candidate in candidates:
         parsed = _positive_int(candidate)
         if parsed is not None:
@@ -1723,8 +1786,8 @@ def agent_performance_report(
 def _analytics_duration_seconds(
     db: Session,
     *,
-    started_at: Any,
-    ended_at: Any,
+    started_at: ColumnElement[datetime],
+    ended_at: ColumnElement[datetime],
 ) -> ColumnElement[float | None]:
     """Return a portable SQL expression for a non-negative duration."""
 
@@ -1732,12 +1795,23 @@ def _analytics_duration_seconds(
         elapsed = (func.julianday(ended_at) - func.julianday(started_at)) * 86400.0
     else:
         elapsed = func.extract("epoch", ended_at - started_at)
-    return type_cast(
-        ColumnElement[float | None],
-        case(
-            (and_(started_at.is_not(None), ended_at >= started_at), elapsed),
-            else_=None,
-        ),
+    return case(
+        (and_(started_at.is_not(None), ended_at >= started_at), elapsed),
+        else_=None,
+    )
+
+
+def _team_sla_expression(
+    team_column: ColumnElement[UUID],
+    thresholds: dict[UUID, int],
+) -> ColumnElement[int | None]:
+    """Build a portable SQL expression for per-team SLA thresholds."""
+
+    if not thresholds:
+        return literal(None)
+    return case(
+        *((team_column == team_id, seconds) for team_id, seconds in thresholds.items()),
+        else_=None,
     )
 
 
@@ -1746,12 +1820,34 @@ def agent_performance_analytics(
     *,
     query: InboxAgentPerformanceQuery,
 ) -> InboxAgentPerformanceAnalyticsPage:
-    """Aggregate bounded agent metrics in SQL and return one paged projection."""
+    """Aggregate bounded agent metrics in SQL and return one paged projection.
+
+    Assignment totals use assignment effective time. Resolution totals and
+    durations use append-only status-transition evidence, credited only to the
+    resolving agent's matching assignment at that instant. First-response time
+    uses the first recorded human outbound after the first inbound message for
+    conversations first received inside the requested interval.
+    """
 
     start_at = _as_utc(query.start_at)
     end_at = _as_utc(query.end_at)
     if start_at is None or end_at is None:
         raise InboxAgentPerformanceQueryError("Date bounds must be timezone-aware.")
+
+    team_statement = select(ServiceTeam).where(ServiceTeam.is_active.is_(True))
+    if query.service_team_id is not None:
+        team_statement = team_statement.where(ServiceTeam.id == query.service_team_id)
+    active_teams = tuple(db.scalars(team_statement).all())
+    response_slas = {
+        team.id: sla
+        for team in active_teams
+        if (sla := response_sla_seconds_for_team(team)) is not None
+    }
+    resolution_slas = {
+        team.id: sla
+        for team in active_teams
+        if (sla := resolution_sla_seconds_for_team(team)) is not None
+    }
 
     display_name = func.coalesce(
         func.nullif(func.trim(SystemUser.display_name), ""),
@@ -1775,6 +1871,10 @@ def agent_performance_analytics(
     )
     if query.person_id is not None:
         member_statement = member_statement.where(SystemUser.id == query.person_id)
+    if query.service_team_id is not None:
+        member_statement = member_statement.where(
+            ServiceTeamMember.team_id == query.service_team_id
+        )
     normalized_search = (query.search or "").strip()
     if normalized_search:
         search_term = f"%{normalized_search}%"
@@ -1806,11 +1906,57 @@ def agent_performance_analytics(
         )
         .cte("agent_period_assignments")
     )
+    if query.service_team_id is not None:
+        assigned = (
+            select(
+                InboxConversationAssignment.service_team_id,
+                InboxConversationAssignment.person_id,
+                func.count(
+                    func.distinct(InboxConversationAssignment.conversation_id)
+                ).label("assigned_count"),
+            )
+            .where(
+                InboxConversationAssignment.service_team_id == query.service_team_id,
+                InboxConversationAssignment.assigned_at >= start_at,
+                InboxConversationAssignment.assigned_at < end_at,
+            )
+            .group_by(
+                InboxConversationAssignment.service_team_id,
+                InboxConversationAssignment.person_id,
+            )
+            .cte("agent_period_assignments")
+        )
+
+    active_resolution_sla = _team_sla_expression(
+        InboxConversationAssignment.service_team_id,
+        resolution_slas,
+    )
+    active_age = _analytics_duration_seconds(
+        db,
+        started_at=InboxConversation.first_message_at,
+        ended_at=func.now(),
+    )
     active = (
         select(
             InboxConversationAssignment.service_team_id,
             InboxConversationAssignment.person_id,
             func.count(InboxConversationAssignment.id).label("active_count"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            active_resolution_sla.is_not(None),
+                            active_age > active_resolution_sla,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("currently_overdue_count"),
+        )
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxConversationAssignment.conversation_id,
         )
         .where(InboxConversationAssignment.is_active.is_(True))
         .group_by(
@@ -1819,6 +1965,39 @@ def agent_performance_analytics(
         )
         .cte("agent_active_assignments")
     )
+    if query.service_team_id is not None:
+        active = (
+            select(
+                InboxConversationAssignment.service_team_id,
+                InboxConversationAssignment.person_id,
+                func.count(InboxConversationAssignment.id).label("active_count"),
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                active_resolution_sla.is_not(None),
+                                active_age > active_resolution_sla,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("currently_overdue_count"),
+            )
+            .join(
+                InboxConversation,
+                InboxConversation.id == InboxConversationAssignment.conversation_id,
+            )
+            .where(
+                InboxConversationAssignment.is_active.is_(True),
+                InboxConversationAssignment.service_team_id == query.service_team_id,
+            )
+            .group_by(
+                InboxConversationAssignment.service_team_id,
+                InboxConversationAssignment.person_id,
+            )
+            .cte("agent_active_assignments")
+        )
 
     resolution_duration = _analytics_duration_seconds(
         db,
@@ -1861,6 +2040,10 @@ def agent_performance_analytics(
         .distinct()
         .cte("agent_resolution_facts")
     )
+    resolution_sla = _team_sla_expression(
+        resolution_facts.c.service_team_id,
+        resolution_slas,
+    )
     resolution = (
         select(
             resolution_facts.c.service_team_id,
@@ -1874,6 +2057,30 @@ def agent_performance_analytics(
             func.coalesce(func.sum(resolution_facts.c.duration_seconds), 0.0).label(
                 "resolution_seconds_sum"
             ),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            resolution_sla.is_not(None),
+                            resolution_facts.c.duration_seconds <= resolution_sla,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("resolution_sla_met_count"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            resolution_sla.is_not(None),
+                            resolution_facts.c.duration_seconds > resolution_sla,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("resolution_sla_breached_count"),
         )
         .group_by(
             resolution_facts.c.service_team_id,
@@ -1974,6 +2181,10 @@ def agent_performance_analytics(
         .distinct()
         .cte("agent_first_response_facts")
     )
+    response_sla = _team_sla_expression(
+        response_facts.c.service_team_id,
+        response_slas,
+    )
     responses = (
         select(
             response_facts.c.service_team_id,
@@ -1982,6 +2193,30 @@ def agent_performance_analytics(
             func.coalesce(func.sum(response_facts.c.duration_seconds), 0.0).label(
                 "response_seconds_sum"
             ),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            response_sla.is_not(None),
+                            response_facts.c.duration_seconds <= response_sla,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("response_sla_met_count"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            response_sla.is_not(None),
+                            response_facts.c.duration_seconds > response_sla,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("response_sla_breached_count"),
         )
         .group_by(
             response_facts.c.service_team_id,
@@ -1993,10 +2228,19 @@ def agent_performance_analytics(
     assigned_count = func.coalesce(assigned.c.assigned_count, 0)
     resolved_count = func.coalesce(resolution.c.resolved_count, 0)
     active_count = func.coalesce(active.c.active_count, 0)
+    currently_overdue_count = func.coalesce(active.c.currently_overdue_count, 0)
     resolution_timed_count = func.coalesce(resolution.c.resolution_timed_count, 0)
     resolution_seconds_sum = func.coalesce(resolution.c.resolution_seconds_sum, 0.0)
+    resolution_sla_met_count = func.coalesce(resolution.c.resolution_sla_met_count, 0)
+    resolution_sla_breached_count = func.coalesce(
+        resolution.c.resolution_sla_breached_count, 0
+    )
     response_count = func.coalesce(responses.c.response_count, 0)
     response_seconds_sum = func.coalesce(responses.c.response_seconds_sum, 0.0)
+    response_sla_met_count = func.coalesce(responses.c.response_sla_met_count, 0)
+    response_sla_breached_count = func.coalesce(
+        responses.c.response_sla_breached_count, 0
+    )
     performance = (
         select(
             members.c.person_id,
@@ -2006,10 +2250,15 @@ def agent_performance_analytics(
             assigned_count.label("assigned_count"),
             resolved_count.label("resolved_count"),
             active_count.label("active_count"),
+            currently_overdue_count.label("currently_overdue_count"),
             resolution_timed_count.label("resolution_timed_count"),
             resolution_seconds_sum.label("resolution_seconds_sum"),
+            resolution_sla_met_count.label("resolution_sla_met_count"),
+            resolution_sla_breached_count.label("resolution_sla_breached_count"),
             response_count.label("response_count"),
             response_seconds_sum.label("response_seconds_sum"),
+            response_sla_met_count.label("response_sla_met_count"),
+            response_sla_breached_count.label("response_sla_breached_count"),
             case(
                 (
                     resolution_timed_count > 0,
@@ -2056,17 +2305,35 @@ def agent_performance_analytics(
         .cte("agent_performance")
     )
 
-    total = int(db.scalar(select(func.count()).select_from(members)) or 0)
+    member_team_rows = tuple(db.scalars(select(members.c.service_team_id)).all())
+    member_team_ids = set(member_team_rows)
+    total = len(member_team_rows)
     if total == 0:
         return InboxAgentPerformanceAnalyticsPage(
             rows=(),
             summary=InboxAgentPerformanceSummary(
                 agent_count=0,
+                activity_agent_count=0,
                 assigned_conversation_count=0,
                 resolved_conversation_count=0,
                 active_assignment_count=0,
                 average_resolution_seconds=None,
                 average_first_response_seconds=None,
+                first_response_observation_count=0,
+                resolution_observation_count=0,
+                first_response_sla_met_count=0,
+                first_response_sla_breached_count=0,
+                first_response_sla_rate=None,
+                resolution_sla_met_count=0,
+                resolution_sla_breached_count=0,
+                resolution_sla_rate=None,
+                currently_overdue_count=0,
+                first_response_sla_configured=any(
+                    team_id in response_slas for team_id in member_team_ids
+                ),
+                resolution_sla_configured=any(
+                    team_id in resolution_slas for team_id in member_team_ids
+                ),
             ),
             total=0,
             page=1,
@@ -2079,6 +2346,21 @@ def agent_performance_analytics(
             func.count(func.distinct(performance.c.person_id)).label(
                 "summary_agent_count"
             ),
+            func.count(
+                func.distinct(
+                    case(
+                        (
+                            or_(
+                                performance.c.assigned_count > 0,
+                                performance.c.resolved_count > 0,
+                                performance.c.response_count > 0,
+                            ),
+                            performance.c.person_id,
+                        ),
+                        else_=None,
+                    )
+                )
+            ).label("summary_activity_agent_count"),
             func.coalesce(func.sum(performance.c.assigned_count), 0).label(
                 "summary_assigned_count"
             ),
@@ -2099,6 +2381,21 @@ def agent_performance_analytics(
             ),
             func.coalesce(func.sum(performance.c.response_seconds_sum), 0.0).label(
                 "summary_response_seconds_sum"
+            ),
+            func.coalesce(func.sum(performance.c.response_sla_met_count), 0).label(
+                "summary_response_sla_met_count"
+            ),
+            func.coalesce(func.sum(performance.c.response_sla_breached_count), 0).label(
+                "summary_response_sla_breached_count"
+            ),
+            func.coalesce(func.sum(performance.c.resolution_sla_met_count), 0).label(
+                "summary_resolution_sla_met_count"
+            ),
+            func.coalesce(
+                func.sum(performance.c.resolution_sla_breached_count), 0
+            ).label("summary_resolution_sla_breached_count"),
+            func.coalesce(func.sum(performance.c.currently_overdue_count), 0).label(
+                "summary_currently_overdue_count"
             ),
         )
         .select_from(performance)
@@ -2125,8 +2422,21 @@ def agent_performance_analytics(
 
     resolution_timed_total = int(summary_row["summary_resolution_timed_count"] or 0)
     response_total = int(summary_row["summary_response_count"] or 0)
+    response_sla_met_total = int(summary_row["summary_response_sla_met_count"] or 0)
+    response_sla_breached_total = int(
+        summary_row["summary_response_sla_breached_count"] or 0
+    )
+    response_sla_scored_total = response_sla_met_total + response_sla_breached_total
+    resolution_sla_met_total = int(summary_row["summary_resolution_sla_met_count"] or 0)
+    resolution_sla_breached_total = int(
+        summary_row["summary_resolution_sla_breached_count"] or 0
+    )
+    resolution_sla_scored_total = (
+        resolution_sla_met_total + resolution_sla_breached_total
+    )
     summary = InboxAgentPerformanceSummary(
         agent_count=int(summary_row["summary_agent_count"] or 0),
+        activity_agent_count=int(summary_row["summary_activity_agent_count"] or 0),
         assigned_conversation_count=int(summary_row["summary_assigned_count"] or 0),
         resolved_conversation_count=int(summary_row["summary_resolved_count"] or 0),
         active_assignment_count=int(summary_row["summary_active_count"] or 0),
@@ -2141,10 +2451,36 @@ def agent_performance_analytics(
         ),
         average_first_response_seconds=(
             round(
-                float(summary_row["summary_response_seconds_sum"]) / response_total, 3
+                float(summary_row["summary_response_seconds_sum"]) / response_total,
+                3,
             )
             if response_total
             else None
+        ),
+        first_response_observation_count=response_total,
+        resolution_observation_count=resolution_timed_total,
+        first_response_sla_met_count=response_sla_met_total,
+        first_response_sla_breached_count=response_sla_breached_total,
+        first_response_sla_rate=(
+            response_sla_met_total / response_sla_scored_total
+            if response_sla_scored_total
+            else None
+        ),
+        resolution_sla_met_count=resolution_sla_met_total,
+        resolution_sla_breached_count=resolution_sla_breached_total,
+        resolution_sla_rate=(
+            resolution_sla_met_total / resolution_sla_scored_total
+            if resolution_sla_scored_total
+            else None
+        ),
+        currently_overdue_count=int(
+            summary_row["summary_currently_overdue_count"] or 0
+        ),
+        first_response_sla_configured=any(
+            team_id in response_slas for team_id in member_team_ids
+        ),
+        resolution_sla_configured=any(
+            team_id in resolution_slas for team_id in member_team_ids
         ),
     )
     rows = tuple(
@@ -2166,6 +2502,43 @@ def agent_performance_analytics(
                 if row["average_first_response_seconds"] is not None
                 else None
             ),
+            resolution_observation_count=int(row["resolution_timed_count"] or 0),
+            first_response_observation_count=int(row["response_count"] or 0),
+            first_response_sla_seconds=response_slas.get(row["service_team_id"]),
+            resolution_sla_seconds=resolution_slas.get(row["service_team_id"]),
+            first_response_sla_met_count=int(row["response_sla_met_count"] or 0),
+            first_response_sla_breached_count=int(
+                row["response_sla_breached_count"] or 0
+            ),
+            first_response_sla_rate=(
+                int(row["response_sla_met_count"] or 0)
+                / (
+                    int(row["response_sla_met_count"] or 0)
+                    + int(row["response_sla_breached_count"] or 0)
+                )
+                if (
+                    int(row["response_sla_met_count"] or 0)
+                    + int(row["response_sla_breached_count"] or 0)
+                )
+                else None
+            ),
+            resolution_sla_met_count=int(row["resolution_sla_met_count"] or 0),
+            resolution_sla_breached_count=int(
+                row["resolution_sla_breached_count"] or 0
+            ),
+            resolution_sla_rate=(
+                int(row["resolution_sla_met_count"] or 0)
+                / (
+                    int(row["resolution_sla_met_count"] or 0)
+                    + int(row["resolution_sla_breached_count"] or 0)
+                )
+                if (
+                    int(row["resolution_sla_met_count"] or 0)
+                    + int(row["resolution_sla_breached_count"] or 0)
+                )
+                else None
+            ),
+            currently_overdue_count=int(row["currently_overdue_count"] or 0),
         )
         for row in raw_rows
     )
@@ -2182,6 +2555,149 @@ def agent_performance_analytics(
 
 def active_service_team_options(db: Session) -> list[ServiceTeam]:
     return _load_teams(db, include_inactive=False)
+
+
+def agent_performance_evidence(
+    db: Session,
+    *,
+    query: InboxAgentPerformanceQuery,
+    limit: int = 50,
+) -> tuple[InboxAgentConversationEvidence, ...]:
+    """Return bounded conversation evidence for one agent detail report."""
+
+    def message_time(message: InboxMessage) -> datetime:
+        return message.received_at or message.sent_at or message.created_at
+
+    def sender_person_id(message: InboxMessage) -> UUID | None:
+        raw_person_id = (message.metadata_ or {}).get("sent_by_person_id")
+        if not raw_person_id:
+            return None
+        try:
+            return UUID(str(raw_person_id))
+        except (TypeError, ValueError):
+            return None
+
+    def seconds_between(
+        started_at: datetime | None, ended_at: datetime | None
+    ) -> float | None:
+        start_utc = _as_utc(started_at)
+        end_utc = _as_utc(ended_at)
+        if start_utc is None or end_utc is None:
+            return None
+        return max((end_utc - start_utc).total_seconds(), 0.0)
+
+    def first_human_response(
+        messages: list[InboxMessage],
+    ) -> tuple[InboxMessage, InboxMessage] | None:
+        first_inbound = next(
+            (
+                message
+                for message in messages
+                if message.direction == InboxMessageDirection.inbound.value
+            ),
+            None,
+        )
+        if first_inbound is None:
+            return None
+        inbound_at = message_time(first_inbound)
+        first_outbound = next(
+            (
+                message
+                for message in messages
+                if message.direction == InboxMessageDirection.outbound.value
+                and message_time(message) >= inbound_at
+                and sender_person_id(message) is not None
+            ),
+            None,
+        )
+        return (first_inbound, first_outbound) if first_outbound else None
+
+    if query.person_id is None:
+        raise InboxAgentPerformanceQueryError(
+            "Conversation evidence requires one agent identity."
+        )
+    assignment_statement = (
+        select(InboxConversationAssignment, InboxConversation, ServiceTeam)
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxConversationAssignment.conversation_id,
+        )
+        .join(
+            ServiceTeam, ServiceTeam.id == InboxConversationAssignment.service_team_id
+        )
+        .where(
+            InboxConversationAssignment.person_id == query.person_id,
+            ServiceTeam.is_active.is_(True),
+            or_(
+                and_(
+                    InboxConversationAssignment.assigned_at >= query.start_at,
+                    InboxConversationAssignment.assigned_at < query.end_at,
+                ),
+                InboxConversationAssignment.is_active.is_(True),
+            ),
+        )
+        .order_by(InboxConversationAssignment.assigned_at.desc())
+        .limit(min(max(limit, 1), 100))
+    )
+    if query.service_team_id is not None:
+        assignment_statement = assignment_statement.where(
+            InboxConversationAssignment.service_team_id == query.service_team_id
+        )
+    records = db.execute(assignment_statement).all()
+    if not records:
+        return ()
+
+    conversation_ids = [assignment.conversation_id for assignment, _, _ in records]
+    bounded_messages = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id.in_(conversation_ids))
+        .order_by(InboxMessage.created_at.asc())
+        .limit(1000)
+        .all()
+    )
+    messages: dict[UUID, list[InboxMessage]] = {}
+    for message in bounded_messages:
+        messages.setdefault(message.conversation_id, []).append(message)
+    resolution_rows = db.execute(
+        select(InboxStatusTransitionEvent)
+        .where(
+            InboxStatusTransitionEvent.conversation_id.in_(conversation_ids),
+            InboxStatusTransitionEvent.actor_person_id == query.person_id,
+            InboxStatusTransitionEvent.status == InboxConversationStatus.resolved.value,
+            InboxStatusTransitionEvent.occurred_at >= query.start_at,
+            InboxStatusTransitionEvent.occurred_at < query.end_at,
+        )
+        .order_by(InboxStatusTransitionEvent.occurred_at.desc())
+    ).scalars()
+    resolved_at_by_conversation: dict[UUID, datetime] = {}
+    for event in resolution_rows:
+        resolved_at_by_conversation.setdefault(event.conversation_id, event.occurred_at)
+
+    evidence: list[InboxAgentConversationEvidence] = []
+    for assignment, conversation, team in records:
+        response = first_human_response(messages.get(conversation.id, []))
+        response_seconds = None
+        if response is not None and sender_person_id(response[1]) == query.person_id:
+            response_seconds = seconds_between(
+                message_time(response[0]), message_time(response[1])
+            )
+        resolved_at = resolved_at_by_conversation.get(conversation.id)
+        evidence.append(
+            InboxAgentConversationEvidence(
+                conversation_id=conversation.id,
+                subject=(conversation.subject or "(No subject)"),
+                service_team_id=team.id,
+                service_team_name=team.name,
+                assigned_at=assignment.assigned_at,
+                resolved_at=resolved_at,
+                is_active_assignment=assignment.is_active,
+                first_response_seconds=response_seconds,
+                resolution_seconds=seconds_between(
+                    conversation.first_message_at, resolved_at
+                ),
+            )
+        )
+    return tuple(evidence)
 
 
 def escalation_candidates(
