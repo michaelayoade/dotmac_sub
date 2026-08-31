@@ -149,7 +149,15 @@ def _as_role(conn: psycopg.Connection, role: str) -> Iterator[None]:
     try:
         yield
     finally:
-        conn.execute("RESET ROLE")
+        try:
+            conn.execute("RESET ROLE")
+        except psycopg.Error:
+            # The block already failed and aborted the transaction, so RESET
+            # ROLE cannot run either. Swallowing it lets the ORIGINAL error
+            # surface; without this the caller sees InFailedSqlTransaction and
+            # the real cause is lost — which is the whole failure mode this
+            # change exists to stop.
+            pass
 
 
 def observe_roles(conn: psycopg.Connection) -> dict[str, RolePosture]:

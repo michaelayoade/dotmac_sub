@@ -28,24 +28,24 @@ END = "verify_database_prerequisites() {"
 HARNESS = """
 set -uo pipefail
 
-log() { printf '\\n==> %s\\n' "$*"; }
+log() { printf '\n==> %s\n' "$*"; }
 env_value() {
   # Only BOOTSTRAP_DATABASE_URL matters here; the fixture drives it.
   if [[ "$1" == "BOOTSTRAP_DATABASE_URL" ]]; then
-    printf '%s\\n' "$FAKE_ENV_BOOTSTRAP_URL"
+    printf '%s\n' "$FAKE_ENV_BOOTSTRAP_URL"
   else
-    printf '%s\\n' ""
+    printf '%s\n' ""
   fi
 }
 
 # Stand-in for `docker compose`: record the argv, succeed. Recording is what
 # lets a test prove the already-satisfied path wrote NOTHING.
-compose_stub() { printf '%s\\n' "$*" >>"$COMPOSE_CALLS"; }
+compose_stub() { printf '%s\n' "$*" >>"$COMPOSE_CALLS"; }
 
 IMAGE="ghcr.io/example/app@sha256:deadbeef"
 FULL_SHA="0000000000000000000000000000000000000000"
 
-%(leg)s
+@@LEG@@
 
 # Overridden AFTER the leg: the leg defines its own real versions.
 COMPOSE=(compose_stub)
@@ -69,7 +69,7 @@ def _run(
 ) -> tuple[int, str, list[str]]:
     calls = tmp_path / "compose-calls"
     calls.write_text("", encoding="utf-8")
-    script = HARNESS % {"leg": _leg()}
+    script = HARNESS.replace("@@LEG@@", _leg())
     result = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,

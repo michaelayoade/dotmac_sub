@@ -68,8 +68,22 @@ def rollback_conn(dsn: str):
 
 
 @pytest.fixture(scope="module")
-def sample_schema() -> str:
-    return module_schema_contract()[0].schema
+def sample_schema(dsn: str) -> str:
+    """A module schema that actually has a table in it.
+
+    The positive control below reads a real table through the same code path as
+    the denial assertion. A schema with no tables would push the control onto a
+    CREATE attempt that `app_user` is also denied, and the control would then
+    "fail correctly" for the wrong reason.
+    """
+    with psycopg.connect(dsn, autocommit=False) as conn:
+        for item in module_schema_contract():
+            if _a_table_in(conn, item.schema) is not None:
+                return item.schema
+    pytest.skip(
+        "no composed module schema has a table; the access-path control cannot "
+        "be exercised, so denial would be unfalsifiable here"
+    )
 
 
 def _a_table_in(conn: psycopg.Connection, schema: str) -> str | None:
@@ -82,14 +96,27 @@ def _a_table_in(conn: psycopg.Connection, schema: str) -> str | None:
 
 
 def _attempt_access(conn: psycopg.Connection, role: str, schema: str) -> None:
-    """Really touch the schema as ``role``. Raises on denial."""
+    """Really touch the schema as ``role``. Raises on denial.
+
+    Two things have to be true at once. The access must run inside a SAVEPOINT,
+    because a denial aborts the current (sub)transaction and every later
+    statement in it — including the ``RESET ROLE`` needed to clean up — then
+    fails with ``InFailedSqlTransaction``; the caller would see that instead of
+    the ``InsufficientPrivilege`` it is asserting on, and be green on the wrong
+    exception. And the savepoint must not discard drift a calling test planted
+    outside it.
+
+    The table lookup happens BEFORE ``SET ROLE``, as the privileged connection:
+    whether a table exists is a fact about the schema, not about what the probe
+    can see, and resolving it through the probe would make an empty result
+    ambiguous. ``RESET ROLE`` stays in a ``finally`` outside the savepoint —
+    rolling back to the savepoint already restores the GUC, so this is a
+    belt-and-braces reset that is safe to run on the healthy outer transaction.
+    """
+    table = _a_table_in(conn, schema)
     try:
-        # The expected permission error aborts PostgreSQL's current transaction.
-        # Isolate the role probe in a savepoint so cleanup can run without
-        # discarding drift deliberately planted by the calling test.
         with conn.transaction():
             conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
-            table = _a_table_in(conn, schema)
             if table is not None:
                 conn.execute(
                     sql.SQL("SELECT 1 FROM {}.{} LIMIT 0").format(
@@ -120,7 +147,6 @@ def test_public_is_denied_and_the_probe_path_actually_works(
     """Denial, plus the positive control that keeps it honest."""
     with pytest.raises(InsufficientPrivilege):
         _attempt_access(rollback_conn, PUBLIC_PROBE_ROLE, sample_schema)
-    rollback_conn.rollback()
 
     # Positive control through the IDENTICAL path. Without it, a typo in the
     # schema name, a missing table or a broken SET ROLE would raise something
@@ -220,8 +246,14 @@ def test_planted_public_grant_is_caught_by_the_probe(
         "is reachable by dotmac_public_probe" in violation
         for violation in commercial_schema_violations(observe_schemas(rollback_conn))
     )
-    # And the denial test now really does pass through.
-    _attempt_access(rollback_conn, PUBLIC_PROBE_ROLE, sample_schema)
+    # Effective privilege, not an ACL row: the probe now really does hold USAGE.
+    # Note it still cannot read a table — schema USAGE is not table SELECT — so
+    # asserting a successful access attempt here would be asserting a falsehood.
+    granted = rollback_conn.execute(
+        "SELECT has_schema_privilege(%s, %s, 'USAGE')",
+        (PUBLIC_PROBE_ROLE, sample_schema),
+    ).fetchone()
+    assert granted is not None and granted[0]
 
 
 def test_planted_missing_usage_grant_is_caught(
