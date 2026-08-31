@@ -1,0 +1,157 @@
+name: Reconcile infrastructure published ports
+
+# A deliberate, requested, recorded maintenance action -- never part of a
+# deploy. deploy.sh's APP_SERVICES excludes postgres-local, redis-local,
+# nominatim, freeradius, genieacs and the metrics services precisely because
+# recreating a database on every release would be far worse than any binding
+# bug. This workflow is the managed way to apply a published-port change to one
+# of them, and it is the only one.
+#
+# What it does NOT do: choose a value. The bind comes from the checked-in
+# declaration in deploy/published_ports.toml, at the revision this workflow
+# checks out. Nobody types an address into a dispatch box.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Compose service to reconcile (see deploy/published_ports.toml)
+        required: true
+        type: string
+      target_server_name:
+        description: Explicit target (must match the host contract)
+        required: true
+        type: string
+      change_reference:
+        description: Incident or change reference
+        required: true
+        type: string
+      reason:
+        description: Why this service is being recreated now
+        required: true
+        type: string
+      plan_only:
+        description: Run every gate and print the plan, recreate nothing
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Shares production-deploy.yml's group: a reconcile and a deploy must never
+# overlap. The host-side flock is the second, independent guarantee.
+concurrency:
+  group: dotmac-sub-production
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: [self-hosted, linux, x64, dotmac-sub-production]
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Require explicit enabled production target
+        env:
+          ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          TARGET: ${{ inputs.target_server_name }}
+        run: |
+          set -euo pipefail
+          test "$ENABLED" = "true" || {
+            echo "Production deployment workflow is disabled." >&2
+            exit 1
+          }
+          test "$TARGET" = "dotmac-sub-prod" || {
+            echo "Explicit target must be dotmac-sub-prod." >&2
+            exit 1
+          }
+
+      # The declaration and the compose file both come from this checkout, the
+      # same way production-deploy.yml sources the release compose. The host's
+      # own (divergent) tree is not consulted.
+      - name: Checkout the declared intent
+        uses: actions/checkout@v4
+
+      - name: Verify production host contract
+        env:
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DEPLOY_DIR"
+          test -f "$PRODUCTION_DEPLOY_DIR/.env"
+          grep -Fqx 'APP_ENV=production' "$PRODUCTION_DEPLOY_DIR/.env"
+          grep -Fqx 'SERVER_NAME=dotmac-sub-prod' "$PRODUCTION_DEPLOY_DIR/.env"
+
+      - name: Check the declaration against compose
+        run: python3 -m scripts.published_ports check-compose
+
+      - name: Record the request
+        env:
+          SERVICE: ${{ inputs.service }}
+          CHANGE_REFERENCE: ${{ inputs.change_reference }}
+          REASON: ${{ inputs.reason }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Infrastructure port reconcile"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| service | \`${SERVICE}\` |"
+            echo "| revision | \`${GITHUB_SHA}\` |"
+            echo "| change reference | ${CHANGE_REFERENCE} |"
+            echo "| reason | ${REASON} |"
+            echo "| plan only | ${PLAN_ONLY} |"
+            echo "| requested by | ${GITHUB_ACTOR} |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Reconcile
+        env:
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+          SERVICE: ${{ inputs.service }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+        run: |
+          set -euo pipefail
+          args=(--service "$SERVICE" --environment production)
+          if [ "$PLAN_ONLY" = "true" ]; then
+            args+=(--plan-only)
+          fi
+          set +e
+          REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \
+            bash scripts/reconcile_published_ports.sh "${args[@]}"
+          status=$?
+          set -e
+          # Exit 3 is "already reconciled -- nothing was done". Surface it as
+          # its own outcome rather than letting it read as a successful fix.
+          if [ "$status" = "3" ]; then
+            echo "::notice::Nothing to do: the service already matches the declaration."
+            echo "> **Outcome:** already reconciled; no container was recreated." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Sweep every declared listener on the host
+        if: ${{ always() }}
+        env:
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+        run: |
+          set -euo pipefail
+          ids="$(docker ps -q --filter label=com.docker.compose.project=dotmac_sub)"
+          test -n "$ids"
+          # Three fields only. The container environment block never leaves.
+          # shellcheck disable=SC2086
+          docker inspect $ids --format \
+            '{"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"ports":{{json .NetworkSettings.Ports}}}' \
+            | python3 -c 'import json,sys
+rows=[json.loads(line) for line in sys.stdin if line.strip()]
+for row in rows:
+    row["container"] = row["container"].lstrip("/")
+json.dump(rows, open("listeners.json", "w"))'
+          # Reports the whole host, including services this run did not touch.
+          # It is expected to fail while known undeclared listeners remain, so
+          # it annotates rather than failing the reconcile it follows.
+          python3 -m scripts.published_ports check-listeners \
+            --environment production --observed listeners.json \
+            || echo "::warning::Host still has listeners that do not match the declaration (see log)."

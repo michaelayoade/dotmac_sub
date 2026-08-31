@@ -99,14 +99,19 @@ CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # postgres-local, redis-local, nominatim, freeradius, genieacs and the metrics
 # services are absent. A deploy never recreates them. So a change to one of
 # those service definitions -- a published port, a volume, a command flag --
-# does NOT take effect by deploying. It needs a deliberate recreate:
+# does NOT take effect by deploying. The repository looking fixed is not the
+# same as the host being fixed.
 #
-#   docker compose -f <release compose> [-f <host override>] up -d postgres-local
+# For PUBLISHED PORTS there is now a managed path for exactly this, and it is
+# the one to use -- not a hand `up -d` on the box:
 #
-# This matters right now for `${PG_LOCAL_BIND:-127.0.0.1:}9001:5432`: the
-# loopback default is merged, but the running container keeps whatever binding
-# it was created with until someone recreates it. The repository looking fixed
-# is not the same as the host being fixed.
+#   scripts/reconcile_published_ports.sh --service <name> --environment <env>
+#
+# It applies deploy/published_ports.toml, proves the environment value is what
+# compose actually resolves BEFORE recreating, and re-reads the host's actual
+# listeners afterwards. See docs/runbooks/PUBLISHED_PORT_RECONCILE.md and
+# ADR-0014. Everything else about these services still needs a deliberate,
+# separately scheduled recreate.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
   celery-worker-monitoring celery-worker-notifications-immediate \
   celery-worker-notifications celery-worker-billing \

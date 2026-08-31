@@ -17,7 +17,7 @@ services:
     logging: *id001
     extra_hosts: *observability_extra_hosts
     ports:
-    - 127.0.0.1:8001:8001
+    - ${APP_BIND:-127.0.0.1:}8001:8001
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -575,7 +575,7 @@ services:
       IMPORT_STYLE: extratags
       THREADS: "2"
     ports:
-    - 127.0.0.1:8088:8080
+    - ${NOMINATIM_BIND:-127.0.0.1:}8088:8080
     volumes:
     - nominatim_data:/var/lib/postgresql/14/main
     - nominatim_flatnode:/var/lib/nominatim/flatnode
@@ -589,10 +589,17 @@ services:
     pids_limit: 64
     logging: *id001
     ports:
-    - 1812:1812/udp
-    - 1813:1813/udp
-    - 1822:1822/udp
-    - 1823:1823/udp
+    # Explicit bind, never bare. A publish with no host address is dual-family:
+    # Docker also listens on [::], and IPv6 published traffic is served by a
+    # userland docker-proxy terminating on INPUT, so it never traverses
+    # DOCKER-USER and no rule in that chain can restrict it. The devices that
+    # talk to this service are off-host, so the safe default here is an
+    # explicit IPv4 wildcard rather than loopback -- explicit is the point.
+    # Declared in deploy/published_ports.toml.
+    - ${FREERADIUS_BIND:-0.0.0.0:}1812:1812/udp
+    - ${FREERADIUS_BIND:-0.0.0.0:}1813:1813/udp
+    - ${FREERADIUS_BIND:-0.0.0.0:}1822:1822/udp
+    - ${FREERADIUS_BIND:-0.0.0.0:}1823:1823/udp
     volumes:
     - ./config/freeradius/radiusd.conf:/etc/freeradius/radiusd.conf:ro
     - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
@@ -658,7 +665,7 @@ services:
       MONGO_INITDB_ROOT_USERNAME: genieacs
       MONGO_INITDB_ROOT_PASSWORD: ${GENIEACS_MONGODB_PASSWORD}
     ports:
-    - 127.0.0.1:27017:27017
+    - ${GENIEACS_MONGODB_BIND:-127.0.0.1:}27017:27017
     volumes:
     - genieacs_mongodb_data:/data/db
   victoriametrics:
@@ -765,7 +772,14 @@ services:
     env_file:
     - .env
     ports:
-    - 514:514/udp
+    # Explicit bind, never bare. A publish with no host address is dual-family:
+    # Docker also listens on [::], and IPv6 published traffic is served by a
+    # userland docker-proxy terminating on INPUT, so it never traverses
+    # DOCKER-USER and no rule in that chain can restrict it. The devices that
+    # talk to this service are off-host, so the safe default here is an
+    # explicit IPv4 wildcard rather than loopback -- explicit is the point.
+    # Declared in deploy/published_ports.toml.
+    - ${SYSLOG_BIND:-0.0.0.0:}514:514/udp
     volumes: []
     command:
     - python
@@ -802,7 +816,7 @@ services:
     env_file:
     - .env
     ports:
-    - "127.0.0.1:${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525"
+    - "${TEAM_INBOX_SMTP_BIND:-127.0.0.1:}${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525"
     volumes: []
     command:
     - python
