@@ -21,6 +21,7 @@ A comment cannot enforce that. These tests pin the mechanisms that do:
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -35,9 +36,45 @@ def _script() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def _workflow() -> dict[str, object]:
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _assert_v1_dispatch_cannot_acquire_production_runner(
+    workflow: dict[str, object],
+) -> None:
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"production_preflight"}
+    preflight = jobs["production_preflight"]
+    assert preflight["runs-on"] == "ubuntu-latest"
+    assert "environment" not in preflight
+    assert all("uses" not in step for step in preflight["steps"])
+
+    refusal = "\n".join(step.get("run", "") for step in preflight["steps"])
+    assert "published-port reconcile v1 is disabled for production" in refusal
+    assert "v2 two-plan/apply/deadman path" in refusal
+    assert re.search(r"^exit 1$", refusal, flags=re.MULTILINE)
+    assert all(not step.get("continue-on-error", False) for step in preflight["steps"])
+    serialized = str(workflow)
+    assert "self-hosted" not in serialized
+    assert "dotmac-sub-production" not in serialized
+    assert "scripts/reconcile_published_ports.sh" not in serialized
+
+
 def test_the_reconcile_script_is_executable() -> None:
     assert SCRIPT.exists()
     assert SCRIPT.stat().st_mode & 0o111, f"{SCRIPT} is not executable"
+
+
+def test_v1_refuses_production_before_reading_host_state() -> None:
+    """Defense in depth if a caller bypasses the hosted workflow preflight."""
+    script = _script()
+    refusal = script.index('[[ "${ENVIRONMENT}" != "production" ]] ||')
+    env_read = script.index('[[ -f "${ENV_FILE}" ]] ||')
+    docker_read = script.index("command -v docker")
+    lock = script.index("# --- one at a time, sharing the deploy lock")
+    plan = script.index("# --- gate 1: plan")
+    assert refusal < env_read < docker_read < lock < plan
 
 
 def test_the_recreate_names_the_variable_only_the_verification_gate_sets() -> None:
@@ -211,6 +248,61 @@ def test_every_declaration_agrees_with_deploy_about_who_recreates_it() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_v1_dispatch_fails_on_hosted_preflight_before_the_production_runner() -> None:
+    _assert_v1_dispatch_cannot_acquire_production_runner(_workflow())
+
+
+def test_dispatch_refusal_guard_detects_every_production_runner_bypass() -> None:
+    """Sensitivity: each load-bearing edge must be necessary to this guard."""
+    passing_preflight = deepcopy(_workflow())
+    passing_preflight["jobs"]["production_preflight"]["steps"][0]["run"] = (
+        "echo incorrectly-enabled\nexit 0\n"
+    )
+
+    self_hosted_preflight = deepcopy(_workflow())
+    self_hosted_preflight["jobs"]["production_preflight"]["runs-on"] = [
+        "self-hosted",
+        "dotmac-sub-production",
+    ]
+
+    production_environment = deepcopy(_workflow())
+    production_environment["jobs"]["production_preflight"]["environment"] = "production"
+
+    unguarded_production_job = deepcopy(_workflow())
+    unguarded_production_job["jobs"]["bypass"] = {
+        "runs-on": ["self-hosted", "dotmac-sub-production"],
+        "environment": "production",
+        "steps": [{"run": "true"}],
+    }
+
+    restored_reconcile = deepcopy(_workflow())
+    restored_reconcile["jobs"]["production_preflight"]["steps"][0]["run"] += (
+        "\nbash scripts/reconcile_published_ports.sh\n"
+    )
+
+    unnamed_v2_gate = deepcopy(_workflow())
+    unnamed_v2_gate["jobs"]["production_preflight"]["steps"][0]["run"] = (
+        unnamed_v2_gate["jobs"]["production_preflight"]["steps"][0]["run"].replace(
+            "v2 two-plan/apply/deadman path", "some later repair"
+        )
+    )
+
+    mutations = {
+        "preflight no longer fails": passing_preflight,
+        "preflight itself acquires production": self_hosted_preflight,
+        "preflight requests the production environment": production_environment,
+        "new production job resurrects the executor": unguarded_production_job,
+        "refusal job invokes the old script": restored_reconcile,
+        "refusal drops the named v2 prerequisite": unnamed_v2_gate,
+    }
+    for name, workflow in mutations.items():
+        try:
+            _assert_v1_dispatch_cannot_acquire_production_runner(workflow)
+        except AssertionError:
+            continue
+        raise AssertionError(f"dispatch refusal guard missed: {name}")
+
+
 def test_the_reconcile_workflow_is_manual_only() -> None:
     """Never on push. Recreating a database on every deploy is far worse."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -232,36 +324,21 @@ def test_the_reconcile_workflow_requires_attribution() -> None:
         )
 
 
-def test_the_workflow_and_the_script_collect_listeners_identically() -> None:
-    """One collector, not two that drift.
-
-    The workflow's sweep and the script's gate 5 must ask `docker inspect` for
-    the same three fields. If they diverge, the sweep can pass on a shape the
-    gate refuses -- or, worse, quietly start pulling a field the other does not.
-    """
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    sweep = next(
-        step
-        for step in workflow["jobs"]["reconcile"]["steps"]
-        if "Sweep" in step["name"]
-    )
-    fmt = sweep["env"]["INSPECT_FORMAT"]
-    assert ".Config.Env" not in fmt, (
-        "the collector must never request the container environment block"
-    )
-    assert fmt in _script(), (
-        "the workflow's docker inspect format has drifted from the script's"
-    )
-
-
-def test_both_collectors_normalise_through_the_shared_subcommand() -> None:
-    """No caller embeds its own JSON parsing."""
-    body = WORKFLOW.read_text(encoding="utf-8")
-    assert "scripts.published_ports normalise" in body
-    assert "scripts.published_ports normalise" in _script()
-
-
-def test_the_reconcile_workflow_invokes_the_script() -> None:
-    body = WORKFLOW.read_text(encoding="utf-8")
-    assert "scripts/reconcile_published_ports.sh" in body
-    assert "REPO_DIR=" in body and "DEPLOY_DIR=" in body
+def test_v1_retirement_gate_is_identical_in_adr_and_runbook() -> None:
+    adr = " ".join(
+        (ROOT / "docs/adr/0014-declared-published-port-intent.md")
+        .read_text(encoding="utf-8")
+        .split()
+    ).casefold()
+    runbook = " ".join(
+        (ROOT / "docs/runbooks/PUBLISHED_PORT_RECONCILE.md")
+        .read_text(encoding="utf-8")
+        .split()
+    ).casefold()
+    for document in (adr, runbook):
+        assert "v1" in document and "disabled" in document
+        assert "two distinct" in document
+        assert "immediate third read-only replan" in document
+        assert "evidence" in document and "authorization" in document
+        assert "persistent=true" in document or "persistent systemd" in document
+        assert "non-port" in document

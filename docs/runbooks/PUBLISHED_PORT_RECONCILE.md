@@ -1,9 +1,15 @@
 # Reconciling an infrastructure service's published ports
 
-`scripts/reconcile_published_ports.sh` is the managed way to apply a
-published-port change to a service `scripts/deploy.sh` does not recreate.
-Declared intent lives in `deploy/published_ports.toml`; the decision behind it
-is [ADR-0014](../adr/0014-declared-published-port-intent.md).
+> **Production refused:** published-port reconcile v1 is disabled. Do not
+> dispatch the workflow or invoke the script against production, including with
+> `--plan-only`. That branch writes `.env` before restoring it, so it is not a
+> read-only plan. The workflow has only a hosted refusal job; it has no
+> production environment, self-hosted runner job or reconcile invocation.
+
+`scripts/reconcile_published_ports.sh` is the retained v1 implementation for
+non-production rehearsal only. Declared intent lives in
+`deploy/published_ports.toml`; the decision and v2 admission gate are in
+[ADR-0014](../adr/0014-declared-published-port-intent.md).
 
 ## When you need this
 
@@ -46,28 +52,43 @@ Under `set -u`, removing gate 3 makes the recreate abort rather than run
 unverified. `tests/architecture/test_published_port_reconcile_contract.py` pins
 that.
 
-## Running it
+## Production status and v2 admission
 
-Prefer the **Reconcile infrastructure published ports** workflow — it records
-who asked, why, and against which revision, and it sources the declaration from
-the checked-out revision rather than the host's tree.
+The **Reconcile infrastructure published ports** workflow is intentionally
+disabled. Its sole job is a GitHub-hosted refusal. No production job or script
+invocation remains in the workflow, so GitHub cannot request the production
+environment or self-hosted runner. The script also refuses a production
+argument before reading `.env` or calling Docker.
 
-Inputs: `service`, `target_server_name` (`dotmac-sub-prod`), `change_reference`,
-`reason`, and `plan_only` (defaults to `true`).
+The v1 CLI emits canonical `PublishedPortIntentV1`, which is declared intent
+only. A full `PublishedPortPlanV1` binds intent to immutable source identity and
+typed host prestate. `PublishedPortPlanReceiptV1` binds one successful Actions
+run and artifact to the plan and prestate digests. Receipts are evidence, not
+authorization; authenticated initiator identity and production-environment
+approval remain separate authority.
 
-Run it once with `plan_only = true`, read the plan, then run it again with
-`plan_only = false`.
+Production stays refused until a separately reviewed v2 provides:
 
-Direct invocation on the host, if the workflow is unavailable:
+- two distinct first-attempt terminal-success read-only plan runs with
+  byte-identical canonical decision bytes;
+- an immediate third read-only replan before apply and refusal unless its exact
+  digest matches both prior plans;
+- an exact-SHA, exact-digest, separately authorized apply using
+  `docker compose up --no-deps` for only the target service;
+- a root-owned persistent systemd deadman/timer and rollback bundle that
+  survive runner death and reboot and restore `.env`, the target container and
+  listeners; and
+- normalized non-port service-definition equivalence plus proof that every
+  non-target container ID is unchanged.
 
-```bash
-REPO_DIR=<authorized checkout> DEPLOY_DIR=/root/dotmac_sub \
-  bash scripts/reconcile_published_ports.sh \
-    --service postgres-local --environment production --plan-only
-```
+No current run or receipt satisfies those gates. Do not dispatch production.
 
-`REPO_DIR` must be a checkout at the revision whose declaration you intend to
-apply — **not** the host's own tree, which is divergent.
+## Non-production rehearsal
+
+The retained script may be exercised only against an explicitly named
+non-production environment. Its v1 ordering below is historical migration
+context, not production authorization. `--plan-only` still changes `.env`
+temporarily and must not be described as read-only.
 
 ### Exit codes
 

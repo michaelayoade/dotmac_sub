@@ -74,6 +74,61 @@ An address allowlist authenticates a network position, not a client. This ADR
 governs *which sockets exist*; it does not claim to be an authorization model,
 and it does not change `ssl`, `pg_hba`, or any credential policy.
 
+## Decision amendment — 2026-08-31 (v1 production executor disabled)
+
+The v1 production executor is disabled. Its `--plan-only` branch changes
+`.env`, asks Compose to resolve the changed file, and restores the preimage on
+exit. Restoration does not turn a mutation into a read-only observation, so a
+v1 run is neither admissible production plan evidence nor authorization. The
+"Reconcile infrastructure published ports" workflow now contains only one
+GitHub-hosted refusal job: there is no production environment, self-hosted
+runner job or reconcile invocation to acquire. The script independently refuses
+`--environment production` before it reads `.env` or calls Docker.
+
+The versioned contract is split into three typed objects with different roles:
+
+- `PublishedPortIntentV1` is the canonical declaration decision emitted by the
+  existing CLI. It contains the service, environment, bind assignments and
+  declared target sockets. It is not an apply plan.
+- `PublishedPortPlanV1` binds that intent to the exact protected-main source
+  SHA, repository, workflow, production target, change reference and reason,
+  declaration and Compose digests, plus typed observed prestate: the target
+  container and image, actual listeners, a versioned non-port service
+  projection digest, and the project container-ID map.
+- `PublishedPortPlanReceiptV1` identifies one terminal plan workflow run and
+  artifact and binds the canonical plan and prestate digests. Two matching
+  receipts are evidence only. They are never an authorization receipt and
+  never replace authenticated initiator identity or production-environment
+  approval.
+
+Production remains refused until a separately reviewed v2 structurally splits
+plan and apply and proves all of the following:
+
+1. A plan is host-read-only: it cannot write `.env`, change Docker, or alter
+   firewall state. Checkout and every decision input are pinned to an exact
+   protected-main SHA.
+2. Two distinct terminal-success plan runs, each on its first attempt, publish
+   byte-identical canonical `plan.json` decisions. Run envelopes may differ;
+   decision bytes may not.
+3. Apply retains a distinct authenticated authorization reference and performs
+   an immediate third read-only replan. It refuses unless those bytes and the
+   exact digest match both prior plans.
+4. Before the first mutation, a root-owned persistent deadman worker and
+   `Persistent=true` systemd timer are installed, verified and armed, with
+   root-owned state and a rollback bundle under
+   `/var/lib/dotmac/published-port-reconcile/`. Explicit failure rolls back
+   immediately; runner death or reboot is caught by the timer.
+5. Rollback restores the bind-key preimage, target container and actual
+   listeners. Disarm happens only after complete readback.
+6. Apply uses `docker compose up --no-deps` for exactly the target service,
+   proves the normalized non-port service definition is equivalent, and proves
+   every non-target project container ID is unchanged. Only the target
+   container ID may change.
+
+V2 remains a narrow production executor with an explicit retirement gate into
+the deployment controller path; it does not become the permanent deployment
+authority merely because the safety gates pass.
+
 ## Invariants
 
 - No publish in `docker-compose.yml` is bare. Every one names a host address.
@@ -113,16 +168,17 @@ and it does not change `ssl`, `pg_hba`, or any credential policy.
 - **Old owner and paths:** none. Published ports were literal strings in
   `docker-compose.yml`, applied by whoever last recreated a container, with two
   ad-hoc knobs (`VM_BIND`, `PG_LOCAL_BIND`) and no check of either.
-- **New owner and paths:** `deploy/published_ports.toml`, enforced by
-  `scripts/published_ports.py` and applied by
-  `scripts/reconcile_published_ports.sh`.
-- **Backfill/repair:** the reconcile *is* the repair path; it is idempotent and
-  exits 3 when a service already matches.
-- **Shadow or verification phase:** `--plan-only` runs every gate and recreates
-  nothing. The workflow defaults `plan_only` to `true`.
-- **Cutover gate and evidence:** `check-listeners` against the host reports zero
-  problems for the reconciled service, read from actual listeners.
-- **Fallback retirement:** none to retire; there was no prior managed path.
+- **New owner and paths:** `deploy/published_ports.toml` owns intent and
+  `scripts/published_ports.py` enforces it. V1 apply is disabled in production;
+  no production executor is currently admitted.
+- **Backfill/repair:** refused until the v2 gates in the amendment above exist.
+- **Shadow or verification phase:** no v1 production shadow phase is admitted;
+  `--plan-only` mutates `.env` temporarily and therefore is not read-only.
+- **Cutover gate and evidence:** two identical terminal v2 plan decisions plus
+  the immediate matching replan are required evidence, separate from production
+  authorization. No such evidence exists yet.
+- **Fallback retirement:** v1 stays disabled and is removed only after v2 is
+  admitted and then retired into the deployment controller path.
 - **Schema contract step:** not applicable — no database schema changes.
 
 ## Verification

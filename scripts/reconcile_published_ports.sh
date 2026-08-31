@@ -16,6 +16,13 @@
 # release would be far worse than any binding bug. This is a named, requested,
 # recorded maintenance action, and it reconciles exactly one service.
 #
+# PRODUCTION V1 IS DISABLED. Even --plan-only writes .env before restoring it,
+# so it is not a read-only production plan. The workflow refuses on a hosted
+# runner before acquiring the production runner, and this script independently
+# refuses a production argument before reading host state. ADR-0014 defines the
+# v2 admission gates. The remaining implementation is retained for staging and
+# as explicit migration history; it is not production authority.
+#
 # THE ORDERING THIS SCRIPT EXISTS TO ENFORCE
 #
 # The environment value must be in place BEFORE the recreate. Recreating
@@ -174,6 +181,8 @@ fi
 
 [[ -n "${SERVICE}" ]] || usage
 [[ -n "${ENVIRONMENT}" ]] || usage
+[[ "${ENVIRONMENT}" != "production" ]] ||
+  die "published-port reconcile v1 is disabled for production; ADR-0014 requires a read-only v2 plan/apply path."
 [[ -f "${ENV_FILE}" ]] || die "missing ${ENV_FILE}"
 command -v docker >/dev/null || die "docker is not on PATH"
 
