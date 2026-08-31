@@ -207,6 +207,7 @@ def test_customer_multi_column_exports_project_the_complete_backend_csv():
     assert "filter((column) => column !== 'all')" in template
     assert "window.location.href = this.customerExportUrl();" in template
     assert "fetch(this.customerExportUrl()," in template
+    assert "new URLSearchParams(new FormData(form))" in template
     assert "credentials: 'same-origin'" in template
     assert "parseCustomerCsv(await response.text())" in template
     assert "selectedColumnIndexes" in template

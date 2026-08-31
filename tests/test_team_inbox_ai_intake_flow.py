@@ -769,6 +769,48 @@ def test_campaign_attribution_skips_gateway_in_observation_path(
     assert message.metadata_["ai_intake_reason"] == "campaign_excluded"
 
 
+def test_observation_path_rolls_back_failed_optional_intake_step(
+    db_session, monkeypatch
+):
+    fallback = _team(db_session, "Optional Intake Failure Fallback")
+    fallback_id = fallback.id
+    db_session.commit()
+
+    def _fail_after_partial_write(db, *, conversation, **_kwargs):
+        conversation.subject = "partial intake write"
+        db.flush()
+        raise RuntimeError("intake database failure")
+
+    monkeypatch.setattr(
+        team_inbox_channel_receive,
+        "_classify_inbound",
+        _fail_after_partial_write,
+    )
+
+    [result] = team_inbox_channel_receive.receive_inbound_channel_batch_committed(
+        db_session,
+        [
+            team_inbox_channel_receive.InboundChannelPayload(
+                channel_type=InboxChannelType.facebook_messenger.value,
+                contact_address="optional-intake-failure-contact",
+                body="Hello",
+                external_message_id="fb-optional-intake-failure-1",
+                metadata={
+                    "provider": "meta_social",
+                    "page_or_account_id": "page-optional-failure",
+                },
+                fallback_service_team_id=fallback_id,
+            )
+        ],
+    )
+
+    conversation = db_session.get(InboxConversation, result["conversation_id"])
+    message = db_session.get(InboxMessage, result["message_id"])
+    assert conversation.subject is None
+    assert message.body == "Hello"
+    assert message.metadata_["ai_intake_status"] == "failed"
+
+
 def test_duplicate_delivery_does_not_reclassify_or_duplicate_message(
     db_session, monkeypatch
 ):

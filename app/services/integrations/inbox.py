@@ -188,15 +188,16 @@ def receive_and_claim_verified(
 
 
 def claim_for_processing(receipt: IntegrationInbox) -> bool:
-    if receipt.state in {"processing", "processed"}:
+    if receipt.state in {"processing", "processed", "dead_letter"}:
+        # Provider redelivery is not an authorized replay. A terminal receipt
+        # remains terminal and the webhook acknowledges the already-recorded
+        # fact without attempting a second consequence.
         return False
     if (
         receipt.state == "retryable"
         and receipt.error_code == "crm_customer_name_rejected"
     ):
         return False
-    if receipt.state == "dead_letter":
-        raise InboxError("dead-letter receipt requires authorized replay")
     receipt.state = "processing"
     receipt.attempt_count += 1
     receipt.error_code = None
