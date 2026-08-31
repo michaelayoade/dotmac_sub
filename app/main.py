@@ -9,6 +9,7 @@ from importlib import import_module
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
+from uuid import UUID
 
 warnings.filterwarnings(
     "ignore",
@@ -1319,6 +1320,9 @@ _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/webhooks/",
 )
 _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_API_SYNC_PRESSURE_DEFAULT_SERVICE_CLIENTS = ("dotmac-erp",)
+_API_SYNC_PRESSURE_DEFAULT_SERVICE_IPS = ("149.102.158.167",)
+_API_SYNC_PRESSURE_SERVICE_CLIENT_HEADER = "X-Dotmac-Integration-Client"
 _PAYMENT_PROVIDER_WEBHOOK_PATHS = {
     "/api/v1/payment-events/paystack": "paystack",
     "/payment-events/paystack": "paystack",
@@ -1336,6 +1340,10 @@ _API_SYNC_FEED_PATHS = frozenset(
         "/api/v1/subscribers/sync",
         "/api/v1/tax-rates/sync",
     }
+)
+_API_SYNC_SERVICE_DETAIL_PREFIXES = (
+    "/api/v1/subscribers/",
+    "/api/v1/billing-accounts/",
 )
 
 
@@ -1366,6 +1374,46 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
 def _path_matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _is_exact_uuid_detail_path(path: str) -> bool:
+    for prefix in _API_SYNC_SERVICE_DETAIL_PREFIXES:
+        if not path.startswith(prefix):
+            continue
+        identifier = path.removeprefix(prefix)
+        if not identifier or "/" in identifier:
+            return False
+        try:
+            UUID(identifier)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _sync_service_client(request: Request, ip_address: str) -> str | None:
+    """Identify a bounded ERP traffic lane; downstream auth remains mandatory."""
+    if request.method != "GET":
+        return None
+    path = request.url.path
+    if path not in _API_SYNC_FEED_PATHS and not _is_exact_uuid_detail_path(path):
+        return None
+    client_name = request.headers.get(_API_SYNC_PRESSURE_SERVICE_CLIENT_HEADER, "")
+    allowed_clients = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_SERVICE_CLIENTS",
+            _API_SYNC_PRESSURE_DEFAULT_SERVICE_CLIENTS,
+        )
+    )
+    allowed_ips = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_SERVICE_IPS",
+            _API_SYNC_PRESSURE_DEFAULT_SERVICE_IPS,
+        )
+    )
+    if client_name in allowed_clients and ip_address in allowed_ips:
+        return client_name
+    return None
 
 
 def _request_is_https(request: Request) -> bool:
@@ -1523,18 +1571,26 @@ async def api_sync_pressure_guard_middleware(request: Request, call_next):
             _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS,
         )
     )
-    if path in _API_SYNC_FEED_PATHS:
+    service_client = _sync_service_client(request, ip_address)
+    if service_client is not None:
+        bucket = "service"
+        limit = _env_int("API_SYNC_PRESSURE_SERVICE_LIMIT", 300)
+        rate_key = f"api-v1-pressure:{bucket}:{service_client}:{ip_address}"
+    elif path in _API_SYNC_FEED_PATHS:
         bucket = "feed"
         limit = _env_int("API_SYNC_PRESSURE_FEED_LIMIT", 60)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
     elif ip_address in offender_ips:
         bucket = "listed"
         limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 10)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
     else:
         bucket = "general"
         limit = _env_int("API_SYNC_PRESSURE_PER_IP_LIMIT", 300)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
 
     decision = allow_operation(
-        f"api-v1-pressure:{bucket}:{ip_address}",
+        rate_key,
         limit=limit,
         window_seconds=window,
     )

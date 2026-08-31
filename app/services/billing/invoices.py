@@ -2674,9 +2674,10 @@ class Invoices(ListResponseMixin):
     ):
         """Return the ordered ERP invoice delta without detail-only relations."""
         query = db.query(Invoice).options(
+            selectinload(Invoice.account),
             selectinload(
                 Invoice.lines.and_(InvoiceLine.is_active.is_(True))
-            ).selectinload(InvoiceLine.tax_rate)
+            ).selectinload(InvoiceLine.tax_rate),
         )
         if account_id:
             query = query.filter(Invoice.account_id == account_id)
