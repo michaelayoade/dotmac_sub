@@ -144,21 +144,59 @@ OpenBao is the system of record for its production credential,
 `secret/dotmac/postgres/sub-production-primary/schema-bootstrap`. The
 deployment consumes already-held material and does not fetch OpenBao on the
 deployment path: the credential is materialised on the host as a root-owned
-`0400` pgpass file at `/etc/dotmac/sub/schema-bootstrap.pgpass`, read by the
-root-owned deployment adapter and by nothing else — not the application, not
-the GitHub runner, not `dotmac_app`. Staging uses a separate role and a
-separate credential. Never write a credential value into this runbook, a
-deployment command, an environment variable or a log.
+`0400` pgpass file at `/etc/dotmac/sub/schema-bootstrap.pgpass`, readable only
+by the deployment adapter's fixed account and by nothing else — not the
+application container, not any other service account, not `dotmac_app`.
+
+That account is `root` on production and `dotmac` on staging, set with
+`SCHEMA_BOOTSTRAP_OWNER` (default `root`). Note what is deliberately NOT
+claimed: the GitHub runner executes the deployment adapter on both hosts
+(production runs the runner as `root`, staging as `dotmac`), so "the runner
+cannot read this file" is unachievable in either environment and is not
+asserted. Stating it would be an invariant that is quietly false everywhere,
+which is worse than one scoped honestly.
+
+Staging uses a separate role and a separate credential — sharing one would make
+a staging compromise a production one and defeat the point of a narrowly scoped
+role. Never write a credential value into this runbook, a deployment command, an
+environment variable or a log.
 
 The connection is TCP with SCRAM and carries no password: libpq reads it from
 `PGPASSFILE` alone, so it appears in no URL, argv, environment or log. The
 deploy refuses to attempt repair unless the URL is passwordless and the
-credential file exists, is a regular file, is non-empty, is owned by `root`,
-and is mode `400`.
+credential file exists, is a regular file, is non-empty, is owned by
+`SCHEMA_BOOTSTRAP_OWNER` (default `root`), and is mode `400`. Every one of those
+checks names what failed; none of them is a bare `test`.
+
+The address is the one the REPAIR LEG sees, not the one an operator sees. The
+leg runs `docker compose run --rm --no-deps app`, so `127.0.0.1` there is the
+container's own loopback, not the host's — a published `127.0.0.1:9001` cannot
+be reached from inside it. Use the Compose service name the application already
+resolves:
 
 ```bash
-SCHEMA_BOOTSTRAP_URL=postgresql://dotmac_schema_bootstrap@127.0.0.1:9001/dotmac_sub
+# production
+SCHEMA_BOOTSTRAP_URL=postgresql://dotmac_schema_bootstrap@postgres-local:5432/dotmac_sub
 SCHEMA_BOOTSTRAP_PGPASS=/etc/dotmac/sub/schema-bootstrap.pgpass
+
+# staging (separate role, separate credential, adapter runs as dotmac)
+SCHEMA_BOOTSTRAP_URL=postgresql://dotmac_schema_bootstrap@db:5432/dotmac_sub
+SCHEMA_BOOTSTRAP_PGPASS=/home/dotmac/dotmac-sub-secrets/schema-bootstrap.pgpass
+SCHEMA_BOOTSTRAP_OWNER=dotmac
+```
+
+This also makes the credential independent of the published `9001` binding, so
+changing that binding cannot break the repair path.
+
+libpq matches a pgpass line on the host string exactly as given in the URL, so
+the file carries both perspectives — the container one used by the deploy and
+the host one used by an operator. Two explicit lines, never a `*` host: a
+wildcard would silently authorise the credential against any host it is ever
+copied to.
+
+```
+postgres-local:5432:dotmac_sub:dotmac_schema_bootstrap:<value from OpenBao>
+127.0.0.1:9001:dotmac_sub:dotmac_schema_bootstrap:<value from OpenBao>
 ```
 
 The bootstrap has three modes. `--repair-schemas` is the deployment's mode: it

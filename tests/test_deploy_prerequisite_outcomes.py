@@ -93,12 +93,12 @@ def _run(
 def _credential(tmp_path: Path, *, mode: int = 0o400) -> dict[str, str]:
     pgpass = tmp_path / "schema-bootstrap.pgpass"
     pgpass.write_text(
-        "127.0.0.1:9001:dotmac_sub:dotmac_schema_bootstrap:x\n", encoding="utf-8"
+        "postgres-local:5432:dotmac_sub:dotmac_schema_bootstrap:x\n", encoding="utf-8"
     )
     pgpass.chmod(mode)
     return {
         "SCHEMA_BOOTSTRAP_PGPASS": str(pgpass),
-        "SCHEMA_BOOTSTRAP_URL": "postgresql://dotmac_schema_bootstrap@127.0.0.1:9001/dotmac_sub",
+        "SCHEMA_BOOTSTRAP_URL": "postgresql://dotmac_schema_bootstrap@postgres-local:5432/dotmac_sub",
         # The harness cannot chown to root; the fixed-owner check itself is
         # exercised by test_a_wrongly_owned_credential_is_refused below.
         "SCHEMA_BOOTSTRAP_OWNER": _current_user(),
@@ -172,7 +172,7 @@ def test_the_password_never_appears_in_the_repair_invocation(tmp_path: Path) -> 
     _, output, calls = _run(tmp_path, satisfied=False, env=_credential(tmp_path))
     joined = " ".join(calls)
     assert "BOOTSTRAP_DATABASE_URL" in joined
-    assert "@127.0.0.1:9001" in joined
+    assert "@postgres-local:5432" in joined
     assert ":x@" not in joined, "a password leaked into the connection URL"
 
 
@@ -200,7 +200,7 @@ def test_an_inline_password_in_the_url_is_refused(tmp_path: Path) -> None:
     """A URL password would land in argv, the environment and the log."""
     env = _credential(tmp_path)
     env["SCHEMA_BOOTSTRAP_URL"] = (
-        "postgresql://dotmac_schema_bootstrap:secret@127.0.0.1:9001/dotmac_sub"
+        "postgresql://dotmac_schema_bootstrap:secret@postgres-local:5432/dotmac_sub"
     )
     code, output, _ = _run(tmp_path, satisfied=False, env=env)
     assert code != 0
@@ -220,7 +220,7 @@ def test_a_persisted_elevated_dsn_in_dot_env_is_refused(tmp_path: Path) -> None:
         tmp_path,
         satisfied=True,
         env={
-            "_env_bootstrap_url": "postgresql://postgres:hunter2@127.0.0.1:9001/dotmac_sub",
+            "_env_bootstrap_url": "postgresql://postgres:hunter2@postgres-local:5432/dotmac_sub",
             "SCHEMA_BOOTSTRAP_PGPASS": str(tmp_path / "absent.pgpass"),
             "SCHEMA_BOOTSTRAP_URL": "",
         },
@@ -244,6 +244,10 @@ def test_an_environment_supplied_elevated_dsn_still_works(tmp_path: Path) -> Non
         tmp_path,
         satisfied=False,
         env={
+            # Host-perspective on purpose, and correct here: the elevated path
+            # is an operator running on the host, where 9001 IS published. The
+            # managed leg runs inside the app container and uses the Compose
+            # service name instead. Two callers, two addresses.
             "BOOTSTRAP_DATABASE_URL": "postgresql://postgres@127.0.0.1:9001/dotmac_sub",
             "SCHEMA_BOOTSTRAP_PGPASS": str(tmp_path / "absent.pgpass"),
             "SCHEMA_BOOTSTRAP_URL": "",
