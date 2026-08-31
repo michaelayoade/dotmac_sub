@@ -12,6 +12,7 @@
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-8">
     {% call page_header(title="Revenue by Category", subtitle="Invoice revenue grouped by service type", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
+    {% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/reports/extended-export/revenue-categories" %}{% include "admin/reports/_csv_export_button.html" %}
 
     <div class="grid gap-4 sm:grid-cols-2">
         {{ stats_card("Categories", (category_count.value if category_count.is_present else category_count.placeholder), icon_chart_bar(), color="teal", color2="emerald") }}
