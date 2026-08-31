@@ -123,11 +123,11 @@ jobs:
           docker pull "$REPAIR_IMAGE"
           test "$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REPAIR_REVISION"
 
-          bootstrap_url="$(python3 - <<'PY'
+          database_name="$(python3 - <<'PY'
           import os
-          import subprocess
+          import re
           from pathlib import Path
-          from urllib.parse import quote, urlsplit, urlunsplit
+          from urllib.parse import unquote, urlsplit
 
           values = {}
           for raw_line in (Path(os.environ["DEPLOY_DIR"]) / ".env").read_text().splitlines():
@@ -140,53 +140,34 @@ jobs:
                   value = value[1:-1]
               values[key.strip()] = value
 
-          database_url = values.get("DATABASE_URL", "")
-          parsed = urlsplit(database_url)
-          password = values.get("PG_LOCAL_BOOTSTRAP_PASSWORD", "")
-          if not password and parsed.hostname in {
-              "postgres-local",
-              "dotmac_pg_local",
-              "localhost",
-              "127.0.0.1",
-          }:
-              result = subprocess.run(
-                  [
-                      "docker",
-                      "exec",
-                      "dotmac_pg_local",
-                      "sh",
-                      "-c",
-                      'printf %s "$POSTGRES_PASSWORD"',
-                  ],
-                  check=False,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.DEVNULL,
-                  text=True,
-              )
-              if result.returncode == 0:
-                  password = result.stdout
-          if not password:
-              password = values.get("POSTGRES_PASSWORD", "")
-          if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
-              raise SystemExit("production bootstrap inputs are incomplete")
-          host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-          port = f":{parsed.port}" if parsed.port else ""
-          netloc = f"postgres:{quote(password, safe='')}@{host}{port}"
-          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
+          parsed = urlsplit(values.get("DATABASE_URL", ""))
+          database_name = unquote(parsed.path.removeprefix("/"))
+          if not parsed.scheme.startswith("postgresql") or not re.fullmatch(
+              r"[A-Za-z0-9_]+", database_name
+          ):
+              raise SystemExit("production database target is invalid")
+          print(database_name)
           PY
           )"
-          test -n "$bootstrap_url"
+          test -n "$database_name"
+
+          database_pid="$(docker inspect dotmac_pg_local --format '{{.State.Pid}}')"
+          test "$database_pid" -gt 1
+          socket_dir="/proc/$database_pid/root/var/run/postgresql"
+          test -S "$socket_dir/.s.PGSQL.5432"
+          bootstrap_url="postgresql://postgres@/$database_name?host=/var/run/postgresql"
 
           compose=(docker compose -f docker-compose.yml)
           if [[ -f docker-compose.override.yml ]]; then
             compose+=(-f docker-compose.override.yml)
           fi
 
-          BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
-          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+          docker run --rm --network none \
+            --mount "type=bind,src=$socket_dir,dst=/var/run/postgresql,readonly" \
+            -e BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
+            "$REPAIR_IMAGE" \
             python scripts/bootstrap_commercial_module_prereqs.py --repair
-          unset bootstrap_url
+          unset bootstrap_url database_name database_pid socket_dir
 
           APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
             "${compose[@]}" run --rm --no-deps app sh -c \
