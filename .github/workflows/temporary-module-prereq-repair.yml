@@ -1,0 +1,168 @@
+name: Temporary commercial module prerequisite repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Exact database target to repair
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-module-prereq-repair-${{ inputs.target }}
+  cancel-in-progress: false
+
+env:
+  REPAIR_IMAGE: ghcr.io/michaelayoade/dotmac_sub@sha256:526daf4ed676ae560c4cee574f65a0ef7c4064c72ad8dfa0648cbd22ab6f772e
+  REPAIR_REVISION: 43482aeb0a5a42488d435181a08ef4b3ce84d151
+
+jobs:
+  staging:
+    name: Repair staging prerequisites
+    if: inputs.target == 'staging'
+    runs-on: [self-hosted, linux, x64, dotmac-sub-staging]
+    environment: staging
+    timeout-minutes: 20
+    steps:
+      - name: Repair and verify exact staging database
+        env:
+          DEPLOY_DIR: ${{ vars.STAGING_DEPLOY_DIR }}
+        run: |
+          set -euo pipefail
+          set +x
+          expected_dir=/home/dotmac/deploy-worktrees/dotmac-sub-staging
+          test "$DEPLOY_DIR" = "$expected_dir"
+          test -f "$DEPLOY_DIR/.env"
+          grep -Fqx 'APP_ENV=staging' "$DEPLOY_DIR/.env"
+          grep -Fqx 'SERVER_NAME=dotmac-sub-staging' "$DEPLOY_DIR/.env"
+          cd "$DEPLOY_DIR"
+
+          exec 9>/var/lock/dotmac_sub_deploy.lock
+          flock -n 9 || {
+            echo 'A staging deployment or database repair is already running.' >&2
+            exit 1
+          }
+
+          docker pull "$REPAIR_IMAGE"
+          test "$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REPAIR_REVISION"
+
+          bootstrap_url="$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import quote, urlsplit, urlunsplit
+
+          values = {}
+          for raw_line in (Path(os.environ["DEPLOY_DIR"]) / ".env").read_text().splitlines():
+              line = raw_line.strip()
+              if not line or line.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                  value = value[1:-1]
+              values[key.strip()] = value
+
+          database_url = values.get("DATABASE_URL", "")
+          password = values.get("POSTGRES_PASSWORD", "")
+          parsed = urlsplit(database_url)
+          if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
+              raise SystemExit("staging bootstrap inputs are incomplete")
+          host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+          port = f":{parsed.port}" if parsed.port else ""
+          netloc = f"postgres:{quote(password, safe='')}@{host}{port}"
+          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
+          PY
+          )"
+          test -n "$bootstrap_url"
+
+          compose=(docker compose -f docker-compose.yml)
+          test -f docker-compose.override.yml
+          compose+=(-f docker-compose.override.yml)
+
+          BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
+          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
+            "${compose[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+            python scripts/bootstrap_commercial_module_prereqs.py --repair
+          unset bootstrap_url
+
+          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
+            "${compose[@]}" run --rm --no-deps app sh -c \
+            'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+
+  production:
+    name: Repair production prerequisites
+    if: inputs.target == 'production'
+    runs-on: [self-hosted, linux, x64, dotmac-sub-production]
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Repair and verify exact production database
+        env:
+          DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$DEPLOY_DIR"
+          test -f "$DEPLOY_DIR/.env"
+          grep -Fqx 'APP_ENV=production' "$DEPLOY_DIR/.env"
+          grep -Fqx 'SERVER_NAME=dotmac-sub-prod' "$DEPLOY_DIR/.env"
+          cd "$DEPLOY_DIR"
+
+          exec 9>/var/lock/dotmac_sub_deploy.lock
+          flock -n 9 || {
+            echo 'A production deployment or database repair is already running.' >&2
+            exit 1
+          }
+
+          docker pull "$REPAIR_IMAGE"
+          test "$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REPAIR_REVISION"
+
+          bootstrap_url="$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import quote, urlsplit, urlunsplit
+
+          values = {}
+          for raw_line in (Path(os.environ["DEPLOY_DIR"]) / ".env").read_text().splitlines():
+              line = raw_line.strip()
+              if not line or line.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                  value = value[1:-1]
+              values[key.strip()] = value
+
+          database_url = values.get("DATABASE_URL", "")
+          password = values.get("POSTGRES_PASSWORD", "")
+          parsed = urlsplit(database_url)
+          if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
+              raise SystemExit("production bootstrap inputs are incomplete")
+          host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+          port = f":{parsed.port}" if parsed.port else ""
+          netloc = f"postgres:{quote(password, safe='')}@{host}{port}"
+          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
+          PY
+          )"
+          test -n "$bootstrap_url"
+
+          compose=(docker compose -f docker-compose.yml)
+          if [[ -f docker-compose.override.yml ]]; then
+            compose+=(-f docker-compose.override.yml)
+          fi
+
+          BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
+          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
+            "${compose[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+            python scripts/bootstrap_commercial_module_prereqs.py --repair
+          unset bootstrap_url
+
+          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
+            "${compose[@]}" run --rm --no-deps app sh -c \
+            'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
