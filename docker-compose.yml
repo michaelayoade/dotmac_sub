@@ -134,7 +134,15 @@ services:
     volumes:
     - /var/lib/dotmac-pg-local:/var/lib/postgresql/data
     ports:
-    - 9001:5432
+    # Default localhost-only; prod sets PG_LOCAL_BIND=0.0.0.0: because the
+    # replication standby streams through this published port from off-host,
+    # so loopback-only is not available here (source-restricted to the standby
+    # IP by the host firewall DOCKER-USER rule). Naming an explicit IPv4 host
+    # address is what keeps Docker from also publishing on [::]: a bare
+    # "9001:5432" spawns a second docker-proxy on :: whose traffic terminates
+    # on INPUT and never traverses DOCKER-USER, so no firewall rule in that
+    # chain can restrict it. See .env.example.
+    - ${PG_LOCAL_BIND:-127.0.0.1:}9001:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
