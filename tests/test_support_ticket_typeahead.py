@@ -257,6 +257,11 @@ def test_ticket_detail_mentions_track_person_and_group_tokens() -> None:
     assert "commentEditor(initialText, initialMentions, options)" in detail_template
     assert "comment_mentions.get(comment.id|string, [])" in detail_template
     assert detail_template.count('name="mentions"') == 2
+    assert '<div x-show="editing" x-cloak>' in detail_template
+    assert '@focus="onInput"' in detail_template
+    assert '@keydown.escape="showSuggestions = false"' in detail_template
+    assert 'x-show="selectedMentions.length"' in detail_template
+    assert "removeMention(mention.token)" in detail_template
     assert 'placeholder="Edit comment... Use @name or @email to mention."' in (
         detail_template
     )

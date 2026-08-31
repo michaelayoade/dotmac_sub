@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.integration_platform import IntegrationInbox
+from app.schemas.notification import PushIntent
 from app.services import quotes_mirror
 from app.services.crm_customers import CRMCustomerObservation, observe_customer
 from app.services.integrations import inbox as integration_inbox
@@ -297,7 +298,11 @@ async def receive_crm_chat_event(
                 subscriber_id,
                 title="New message from support",
                 body=preview,
-                data={"type": "chat_message", "conversation_id": conversation_id},
+                intent=PushIntent(
+                    intent_code="chat.message",
+                    subject_kind="conversation",
+                    subject_id=conversation_id or str(receipt.id),
+                ),
             )
 
         subscriber_id = str(body.get("subscriber_id") or "").strip()

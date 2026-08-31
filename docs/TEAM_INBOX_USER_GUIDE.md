@@ -199,6 +199,8 @@ the reply composer, and separate multiple addresses with commas, semicolons, or
 line breaks. Any invalid address blocks the send. Each email message in the
 staff thread shows its recorded From, To, CC, and BCC addresses. BCC recipients
 are never placed in the visible email headers or shown to customer recipients.
+The action is browser-native and does not require inbox JavaScript to become
+visible.
 
 ### Facebook and Instagram direct messages
 

@@ -1,5 +1,8 @@
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from app.models.erp_domain_sync import ErpDomainSyncCursor
 from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber
@@ -36,7 +39,7 @@ class _ERP:
         return None
 
 
-def test_v2_outcome_accepts_the_real_erp_error_field() -> None:
+def test_v2_outcome_accepts_only_the_neutral_erp_error_field() -> None:
     source_id = uuid4()
 
     outcome = ErpOperationalSyncOutcome.model_validate(
@@ -49,14 +52,32 @@ def test_v2_outcome_accepts_the_real_erp_error_field() -> None:
             "errors": [
                 {
                     "entity_type": "project_task",
-                    "crm_id": str(source_id),
+                    "source_reference": str(source_id),
                     "error": "project source mapping not found",
                 }
             ],
         }
     )
 
-    assert outcome.errors[0].source_id == source_id
+    assert outcome.errors[0].source_reference == source_id
+
+    with pytest.raises(ValidationError):
+        ErpOperationalSyncOutcome.model_validate(
+            {
+                "contract_version": 2,
+                "projects_synced": 0,
+                "project_tasks_synced": 0,
+                "tickets_synced": 0,
+                "work_orders_synced": 0,
+                "errors": [
+                    {
+                        "entity_type": "project_task",
+                        "crm_id": str(source_id),
+                        "error": "legacy alias must be refused",
+                    }
+                ],
+            }
+        )
 
 
 def _seed(db):
@@ -145,7 +166,7 @@ def test_domain_sync_does_not_advance_on_partial_erp_error(db_session):
             errors=(
                 ErpOperationalSyncError(
                     entity_type="project",
-                    source_id=uuid4(),
+                    source_reference=uuid4(),
                     error="invalid",
                 ),
             ),

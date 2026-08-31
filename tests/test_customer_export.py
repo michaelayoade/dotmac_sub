@@ -10,7 +10,9 @@ from app.models.subscriber import UserType
 from app.services import web_customer_lists
 
 
-def _export_query(*, ids: str = "all") -> web_customer_lists.CustomerExportQuery:
+def _export_query(
+    *, ids: str = "all", billing_mode: str | None = None
+) -> web_customer_lists.CustomerExportQuery:
     return web_customer_lists.build_customer_export_query(
         ids=ids,
         search=None,
@@ -20,9 +22,16 @@ def _export_query(*, ids: str = "all") -> web_customer_lists.CustomerExportQuery
         pop_site_id=None,
         infrastructure_type=None,
         infrastructure_id=None,
+        billing_mode=billing_mode,
         sort_by="created_at",
         sort_dir="desc",
     )
+
+
+def test_customer_export_preserves_billing_filter_in_canonical_scope():
+    export_query = _export_query(billing_mode="non_billable")
+
+    assert export_query.list_query.filter_value("billing_mode") == "non_billable"
 
 
 def test_complete_customer_csv_projects_advanced_analytical_fields(

@@ -1021,7 +1021,7 @@ def _asset_attachment(asset: InboxMediaAsset) -> InboxTimelineAttachment:
     elif asset.asset_type != "location":
         url = (
             team_inbox_media.media_content_url(asset.id)
-            if asset.download_status in {"stored", "remote_available", "metadata_only"}
+            if team_inbox_media.asset_content_available(asset)
             else (asset.storage_url or asset.source_url)
         )
     return InboxTimelineAttachment(

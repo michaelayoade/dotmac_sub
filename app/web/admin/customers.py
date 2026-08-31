@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.party import PartyType
-from app.models.subscriber import Reseller, SubscriberCategory
+from app.models.subscriber import Reseller, SubscriberCategory, UserType
 from app.services import (
     conversation_lead_relationships,
     customer_portal,
@@ -37,6 +37,7 @@ from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
 )
@@ -226,6 +227,12 @@ def _subscription_action_permission_context(
     auth = getattr(getattr(request, "state", None), "auth", None) or {}
     can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
     return {
+        "can_send_customer_messages": bool(auth)
+        and has_permission(
+            auth,
+            db,
+            web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION,
+        ),
         "can_activate_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:activate")),
         "can_suspend_subscriptions": can_write_catalog
@@ -445,6 +452,7 @@ def customers_list(
     search: str | None = None,
     status: str | None = None,
     customer_type: str | None = None,  # 'person' or 'business'
+    billing_mode: str | None = None,
     nas_id: str | None = None,
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
@@ -470,6 +478,7 @@ def customers_list(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
@@ -1040,6 +1049,42 @@ def customer_party_binding_repair_submit(
             f"?party_binding_success={quote_plus('Party binding repaired')}&party_id={outcome.party_id}"
         ),
         status_code=303,
+    )
+
+
+@router.get(
+    "/person/{customer_id}/billing/ledger",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("customer:read")),
+        Depends(require_permission("billing:ledger:read")),
+    ],
+)
+def customer_billing_ledger(
+    request: Request,
+    customer_id: UUID,
+    page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """Lazy customer-scoped ledger panel for the customer billing workspace."""
+
+    customer = _get_subscriber(db, str(customer_id))
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    ledger = web_billing_ledger_service.build_customer_ledger_view(
+        db,
+        query=web_billing_ledger_service.CustomerLedgerQuery(
+            account_id=customer.id,
+            page=page,
+        ),
+    )
+    return templates.TemplateResponse(
+        "admin/customers/_billing_ledger.html",
+        {
+            "request": request,
+            "customer": customer,
+            "customer_ledger": ledger,
+        },
     )
 
 
@@ -2990,7 +3035,14 @@ def bulk_update_customers(
 
 
 @router.post(
-    "/bulk/send-message", dependencies=[Depends(require_permission("customer:write"))]
+    "/bulk/send-message",
+    dependencies=[
+        Depends(
+            require_permission(
+                web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION
+            )
+        )
+    ],
 )
 def bulk_send_customer_message(
     request: Request,
@@ -3061,6 +3113,7 @@ def export_customers(
     search: str | None = None,
     status: str | None = None,
     customer_type: str | None = None,
+    billing_mode: str | None = None,
     nas_id: str | None = None,
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
@@ -3076,6 +3129,7 @@ def export_customers(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,

@@ -20,6 +20,8 @@ from app.models.party import Party, PartyIdentityStatus, PartyType
 from app.models.service_team import (
     ServiceTeam,
     ServiceTeamCapabilityKey,
+    ServiceTeamDepartmentMembershipSource,
+    ServiceTeamExternalReference,
     ServiceTeamMember,
     ServiceTeamResponsibilityKey,
     ServiceTeamScopeType,
@@ -39,6 +41,10 @@ from app.services.owner_commands import (
 OWNER = "operations.service_team_lifecycle"
 LIFECYCLE_CONCERN = "service-team lifecycle"
 MEMBERSHIP_CONCERN = "service-team membership lifecycle"
+ERP_DEPARTMENT_MEMBERSHIP_CONCERN = (
+    "ERP department service-team membership synchronization"
+)
+ERP_DEPARTMENT_PROVIDER = "dotmac_erp"
 
 _CREATE = OwnerCommandDefinition(
     owner=OWNER,
@@ -64,6 +70,11 @@ _REMOVE_MEMBER = OwnerCommandDefinition(
     owner=OWNER,
     concern=MEMBERSHIP_CONCERN,
     name="remove_service_team_member",
+)
+_SYNC_ERP_DEPARTMENT_MEMBERSHIP = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=ERP_DEPARTMENT_MEMBERSHIP_CONCERN,
+    name="sync_erp_department_membership",
 )
 
 
@@ -111,8 +122,38 @@ class RemoveServiceTeamMember:
 
 
 @dataclass(frozen=True)
+class ErpDepartmentMembershipDepartment:
+    department_id: str
+    department_code: str | None
+    department_name: str | None
+
+
+@dataclass(frozen=True)
+class SyncErpDepartmentMembership:
+    context: CommandContext
+    system_user_id: UUID
+    account_scope: str
+    erp_employee_id: str
+    employee_code: str | None
+    department: ErpDepartmentMembershipDepartment | None
+    observed_at: datetime
+
+
+@dataclass(frozen=True)
 class ServiceTeamMutation:
     team_id: UUID
+    member_id: UUID | None
+    operation: str
+    replayed: bool
+
+
+@dataclass(frozen=True)
+class ErpDepartmentMembershipMutation:
+    system_user_id: UUID
+    erp_employee_id: str
+    account_scope: str
+    team_id: UUID | None
+    previous_team_id: UUID | None
     member_id: UUID | None
     operation: str
     replayed: bool
@@ -251,6 +292,31 @@ def _clean_reason(value: str) -> str:
     return reason
 
 
+def _clean_external_value(
+    value: str | None,
+    *,
+    field: str,
+    maximum: int,
+    required: bool = True,
+) -> str | None:
+    cleaned = " ".join(str(value or "").split())
+    if not cleaned:
+        if required:
+            raise _error(
+                "service_team_invalid",
+                f"{field} is required.",
+                field=field,
+            )
+        return None
+    if len(cleaned) > maximum:
+        raise _error(
+            "service_team_invalid",
+            f"{field} must be {maximum} characters or fewer.",
+            field=field,
+        )
+    return cleaned
+
+
 def _actor(context: CommandContext) -> tuple[AuditActorType, str | None]:
     raw_actor = str(context.actor or "")
     candidate = raw_actor.rsplit(":", maxsplit=1)[-1]
@@ -320,6 +386,44 @@ def _active_staff_identity(
     return user, user.person_party_id
 
 
+def _staff_identity_for_membership_sync(
+    db: Session,
+    system_user_id: UUID,
+    *,
+    require_active_user: bool,
+) -> tuple[SystemUser, UUID]:
+    user = db.scalar(
+        select(SystemUser).where(SystemUser.id == system_user_id).with_for_update()
+    )
+    if user is None or (require_active_user and not user.is_active):
+        raise _error(
+            "service_team_staff_not_found",
+            "The selected staff member is not active.",
+            system_user_id=str(system_user_id),
+        )
+    if user.person_party_id is None:
+        raise _error(
+            "service_team_staff_identity_unbound",
+            "The selected staff member has no reviewed Person Party binding.",
+            system_user_id=str(system_user_id),
+        )
+    person = db.scalar(
+        select(Party).where(Party.id == user.person_party_id).with_for_update()
+    )
+    if (
+        person is None
+        or person.party_type != PartyType.person.value
+        or person.status != PartyIdentityStatus.active.value
+    ):
+        raise _error(
+            "service_team_staff_identity_invalid",
+            "The selected staff member's Person Party binding is not active.",
+            system_user_id=str(system_user_id),
+            person_party_id=str(user.person_party_id),
+        )
+    return user, user.person_party_id
+
+
 def _locked_team(db: Session, team_id: UUID) -> ServiceTeam:
     team = db.scalar(
         select(ServiceTeam).where(ServiceTeam.id == team_id).with_for_update()
@@ -355,6 +459,69 @@ def _locked_member(
             member_id=str(member_id),
         )
     return member
+
+
+def _locked_erp_department_source(
+    db: Session,
+    *,
+    account_scope: str,
+    erp_employee_id: str,
+) -> ServiceTeamDepartmentMembershipSource | None:
+    return db.scalar(
+        select(ServiceTeamDepartmentMembershipSource)
+        .where(
+            ServiceTeamDepartmentMembershipSource.provider == ERP_DEPARTMENT_PROVIDER,
+            ServiceTeamDepartmentMembershipSource.account_scope == account_scope,
+            ServiceTeamDepartmentMembershipSource.external_employee_id
+            == erp_employee_id,
+        )
+        .with_for_update()
+    )
+
+
+def _active_team_for_erp_department(
+    db: Session,
+    *,
+    account_scope: str,
+    department_id: str,
+) -> ServiceTeam:
+    reference = db.scalar(
+        select(ServiceTeamExternalReference)
+        .join(ServiceTeam, ServiceTeam.id == ServiceTeamExternalReference.team_id)
+        .where(
+            ServiceTeamExternalReference.provider == ERP_DEPARTMENT_PROVIDER,
+            ServiceTeamExternalReference.account_scope == account_scope,
+            ServiceTeamExternalReference.external_id == department_id,
+            ServiceTeamExternalReference.is_active.is_(True),
+            ServiceTeam.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    if reference is None:
+        raise _error(
+            "service_team_erp_department_unmapped",
+            "ERP department is not mapped to an active Self-Care service team.",
+            provider=ERP_DEPARTMENT_PROVIDER,
+            account_scope=account_scope,
+            department_id=department_id,
+        )
+    return _locked_team(db, reference.team_id)
+
+
+def _locked_member_for_person(
+    db: Session,
+    *,
+    team_id: UUID,
+    person_id: UUID,
+) -> ServiceTeamMember | None:
+    return db.scalar(
+        select(ServiceTeamMember)
+        .where(
+            ServiceTeamMember.team_id == team_id,
+            ServiceTeamMember.person_id == person_id,
+        )
+        .with_for_update()
+    )
 
 
 def _ensure_name_available(
@@ -650,6 +817,289 @@ def remove_member(
     return execute_owner_command(
         db,
         definition=_REMOVE_MEMBER,
+        context=command.context,
+        operation=apply,
+    )
+
+
+def sync_erp_department_membership(
+    db: Session,
+    command: SyncErpDepartmentMembership,
+) -> ErpDepartmentMembershipMutation:
+    """Apply one ERP employee department observation to Self-Care membership."""
+
+    account_scope = _clean_external_value(
+        command.account_scope,
+        field="account_scope",
+        maximum=120,
+    )
+    assert account_scope is not None
+    erp_employee_id = _clean_external_value(
+        command.erp_employee_id,
+        field="erp_employee_id",
+        maximum=200,
+    )
+    assert erp_employee_id is not None
+    employee_code = _clean_external_value(
+        command.employee_code,
+        field="employee_code",
+        maximum=80,
+        required=False,
+    )
+    observed_at = _utc_instant(command.observed_at)
+
+    department: ErpDepartmentMembershipDepartment | None = None
+    if command.department is not None:
+        department_id = _clean_external_value(
+            command.department.department_id,
+            field="department.department_id",
+            maximum=200,
+        )
+        assert department_id is not None
+        department = ErpDepartmentMembershipDepartment(
+            department_id=department_id,
+            department_code=_clean_external_value(
+                command.department.department_code,
+                field="department.department_code",
+                maximum=80,
+                required=False,
+            ),
+            department_name=_clean_external_value(
+                command.department.department_name,
+                field="department.department_name",
+                maximum=200,
+                required=False,
+            ),
+        )
+
+    def apply() -> ErpDepartmentMembershipMutation:
+        source = _locked_erp_department_source(
+            db,
+            account_scope=account_scope,
+            erp_employee_id=erp_employee_id,
+        )
+        previous_team_id = (
+            source.team_id if source is not None and source.is_active else None
+        )
+        _, person_party_id = _staff_identity_for_membership_sync(
+            db,
+            command.system_user_id,
+            require_active_user=department is not None,
+        )
+        if source is not None and (
+            source.system_user_id != command.system_user_id
+            or source.person_id != person_party_id
+        ):
+            raise _error(
+                "service_team_erp_employee_identity_conflict",
+                "ERP employee is already bound to a different Self-Care staff account.",
+                provider=ERP_DEPARTMENT_PROVIDER,
+                account_scope=account_scope,
+                erp_employee_id=erp_employee_id,
+                existing_system_user_id=str(source.system_user_id),
+                requested_system_user_id=str(command.system_user_id),
+            )
+
+        if department is None:
+            if source is None or not source.is_active:
+                return ErpDepartmentMembershipMutation(
+                    system_user_id=command.system_user_id,
+                    erp_employee_id=erp_employee_id,
+                    account_scope=account_scope,
+                    team_id=None,
+                    previous_team_id=None,
+                    member_id=None,
+                    operation="erp_department_membership_absent",
+                    replayed=True,
+                )
+            member = db.scalar(
+                select(ServiceTeamMember)
+                .where(ServiceTeamMember.id == source.member_id)
+                .with_for_update()
+            )
+            team = _locked_team(db, source.team_id)
+            source.is_active = False
+            source.observed_at = observed_at
+            source.employee_code = employee_code
+            if member is not None and member.is_active:
+                member.is_active = False
+                db.flush()
+                _audit_and_event(
+                    db,
+                    context=command.context,
+                    action="erp_department_member_removed",
+                    team=team,
+                    member=member,
+                    metadata={
+                        "provider": ERP_DEPARTMENT_PROVIDER,
+                        "account_scope": account_scope,
+                        "erp_employee_id": erp_employee_id,
+                        "employee_code": employee_code,
+                        "department_removed": True,
+                        "observed_at": observed_at.isoformat(),
+                    },
+                )
+            else:
+                db.flush()
+            return ErpDepartmentMembershipMutation(
+                system_user_id=command.system_user_id,
+                erp_employee_id=erp_employee_id,
+                account_scope=account_scope,
+                team_id=None,
+                previous_team_id=team.id,
+                member_id=source.member_id,
+                operation="erp_department_member_removed",
+                replayed=False,
+            )
+
+        team = _active_team_for_erp_department(
+            db,
+            account_scope=account_scope,
+            department_id=department.department_id,
+        )
+        if source is not None:
+            same_active_target = (
+                source.is_active
+                and source.system_user_id == command.system_user_id
+                and source.person_id == person_party_id
+                and source.team_id == team.id
+                and source.external_department_id == department.department_id
+            )
+            if same_active_target:
+                member = db.scalar(
+                    select(ServiceTeamMember)
+                    .where(ServiceTeamMember.id == source.member_id)
+                    .with_for_update()
+                )
+                if member is not None and member.is_active:
+                    return ErpDepartmentMembershipMutation(
+                        system_user_id=command.system_user_id,
+                        erp_employee_id=erp_employee_id,
+                        account_scope=account_scope,
+                        team_id=team.id,
+                        previous_team_id=team.id,
+                        member_id=member.id,
+                        operation="erp_department_membership_replayed",
+                        replayed=True,
+                    )
+
+        if source is not None and source.is_active and source.team_id != team.id:
+            previous_member = db.scalar(
+                select(ServiceTeamMember)
+                .where(ServiceTeamMember.id == source.member_id)
+                .with_for_update()
+            )
+            previous_team = _locked_team(db, source.team_id)
+            if previous_member is not None and previous_member.is_active:
+                previous_member.is_active = False
+                _audit_and_event(
+                    db,
+                    context=command.context,
+                    action="erp_department_member_removed",
+                    team=previous_team,
+                    member=previous_member,
+                    metadata={
+                        "provider": ERP_DEPARTMENT_PROVIDER,
+                        "account_scope": account_scope,
+                        "erp_employee_id": erp_employee_id,
+                        "employee_code": employee_code,
+                        "replacement_team_id": str(team.id),
+                        "observed_at": observed_at.isoformat(),
+                    },
+                )
+
+        member = _locked_member_for_person(
+            db,
+            team_id=team.id,
+            person_id=person_party_id,
+        )
+        changed = False
+        if member is None:
+            member = ServiceTeamMember(
+                team_id=team.id,
+                person_id=person_party_id,
+                role=None,
+                is_active=True,
+            )
+            db.add(member)
+            changed = True
+        elif not member.is_active:
+            member.is_active = True
+            changed = True
+
+        db.flush()
+        if source is None:
+            source = ServiceTeamDepartmentMembershipSource(
+                provider=ERP_DEPARTMENT_PROVIDER,
+                account_scope=account_scope,
+                external_employee_id=erp_employee_id,
+                employee_code=employee_code,
+                external_department_id=department.department_id,
+                department_code=department.department_code,
+                department_name=department.department_name,
+                system_user_id=command.system_user_id,
+                person_id=person_party_id,
+                team_id=team.id,
+                member_id=member.id,
+                observed_at=observed_at,
+                is_active=True,
+            )
+            db.add(source)
+            changed = True
+        else:
+            changed = changed or not source.is_active or source.team_id != team.id
+            source.employee_code = employee_code
+            source.external_department_id = department.department_id
+            source.department_code = department.department_code
+            source.department_name = department.department_name
+            source.system_user_id = command.system_user_id
+            source.person_id = person_party_id
+            source.team_id = team.id
+            source.member_id = member.id
+            source.observed_at = observed_at
+            source.is_active = True
+
+        operation = (
+            "erp_department_member_transferred"
+            if previous_team_id is not None and previous_team_id != team.id
+            else "erp_department_member_added"
+        )
+        db.flush()
+        if changed:
+            _audit_and_event(
+                db,
+                context=command.context,
+                action=operation,
+                team=team,
+                member=member,
+                metadata={
+                    "provider": ERP_DEPARTMENT_PROVIDER,
+                    "account_scope": account_scope,
+                    "erp_employee_id": erp_employee_id,
+                    "employee_code": employee_code,
+                    "department_id": department.department_id,
+                    "department_code": department.department_code,
+                    "department_name": department.department_name,
+                    "observed_at": observed_at.isoformat(),
+                    "previous_team_id": (
+                        str(previous_team_id) if previous_team_id is not None else None
+                    ),
+                },
+            )
+        return ErpDepartmentMembershipMutation(
+            system_user_id=command.system_user_id,
+            erp_employee_id=erp_employee_id,
+            account_scope=account_scope,
+            team_id=team.id,
+            previous_team_id=previous_team_id,
+            member_id=member.id,
+            operation=operation,
+            replayed=not changed,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_SYNC_ERP_DEPARTMENT_MEMBERSHIP,
         context=command.context,
         operation=apply,
     )

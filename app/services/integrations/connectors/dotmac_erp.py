@@ -189,10 +189,16 @@ class DotmacErpRunner:
                 )
         elif capability_id == ERP_STATUS_CAPABILITY:
             if action == "expense_claim_status":
-                return {"item": client.get_expense_claim_status(str(params["omni_id"]))}
+                return {
+                    "item": client.get_expense_claim_status(
+                        str(params["source_claim_id"])
+                    )
+                }
             if action == "material_request_status":
                 return {
-                    "item": client.get_material_request_status(str(params["omni_id"]))
+                    "item": client.get_material_request_status(
+                        str(params["source_request_id"])
+                    )
                 }
             if action == "purchase_invoice_status":
                 return {

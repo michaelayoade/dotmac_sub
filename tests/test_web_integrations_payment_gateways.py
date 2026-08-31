@@ -65,6 +65,15 @@ def test_save_gateway_config_creates_complete_bundle_and_finance_identity(db_ses
         if binding.capability_id == "payments.intent.v1"
     )
     assert intent_binding.policy_json["presentment_priority"] == 40
+    webhook_binding = next(
+        binding
+        for binding in installation.capability_bindings
+        if binding.capability_id == "payments.webhook.v1"
+    )
+    assert webhook_binding.policy_json["ingress_rate_limit"] == {
+        "requests_per_window": 120,
+        "window_seconds": 60,
+    }
     assert db_session.query(PaymentProvider).one().provider_type.value == "paystack"
     assert db_session.query(PaymentChannel).one().provider_id is not None
 
@@ -198,6 +207,75 @@ def test_disable_stops_new_checkout_but_keeps_lifecycle_capabilities(db_session)
     state = service.build_config_state(db_session, "paystack")
     assert state["health"]["health"] == "checkout_disabled"
     assert state["health"]["lifecycle_ready"] is True
+
+
+def test_update_webhook_ingress_policy_is_bounded_and_preserves_binding_policy(
+    db_session,
+):
+    installation = _save_paystack(db_session)
+    installations.enable_after_connection_validation(
+        db_session,
+        installation_id=installation.id,
+        connection_result=ValidationResult(valid=True),
+    )
+
+    binding, ingress = service.update_webhook_ingress_policy(
+        db_session,
+        provider_type_value="paystack",
+        requests_per_window=240,
+        window_seconds=90,
+    )
+
+    assert ingress.requests_per_window == 240
+    assert ingress.window_seconds == 90
+    assert binding.policy_json["default"] is True
+    assert binding.policy_json["ingress_rate_limit"] == {
+        "requests_per_window": 240,
+        "window_seconds": 90,
+    }
+
+    with pytest.raises(ValueError, match="between 10 and 1000"):
+        service.update_webhook_ingress_policy(
+            db_session,
+            provider_type_value="paystack",
+            requests_per_window=5000,
+            window_seconds=90,
+        )
+
+
+def test_gateway_state_projects_sanitized_inbound_receipts(db_session):
+    from app.models.integration_platform import IntegrationInbox
+
+    installation = _save_paystack(db_session)
+    binding = next(
+        row
+        for row in installation.capability_bindings
+        if row.capability_id == "payments.webhook.v1"
+    )
+    db_session.add(
+        IntegrationInbox(
+            installation_id=installation.id,
+            capability_binding_id=binding.id,
+            provider_event_id="paystack-DMAC-CONTROL-1",
+            event_type="charge.success",
+            payload_digest="a" * 64,
+            payload_json={"private": "must-not-render"},
+            headers_json={"signature": "must-not-render"},
+            state="processed",
+            consequence_json={"status": "processed"},
+        )
+    )
+    db_session.flush()
+
+    state = service.build_config_state(db_session, "paystack")
+
+    assert state["webhook"]["endpoint_path"] == "/api/v1/payment-events/paystack"
+    assert state["webhook"]["source_label"] == "ERP verified relay"
+    assert state["webhook"]["receipts"][0]["provider_event_id"] == (
+        "paystack-DMAC-CONTROL-1"
+    )
+    assert "private" not in str(state["webhook"])
+    assert "signature" not in str(state["webhook"])
 
 
 def test_finance_identity_fails_closed_on_multiple_provider_channels(db_session):

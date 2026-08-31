@@ -3,13 +3,22 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.field_erp_sync import FieldErpSyncEvent
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
+    FieldErpSyncFlow,
+    SyncFlowOwner,
+    SyncFlowOwnership,
+)
 from app.models.project import Project
 from app.models.stored_file import StoredFile
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import (
     InstallationProject,
+    InstallationProjectStatus,
     ProjectQuote,
+    ProjectQuoteLineItem,
     ProjectQuoteStatus,
     Vendor,
     VendorPurchaseInvoice,
@@ -24,6 +33,10 @@ from app.services.dotmac_erp.outbox import FLOW_ENDPOINTS
 from app.services.dotmac_erp.purchase_invoice_sync import (
     build_purchase_invoice_payload,
 )
+from app.services.events.handlers.materials_lifecycle_projection import (
+    MaterialsLifecycleProjectionHandler,
+)
+from app.services.events.types import Event, EventType
 from app.services.file_storage import file_uploads
 from app.services.owner_commands import CommandContext
 from app.services.vendor_purchase_invoices import (
@@ -81,6 +94,34 @@ def _chain(db):
     db.add(quote)
     db.commit()
     return install, vendor, reviewer
+
+
+def _seed_purchase_invoice_flow(db):
+    for flow in FieldErpSyncFlow:
+        db.add(
+            SyncFlowOwnership(
+                flow=flow.value,
+                owner=(
+                    SyncFlowOwner.sub.value
+                    if flow is FieldErpSyncFlow.purchase_invoice
+                    else SyncFlowOwner.crm.value
+                ),
+            )
+        )
+    db.flush()
+
+
+def _set_vendor_invoice_tax_profile(db, profile: str):
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="vendor_purchase_invoice_erp_tax_profile",
+            value_type=SettingValueType.string,
+            value_text=profile,
+            is_active=True,
+        )
+    )
+    db.flush()
 
 
 def test_vendor_invoice_lifecycle_and_neutral_erp_contract(db_session):
@@ -180,6 +221,105 @@ def test_vendor_invoice_lifecycle_and_neutral_erp_contract(db_session):
     assert payload["source_project_id"] == str(install.project_id)
     assert "crm_invoice_id" not in payload
     assert FLOW_ENDPOINTS["purchase_invoice"] == "/api/v1/sync/sub/purchase-invoices"
+
+
+def test_project_completion_creates_po_backed_erp_invoice_with_tax_profile(
+    db_session,
+):
+    install, vendor, _reviewer = _chain(db_session)
+    quote = (
+        db_session.query(ProjectQuote)
+        .filter(ProjectQuote.project_id == install.id)
+        .one()
+    )
+    quote.status = ProjectQuoteStatus.approved.value
+    quote.currency = "NGN"
+    quote.vat_rate_percent = Decimal("0.00")
+    quote.subtotal = Decimal("100000.00")
+    quote.tax_total = Decimal("0.00")
+    quote.total = Decimal("100000.00")
+    db_session.add(
+        ProjectQuoteLineItem(
+            quote_id=quote.id,
+            item_type="labor",
+            description="Completed fiber installation",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100000.00"),
+            amount=Decimal("100000.00"),
+            is_active=True,
+        )
+    )
+    install.status = InstallationProjectStatus.completed.value
+    install.approved_quote_id = quote.id
+    install.assigned_vendor_id = vendor.id
+    _seed_purchase_invoice_flow(db_session)
+    _set_vendor_invoice_tax_profile(db_session, "WHT 2%")
+    db_session.commit()
+
+    event = Event(
+        EventType.vendor_project_completed,
+        {
+            "schema_version": 1,
+            "project_id": str(install.id),
+            "native_project_id": str(install.project_id),
+            "vendor_id": str(vendor.id),
+        },
+    )
+
+    MaterialsLifecycleProjectionHandler().handle(db_session, event)
+    db_session.expire_all()
+
+    invoice = (
+        db_session.query(VendorPurchaseInvoice)
+        .filter(VendorPurchaseInvoice.project_id == install.id)
+        .one()
+    )
+    assert invoice.status == "approved"
+    assert invoice.invoice_number == "AUTO-PO-2026-0042"
+    assert invoice.procurement_order_reference == "PO-2026-0042"
+    assert invoice.subtotal == Decimal("100000.00")
+    assert invoice.total == Decimal("100000.00")
+
+    row = db_session.query(FieldErpSyncEvent).one()
+    assert row.flow == FieldErpSyncFlow.purchase_invoice.value
+    assert row.entity_id == invoice.id
+    assert row.payload["erp_purchase_order_id"] == "PO-2026-0042"
+    assert row.payload["tax_profile"] == "WHT 2%"
+
+    MaterialsLifecycleProjectionHandler().handle(db_session, event)
+    assert db_session.query(FieldErpSyncEvent).count() == 1
+    assert db_session.query(VendorPurchaseInvoice).count() == 1
+
+
+def test_purchase_invoice_payload_includes_configured_erp_tax_profile(db_session):
+    install, vendor, reviewer = _chain(db_session)
+    invoice = VendorPurchaseInvoice(
+        project_id=install.id,
+        vendor_id=vendor.id,
+        invoice_number="VENDOR-TAX-PROFILE",
+        currency="NGN",
+        status="approved",
+        procurement_order_reference="PO-2026-0042",
+        reviewed_by_system_user_id=reviewer.id,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        VendorPurchaseInvoiceLineItem(
+            invoice_id=invoice.id,
+            description="Tax profile proof",
+            quantity=Decimal("1"),
+            unit_price=Decimal("1000"),
+            amount=Decimal("1000"),
+            is_active=True,
+        )
+    )
+    invoice.subtotal = Decimal("1000.00")
+    invoice.tax_total = Decimal("0.00")
+    invoice.total = Decimal("1000.00")
+    db_session.flush()
+    payload = build_purchase_invoice_payload(invoice, erp_tax_profile="WHT 2%")
+    assert payload["tax_profile"] == "WHT 2%"
 
 
 def test_vendor_invoice_review_rolls_back_when_erp_enqueue_fails(

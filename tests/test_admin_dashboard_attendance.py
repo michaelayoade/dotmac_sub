@@ -286,14 +286,21 @@ def test_attendance_audit_uses_the_sanctioned_writer_without_adapter_commit(
 def test_dashboard_templates_and_script_preserve_lazy_safe_states():
     root = Path(__file__).resolve().parents[1]
     index = (root / "templates/admin/dashboard/index.html").read_text()
+    layout = (root / "templates/layouts/admin.html").read_text()
     partial = (root / "templates/admin/dashboard/_attendance.html").read_text()
     script = (root / "static/js/admin-attendance.js").read_text()
+    reminder = (root / "static/js/admin-attendance-reminder.js").read_text()
 
     assert 'hx-get="/admin/dashboard/attendance"' in index
     assert index.index("Add Customer") < index.index('id="attendance-widget"')
+    assert 'can(request, "attendance:self:use")' in layout
+    assert "/static/js/admin-attendance-reminder.js" in layout
     assert "_dashboard_global_cache" not in partial
     assert "Ready to check in" in partial
     assert "Check In" in partial and "Check Out" in partial
+    assert "data-attendance-state" in partial
+    assert "data-attendance-date" in partial
+    assert "data-attendance-can-check-in" in partial
     assert "data-attendance-start" in partial
     assert "data-attendance-end" in partial
     assert "formatElapsed" in script
@@ -302,3 +309,10 @@ def test_dashboard_templates_and_script_preserve_lazy_safe_states():
     assert "enableHighAccuracy: true" in script
     assert "X-CSRF-Token" in script
     assert "employee_id" not in script
+    assert "fetch(attendanceUrl" in reminder
+    assert "checkIntervalMs = 10 * 60 * 1000" in reminder
+    assert "unavailableRetryMs = 5 * 60 * 1000" in reminder
+    assert "snoozeMs = 10 * 60 * 1000" in reminder
+    assert "dismissedDateKey" in reminder
+    assert "window.location.href = dashboardUrl" in reminder
+    assert "/admin/dashboard/attendance/check-in" not in reminder

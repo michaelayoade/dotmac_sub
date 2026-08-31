@@ -109,6 +109,8 @@ def test_chat_redelivery_returns_stored_consequence_without_double_push(db_sessi
 
     assert first == replay == {"status": "ok", "event": "message.outbound"}
     assert send_push.call_count == 1
+    assert send_push.call_args.kwargs["intent"].intent_code == "chat.message"
+    assert send_push.call_args.kwargs["intent"].subject_id == "c1"
     assert db_session.query(IntegrationInbox).count() == 1
 
 

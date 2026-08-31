@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from re import sub
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,15 @@ class AdminWorkflowGuidance:
     route_prefixes: tuple[str, ...]
     steps: tuple[str, ...]
     notes: tuple[str, ...] = ()
+
+    @property
+    def slug(self) -> str:
+        return sub(r"[^a-z0-9]+", "-", self.title.casefold()).strip("-") or self.id
+
+    @property
+    def summary(self) -> str:
+        """Compatibility name for detail-oriented Help Center layouts."""
+        return self.purpose
 
     def matches_path(self, path: str) -> bool:
         return any(

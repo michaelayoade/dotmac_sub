@@ -9,9 +9,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from app.api import erp_material_webhooks
+from app.schemas.erp_material_webhook import ErpMaterialStatusWebhook
 from app.services.field.material_requests import _MATERIAL_OBSERVATION_COMMAND
 from app.services.integrations.backoffice_contracts import (
     ERP_MATERIAL_STATUS_WEBHOOK_CAPABILITY,
@@ -36,7 +38,7 @@ class _Request:
 def _payload(request_id: UUID) -> bytes:
     return json.dumps(
         {
-            "omni_id": str(request_id),
+            "source_request_id": str(request_id),
             "request_id": "erp-request-1",
             "request_number": "MR-0001",
             "old_status": "SUBMITTED",
@@ -48,6 +50,14 @@ def _payload(request_id: UUID) -> bytes:
 
 def test_material_status_observation_command_matches_typed_manifest() -> None:
     _validate_manifest(_MATERIAL_OBSERVATION_COMMAND)
+
+
+def test_material_status_contract_refuses_the_retired_omni_alias() -> None:
+    payload = json.loads(_payload(uuid4()))
+    payload["omni_id"] = payload["source_request_id"]
+
+    with pytest.raises(ValidationError):
+        ErpMaterialStatusWebhook.model_validate(payload)
 
 
 def test_webhook_rejects_invalid_signature_before_claim(db_session, monkeypatch):

@@ -249,7 +249,8 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' not in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260820a" in INDEX
+    assert "admin-inbox.js?v=20260827a" in INDEX
+    assert "admin-inbox.js?v=20260820a" not in INDEX
     assert "admin-inbox.js?v=20260817b" not in INDEX
 
 

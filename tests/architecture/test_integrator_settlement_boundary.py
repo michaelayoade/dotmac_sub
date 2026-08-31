@@ -95,6 +95,7 @@ def test_integrator_provider_reference_migration_extends_the_current_chain() -> 
 
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1

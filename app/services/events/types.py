@@ -71,6 +71,9 @@ class EventType(enum.Enum):
     payment_gateway_integrator_mapping_changed = (
         "payment_gateway.integrator_mapping_changed"
     )
+    paystack_outside_window_recovered = (
+        "payment_reconciliation.paystack_outside_window_recovered"
+    )
     integration_installation_manifest_adopted = (
         "integration.installation.manifest_adopted"
     )
@@ -91,6 +94,7 @@ class EventType(enum.Enum):
     subscription_billing_treatment_changed = "subscription_billing_treatment.changed"
     subscription_service_granted = "subscription_service.granted"
     billing_shadow_delivery_recorded = "billing.shadow_delivery.recorded"
+    receivable_projection_reconciled = "receivable_projection.reconciled"
     billing_cutover_verification_recorded = "billing.cutover_verification.recorded"
     billing_cutover_verification_approved = "billing.cutover_verification.approved"
     customer_subledger_opening_positions_captured = (
@@ -363,9 +367,10 @@ class EventType(enum.Enum):
     reseller_logout = "reseller.logout"
     reseller_impersonated = "reseller.impersonated"
 
-    # Staff and subscriber identity/authorization lifecycle (6)
+    # Staff and subscriber identity/authorization lifecycle
     vendor_user_provisioned = "vendor_user.provisioned"
     vendor_user_revoked = "vendor_user.revoked"
+    vendor_user_profile_updated = "vendor_user.profile_updated"
     vendor_user_role_changed = "vendor_user.role_changed"
     staff_account_provisioned = "staff_account.provisioned"
     staff_account_roles_changed = "staff_account.roles_changed"
@@ -379,6 +384,12 @@ class EventType(enum.Enum):
     # Credential recovery lifecycle (2)
     password_recovery_requested = "password_recovery.requested"
     password_recovery_completed = "password_recovery.completed"
+
+    # Field-mobile OIDC federation lifecycle (2). Payloads carry the ceremony,
+    # binding and deployment identities and the admitted principal — never a
+    # token, a nonce, an external subject, or an email.
+    oidc_mobile_ceremony_started = "oidc_mobile_ceremony.started"
+    oidc_mobile_assertion_admitted = "oidc_mobile_assertion.admitted"
 
     # Referral-created customer credential enrollment lifecycle (2)
     customer_credential_enrollment_requested = (

@@ -32,6 +32,7 @@ SERVICES: tuple[SOTService, ...] = (
             "saved-card top-up intent failure projection",
             "top-up intent completed-payment projection",
             "gateway observation lifecycle and blocker projection",
+            "gateway reconciliation attempt and observation progress",
         ),
         depends_on=(
             "control.feature_registry",
@@ -47,7 +48,8 @@ SERVICES: tuple[SOTService, ...] = (
             "active collection-account destinations and customer "
             "instructions. It is the canonical invoice-intent, proof-link, "
             "reviewed-proof resolution, completed-payment, gateway-observation, "
-            "effective-expiry, and blocker/retry projection writer. Cash remains "
+            "gateway-reconciliation attempt progress, effective-expiry, and "
+            "blocker/retry projection writer. Cash remains "
             "authoritative in the payment owner; "
             "callers compose or idempotently repair the intent projection without "
             "parallel field writers."
@@ -134,6 +136,17 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical top-up intent projection target",
+                        "typed gateway verification observation",
+                        "top-up intent transition protocol",
+                    ),
+                    canonical_writer="financial.topup_intents",
+                ),
+                ConcernContract(
+                    name="gateway reconciliation attempt and observation progress",
+                    role=OwnerRole.AUTHORITATIVE_RECORD,
+                    input_names=(
+                        "canonical top-up intent projection target",
+                        "typed gateway reconciliation attempt",
                         "typed gateway verification observation",
                         "top-up intent transition protocol",
                     ),
@@ -228,6 +241,21 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="typed gateway reconciliation attempt",
+                    owner="financial.payment_reconciliation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed scheduled sweep, intent, lifecycle lane, provider, "
+                        "selection, attempt time, and next-reconcile evidence admitted "
+                        "before provider I/O. Singular finance-reviewed outside-window "
+                        "recovery is limited to failed, abandoned, canceled, or expired "
+                        "Paystack intents and does not fabricate a scheduled lane or "
+                        "retry claim; pending and other non-terminal intents are "
+                        "ineligible, and immutable review and result evidence remains "
+                        "owned by financial.payment_reconciliation"
+                    ),
+                ),
+                AuthorityInput(
                     name="direct-transfer creation command evidence",
                     owner="financial.direct_transfer_intent_commands",
                     kind=AuthorityKind.CONTROL_INPUT,
@@ -266,8 +294,12 @@ SERVICES: tuple[SOTService, ...] = (
                         "submitted eligibility, exact proof-link uniqueness, "
                         "submitted-to-completed/canceled reviewed-proof resolution, "
                         "terminal versus non-terminal gateway semantics, effective "
-                        "expiry, blocker/retry policy, late-success recovery from "
-                        "failed, abandoned, canceled, or expired, and event vocabulary"
+                        "expiry, blocker/retry policy, typed gateway attempt and "
+                        "observation progress, next reconcile time, bounded automatic "
+                        "late-success recovery from failed, abandoned, canceled, or "
+                        "expired, singular finance-reviewed exact-reference recovery of "
+                        "only those same terminal statuses outside that automatic "
+                        "window, and event vocabulary"
                     ),
                 ),
             ),
@@ -278,9 +310,16 @@ SERVICES: tuple[SOTService, ...] = (
                     "reseller, or reconciliation caller supplies the transaction; "
                     "this participant stages intent creation, replacement, proof "
                     "submission/resolution, failure/completion/expiry projection, "
-                    "and events without "
+                    "gateway attempt/observation progress, and events without "
                     "committing or rolling back. Cash-first payment owners may commit confirmed "
-                    "money before invoking this idempotent repairable projection."
+                    "money before invoking this idempotent repairable projection. "
+                    "The reconciliation owner commits a dedicated scheduled attempt-"
+                    "progress root before provider I/O. A fingerprint-confirmed exact "
+                    "outside-window recovery instead performs fresh verification before "
+                    "its single coordinator root and composes this owner's completion "
+                    "participant without inventing a scheduled claim or persisting a "
+                    "non-success preview as lifecycle evidence. Pending and other "
+                    "non-terminal intents fail eligibility before provider I/O."
                 ),
                 locking=(
                     "Creation holds the canonical account lock before pending intent "
@@ -289,7 +328,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "lock the exact intent. Completion "
                     "locks subscriber or billing-account scope, exact intent, then "
                     "succeeded Payment before scope/provider/currency/link evidence "
-                    "is rechecked; expiry uses the same scope and intent locks."
+                    "is rechecked; expiry and pre-I/O attempt progress use the same "
+                    "scope and intent locks."
                 ),
                 idempotency=(
                     "A stable creation key replays the matching pending invoice "
@@ -299,14 +339,24 @@ SERVICES: tuple[SOTService, ...] = (
                     "transition or event, while changed outcome, proof, or payment "
                     "evidence conflicts. Replaying the same succeeded Payment or "
                     "expired state performs no second field transition or event. "
-                    "Repeated normalized gateway observations update only safe "
-                    "latest-check evidence and cannot repeat a terminal transition."
+                    "A typed scheduled reconciliation attempt advances its durable "
+                    "count and time once for that attempt identity before transport. "
+                    "The reviewed outside-window coordinator is independently "
+                    "idempotent by its exact preview and immutable recovery evidence. Repeated "
+                    "normalized gateway observations update only safe latest-check "
+                    "evidence, observation progress, and the next reconcile time; "
+                    "they cannot repeat a terminal transition."
                 ),
                 retries=(
                     "Only the caller retries after rollback. If cash was already "
                     "committed, webhook or scheduled reconciliation safely replays "
                     "the projection from canonical Payment evidence; this participant "
-                    "never retries or completes a transaction independently."
+                    "never retries or completes a transaction independently. A "
+                    "scheduled provider or consequence error cannot erase the separately "
+                    "committed attempt progress or pin the bounded queue. A later "
+                    "eligible terminal outside-window operator retry requires a new "
+                    "current preview and review evidence rather than becoming scheduled "
+                    "work; pending outside-window work cannot enter this command."
                 ),
             ),
             errors=ErrorContract(
@@ -345,6 +395,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.topup_intents.observation_time_invalid",
                     "financial.topup_intents.observation_success_forbidden",
                     "financial.topup_intents.observation_transaction_forbidden",
+                    "financial.topup_intents.reconciliation_attempt_time_invalid",
+                    "financial.topup_intents.reconciliation_retry_time_invalid",
+                    "financial.topup_intents.status_invalid",
+                    "financial.topup_intents.reference_mismatch",
                 ),
                 mapping_owner=(
                     "payment, webhook, portal, reseller, and reconciliation adapters"
@@ -365,6 +419,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "invalid expiry evidence or non-pending expiry transition",
                     "successful or transaction-bearing evidence submitted through "
                     "the non-money gateway-observation command",
+                    "missing, stale, or contradictory reconciliation attempt "
+                    "identity, status, provider, reference, or retry time",
                 ),
             ),
             events=EventContract(
@@ -404,7 +460,9 @@ SERVICES: tuple[SOTService, ...] = (
                     writer="financial.topup_intents",
                     freshness=(
                         "Resolved at an explicit observation time; normalized "
-                        "provider evidence is persisted synchronously by the owner."
+                        "provider evidence is persisted synchronously by the owner, "
+                        "while each reconciliation selection persists separate "
+                        "attempt progress before provider I/O."
                     ),
                     stale_behavior=(
                         "A legacy pending gateway row projects as Expired once its "
@@ -412,7 +470,8 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     drift_signal=(
                         "Stored pending state outlives expiry or disagrees with a "
-                        "terminal normalized provider observation."
+                        "terminal normalized provider observation, or selected "
+                        "reconciliation evidence lacks its durable attempt progress."
                     ),
                     rebuild_operation=(
                         "Run bounded payment reconciliation and the expiry backfill; "
@@ -461,15 +520,19 @@ SERVICES: tuple[SOTService, ...] = (
                 verification=(
                     "Configured-account projection, atomic create/replace/proof-link, "
                     "typed reviewed-proof completion/rejection, completion/expiry "
-                    "success, idempotent replay/repair, rollback, mismatch rejection, "
-                    "caller, event, and architecture tests."
+                    "success, scheduled pre-I/O attempt progress, reviewed exact-"
+                    "reference completion composition, provider-error "
+                    "persistence, "
+                    "idempotent replay/repair, rollback, mismatch rejection, caller, "
+                    "event, and architecture tests."
                 ),
                 cutover_gate=(
                     "Every reviewed-proof/completion/expiry/observation caller "
                     "supplies typed evidence; only this participant writes canceled/completed/"
                     "expired/failed/abandoned intent status, completion identity, "
-                    "safe provider evidence, amount/time, proof-resolution metadata, "
-                    "and lifecycle events."
+                    "safe provider evidence, scheduled gateway attempt and observation "
+                    "progress, singular finance-reviewed completion projection, "
+                    "amount/time, proof-resolution metadata, and lifecycle events."
                 ),
                 fallback_retirement=(
                     "Portal-owned direct-transfer construction/replacement/proof "
@@ -1465,9 +1528,9 @@ SERVICES: tuple[SOTService, ...] = (
             "then asks the canonical applicator to settle eligible debt. "
             "Only after that application completes does its chained event "
             "request due-service renewal before access reconciliation. "
-            "Customer verification and reconciliation enter the typed public "
-            "command; webhook and proof owners compose the same flush-only "
-            "participant inside their wider evidence transactions."
+            "Customer verification enters the typed public command; reconciliation, "
+            "webhook, and proof owners compose the same flush-only participant inside "
+            "their wider evidence transactions."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1638,8 +1701,8 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 retries=(
                     "Adapters retry the complete public command with the same evidence. "
-                    "Webhook/proof owners retry their wider command; staging helpers "
-                    "never retry or commit independently."
+                    "Reconciliation, webhook, and proof owners retry their wider "
+                    "command; staging helpers never retry or commit independently."
                 ),
             ),
             errors=ErrorContract(

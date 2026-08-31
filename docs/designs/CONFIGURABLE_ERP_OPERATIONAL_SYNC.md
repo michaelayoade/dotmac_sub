@@ -18,10 +18,9 @@ require the project profile and are sent after projects and tickets.
 
 ERP responds with `contract_version: 2` plus separate project, ticket,
 project-task, and work-order counts. The typed client rejects a missing or older
-response before any watermark advances. Item errors use ERP's compatibility
-field `crm_id` for the Self-Care source UUID; the typed client converts it to
-`source_id` internally. Deploy ERP and its migration first, then enable the
-Self-Care capability.
+response before any watermark advances. Item errors return the neutral
+`source_reference` for the Sub source UUID. No predecessor-system alias is
+accepted. Deploy ERP and its migration first, then enable the Sub capability.
 
 The dedicated scheduler is enabled only while the capability binding is
 enabled. The same page provides a manual run action. Disabling every profile

@@ -155,11 +155,49 @@ def test_expired_reply_window_filter_renders_as_a_status_choice(db_session):
         response = client.get("/inbox?reply_window_status=expired")
 
     assert response.status_code == 200
+    assert response.headers["Cache-Control"] == (
+        "private, no-store, no-cache, must-revalidate"
+    )
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"
     status_group = response.text.split('<legend class="sr-only">Status</legend>', 1)[
         1
     ].split("</fieldset>", 1)[0]
     assert 'name="reply_window_status" value="expired"' in status_group
     assert "hover:text-white" in status_group
+
+
+def test_email_conversation_fragment_renders_native_copy_control_without_cache(
+    db_session,
+):
+    conversation = InboxConversation(
+        channel_type="email",
+        status="open",
+        subject="Copy recipient visibility",
+        contact_address="customer@example.test",
+        last_message_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(conversation)
+    db_session.commit()
+
+    with patch("app.services.web_admin.get_actor_id", return_value=None):
+        response = _client(db_session).get(
+            f"/inbox/{conversation.id}",
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == (
+        "private, no-store, no-cache, must-revalidate"
+    )
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"
+    assert "<details data-email-copy-recipients" in response.text
+    assert "Add CC/BCC" in response.text
+    assert 'name="cc"' in response.text
+    assert 'name="bcc"' in response.text
+    assert "copyRecipientsOpen" not in response.text
 
 
 def test_has_ticket_checkbox_reaches_the_read_model_as_a_boolean(captured_request):

@@ -21,6 +21,7 @@ from app.models.operational_escalation import (
 from app.models.service_team import ServiceTeamMember
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
 from app.models.system_user import SystemUser
+from app.schemas.notification import PushIntent
 from app.services.notification_status_policy import status_allows_notification
 
 logger = logging.getLogger(__name__)
@@ -237,7 +238,11 @@ def _send_push(
             target.address,
             title,
             body,
-            data=_delivery_metadata(delivery),
+            intent=PushIntent(
+                intent_code="operational.escalation",
+                subject_kind="operational_escalation",
+                subject_id=str(delivery.id),
+            ),
             notification_id=str(delivery.id),
         )
         return {
@@ -251,7 +256,11 @@ def _send_push(
             target.address,
             title,
             body,
-            data=_delivery_metadata(delivery),
+            intent=PushIntent(
+                intent_code="operational.escalation",
+                subject_kind="operational_escalation",
+                subject_id=str(delivery.id),
+            ),
             notification_id=str(delivery.id),
         )
         return {

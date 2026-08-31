@@ -178,7 +178,7 @@ def test_churn_report_returns_kpi_contracts(db_session):
     _make_subscriber(db_session, AccountStatus.suspended)
 
     data = web_reports.get_churn_report_data(db_session)
-    kpis = data["churn_kpis"]
+    kpis = data.churn_kpis
 
     assert set(kpis) == {"churn_rate", "cancelled", "at_risk", "retention_rate"}
     for kpi in kpis.values():
@@ -219,7 +219,7 @@ def test_churn_cancelled_tile_counts_strictly_like_its_drilldown(db_session):
     # Derived-cancelled (NULL status + inactive) but NOT a strict ``canceled``.
     _make_subscriber(db_session, None, is_active=False)
 
-    kpis = web_reports.get_churn_report_data(db_session)["churn_kpis"]
+    kpis = web_reports.get_churn_report_data(db_session).churn_kpis
     cancelled = kpis["cancelled"]
 
     # Only the strict ``canceled`` row is counted, matching the drill-down.

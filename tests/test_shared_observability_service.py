@@ -109,6 +109,73 @@ def test_reconciliation_success_with_rejections_records_partial_result(monkeypat
     assert result_kwargs["detail"]["errors"] == 3
 
 
+def test_reconciliation_saturated_result_records_partial_result(monkeypatch):
+    calls: dict[str, object] = {}
+    task_name = "app.tasks.payment_reconciliation.reconcile_topups"
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_success",
+        lambda name, **kwargs: calls.setdefault("success", (name, kwargs)),
+    )
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_result",
+        lambda name, **kwargs: calls.setdefault("result", (name, kwargs)),
+    )
+
+    observability.record_celery_task_success(
+        task_name,
+        result={
+            "selected": 50,
+            "checked": 50,
+            "unchanged": 50,
+            "errors": 0,
+            "pending_due_remaining": 4,
+            "terminal_due_remaining": 20,
+            "outside_window": 0,
+            "saturated": True,
+            "partial": True,
+        },
+    )
+
+    assert calls["success"][0] == task_name
+    result_name, result_kwargs = calls["result"]
+    assert result_name == task_name
+    assert result_kwargs["status"] == "partial"
+    assert result_kwargs["detail"]["saturated"] is True
+
+
+def test_reconciliation_complete_unsaturated_result_records_ok(monkeypatch):
+    calls: dict[str, object] = {}
+    task_name = "app.tasks.payment_reconciliation.reconcile_topups"
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_success",
+        lambda name, **kwargs: calls.setdefault("success", (name, kwargs)),
+    )
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_result",
+        lambda name, **kwargs: calls.setdefault("result", (name, kwargs)),
+    )
+
+    observability.record_celery_task_success(
+        task_name,
+        result={
+            "selected": 8,
+            "checked": 8,
+            "unchanged": 8,
+            "errors": 0,
+            "pending_due_remaining": 0,
+            "terminal_due_remaining": 0,
+            "outside_window": 0,
+            "saturated": False,
+            "partial": False,
+        },
+    )
+
+    assert calls["success"][0] == task_name
+    result_name, result_kwargs = calls["result"]
+    assert result_name == task_name
+    assert result_kwargs["status"] == "ok"
+
+
 def test_record_celery_task_success_skips_non_money_result(monkeypatch):
     calls: list[tuple[str, object]] = []
 

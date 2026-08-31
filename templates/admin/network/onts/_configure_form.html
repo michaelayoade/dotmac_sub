@@ -1,5 +1,6 @@
 {# Compact ONT service intent form - dense inline layout for NOC efficiency #}
 {% set lifecycle = configuration_lifecycle if configuration_lifecycle is defined else none %}
+{% set configuration_eligibility = configuration_eligibility if configuration_eligibility is defined else (configure_readiness.eligibility if configure_readiness is defined and configure_readiness.eligibility is defined else none) %}
 
 {% if config_result is defined %}
 {% set result_style = 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300' %}
@@ -8,6 +9,7 @@
     <span class="font-semibold">{{ result_label }}:</span>
     <span>{{ config_result.message }}</span>
     <span class="ml-1 font-mono text-xs">Operation {{ config_result.operation_id }}</span>
+    <p class="mt-1 text-xs">Final delivery state is shown in Current lifecycle after worker readback; queued does not mean verified.</p>
 </div>
 {% elif config_error is defined %}
 {% set result_style = 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300' %}
@@ -117,6 +119,15 @@
             </dd>
         </div>
     </dl>
+    {% if configuration_eligibility %}
+    <div class="mt-2 grid gap-2 border-t border-slate-200 pt-2 text-xs dark:border-slate-700 sm:grid-cols-2">
+        <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold text-slate-800 dark:text-slate-100">WAN:</span> {{ configuration_eligibility.routed_wan_message }}</p>
+        <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold text-slate-800 dark:text-slate-100">Bridge/routing:</span> {{ configuration_eligibility.bridge_mode_message }}</p>
+        <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold text-slate-800 dark:text-slate-100">NAT:</span> {{ configuration_eligibility.nat_message }}</p>
+        <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold text-slate-800 dark:text-slate-100">LAN DHCP:</span> {{ configuration_eligibility.lan_dhcp_message }}</p>
+        <p class="text-slate-600 dark:text-slate-300 sm:col-span-2"><span class="font-semibold text-slate-800 dark:text-slate-100">ONT move:</span> {{ configuration_eligibility.move_message }}</p>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -294,7 +305,7 @@
                         <option value="static_ip" {% if wan_mode_val == 'static_ip' %}selected{% endif %}>Static IP</option>
                         <option value="setup_via_onu" disabled{% if bridge_mode_val %} selected{% endif %}>Bridge / Via ONU — provisioning only</option>
                     </select>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Bridge / Via ONU is provisioning-only. Select DHCP, PPPoE, or Static IP to apply WAN here.</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ configuration_eligibility.bridge_mode_message if configuration_eligibility else 'Bridge / Via ONU is provisioning-only. Select DHCP, PPPoE, or Static IP to apply WAN here.' }}</p>
                 </div>
                 <div class="w-28">
                     <label for="ip_protocol" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">Protocol</label>

@@ -169,12 +169,14 @@ def test_customer_query_canonicalizes_aliases_and_rejects_bad_filter_values():
         search=None,
         status=" ACTIVE ",
         customer_type="individual",
+        billing_mode="Non-Billable",
         nas_id=None,
         pop_site_id=None,
     )
 
     assert query.filter_value("status") == "active"
     assert query.filter_value("customer_type") == "person"
+    assert query.filter_value("billing_mode") == "non_billable"
 
     with pytest.raises(ValueError, match="Unsupported status filter"):
         build_customer_list_query(
@@ -234,6 +236,7 @@ def test_legacy_customer_table_query_maps_to_canonical_page_contract():
             "q": "  Acme  ",
             "activation_state": "inactive",
             "customer_type": "individual",
+            "billing_mode": "postpaid",
             "sort_by": "customer_name",
             "sort_dir": "asc",
             "_ts": "1771944545000",
@@ -243,6 +246,7 @@ def test_legacy_customer_table_query_maps_to_canonical_page_contract():
     assert query.search == "Acme"
     assert query.filter_value("status") == "inactive"
     assert query.filter_value("customer_type") == "person"
+    assert query.filter_value("billing_mode") == "postpaid"
     assert query.sort_by == "name"
     assert query.sort_dir == "asc"
     assert query.page == 3

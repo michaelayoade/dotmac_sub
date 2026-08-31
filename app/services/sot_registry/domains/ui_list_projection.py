@@ -57,6 +57,7 @@ DOMAIN = DomainSOT(
             owns=_CRM_REPORT_CONCERNS,
             depends_on=(
                 "auth.permission_gate",
+                "communications.team_inbox_metrics",
                 "communications.team_inbox_projection",
                 "customer.accounts",
                 "financial.invoices",
@@ -96,6 +97,7 @@ DOMAIN = DomainSOT(
                             "native RADIUS records",
                             "native customer outage intervals",
                             "native inbox records",
+                            "bounded inbox performance projections",
                             "native support records",
                             "native work-order and project records",
                             "native provisioning records",
@@ -108,7 +110,10 @@ DOMAIN = DomainSOT(
                         name="typed CRM report query",
                         owner="ui.list_contracts",
                         kind=AuthorityKind.CONTROL_INPUT,
-                        source="inclusive dates, pagination, and personal-agent scope",
+                        source=(
+                            "inclusive dates, Africa/Lagos day/week/month/custom "
+                            "periods, bounded pagination, search, and personal-agent scope"
+                        ),
                     ),
                     AuthorityInput(
                         name="authorized report scope",
@@ -171,6 +176,15 @@ DOMAIN = DomainSOT(
                         source="inbox conversations, assignments, queues, messages, and recorded classifications",
                     ),
                     AuthorityInput(
+                        name="bounded inbox performance projections",
+                        owner="communications.team_inbox_metrics",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Typed date-bounded team and agent response cohorts with "
+                            "set-based aggregation and database pagination"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="native support records",
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -191,7 +205,11 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
-                    boundary="The adapter supplies a read session; the projection never flushes or commits.",
+                    boundary=(
+                        "The adapter supplies a read session; agent analytics use "
+                        "bounded grouped SQL reads and the projection never flushes "
+                        "or commits."
+                    ),
                     locking="Committed operational facts require no mutation lock.",
                     idempotency="The same committed facts and typed query produce the same report rows.",
                     retries="Bounded report reads and CSV serialization are safe to retry.",
@@ -209,7 +227,10 @@ DOMAIN = DomainSOT(
                     state=AuthorityMigrationState.SHADOWING,
                     old_owner="dotmac_crm report projection routes and templates",
                     new_owner="ui.crm_operational_reports",
-                    verification="typed owner, route, permission, render, empty-state, pagination, and export tests",
+                    verification=(
+                        "typed owner, route, permission, lazy render, raw-event "
+                        "metric parity, empty/error state, SQL pagination, and export tests"
+                    ),
                     cutover_gate="report-by-report comparison against the retained CRM surface",
                     fallback_retirement="CRM routes retire only under the CRM web retirement gate",
                 ),
@@ -220,7 +241,35 @@ DOMAIN = DomainSOT(
                     "docs/designs/CRM_REPORT_DATA_FLOW_GUIDE.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                 ),
-                test_refs=("tests/test_crm_reporting.py",),
+                test_refs=(
+                    "tests/test_crm_reporting.py",
+                    "tests/test_team_inbox_metrics.py",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="bounded live Inbox agent performance analytics",
+                        input_names=("typed CRM report query", "native inbox records"),
+                        writer="ui.crm_operational_reports",
+                        freshness=(
+                            "Calculated on demand from committed assignment, message, "
+                            "and status-transition evidence; each response identifies "
+                            "its generation time and Africa/Lagos period."
+                        ),
+                        stale_behavior=(
+                            "No result cache is authoritative; a failed read renders "
+                            "unavailable and never reuses or estimates prior values."
+                        ),
+                        drift_signal=(
+                            "Per-agent assigned, resolved, resolution-duration, or "
+                            "first-response totals differ from the same bounded raw events."
+                        ),
+                        rebuild_operation=(
+                            "Re-run the idempotent typed query for the exact period, "
+                            "search, personal scope, and page."
+                        ),
+                        repair_owner="communications.team_inbox_projection",
+                    ),
+                ),
             ),
         ),
         SOTService(
@@ -521,6 +570,8 @@ DOMAIN = DomainSOT(
                 "customer.account_visibility",
                 "customer.accounts",
                 "access.subscription_lifecycle",
+                "financial.billing_profile",
+                "financial.subscription_billing_treatments",
                 "service_intent.catalog_policy",
                 "network.identity",
                 "network.ip_assignment_lifecycle",
@@ -531,7 +582,11 @@ DOMAIN = DomainSOT(
                 "subscription, catalog, access identity, IP assignment, NAS, and "
                 "POP facts without mutating or re-owning them. Customer rows "
                 "retain the full account name while the list presentation limits "
-                "visible names to four words and exposes the full text when cut."
+                "visible names to four words and exposes the full text when cut. "
+                "Billing cohorts consume the canonical billing profile and "
+                "effective non-standard treatments plus canonical recurring "
+                "catalog prices; offer names and billing activation flags never "
+                "classify free service."
             ),
             contract=ServiceContract(
                 concerns=tuple(
@@ -542,6 +597,9 @@ DOMAIN = DomainSOT(
                             "normalized customer list query",
                             "canonical visible customer accounts",
                             "canonical subscription lifecycle records",
+                            "canonical billing-mode profile",
+                            "effective non-standard billing treatment",
+                            "canonical recurring catalog price",
                             "canonical catalog offers",
                             "canonical network access identities",
                             "canonical service IP assignments",
@@ -578,6 +636,33 @@ DOMAIN = DomainSOT(
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="committed Subscription rows and lifecycle status",
+                    ),
+                    AuthorityInput(
+                        name="canonical billing-mode profile",
+                        owner="financial.billing_profile",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "effective prepaid/postpaid mode resolved from "
+                            "collectible subscription modes with account fallback"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="effective non-standard billing treatment",
+                        owner="financial.subscription_billing_treatments",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "effective complimentary/sponsored arrangement "
+                            "suppression, including protected drift"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical recurring catalog price",
+                        owner="service_intent.catalog_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "newest active recurring offer-version price with "
+                            "offer-price fallback and positive contract override"
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical catalog offers",

@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/api/token_store.dart' show LoginMode;
+import '../core/deeplink/oidc_redirect.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/mfa_screen.dart';
+import '../features/auth/oidc_callback_coordinator.dart';
 import '../features/expenses/expenses_screen.dart';
 import '../features/execution/completion_wizard.dart';
 import '../features/jobs/job_chat_screen.dart';
@@ -26,6 +28,7 @@ import '../features/vendor/vendor_map_screen.dart';
 GoRouter buildRouter(Ref ref) {
   final listenable = ValueNotifier(0);
   ref.listen(authControllerProvider, (_, _) => listenable.value++);
+  final oidc = ref.read(oidcCallbackCoordinatorProvider);
 
   return GoRouter(
     restorationScopeId: 'dotmac-field-router',
@@ -33,6 +36,21 @@ GoRouter buildRouter(Ref ref) {
     refreshListenable: listenable,
     redirect: (context, state) {
       final auth = ref.read(authControllerProvider);
+
+      // The verified redirect boundary, handled BEFORE the auth switch below.
+      // An OIDC ceremony runs while the app is still unauthenticated, so
+      // letting the switch bounce this location to /login would swallow the
+      // authorization response. Only the ONE exact callback path gets here;
+      // any other path or a route carrying its own authority is not owned by
+      // the coordinator and falls through to the ordinary auth switch.
+      //
+      // The callback path is a boundary, never a screen: whatever the
+      // coordinator decides (accept, discard, ignore), the router leaves it
+      // immediately for the location the auth state says is current.
+      if (oidc.ownsLocation(state.uri)) {
+        oidc.submitLocation(state.uri);
+        return auth is Authenticated ? '/today' : '/login';
+      }
       final atRestore = state.matchedLocation == '/restore';
       final atLogin = state.matchedLocation == '/login';
       final atMfa = state.matchedLocation == '/mfa';
@@ -47,6 +65,13 @@ GoRouter buildRouter(Ref ref) {
       };
     },
     routes: [
+      // Declared only so a cold start on the callback link has something to
+      // match; the top-level redirect above consumes it first, so this builder
+      // is a transient spinner and never a real destination.
+      GoRoute(
+        path: oidcCallbackPath,
+        builder: (_, _) => const _RestoreScreen(),
+      ),
       GoRoute(path: '/restore', builder: (_, _) => const _RestoreScreen()),
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
       GoRoute(path: '/mfa', builder: (_, _) => const MfaScreen()),

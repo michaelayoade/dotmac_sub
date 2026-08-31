@@ -23,6 +23,21 @@ class TestServices:
         page.expect_loaded()
         expect(admin_page.locator("table")).to_be_visible()
 
+    def test_services_table_fits_standard_desktop_without_horizontal_scroll(
+        self, admin_page: Page, settings
+    ):
+        """The bounded default catalog columns fit the desktop work surface."""
+        page = OffersPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+        table_scroller = admin_page.locator(
+            "#catalog-grid-wrapper .overflow-x-auto"
+        ).first
+        expect(table_scroller).to_be_visible()
+        assert table_scroller.evaluate(
+            "element => element.scrollWidth <= element.clientWidth"
+        )
+
 
 class TestCatalogAPI:
     """API-level tests for catalog."""

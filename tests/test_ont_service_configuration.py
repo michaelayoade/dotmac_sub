@@ -42,6 +42,7 @@ from app.services.network.ont_service_configuration import (
     ExecuteOntServiceConfigurationCommand,
     LanConfigurationChange,
     OntConfigurationChange,
+    OntConfigurationNextAction,
     OntConfigurationSection,
     RetryOntServiceConfigurationCommand,
     WanConfigurationChange,
@@ -50,6 +51,7 @@ from app.services.network.ont_service_configuration import (
     configure_ont_service,
     execute_ont_service_configuration,
     get_latest_ont_configuration_section_delivery,
+    get_ont_service_configuration_eligibility,
     get_ont_service_configuration_projection,
     retry_ont_service_configuration,
 )
@@ -153,6 +155,43 @@ def _configure_command(
             static_dns=None,
         ),
     )
+
+
+def test_configuration_eligibility_discloses_supported_owner_surface(
+    db_session, monkeypatch, olt_device
+):
+    ont = OntUnit(
+        serial_number=f"ELIG-{uuid.uuid4().hex[:10]}",
+        is_active=True,
+        olt_device_id=olt_device.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    monkeypatch.setattr(
+        "app.services.network.ont_service_configuration.resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "config_pack": SimpleNamespace(id="test-pack"),
+            "values": {"wan_mode": "dhcp"},
+        },
+    )
+
+    eligibility = get_ont_service_configuration_eligibility(
+        db_session, ont_unit_id=ont.id
+    )
+
+    assert eligibility.routed_wan_configurable is True
+    assert eligibility.lan_dhcp_configurable is True
+    assert eligibility.bridge_mode_configurable is False
+    assert eligibility.nat_toggle_configurable is False
+    assert eligibility.nat_default_enabled is True
+    assert eligibility.retain_config_on_move_supported is False
+    assert "Routed DHCP" in eligibility.routed_wan_message
+    assert "dedicated WAN-mode transition owner" in eligibility.bridge_mode_message
+    assert "typed WAN intent" in eligibility.nat_message
+    assert "inventory move flow" in eligibility.move_message
 
 
 def test_configuration_admission_commits_intent_operation_and_dispatch_atomically(
@@ -1036,6 +1075,182 @@ def test_lan_worker_treats_acs_connection_request_failure_as_pending_drain(
     assert head.waiting_reason == "awaiting_acs_task_drain"
     assert head.failure_code is None
     assert operation.status is NetworkOperationStatus.waiting
+
+
+def test_lan_cr_drain_exhaustion_reports_acs_blocker(db_session, monkeypatch):
+    ont = OntUnit(serial_number=f"LANCRWAIT-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.readback_pending,
+        suffix="lan-cr-drain-exhausted",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    head.waiting_reason = "awaiting_acs_task_drain"
+    operation.status = NetworkOperationStatus.waiting
+    operation.input_payload = {
+        "ont_id": str(ont.id),
+        "configuration_head_id": str(head.id),
+        "configuration_revision": revision.revision,
+    }
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=("lan.dhcp_enabled",),
+            failure=SimpleNamespace(
+                reason="blocked_out_of_sync",
+                message=(
+                    "ONT is out_of_sync (last_error: setParameterValues queued "
+                    "but Connection Request failed: Device is offline. Force OLT "
+                    "`ont reset` to drain.)"
+                ),
+                evidence=None,
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test LAN CR drain exhausted",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-cr-drain-exhausted",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+            verification_attempt=3,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.failed
+    assert "GenieACS Connection Request" in outcome.message
+    assert head.failure_code == "acs_cr_failed"
+    assert head.waiting_reason is None
+    assert operation.status is NetworkOperationStatus.failed
+
+
+def test_projection_surfaces_interrupted_latest_operation_as_retryable(db_session):
+    ont = OntUnit(serial_number=f"INTERRUPT-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, _revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="interrupted-projection",
+    )
+    operation.status = NetworkOperationStatus.failed
+    operation.error = "Command execution state is unknown. Review current device state before retrying."
+    operation.output_payload = {
+        "message": "Command execution state is unknown. Review current device state before retrying."
+    }
+    db_session.flush()
+
+    projection = get_ont_service_configuration_projection(
+        db_session, ont_unit_id=ont.id
+    )
+
+    assert head.phase is OntServiceConfigurationPhase.queued
+    assert projection.phase is OntServiceConfigurationPhase.failed
+    assert projection.waiting_reason is None
+    assert projection.failure_code == "operation_interrupted"
+    assert "Review current device state" in str(projection.failure_message)
+    assert (
+        projection.next_action is OntConfigurationNextAction.retry_current_configuration
+    )
+
+
+def test_retry_accepts_interrupted_current_operation(db_session):
+    ont = OntUnit(serial_number=f"RETRYINT-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, old_operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="interrupted-retry",
+    )
+    old_operation.status = NetworkOperationStatus.failed
+    old_operation.error = (
+        "Worker acknowledgement became stale before command completion."
+    )
+    ont_id = ont.id
+    head_id = head.id
+    revision_number = revision.revision
+    old_operation_id = old_operation.id
+    db_session.commit()
+    command_id = uuid.uuid4()
+
+    outcome = retry_ont_service_configuration(
+        db_session,
+        RetryOntServiceConfigurationCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="test:operator",
+                scope="network:ont:write",
+                reason="reviewed interrupted worker recovery",
+                idempotency_key="retry-interrupted-current-revision",
+            ),
+            ont_unit_id=ont_id,
+            expected_head_id=head_id,
+            expected_revision=revision_number,
+        ),
+    )
+
+    refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
+    refreshed_revision = db_session.scalar(
+        select(OntServiceConfigurationRevision).where(
+            OntServiceConfigurationRevision.head_id == head_id,
+            OntServiceConfigurationRevision.revision == revision_number,
+        )
+    )
+    assert outcome.operation_id != old_operation_id
+    assert outcome.phase is OntServiceConfigurationPhase.queued
+    assert refreshed_head.latest_operation_id == outcome.operation_id
+    assert refreshed_revision.operation_id == outcome.operation_id
+    assert (
+        db_session.get(NetworkOperation, old_operation_id).status
+        is NetworkOperationStatus.failed
+    )
 
 
 def test_inventory_retirement_clears_only_current_projection_and_keeps_history(

@@ -21,6 +21,10 @@ places where they genuinely differ:
   `tenant`.
 - **`description` and `validator`.** The kernel has them, Sub does not. Left
   unset rather than invented.
+
+`inherits` is NOT one of the differences: both sides spell it the same way and
+it is passed straight through, because the kernel resolver owns the scope chain
+it shortens.
 """
 
 from __future__ import annotations
@@ -50,6 +54,10 @@ def to_kernel_spec(spec: SettingSpec) -> KernelSettingSpec:
         label=spec.label,
         env_var=spec.env_var,
         required_at=_REQUIRED_SCOPE if spec.required else None,
+        # Carried verbatim. The kernel resolver is what shortens the resolution
+        # chain to the target scope; dropping it here would silently restore
+        # platform inheritance for identifiers that must not have it.
+        inherits=spec.inherits,
         allowed=spec.allowed,
         min_value=spec.min_value,
         max_value=spec.max_value,

@@ -28,9 +28,15 @@ _REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 class ReleaseBranch(str, Enum):
-    """Promotion branch accepted for a deployment environment."""
+    """Release branch accepted for a deployment environment.
 
-    DEV = "dev"
+    Both staging and production release from the single `main` trunk. `DEV` was
+    removed with the dev-first hop on 2026-08-28: leaving it would have kept the
+    `--branch` surface able to accept CI evidence recorded on a branch no
+    environment deploys from, which is the bypass the hop's removal must not
+    open.
+    """
+
     MAIN = "main"
 
 

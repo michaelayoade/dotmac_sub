@@ -66,11 +66,13 @@ class WorkOrderEvidenceMapRepository {
     WorkOrderEvidenceMapSnapshot snapshot,
     Map<String, dynamic> payload,
   ) async {
-    final db = _ref.read(syncServiceProvider).db;
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
     final now = DateTime.now().toUtc();
     await db.transaction(() async {
       await (db.delete(db.cachedWorkOrderEvidenceMaps)..where(
             (row) =>
+                row.scopeKey.equals(sync.scopeKey) &
                 row.principalScope.equals(principalScope) &
                 row.workOrderPublicId.equals(snapshot.workOrderPublicId),
           ))
@@ -79,6 +81,7 @@ class WorkOrderEvidenceMapRepository {
           .into(db.cachedWorkOrderEvidenceMaps)
           .insert(
             CachedWorkOrderEvidenceMapsCompanion.insert(
+              scopeKey: sync.scopeKey,
               principalScope: principalScope,
               workOrderPublicId: snapshot.workOrderPublicId,
               reportSha256: snapshot.reportSha256,
@@ -95,10 +98,12 @@ class WorkOrderEvidenceMapRepository {
     String principalScope,
     String workOrderPublicId,
   ) async {
-    final db = _ref.read(syncServiceProvider).db;
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
     final query = db.select(db.cachedWorkOrderEvidenceMaps)
       ..where(
         (row) =>
+            row.scopeKey.equals(sync.scopeKey) &
             row.principalScope.equals(principalScope) &
             row.workOrderPublicId.equals(workOrderPublicId),
       )

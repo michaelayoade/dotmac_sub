@@ -33,6 +33,7 @@ def test_portal_ui_migrations_extend_current_main_as_one_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     # The chain must stay single-headed with 367 in its ancestry; later
     # revisions (e.g. the legacy-153 bridge merge) may extend past it, so
     # asserting the exact head would break on every subsequent migration.

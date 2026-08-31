@@ -307,6 +307,11 @@ class InboxConversation(Base):
             "continued_from_conversation_id",
         ),
         Index("ix_inbox_conversations_primary_team", "primary_service_team_id"),
+        Index(
+            "ix_inbox_conversations_agent_analytics",
+            "first_message_at",
+            "id",
+        ),
         Index("ix_inbox_conversations_status_last", "status", "last_message_at"),
         Index(
             "ix_inbox_conversations_external_thread",
@@ -903,6 +908,12 @@ class InboxMessage(Base):
     __table_args__ = (
         Index("ix_inbox_messages_conversation", "conversation_id", "created_at"),
         Index(
+            "ix_inbox_messages_agent_analytics",
+            "direction",
+            "created_at",
+            "conversation_id",
+        ),
+        Index(
             "ix_inbox_messages_unread",
             "conversation_id",
             "received_at",
@@ -1291,6 +1302,13 @@ class InboxConversationAssignment(Base):
         ),
         Index("ix_inbox_conversation_assignments_person", "person_id", "is_active"),
         Index("ix_inbox_conversation_assignments_team", "service_team_id", "is_active"),
+        Index(
+            "ix_inbox_assignments_agent_analytics",
+            "assigned_at",
+            "person_id",
+            "service_team_id",
+            "conversation_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1600,6 +1618,13 @@ class InboxStatusTransitionEvent(Base):
         ),
         Index(
             "ix_inbox_status_event_conversation_time", "conversation_id", "occurred_at"
+        ),
+        Index(
+            "ix_inbox_status_event_agent_analytics",
+            "status",
+            "occurred_at",
+            "actor_person_id",
+            "conversation_id",
         ),
     )
 

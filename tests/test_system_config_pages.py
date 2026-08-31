@@ -240,6 +240,7 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
             "payment_period": "Monthly",  # normaliser lower-cases
             "payment_due_days": "72",
             "minimum_balance": "10.50",
+            "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
         },
     )
 
@@ -264,6 +265,39 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
 
     # Nothing is committed when validation fails.
     assert "payment_due_days" not in _billing_rows(db_session)
+
+
+def test_billing_config_saves_upcoming_charge_report_defaults(db_session):
+    web_system_config_service.save_billing_config(
+        db_session,
+        {
+            "upcoming_charges_postpaid_lead_days": "21",
+            "upcoming_charges_prepaid_lead_days": "10",
+            "upcoming_charges_prepaid_amount_bands": (
+                "50000-100000,100000-500000,500000-"
+            ),
+            "upcoming_charges_include_funded_prepaid_default": "true",
+        },
+    )
+
+    rows = _billing_rows(db_session)
+    assert rows["upcoming_charges_postpaid_lead_days"].value_text == "21"
+    assert rows["upcoming_charges_prepaid_lead_days"].value_text == "10"
+    assert (
+        rows["upcoming_charges_prepaid_amount_bands"].value_text
+        == "50000-100000,100000-500000,500000-"
+    )
+    assert rows["upcoming_charges_include_funded_prepaid_default"].value_json is True
+
+
+def test_billing_config_rejects_overlapping_upcoming_charge_bands(db_session):
+    with pytest.raises(ValueError, match="must not overlap"):
+        web_system_config_service.save_billing_config(
+            db_session,
+            {"upcoming_charges_prepaid_amount_bands": "50000-200000,100000-"},
+        )
+
+    assert "upcoming_charges_prepaid_amount_bands" not in _billing_rows(db_session)
 
 
 # --- 8.12 Direct bank transfer: config owns accounts, not enablement ---

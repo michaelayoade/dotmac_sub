@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -40,6 +40,9 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 
+if TYPE_CHECKING:
+    from app.services.team_inbox_receive import EmailThreadHeaders
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 T = TypeVar("T")
 OWNER = "communications.team_inbox_outbound_intents"
@@ -72,15 +75,16 @@ class InboxReplyPayload:
     cc_addresses: tuple[str, ...] = ()
     bcc_addresses: tuple[str, ...] = ()
     sent_by_person_id: str | UUID | None = None
-    metadata: dict | None = None
+    metadata: Mapping[str, object] | None = None
     dedupe_key: str | None = None
+    email_thread_headers: EmailThreadHeaders | None = None
 
 
 @dataclass(frozen=True)
 class AiIntakeFollowUpPayload:
     question: str
     inbound_message_id: UUID
-    config_id: UUID
+    config_id: UUID | None
     follow_up_count: int
     session_id: UUID | None = None
     policy_id: UUID | None = None
@@ -153,6 +157,23 @@ def _plain_text_reply(payload: InboxReplyPayload) -> str:
     return html.unescape(" ".join(text.split())).strip()
 
 
+def _whatsapp_inbox_reply_bypasses_customer_policy(
+    *,
+    channel: NotificationChannel,
+    payload: InboxReplyPayload,
+) -> bool:
+    metadata = dict(payload.metadata or {})
+    sender_type = str(metadata.get("sender_type") or "").strip().lower()
+    author_type = str(metadata.get("author_type") or "").strip().lower()
+    automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
+    return channel == NotificationChannel.whatsapp and (
+        payload.sent_by_person_id is not None
+        or sender_type == "ai"
+        or author_type == "ai"
+        or automation_kind == "ai_intake"
+    )
+
+
 def _queue_outbox_reply(
     db: Session,
     *,
@@ -182,13 +203,42 @@ def _queue_outbox_reply(
             "bcc": list(payload.bcc_addresses),
         }
     )
-    audience_type = (
-        "subscriber" if conversation.subscriber_id is not None else "operational"
+    message = existing_message or InboxMessage(
+        id=uuid4(), conversation_id=conversation.id
     )
+    email_thread_headers: EmailThreadHeaders | None = None
+    if channel == NotificationChannel.email:
+        from app.services import team_inbox_receive
+
+        email_thread_headers = payload.email_thread_headers
+        if email_thread_headers is None:
+            email_thread_headers = (
+                team_inbox_receive.build_outbound_email_thread_headers(
+                    db,
+                    conversation_id=conversation.id,
+                    outbound_message_id=message.id,
+                )
+            )
+        intent_metadata["email_thread"] = email_thread_headers.as_metadata()
+    linked_subscriber_id = conversation.subscriber_id
+    if linked_subscriber_id is not None:
+        intent_metadata["linked_subscriber_id"] = str(linked_subscriber_id)
+    use_operational_audience = _whatsapp_inbox_reply_bypasses_customer_policy(
+        channel=channel,
+        payload=payload,
+    )
+    audience_type = (
+        "operational"
+        if use_operational_audience
+        else "subscriber"
+        if linked_subscriber_id is not None
+        else "operational"
+    )
+    intent_subscriber_id = None if use_operational_audience else linked_subscriber_id
     result = submit(
         db,
         CommunicationIntent(
-            subscriber_id=conversation.subscriber_id,
+            subscriber_id=intent_subscriber_id,
             event_type="team_inbox.reply",
             category="service",
             communication_class=CommunicationClass.transactional,
@@ -200,8 +250,8 @@ def _queue_outbox_reply(
             recipients={channel: recipient},
             audience_type=audience_type,
             audience_id=(
-                conversation.subscriber_id
-                if conversation.subscriber_id is not None
+                linked_subscriber_id
+                if audience_type == "subscriber"
                 else conversation.id
             ),
             resolve_subscriber_identity=False,
@@ -224,12 +274,14 @@ def _queue_outbox_reply(
         )
 
     queued_at = now or datetime.now(UTC)
-    message = existing_message or InboxMessage(conversation_id=conversation.id)
     message.notification_id = notification.id
     message.channel_type = channel.value
     message.direction = InboxMessageDirection.outbound.value
     message.subject = subject
     message.body = body
+    message.external_message_id = (
+        email_thread_headers.message_id if email_thread_headers is not None else None
+    )
     message.external_thread_id = conversation.external_thread_id
     message.from_address = from_address
     message.to_addresses = [recipient]
@@ -808,7 +860,11 @@ def send_ai_intake_follow_up(
 ) -> InboxReplyResult:
     """Queue one approved intake clarification through the channel owner."""
 
-    if payload.question not in APPROVED_FOLLOW_UP_QUESTIONS:
+    question = " ".join(str(payload.question or "").split())
+    approved_questions = {
+        " ".join(item.split()) for item in APPROVED_FOLLOW_UP_QUESTIONS
+    }
+    if question not in approved_questions:
         return InboxReplyResult(
             kind="invalid_body",
             conversation_id=str(conversation.id),
@@ -827,8 +883,8 @@ def send_ai_intake_follow_up(
         db,
         conversation=conversation,
         payload=InboxReplyPayload(
-            body_html=payload.question,
-            body_text=payload.question,
+            body_html=question,
+            body_text=question,
             metadata={
                 "sender_type": "ai",
                 "author_type": "ai",
@@ -845,7 +901,9 @@ def send_ai_intake_follow_up(
                 else None,
                 "ai_message_purpose": "clarification",
                 "ai_intake_follow_up": True,
-                "ai_intake_config_id": str(payload.config_id),
+                "ai_intake_config_id": str(payload.config_id)
+                if payload.config_id is not None
+                else None,
                 "ai_intake_inbound_message_id": str(payload.inbound_message_id),
                 "ai_intake_follow_up_count": payload.follow_up_count,
                 "author_name": payload.display_name,
@@ -1009,6 +1067,8 @@ def retry_outbound_message(
     sent_by_person_id: str | UUID | None = None,
     now: datetime | None = None,
 ) -> InboxReplyResult:
+    from app.services import team_inbox_receive
+
     metadata = dict(message.metadata_ or {})
     if metadata.get("delivery_status") != "failed":
         return InboxReplyResult(
@@ -1063,6 +1123,13 @@ def retry_outbound_message(
             else (),
             sent_by_person_id=sent_by_person_id,
             metadata=retry_metadata,
+            email_thread_headers=(
+                team_inbox_receive.EmailThreadHeaders.from_metadata(
+                    metadata.get("email_thread")
+                )
+                if conversation.channel_type == InboxChannelType.email.value
+                else None
+            ),
         ),
         now=now,
         record_failure=False,

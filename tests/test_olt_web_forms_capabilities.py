@@ -1,4 +1,7 @@
+from types import SimpleNamespace
+
 import pytest
+from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
@@ -6,7 +9,17 @@ from app.services.network.olt_web_forms import (
     build_form_model,
     create_payload,
     parse_form_values,
+    validate_values,
 )
+
+templates = Jinja2Templates(directory="templates")
+
+
+def _template_request():
+    return SimpleNamespace(
+        state=SimpleNamespace(auth={"permission_keys": {"*"}}, csrf_token=""),
+        url=SimpleNamespace(path="/admin/network/olts/test"),
+    )
 
 
 def _base_form(**extra):
@@ -91,3 +104,106 @@ def test_olt_schema_rejects_invalid_capability_values():
 
     with pytest.raises(ValidationError):
         OLTDeviceUpdate(capabilities_source="manual_override")
+
+
+def test_olt_form_parses_config_pack_wcd_defaults():
+    values = parse_form_values(
+        _base_form(
+            default_internet_config_ip_index="1",
+            default_wan_config_profile_id="10",
+            pppoe_wcd_index="2",
+            mgmt_wcd_index="1",
+            voip_wcd_index="3",
+        )
+    )
+
+    payload = create_payload(values)
+
+    assert payload.config_pack is not None
+    assert payload.config_pack["internet_config_ip_index"] == 1
+    assert payload.config_pack["wan_config_profile_id"] == 10
+    assert payload.config_pack["pppoe_wcd_index"] == 2
+    assert payload.config_pack["mgmt_wcd_index"] == 1
+    assert payload.config_pack["voip_wcd_index"] == 3
+
+
+def test_olt_form_rejects_invalid_config_pack_indexes(db_session):
+    values = parse_form_values(_base_form(default_internet_config_ip_index="33"))
+
+    assert (
+        validate_values(db_session, values)
+        == "Internet IP index must be between 0 and 32"
+    )
+
+    values = parse_form_values(_base_form(pppoe_wcd_index="0"))
+
+    assert (
+        validate_values(db_session, values)
+        == "PPPoE WCD index must be between 1 and 32"
+    )
+
+
+def test_olt_form_renders_config_pack_wcd_defaults(db_session):
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        name="Gwarimpa Huawei OLT",
+        hostname="gwarimpa-olt",
+        config_pack={
+            "internet_config_ip_index": 1,
+            "wan_config_profile_id": 10,
+            "pppoe_wcd_index": 2,
+            "mgmt_wcd_index": 1,
+            "voip_wcd_index": 3,
+        },
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    form_model = build_form_model(db_session, olt)
+    html = templates.get_template("admin/network/olts/form.html").render(
+        request=_template_request(),
+        olt=form_model,
+        olt_vlans=[],
+        olt_ip_pools=[],
+        tr069_servers=[],
+    )
+
+    assert 'name="default_internet_config_ip_index"' in html
+    assert 'name="mgmt_wcd_index"' in html
+    assert 'name="pppoe_wcd_index"' in html
+    assert 'name="voip_wcd_index"' in html
+    assert 'name="pppoe_wcd_index" id="pppoe_wcd_index" min="1" max="32"' in html
+    assert 'value="2"' in html
+
+
+def test_olt_form_hides_huawei_config_pack_fields_for_non_huawei(db_session):
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        name="Fiber OLT",
+        hostname="fiber-olt",
+        vendor="Ubiquiti",
+        model="UFiber",
+        config_pack={
+            "internet_config_ip_index": 1,
+            "pppoe_wcd_index": 2,
+        },
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    form_model = build_form_model(db_session, olt)
+    html = templates.get_template("admin/network/olts/form.html").render(
+        request=_template_request(),
+        olt=form_model,
+        olt_vlans=[],
+        olt_ip_pools=[],
+        tr069_servers=[],
+    )
+
+    assert form_model.show_huawei_config_pack_fields is False
+    assert 'name="default_internet_config_ip_index"' not in html
+    assert 'name="pppoe_wcd_index"' not in html
+    assert 'name="mgmt_wcd_index"' not in html
+    assert 'name="voip_wcd_index"' not in html

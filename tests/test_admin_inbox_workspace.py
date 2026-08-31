@@ -206,7 +206,10 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'role="dialog"' in Path("templates/admin/inbox/_overlays.html").read_text()
     assert "@input.debounce.300ms" in sidebar
     assert "/admin/inbox/presence" in sidebar
-    assert "Only online agents receive auto-assigned inbox conversations." in sidebar
+    assert (
+        "Only online agents with recent presence evidence receive auto-assigned "
+        "inbox conversations." in sidebar
+    )
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
     assert sidebar.count('name="inbox-filter-section"') == 2
@@ -229,8 +232,15 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "data-reply-composer" in conversation
     assert "idempotency_key" in conversation
     assert "Add CC/BCC" in conversation
+    assert "<details data-email-copy-recipients" in conversation
+    assert "copyRecipientsOpen" not in conversation
     assert 'name="cc"' in conversation
     assert 'name="bcc"' in conversation
+    assert (
+        'hx-get="/admin/inbox/{{ row.id }}?view=20260827a"'
+        in Path("templates/admin/inbox/_queue_macros.html").read_text()
+    )
+    assert 'const INBOX_FRAGMENT_VERSION = "20260827a"' in javascript
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage
@@ -808,7 +818,11 @@ def test_manager_dashboard_projects_presence_load_status_and_channels(db_session
     db_session.flush()
     db_session.add_all(
         [
-            InboxAgentPresence(person_id=user.id, status="online"),
+            InboxAgentPresence(
+                person_id=user.id,
+                status="online",
+                last_seen_at=datetime.now(UTC),
+            ),
             InboxConversationAssignment(
                 conversation_id=assigned.id,
                 service_team_id=team.id,

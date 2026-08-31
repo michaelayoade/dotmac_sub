@@ -299,7 +299,11 @@
                             <div class="flex-1 min-w-0">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
                                 {% if customer.email %}
+                                {% if can_send_customer_messages %}
                                 <button type="button" @click.prevent.stop="openSendMessageModal('email')" class="block truncate text-left text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ customer.email }}</button>
+                                {% else %}
+                                <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ customer.email }}</p>
+                                {% endif %}
                                 {% else %}
                                 <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
                                 {% endif %}
@@ -874,7 +878,7 @@
         <div class="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
             <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-slate-50 p-1 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/40">
                 <div class="flex min-w-max gap-1">
-                    {% for tab in [
+                    {% set billing_tabs = [
                         {'id': 'overview', 'label': 'Overview', 'count': none},
                         {'id': 'invoices', 'label': 'Invoices', 'count': invoices|length},
                         {'id': 'payments', 'label': 'Payments', 'count': payments|length},
@@ -883,6 +887,10 @@
                         {'id': 'extensions', 'label': 'Extensions', 'count': service_extension_entries|length},
                         {'id': 'activity', 'label': 'Activity', 'count': credit_applications|length}
                     ] %}
+                    {% if can(request, 'billing:ledger:read') %}
+                    {% set billing_tabs = billing_tabs[:3] + [{'id': 'ledger', 'label': 'Ledger', 'count': none}] + billing_tabs[3:] %}
+                    {% endif %}
+                    {% for tab in billing_tabs %}
                     <button type="button"
                             @click="billingSubTab = '{{ tab.id }}'"
                             :class="billingSubTab === '{{ tab.id }}' ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white'"
@@ -1063,6 +1071,20 @@
             {% endif %}
         </div>
 
+        {% if can(request, 'billing:ledger:read') %}
+        <div x-show="billingSubTab === 'ledger'"
+             x-cloak
+             id="customer-billing-ledger"
+             hx-get="/admin/customers/person/{{ customer.id }}/billing/ledger"
+             hx-trigger="revealed once"
+             hx-swap="innerHTML"
+             class="min-h-48">
+            <div class="flex min-h-48 items-center justify-center rounded-2xl border border-slate-200/60 bg-white text-sm text-slate-500 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 dark:text-slate-400">
+                Loading customer ledger…
+            </div>
+        </div>
+        {% endif %}
+
         <div x-show="billingSubTab === 'proofs'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                 <h3 class="font-semibold text-slate-900 dark:text-white">Payment Proofs</h3>
@@ -1174,7 +1196,7 @@
         <div x-show="billingSubTab === 'activity'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                 <h3 class="font-semibold text-slate-900 dark:text-white">Credit Application Activity</h3>
-                <a href="/admin/billing/ledger?account={{ billing_account_id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</a>
+                {% if can(request, 'billing:ledger:read') %}<button type="button" @click="billingSubTab = 'ledger'" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</button>{% endif %}
             </div>
             {% if credit_applications %}
             <div class="divide-y divide-slate-100 dark:divide-slate-700">
@@ -1851,11 +1873,12 @@
 
     <!-- Tab Content: Network -->
     <div id="customer-network-panel"
-         x-show="activeTab === 'network'" x-cloak class="space-y-6"
+         x-show="activeTab === 'network'" x-cloak class="space-y-6">
+        <div id="customer-network-panel-content"
          {% if not network_panel_loaded %}
          hx-get="{{ detail_config.networkPanelUrl }}"
          hx-trigger="revealed"
-         hx-select="#customer-network-panel"
+         hx-select="#customer-network-panel-content"
          hx-swap="outerHTML"
          hx-indicator="#customer-network-panel-loading"
          {% endif %}>
@@ -2177,6 +2200,7 @@
 
                 {% endif %}
 
+        </div>
     </div>
 
     <!-- Tab Content: Timeline -->
@@ -2645,6 +2669,7 @@
     </div>
 </div>
 
+{% if can_send_customer_messages %}
 <!-- Send Message Modal -->
 <div x-show="sendMessageModal"
      x-transition.opacity
@@ -2755,6 +2780,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 </div>
 
@@ -3269,8 +3295,7 @@ function customerDetail(config = {}) {
             // Check URL hash for tab
             const hash = window.location.hash.slice(1);
             if (hash === 'network') {
-                this.activeTab = 'subscriptions';
-                this.serviceSubTab = 'subscriptions';
+                this.activeTab = 'network';
             } else if (hash === 'stats') {
                 this.activeTab = 'subscriptions';
                 this.serviceSubTab = 'stats';

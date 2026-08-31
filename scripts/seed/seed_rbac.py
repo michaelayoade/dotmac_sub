@@ -71,6 +71,10 @@ DEFAULT_PERMISSIONS = [
     ("system:write", "Manage system administration resources"),
     ("notification:read", "View notification templates, queue, and history"),
     ("notification:write", "Manage notification templates and delivery"),
+    (
+        "communications:customer:send",
+        "Send customer notifications to selected customer scopes",
+    ),
     ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
@@ -236,6 +240,10 @@ DEFAULT_PERMISSIONS = [
     ("network:radius:write", "Manage RADIUS configuration"),
     ("monitoring:read", "View monitoring dashboards and alerts"),
     ("monitoring:write", "Manage monitoring rules and alert states"),
+    (
+        "monitoring:outage_notify:send",
+        "Send outage notifications to affected customers",
+    ),
     ("usage:read", "View subscriber usage and metering records"),
     ("usage:write", "Manage usage and metering records"),
     # Operations - Work Orders
@@ -276,6 +284,18 @@ DEFAULT_PERMISSIONS = [
     ("support:automation:read", "View ticket automation rules"),
     ("support:automation:write", "Manage ticket automation rules"),
     ("support:inbox_ai:read", "Use manager AI for Team Inbox insight"),
+    (
+        "customer_experience:handoff:read",
+        "View customer-experience handoff queue",
+    ),
+    (
+        "customer_experience:handoff:accept",
+        "Accept ready customer-experience handoffs",
+    ),
+    (
+        "customer_experience:handoff:attention",
+        "Flag and resolve customer-experience handoff attention items",
+    ),
     # CRM
     ("crm:contact:read", "View CRM contacts"),
     ("crm:contact:write", "Manage CRM contacts"),
@@ -336,6 +356,8 @@ DEFAULT_PERMISSIONS = [
     ("reports:billing:export", "Export billing and revenue report data"),
     ("reports:network:read", "View network and bandwidth reports"),
     ("reports:network:export", "Export network and bandwidth report data"),
+    ("reports:ncc:read", "View NCC regulatory reports"),
+    ("reports:ncc:export", "Export NCC regulatory report data and artifacts"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
     ("reports:support:read", "View support and inbox operations reports"),
@@ -375,6 +397,7 @@ DEFAULT_ROLES = [
     ("operator", "Network and provisioning operations"),
     ("support", "Subscriber and billing support"),
     ("finance_manager", "Full billing and finance access"),
+    ("customer_experience_manager", "Customer experience manager access"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -449,6 +472,7 @@ ROLE_PERMISSIONS = {
         "network:radius:write",
         "monitoring:read",
         "monitoring:write",
+        "monitoring:outage_notify:send",
         "provisioning:read",
         "provisioning:write",
         "customer:read",
@@ -498,6 +522,16 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+        "reports:support:read",
+    ],
+    "customer_experience_manager": [
+        "customer:read",
+        "reseller:read",
+        "support:ticket:read",
+        "support:ticket:update",
+        "support:inbox:self_assign",
+        "reports:ncc:read",
+        "reports:ncc:export",
         "reports:support:read",
     ],
     "finance_manager": [

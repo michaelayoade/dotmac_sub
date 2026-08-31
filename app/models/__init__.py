@@ -111,6 +111,11 @@ from app.models.billing_contract import (  # noqa: F401
     ObligationState,
     RateBasis,
 )
+from app.models.billing_receivable_projection import (  # noqa: F401
+    BillingReceivableProjection,
+    ReceivableProjectionRun,
+    ReceivableProjectionRunKind,
+)
 from app.models.billing_shadow_verification import (  # noqa: F401
     BillingCutoverVerificationRun,
     BillingShadowDeliveryEvidence,
@@ -627,6 +632,10 @@ from app.models.offer_availability import (  # noqa: F401
     OfferLocationAvailability,
     OfferResellerAvailability,
 )
+from app.models.oidc_mobile import (  # noqa: F401
+    OidcCeremonyOutcome,
+    OidcMobileCeremony,
+)
 from app.models.ont_assignment_constraint_authorization import (  # noqa: F401
     OntAssignmentConstraintAuthorizationRequest,
     OntAssignmentConstraintAuthorizationReview,
@@ -719,6 +728,9 @@ from app.models.payment_proof import (  # noqa: F401
     WithholdingTaxStatus,
     WithholdingTaxTransition,
     WithholdingTaxTransitionImmutableError,
+)
+from app.models.paystack_recovery import (  # noqa: F401
+    PaystackOutsideWindowRecoveryRun,
 )
 from app.models.plan_family_catalogue import PlanFamilyCatalogue  # noqa: F401
 from app.models.portal_message import (  # noqa: F401
@@ -893,6 +905,7 @@ from app.models.service_team import (  # noqa: F401
     ServiceTeamCapability,
     ServiceTeamCapabilityDefinition,
     ServiceTeamCapabilityKey,
+    ServiceTeamDepartmentMembershipSource,
     ServiceTeamExternalReference,
     ServiceTeamMember,
     ServiceTeamMemberResponsibility,

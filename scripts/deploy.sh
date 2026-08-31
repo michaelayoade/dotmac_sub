@@ -87,7 +87,7 @@ IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 MIGRATION_MAX_ATTEMPTS="${MIGRATION_MAX_ATTEMPTS:-4}"
 MIGRATION_RETRY_SECONDS="${MIGRATION_RETRY_SECONDS:-10}"
 CANDIDATE_CONTAINER="${CANDIDATE_CONTAINER:-dotmac_sub_app_candidate}"
-CANDIDATE_PORT="${CANDIDATE_PORT:-18001}"
+CANDIDATE_PORT="${CANDIDATE_PORT:-18002}"
 CANDIDATE_HEALTH_URL="${CANDIDATE_HEALTH_URL:-http://127.0.0.1:${CANDIDATE_PORT}/health}"
 CANDIDATE_DRAIN_SECONDS="${CANDIDATE_DRAIN_SECONDS:-2}"
 BACKGROUND_RUNTIME_TIMEOUT_SECONDS="${BACKGROUND_RUNTIME_TIMEOUT_SECONDS:-90}"
@@ -332,6 +332,29 @@ assert_proxy_handoff_contract() {
   fi
 }
 
+assert_candidate_port_available() {
+  local port_owner
+
+  docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+  port_owner="$(
+    docker ps --format '{{.Names}} {{.Ports}}' \
+      | grep -E "(^|[ ,])127\\.0\\.0\\.1:${CANDIDATE_PORT}->|(^|[ ,])0\\.0\\.0\\.0:${CANDIDATE_PORT}->|\\[::\\]:${CANDIDATE_PORT}->" \
+      || true
+  )"
+  if [[ -n "${port_owner}" ]]; then
+    echo "DEPLOY AVAILABILITY FAILURE: candidate port 127.0.0.1:${CANDIDATE_PORT} is already allocated." >&2
+    printf '%s\n' "${port_owner}" | sed 's/^/  owner: /' >&2
+    echo "Set CANDIDATE_PORT to a free warm-candidate port before retrying." >&2
+    return 1
+  fi
+  if command -v ss >/dev/null \
+    && ss -H -ltn | awk '{print $4}' | grep -Eq "(^|:|\\])${CANDIDATE_PORT}$"; then
+    echo "DEPLOY AVAILABILITY FAILURE: candidate port 127.0.0.1:${CANDIDATE_PORT} is already in use by a host process." >&2
+    echo "Set CANDIDATE_PORT to a free warm-candidate port before retrying." >&2
+    return 1
+  fi
+}
+
 CANDIDATE_STARTED=0
 PRIMARY_REPLACED=0
 
@@ -375,6 +398,118 @@ run_migrations() {
     sleep "${MIGRATION_RETRY_SECONDS}"
     attempt=$((attempt + 1))
   done
+}
+
+run_database_prerequisite_bootstrap() {
+  local bootstrap_url
+  bootstrap_url="${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
+  if [[ -z "${bootstrap_url}" ]]; then
+    log "No BOOTSTRAP_DATABASE_URL supplied; verifying existing database prerequisites only"
+    return 0
+  fi
+
+  log "Repairing commercial module database prerequisites with the elevated bootstrap connection"
+  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+    python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+  log "Repairing outbox dispatcher database prerequisites with the elevated bootstrap connection"
+  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+    python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+}
+
+verify_database_prerequisites() {
+  log "Verifying commercial module prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+
+  log "Verifying outbox dispatcher prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
+}
+
+database_heads() {
+  local backup_db_user
+  local backup_db_name
+  local database_url
+
+  backup_db_user="${DB_BACKUP_DB_USER:-$(env_value DB_BACKUP_DB_USER)}"
+  backup_db_user="${backup_db_user:-postgres}"
+  backup_db_name="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
+  if [[ -z "${backup_db_name}" ]]; then
+    database_url="$(env_value DATABASE_URL)"
+    backup_db_name="${database_url##*/}"
+    backup_db_name="${backup_db_name%%\?*}"
+  fi
+  if [[ -z "${backup_db_name}" || "${backup_db_name}" == "$(env_value DATABASE_URL)" ]]; then
+    echo "RESUME POLICY REJECTED: cannot resolve database name for alembic head verification." >&2
+    return 1
+  fi
+  docker exec "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
+    -d "${backup_db_name}" \
+    -c 'SELECT version_num FROM alembic_version ORDER BY version_num'
+}
+
+candidate_heads() {
+  docker run --rm --entrypoint alembic "${IMAGE}" heads \
+    | sed -E 's/[[:space:]].*$//' \
+    | grep -E '^[A-Za-z0-9_.-]+$'
+}
+
+verify_post_migration_resume() {
+  local prior_run_id="${PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID:-}"
+  local backup_path="${PRODUCTION_DEPLOY_RESUME_BACKUP_PATH:-}"
+  local authorization_run_id="${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID:-}"
+  local current_app_image
+  local -a database_head_args=()
+  local -a candidate_head_args=()
+  local -a database_head_values=()
+  local -a candidate_head_values=()
+  local head
+
+  [[ "${PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION:-0}" == "1" ]] || return 1
+  [[ "${DEPLOYMENT_TARGET}" == "production" ]] || {
+    echo "RESUME POLICY REJECTED: post-migration resume is production-only." >&2
+    return 1
+  }
+  [[ "${prior_run_id}" =~ ^[0-9]+$ && "${prior_run_id}" -gt 0 ]] || {
+    echo "RESUME POLICY REJECTED: prior failed deployment run ID is required." >&2
+    return 1
+  }
+  [[ "${authorization_run_id}" =~ ^[0-9]+$ && "${authorization_run_id}" -gt 0 ]] || {
+    echo "RESUME POLICY REJECTED: authorization run ID is required." >&2
+    return 1
+  }
+  current_app_image="$(
+    docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true
+  )"
+  mapfile -t database_head_values < <(database_heads)
+  mapfile -t candidate_head_values < <(candidate_heads)
+  if ((${#database_head_values[@]} == 0 || ${#candidate_head_values[@]} == 0)); then
+    echo "RESUME POLICY REJECTED: database or candidate Alembic heads could not be proven." >&2
+    return 1
+  fi
+  for head in "${database_head_values[@]}"; do
+    database_head_args+=(--database-head "${head}")
+  done
+  for head in "${candidate_head_values[@]}"; do
+    candidate_head_args+=(--candidate-head "${head}")
+  done
+  run_repo_module scripts.deploy_resume_policy verify-post-migration \
+    --prior-failed-run-id "${prior_run_id}" \
+    --authorization-run-id "${authorization_run_id}" \
+    --expected-authorization-run-id "${authorization_run_id}" \
+    --backup-path "${backup_path}" \
+    --candidate-digest "${TAG}" \
+    --authorized-digest "${TAG}" \
+    "${database_head_args[@]}" \
+    "${candidate_head_args[@]}" \
+    --current-app-image "${current_app_image}" \
+    --previous-image "${PREV_IMAGE}" \
+    --candidate-image "${IMAGE}"
 }
 
 # Deploy-integrity gate. The immutable image must not be shadowed by a host
@@ -602,7 +737,7 @@ case "$(env_value APP_ENV):$(env_value SERVER_NAME)" in
     fi
     ;;
   staging:dotmac-sub-staging)
-    GITHUB_RELEASE_BRANCH="dev"
+    GITHUB_RELEASE_BRANCH="main"
     DEPLOYMENT_TARGET="staging"
     if [[ "${SKIP_BACKUP:-0}" == "1" ]]; then
       echo "BACKUP POLICY REJECTED: use the verified staging adapter." >&2
@@ -634,6 +769,8 @@ log "Compose files: ${COMPOSE_FILES_DESC}"
 # having touched anything, including read-only queries.
 log "Verifying Nginx warm-handoff contract"
 assert_proxy_handoff_contract
+log "Verifying warm-candidate port availability"
+assert_candidate_port_available
 
 log "Resolving declared Compose services"
 load_declared_services
@@ -685,12 +822,19 @@ if [[ "${DEPLOYMENT_TARGET}" == "production" ]]; then
     echo "PRODUCTION RELEASE GATE REJECTED: typed production authorization is required." >&2
     exit 1
   fi
+  PRODUCTION_VERIFY_ARGS=(
+    verify-production
+    --path "${PRODUCTION_RELEASE_EVIDENCE}"
+    --expected-source-revision "${FULL_SHA}"
+    --expected-image-digest "${TAG}"
+  )
+  if [[ -n "${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID:-}" ]]; then
+    PRODUCTION_VERIFY_ARGS+=(
+      --expected-authorization-run-id "${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID}"
+    )
+  fi
   if ! GITHUB_RELEASE_REVISION="$(
-    run_repo_module scripts.release_candidate_evidence \
-      verify-production \
-      --path "${PRODUCTION_RELEASE_EVIDENCE}" \
-      --expected-source-revision "${FULL_SHA}" \
-      --expected-image-digest "${TAG}"
+    run_repo_module scripts.release_candidate_evidence "${PRODUCTION_VERIFY_ARGS[@]}"
   )"; then
     echo "PRODUCTION RELEASE GATE REJECTED: authorization evidence did not match the image." >&2
     exit 1
@@ -700,6 +844,9 @@ fi
   --repository "${GITHUB_RELEASE_REPOSITORY}" \
   --revision "${GITHUB_RELEASE_REVISION}" \
   --branch "${GITHUB_RELEASE_BRANCH}"
+
+run_database_prerequisite_bootstrap
+verify_database_prerequisites
 
 # If this script is killed mid-backup -- an SSH session dropping is enough --
 # the pg_dump it started does NOT die with it. It keeps running, and the next
@@ -731,6 +878,11 @@ elif [[ -n "${PRODUCTION_BACKUP_DECISION_FILE:-}" ]]; then
     echo "BACKUP POLICY REJECTED: production hotfix evidence is invalid." >&2
     exit 1
   fi
+elif [[ "${PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION:-0}" == "1" ]]; then
+  if ! BACKUP_MODE="$(verify_post_migration_resume)"; then
+    echo "BACKUP POLICY REJECTED: production post-migration resume evidence is invalid." >&2
+    exit 1
+  fi
 fi
 
 if [[ "${BACKUP_MODE}" == "required" ]]; then
@@ -741,7 +893,12 @@ if [[ "${BACKUP_MODE}" == "required" ]]; then
   # REPO_DIR is the ephemeral Actions workspace and DEPLOY_DIR is the pinned
   # host directory that actually holds .env, so the backup aborted with
   # "Missing <workspace>/.env" and no production deploy ever completed.
-  ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  if [[ "${DEPLOYMENT_TARGET}" == "production" && -n "${DEPLOY_RUN_ID:-}" && -z "${DB_BACKUP_BASENAME:-}" ]]; then
+    DB_BACKUP_BASENAME="dotmac_sub_run_${DEPLOY_RUN_ID}" \
+      ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  else
+    ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  fi
   BACKUP_PID=$!
   wait "${BACKUP_PID}"
   BACKUP_PID=""
@@ -749,6 +906,8 @@ elif [[ "${BACKUP_MODE}" == "skip_staging" ]]; then
   log "Skipping staging database backup under the verified staging host policy"
 elif [[ "${BACKUP_MODE}" == "skip_production_hotfix" ]]; then
   log "Skipping production backup under verified no-migration hotfix evidence"
+elif [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+  log "Skipping production backup under verified post-migration resume evidence"
 else
   echo "BACKUP POLICY REJECTED: unrecognized backup mode ${BACKUP_MODE}." >&2
   exit 1
@@ -803,7 +962,11 @@ set_env_value GIT_SHA "${FULL_SHA}"
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
 log "Applying migrations (alembic upgrade heads)"
-run_migrations
+if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+  log "Skipping migrations under verified post-migration resume evidence"
+else
+  run_migrations
+fi
 
 log "Verifying database schema contracts"
 "${COMPOSE[@]}" run --rm --no-deps app \

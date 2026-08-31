@@ -71,7 +71,11 @@ def test_deploy_requires_exact_branch_github_evidence_before_database_work() -> 
     assert "production:dotmac-sub-prod)" in deploy
     assert 'GITHUB_RELEASE_BRANCH="main"' in deploy
     assert "staging:dotmac-sub-staging)" in deploy
-    assert 'GITHUB_RELEASE_BRANCH="dev"' in deploy
+    # Both environments release from the single `main` trunk. The branch
+    # dimension collapsed when the `dev` hop was retired; the environments stay
+    # separated by digest and by host contract, not by branch.
+    assert 'GITHUB_RELEASE_BRANCH="dev"' not in deploy
+    assert deploy.count('GITHUB_RELEASE_BRANCH="main"') == 2
     assert '"${REPO_DIR}/scripts/verify_github_release.py"' in deploy
     assert deploy.index('scripts/verify_github_release.py"') < deploy.index(
         "Backing up database before migrations"
@@ -113,6 +117,54 @@ def test_deploy_checks_openbao_boot_secrets_before_migrations() -> None:
     migration = 'log "Applying migrations (alembic upgrade heads)"'
     assert preflight in deploy
     assert deploy.index(preflight) < deploy.index(migration)
+
+
+def test_deploy_checks_database_prerequisites_before_backup_and_migrations() -> None:
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+
+    prerequisite_check = "\nverify_database_prerequisites\n"
+    backup = "Backing up database before migrations"
+    migration = 'log "Applying migrations (alembic upgrade heads)"'
+    assert "scripts/bootstrap_commercial_module_prereqs.py --verify-only" in deploy
+    assert "scripts/bootstrap_outbox_dispatcher_roles.py --verify-only" in deploy
+    assert deploy.index(prerequisite_check) < deploy.index(backup)
+    assert deploy.index(prerequisite_check) < deploy.index(migration)
+
+
+def test_deploy_candidate_port_does_not_collide_with_backup_app_port() -> None:
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/runbooks/PRODUCTION_DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert 'CANDIDATE_PORT="${CANDIDATE_PORT:-18002}"' in deploy
+    assert "assert_candidate_port_available" in deploy
+    assert deploy.index("\nassert_candidate_port_available\n") < deploy.index(
+        "Backing up database before migrations"
+    )
+    assert "127.0.0.1:18001" in docs
+    assert "127.0.0.1:18002" in docs
+    nginx = (ROOT / "nginx" / "selfcare.dotmac.io.conf").read_text(encoding="utf-8")
+    assert "127.0.0.1:18002 backup" in nginx
+    assert "127.0.0.1:18001 backup" not in nginx
+
+
+def test_production_deploy_exposes_fail_closed_post_migration_resume() -> None:
+    workflow = (ROOT / ".github/workflows/production-deploy.yml").read_text(
+        encoding="utf-8"
+    )
+    adapter = (ROOT / "scripts/deploy_production.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+
+    assert "resume_after_migration" in workflow
+    assert "failed_deployment_run_id" in workflow
+    assert "prior_backup_path" in workflow
+    assert "AUTHORIZATION_RUN_ID" in workflow
+    assert "DB_BACKUP_BASENAME: dotmac_sub_run_${{ github.run_id }}" in workflow
+    assert "PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID" in adapter
+    assert "scripts.deploy_resume_policy verify-post-migration" in deploy
+    assert "Skipping migrations under verified post-migration resume evidence" in deploy
+    assert deploy.index('BACKUP_MODE="$(verify_post_migration_resume)"') < deploy.index(
+        "Backing up database before migrations"
+    )
 
 
 def test_openbao_initializer_seeds_kernel_secret_source_paths() -> None:

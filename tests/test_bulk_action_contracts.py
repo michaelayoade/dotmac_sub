@@ -137,7 +137,7 @@ def test_customer_bulk_projection_exposes_actions_only_after_permission_check(
 
     allowed = web_customer_bulk_actions.build_customer_bulk_action_contract(
         object(),
-        auth={"permissions": ["customer:write"]},
+        auth={"permissions": ["customer:write", "communications:customer:send"]},
     )
     denied = web_customer_bulk_actions.build_customer_bulk_action_contract(
         object(),

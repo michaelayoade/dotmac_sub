@@ -7,15 +7,16 @@ import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
 import 'package:dotmac_field/features/today/map_assets_repository.dart';
-import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   setUpAll(() {
@@ -27,6 +28,7 @@ void main() {
     }
   });
 
+  late SecureFieldStore store;
   late AppDatabase db;
   late FakeHttpAdapter adapter;
   late FakeConnectivity connectivity;
@@ -34,10 +36,11 @@ void main() {
   late ProviderContainer container;
 
   setUp(() async {
-    db = AppDatabase(NativeDatabase.memory());
+    store = await openTestStore();
+    db = store.database;
     adapter = FakeHttpAdapter();
-    final store = InMemoryTokenStore();
-    await store.save(
+    final tokens = InMemoryTokenStore();
+    await tokens.save(
       accessToken: fakeJwt(
         expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
       ),
@@ -48,7 +51,7 @@ void main() {
     dio.httpClientAdapter = adapter;
     final api = ApiClient(
       baseUrl: 'https://test.local',
-      tokenStore: store,
+      tokenStore: tokens,
       dio: dio,
     );
     connectivity = FakeConnectivity();
@@ -56,6 +59,7 @@ void main() {
       db: db,
       api: api,
       connectivity: connectivity,
+      evidence: store.evidence,
       delay: (_) async {},
     );
     container = ProviderContainer(
@@ -183,6 +187,7 @@ void main() {
           .into(db.cachedMapAssets)
           .insert(
             CachedMapAssetsCompanion.insert(
+              scopeKey: store.scopeKey,
               assetType: 'olt',
               assetId: 'olt-1',
               title: 'OLT Alpha',
@@ -195,6 +200,7 @@ void main() {
           .into(db.cachedMapAssetSyncCursors)
           .insert(
             CachedMapAssetSyncCursorsCompanion.insert(
+              scopeKey: store.scopeKey,
               assetType: 'olt',
               syncedAt: oldCursor,
             ),
@@ -249,6 +255,7 @@ void main() {
         .into(db.cachedMapAssets)
         .insert(
           CachedMapAssetsCompanion.insert(
+            scopeKey: store.scopeKey,
             assetType: 'fdh',
             assetId: 'fdh-deleted',
             title: 'FDH Deleted',
@@ -261,6 +268,7 @@ void main() {
         .into(db.cachedMapAssetSyncCursors)
         .insert(
           CachedMapAssetSyncCursorsCompanion.insert(
+            scopeKey: store.scopeKey,
             assetType: 'fdh',
             syncedAt: oldCursor,
           ),

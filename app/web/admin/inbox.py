@@ -86,6 +86,11 @@ router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 settings_router = APIRouter(prefix="/crm/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
+INBOX_HTML_RESPONSE_HEADERS: dict[str, str] = {
+    "Cache-Control": "private, no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 ReplyPresentationOutcome = Literal[
     "queued", "scheduled", "sent", "retried", "failed", "replayed", "error"
 ]
@@ -447,8 +452,16 @@ def team_inbox_queue(
             }
         )
     if is_list_fragment_request:
-        return templates.TemplateResponse("admin/inbox/_sidebar.html", context)
-    return templates.TemplateResponse("admin/inbox/index.html", context)
+        return templates.TemplateResponse(
+            "admin/inbox/_sidebar.html",
+            context,
+            headers=INBOX_HTML_RESPONSE_HEADERS,
+        )
+    return templates.TemplateResponse(
+        "admin/inbox/index.html",
+        context,
+        headers=INBOX_HTML_RESPONSE_HEADERS,
+    )
 
 
 @router.get(
@@ -1060,7 +1073,11 @@ def team_inbox_detail(
             "queue_return_url": _inbox_queue_return_url(request),
         }
         context.update(view)
-        return templates.TemplateResponse("admin/inbox/_conversation.html", context)
+        return templates.TemplateResponse(
+            "admin/inbox/_conversation.html",
+            context,
+            headers=INBOX_HTML_RESPONSE_HEADERS,
+        )
     return RedirectResponse(url=f"/admin/inbox?c={conversation_id}", status_code=303)
 
 
@@ -2102,9 +2119,12 @@ def team_inbox_workflow_action(
     )
 
 
+# Persists a saved view (optionally shared with the whole team), so it takes the
+# same write-tier permission as its sibling ``POST /filters/{filter_id}/delete``
+# — a saved filter is stored state, not a query string.
 @router.post(
     "/filters/save",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_saved_filter_create(
     request: Request,
@@ -2920,6 +2940,7 @@ def team_inbox_ai_intake_policy_draft_update(
     enable_customer_lookup_tool: bool = Form(default=True),
     enable_subscriber_monitoring_tool: bool = Form(default=False),
     max_conversation_turns: int = Form(default=6),
+    handoff_after_classification: bool = Form(default=False),
     handoff_customer_message: str | None = Form(default=None),
     handoff_summary_template: str | None = Form(default=None),
     announce_destination_team: bool = Form(default=False),
@@ -3204,7 +3225,7 @@ def team_inbox_ai_intake_policy_draft_update(
             raise ValueError("Channel overrides must be a JSON object.")
         conversation_policy = {
             "require_identity_before_tools": True,
-            "handoff_after_classification": True,
+            "handoff_after_classification": bool(handoff_after_classification),
             "max_turns": max(1, min(int(max_conversation_turns), 10)),
             "handoff": {
                 "customer_message": (
@@ -3457,7 +3478,7 @@ def team_inbox_ai_intake_canary_suite_save(
 
 @settings_router.post(
     "/ai-intake-canary/run",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_ai_intake_canary_run(
     request: Request,

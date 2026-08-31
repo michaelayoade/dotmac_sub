@@ -28,6 +28,11 @@ API_SYNC_PRESSURE_LIMITED = Counter(
     "API sync requests rejected before they could acquire DB resources",
     ["bucket", "scope"],
 )
+PAYMENT_PROVIDER_WEBHOOK_INGRESS = Counter(
+    "payment_provider_webhook_ingress_total",
+    "Payment-provider webhook requests admitted or limited before DB access",
+    ["provider", "outcome"],
+)
 DATABASE_TRANSACTION_SPANS = Histogram(
     "database_transaction_span_seconds",
     "Root SQLAlchemy transaction duration from first statement to completion",
@@ -87,6 +92,57 @@ SETTLED_ACCESS_BLOCKED = Counter(
     "settled_access_blocked_total",
     "Settled payments whose subscription access stayed blocked, by blocker",
     ["blocker", "trigger", "required_action"],
+)
+
+
+# Field-mobile OIDC federation (docs/designs/OIDC_MOBILE_FEDERATION.md).
+#
+# Every label below is a CLOSED, SAFE CATEGORY chosen at the refusal site. No
+# metric, log line or event on this path may carry a token, an authorization
+# code, a PKCE verifier, a nonce, a subject, a key id or an email — not even
+# truncated, because a truncated identifier is still an identifier for anyone
+# holding the other half.
+OIDC_MOBILE_CEREMONY_STARTED = Counter(
+    "oidc_mobile_ceremony_started_total",
+    "Field-mobile OIDC ceremonies started",
+)
+# A start supersedes that device's outstanding ceremony, so this counts real
+# abandonment (the user backed out and retried) rather than a swept expiry.
+OIDC_MOBILE_CEREMONY_CANCELLED = Counter(
+    "oidc_mobile_ceremony_cancelled_total",
+    "Outstanding field-mobile OIDC ceremonies superseded before completion",
+)
+OIDC_MOBILE_CEREMONY_COMPLETED = Counter(
+    "oidc_mobile_ceremony_completed_total",
+    "Field-mobile OIDC ceremonies that ended in an issued Sub session",
+)
+# `reason` is the exchange's refusal vocabulary. Non-zero on
+# `binding_mismatch`, `nonce_mismatch` or `assertion_invalid` is worth an
+# operator's attention; `ceremony_expired` is ordinary user behaviour.
+OIDC_MOBILE_EXCHANGE_FAILED = Counter(
+    "oidc_mobile_exchange_failed_total",
+    "Field-mobile OIDC assertion exchanges refused, by safe reason category",
+    ["reason"],
+)
+# Split out of the failure counter because it is an availability signal about
+# the identity provider rather than a decision about a caller.
+OIDC_MOBILE_JWKS_REFRESH_FAILURES = Counter(
+    "oidc_mobile_jwks_refresh_failures_total",
+    "Bounded JWKS refresh attempts that did not yield a usable key set",
+    ["stage"],
+)
+# A refused replay is the single highest-value signal on this path: it means a
+# ceremony id, an assertion, or a nonce was presented twice.
+OIDC_MOBILE_REPLAY_REFUSED = Counter(
+    "oidc_mobile_replay_refused_total",
+    "Field-mobile OIDC exchanges refused as a replay, by what was replayed",
+    ["kind"],
+)
+# A verified subject with no local binding. Never provisioned, always refused —
+# non-zero means an operator has an unbound technician to bind deliberately.
+OIDC_MOBILE_UNBOUND_SUBJECT = Counter(
+    "oidc_mobile_unbound_subject_total",
+    "Verified external subjects with no active local credential binding",
 )
 
 

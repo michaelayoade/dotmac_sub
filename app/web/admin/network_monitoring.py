@@ -13,11 +13,13 @@ from app.services import web_network_core_runtime as web_network_core_runtime_se
 from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services import web_network_noc as web_network_noc_service
 from app.services import web_network_noc_inspector as web_network_noc_inspector_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_any_permission, require_permission
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
+
+OUTAGE_NOTIFY_SEND_PERMISSION = "monitoring:outage_notify:send"
 
 _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
@@ -642,7 +644,11 @@ def _incident_boundary_and_subscription_ids(db: Session, incident_id: str | None
 @router.get(
     "/detected-outages/notify",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("monitoring:read"))],
+    dependencies=[
+        Depends(
+            require_any_permission("monitoring:read", OUTAGE_NOTIFY_SEND_PERMISSION)
+        )
+    ],
 )
 def detected_outage_notify_preview(
     request: Request,
@@ -685,7 +691,7 @@ def detected_outage_notify_preview(
 @router.post(
     "/detected-outages/notify",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("monitoring:write"))],
+    dependencies=[Depends(require_permission(OUTAGE_NOTIFY_SEND_PERMISSION))],
 )
 def detected_outage_notify_send(
     request: Request,
@@ -771,7 +777,11 @@ def _notice_context(request: Request, db: Session, incident_id: str):
 @router.get(
     "/outage-communications",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("monitoring:read"))],
+    dependencies=[
+        Depends(
+            require_any_permission("monitoring:read", OUTAGE_NOTIFY_SEND_PERMISSION)
+        )
+    ],
 )
 def outage_communications_preview(
     request: Request,
@@ -794,7 +804,7 @@ def outage_communications_preview(
 @router.post(
     "/outage-communications",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("monitoring:write"))],
+    dependencies=[Depends(require_permission(OUTAGE_NOTIFY_SEND_PERMISSION))],
 )
 def outage_communications_send(
     request: Request,

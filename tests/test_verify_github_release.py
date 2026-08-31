@@ -103,11 +103,20 @@ def test_latest_attempt_is_authoritative() -> None:
     assert "CI=status=completed, conclusion=failure" in outcome.summary()
 
 
-def test_staging_accepts_only_dev_evidence() -> None:
-    command = _command(branch=ReleaseBranch.DEV)
+def test_main_is_the_only_accepted_release_branch() -> None:
+    """Staging and production share one trunk, so one branch is accepted.
+
+    The parametrized rejection above already proves `dev`-branch evidence is
+    refused for a `main` command; this pins the other half — that `dev` is no
+    longer expressible as a command at all, so no caller can opt into it.
+    """
+
+    assert [branch.value for branch in ReleaseBranch] == ["main"]
+    assert not hasattr(ReleaseBranch, "DEV")
+
     outcome = require_approved_release(
-        command,
-        _Source((_run("CI", branch="dev"), _run("Mobile CI", branch="dev"))),
+        _command(branch=ReleaseBranch.MAIN),
+        _Source((_run("CI"), _run("Mobile CI"))),
     )
 
     assert outcome.approved is True

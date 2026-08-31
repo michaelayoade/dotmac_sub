@@ -1,25 +1,86 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, status_badge, empty_state, animation_styles, icon_chart_bar %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles, icon_chart_bar %}
 {% block title %}Upcoming Charges - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("teal", "emerald") }}
-<div class="relative space-y-8">
-    {% call page_header(title="Upcoming Charges", subtitle="Preview of pending scheduled billing events", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
+<div class="relative space-y-6">
+    {% call page_header(title="Upcoming Charges", subtitle="A payment-reminder worklist for approaching postpaid dues and prepaid coverage endings", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
 
-    {# Filters #}
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">
-        <form method="GET" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">From</label><input type="date" name="date_from" value="{{ date_from|default('') }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">To</label><input type="date" name="date_to" value="{{ date_to|default('') }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div class="flex items-end gap-2"><button type="submit" class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition">Filter</button><a href="{{ request.url.path }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 transition">Clear</a></div>
-        </form>
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex gap-1" role="tablist" aria-label="Billing mode">
+            <a href="?mode=postpaid&amp;state={{ state }}&amp;per_page={{ per_page }}" class="rounded-xl px-4 py-2 text-sm font-semibold transition {{ 'bg-teal-600 text-white shadow-sm' if mode == 'postpaid' else 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700' }}">Postpaid</a>
+            <a href="?mode=prepaid&amp;state={{ state }}&amp;per_page={{ per_page }}" class="rounded-xl px-4 py-2 text-sm font-semibold transition {{ 'bg-teal-600 text-white shadow-sm' if mode == 'prepaid' else 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700' }}">Prepaid</a>
+        </div>
+        <a href="/admin/system/config/billing#upcoming-charges-settings" class="px-3 py-2 text-sm font-medium text-teal-700 hover:text-teal-800 dark:text-teal-300">Configure report defaults</a>
     </div>
 
-    {% call card("Upcoming Charges", color="teal") %}
-    {% if charges %}
-    <div class="mb-4 rounded-lg bg-emerald-50 p-4 dark:bg-emerald-900/20"><p class="text-sm text-emerald-700 dark:text-emerald-300">Total Upcoming: <span class="font-bold font-mono tabular-nums">{{ "{:,.2f}".format(total_amount|float) }}</span> across {{ total_count }} subscriptions</p></div>
-    <div class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700"><thead><tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500"><th class="px-4 py-3">Subscriber</th><th class="px-4 py-3">Plan</th><th class="px-4 py-3">Amount</th></tr></thead><tbody class="divide-y divide-slate-200 dark:divide-slate-700">{% for c in charges %}<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50"><td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ c.subscriber }}</td><td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ c.plan }}</td><td class="px-4 py-3 text-sm font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ "{:,.2f}".format(c.amount|float) if c.amount else "--" }}</td></tr>{% endfor %}</tbody></table></div>
-    {% else %}{{ empty_state("No upcoming charges", "Upcoming charges will appear when active subscriptions exist.") }}{% endif %}
+    <form method="GET" class="grid gap-4 rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 sm:grid-cols-2 lg:grid-cols-4">
+        <input type="hidden" name="mode" value="{{ mode }}">
+        <div>
+            <label for="state" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reminder state</label>
+            <select id="state" name="state" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                <option value="all" {% if state == 'all' %}selected{% endif %}>All actionable</option>
+                <option value="upcoming" {% if state == 'upcoming' %}selected{% endif %}>Upcoming</option>
+                <option value="payment_required" {% if state == 'payment_required' %}selected{% endif %}>Suspended / payment required</option>
+                {% if mode == 'prepaid' %}<option value="needs_review" {% if state == 'needs_review' %}selected{% endif %}>Needs review</option>{% endif %}
+            </select>
+        </div>
+        {% if mode == 'prepaid' %}
+        <div>
+            <label for="band" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contracted plan price</label>
+            <select id="band" name="band" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                <option value="">All configured ranges</option>
+                {% for amount_band in amount_bands %}<option value="{{ amount_band.key }}" {% if selected_band == amount_band.key %}selected{% endif %}>{{ amount_band.label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="flex items-end">
+            <input type="hidden" name="include_funded" value="false">
+            <label class="flex min-h-10 items-center gap-3 rounded-xl bg-slate-50 px-3 text-sm text-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+                <input type="checkbox" name="include_funded" value="true" {% if include_funded %}checked{% endif %} class="rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                Include already-funded prepaid
+            </label>
+        </div>
+        {% endif %}
+        <div class="flex items-end gap-2">
+            <button type="submit" class="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700">Apply</button>
+            <a href="?mode={{ mode }}" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+        </div>
+    </form>
+
+    <div class="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-200">
+        {% if mode == 'postpaid' %}Showing collectible invoices due within {{ postpaid_lead_days }} days; overdue customers with recoverable services remain on the list.{% else %}Showing exact coverage endings within {{ prepaid_lead_days }} days. Financially suspended customers remain visible, and funded suspensions are flagged for review.{% endif %}
+    </div>
+
+    {% call card("Reminder worklist", color="teal") %}
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <span>{{ candidate_count }} candidate{{ '' if candidate_count == 1 else 's' }} scanned on this page; only this page is enriched.</span>
+        <span>Page {{ page }}</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead><tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500"><th class="px-4 py-3">Customer</th><th class="px-4 py-3">Plan / reference</th><th class="px-4 py-3">{{ 'Invoice due' if mode == 'postpaid' else 'Coverage ends' }}</th><th class="px-4 py-3">{{ 'Balance due' if mode == 'postpaid' else 'Renewal / funding' }}</th><th class="px-4 py-3">Status</th></tr></thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for charge in charges %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="px-4 py-3"><a href="{{ charge.customer_url }}" class="text-sm font-semibold text-slate-900 hover:text-teal-700 dark:text-white dark:hover:text-teal-300">{{ charge.customer_name }}</a><p class="mt-0.5 text-xs capitalize text-slate-500">{{ charge.mode }}</p></td>
+                    <td class="px-4 py-3"><p class="text-sm text-slate-800 dark:text-slate-200">{{ charge.plan_name or 'Invoice' }}</p><p class="mt-0.5 max-w-44 truncate font-mono text-xs text-slate-500" title="{{ charge.reference }}">{{ charge.reference }}</p></td>
+                    <td class="whitespace-nowrap px-4 py-3"><p class="text-sm text-slate-800 dark:text-slate-200">{{ charge.due_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</p><p class="mt-0.5 text-xs {{ 'text-red-600 dark:text-red-400' if charge.days_remaining < 0 else 'text-slate-500' }}">{% if charge.days_remaining < 0 %}{{ -charge.days_remaining }} days past{% elif charge.days_remaining == 0 %}Today{% else %}{{ charge.days_remaining }} days remaining{% endif %}</p></td>
+                    <td class="whitespace-nowrap px-4 py-3"><p class="font-mono text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{{ charge.amount_display }}</p>{% if mode == 'prepaid' %}<p class="mt-0.5 text-xs text-slate-500">Funded {{ charge.funding_display }} · needs {{ charge.needed_display }}</p>{% endif %}</td>
+                    <td class="px-4 py-3">{{ status_badge(charge.status_label, charge.status_tone, size='sm') }}</td>
+                </tr>
+                {% else %}
+                {{ empty_state("No matching reminder candidates", "Try another state, price range, or billing mode.", colspan=5) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if has_previous or has_next %}
+    <div class="mt-5 flex items-center justify-between border-t border-slate-200 pt-4 dark:border-slate-700">
+        {% set common_query = 'mode=' ~ mode ~ '&state=' ~ state ~ '&band=' ~ selected_band ~ '&include_funded=' ~ ('true' if include_funded else 'false') ~ '&per_page=' ~ per_page %}
+        {% if has_previous %}<a href="?{{ common_query }}&amp;page={{ page - 1 }}" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>{% else %}<span></span>{% endif %}
+        {% if has_next %}<a href="?{{ common_query }}&amp;page={{ page + 1 }}" class="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Next</a>{% endif %}
+    </div>
+    {% endif %}
     {% endcall %}
 </div>
 {{ animation_styles() }}

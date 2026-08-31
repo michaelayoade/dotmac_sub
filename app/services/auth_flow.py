@@ -256,11 +256,16 @@ def _refresh_cookie_name(db: Session | None) -> str:
     )
 
 
-def _wants_refresh_in_body(request: Request | None) -> bool:
+def wants_refresh_in_body(request: Request | None) -> bool:
     """Native clients (mobile) can't read the httpOnly refresh cookie, so they
     opt into receiving the refresh token in the JSON body via this header and
     persist it in the platform secure store instead. Browser clients omit the
-    header and keep the safer httpOnly-cookie behaviour."""
+    header and keep the safer httpOnly-cookie behaviour.
+
+    Public because it is ONE policy for the whole JSON API: the vendor
+    authentication adapter (``app/api/vendor_auth.py``) has to answer the same
+    question for the same field client, and a second copy of the header name
+    would drift."""
     if request is None:
         return False
     return request.headers.get("x-auth-refresh-in-body", "").strip().lower() in {
@@ -408,21 +413,47 @@ def _issue_access_token(
         principal_type = principal_type_or_session_id
         resolved_session_id = session_id
 
-    now = _now()
+    return _encode_access_token(
+        principal_id=principal_id,
+        principal_type=principal_type,
+        session_id=resolved_session_id,
+        roles=roles,
+        permissions=permissions,
+        issued_at=_now(),
+        ttl_minutes=_access_ttl_minutes(db),
+        secret=_jwt_secret(db),
+        algorithm=_jwt_algorithm(db),
+    )
+
+
+def _encode_access_token(
+    *,
+    principal_id: str,
+    principal_type: str,
+    session_id: str,
+    issued_at: datetime,
+    ttl_minutes: int,
+    secret: str,
+    algorithm: str,
+    roles: list[str] | None = None,
+    permissions: list[str] | None = None,
+) -> str:
+    """Encode an access token from immutable values, with no persistence reads."""
+
     payload = {
         "sub": principal_id,
         "principal_id": principal_id,
         "principal_type": principal_type,
-        "session_id": resolved_session_id,
+        "session_id": session_id,
         "typ": "access",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=_access_ttl_minutes(db))).timestamp()),
+        "iat": int(issued_at.timestamp()),
+        "exp": int((issued_at + timedelta(minutes=ttl_minutes)).timestamp()),
     }
     if roles:
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+    return _jwt_encode_token(payload, secret, algorithm)
 
 
 def issue_impersonation_access_token(
@@ -1142,7 +1173,7 @@ class AuthFlow(ListResponseMixin):
         provider: str | None,
     ):
         result = AuthFlow.login(db, username, password, request, provider)
-        if result.get("refresh_token") and not _wants_refresh_in_body(request):
+        if result.get("refresh_token") and not wants_refresh_in_body(request):
             return AuthFlow._response_with_refresh_cookie(
                 db, result, LoginResponse, status.HTTP_200_OK
             )
@@ -1647,7 +1678,7 @@ class AuthFlow(ListResponseMixin):
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
         result = AuthFlow.mfa_verify(db, mfa_token, code, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
@@ -1730,7 +1761,7 @@ class AuthFlow(ListResponseMixin):
         if not resolved:
             raise HTTPException(status_code=401, detail="Missing refresh token")
         result = AuthFlow.refresh(db, resolved, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
@@ -1833,6 +1864,12 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        # Resolve every signing input while this issuance transaction owns the
+        # session. Reading settings after commit would start an implicit caller
+        # transaction and make the next owner command fail its entry guard.
+        access_ttl_minutes = _access_ttl_minutes(db)
+        access_secret = _jwt_secret(db)
+        access_algorithm = _jwt_algorithm(db)
         device_id = _clean_device_id(active_request.headers.get("x-device-id"))
         session_kwargs = dict(
             status=SessionStatus.active,
@@ -1881,15 +1918,59 @@ class AuthFlow(ListResponseMixin):
         else:
             session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
+        db.flush()
+        session_id = str(session.id)
         db.commit()
-        db.refresh(session)
-        access_token = _issue_access_token(
-            db, str(principal_uuid), principal_type, str(session.id)
+        access_token = _encode_access_token(
+            principal_id=str(principal_uuid),
+            principal_type=principal_type,
+            session_id=session_id,
+            issued_at=now,
+            ttl_minutes=access_ttl_minutes,
+            secret=access_secret,
+            algorithm=access_algorithm,
         )
         return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 auth_flow = AuthFlow()
+
+
+def issue_session_tokens(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: str,
+    request: Request,
+    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
+) -> dict[str, str]:
+    """The PUBLIC name of the one session-issuance seam.
+
+    ``AuthFlow._issue_tokens`` is and stays the only place a Sub session is
+    minted. What was missing was a name another mechanism could call without
+    reaching through a private attribute — which is how a second issuer gets
+    written: not out of ambition, but because the first one had no door.
+
+    This adds no policy of its own. Device supersession, refresh-token
+    generation and hashing, the staff Party/context re-check, and the access
+    token's claims all stay where they are; this only fixes the arguments in
+    keyword form so a later parameter insertion cannot silently rebind them.
+
+    A caller that has already AUTHENTICATED a principal by some other means
+    (password, RADIUS, a verified external assertion) calls this. A caller that
+    has not is looking for ``AuthFlow.login``.
+    """
+
+    return cast(
+        dict[str, str],
+        AuthFlow._issue_tokens(  # noqa: SLF001 - the owner's own public seam
+            db,
+            principal_type,
+            principal_id,
+            request,
+            staff_binding=staff_binding,
+        ),
+    )
 
 
 def change_password(

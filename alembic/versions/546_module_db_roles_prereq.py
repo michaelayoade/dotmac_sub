@@ -1,4 +1,4 @@
-"""Supply `module_database_roles.v1` from Sub's own lineage.
+"""Verify `module_database_roles.v1` from Sub's own lineage.
 
 Revision ID: 546_module_db_roles_prereq
 Revises: 545_tenant_scope_catalog_prereq
@@ -21,20 +21,17 @@ Three roles, and the RLS posture is the point rather than the names:
 The verifier checks ``rolsuper`` as well as ``rolbypassrls``, because **a
 superuser bypasses RLS regardless of the flag** — so a superuser ``app_user``
 would satisfy a naive check while defeating tenant isolation for every composed
-module at once. Creating them here with exactly kernel `0001`'s attributes is
-what keeps that from being an accident.
+module at once. The explicit elevated bootstrap creates or repairs the roles;
+this migration only proves they exist before module DDL depends on them.
 
 **Passwords are not set here**, matching the kernel. Operators set them out of
 band and wire each role to its own connection string.
 
-**Privileges this migration needs.** Creating a role requires ``CREATEROLE`` (or
-superuser) on the migrating connection. The DO block only issues ``CREATE ROLE``
-for a role that does not already exist, so a deployment whose operator has
-pre-created all three needs no elevated privilege at all and this migration is a
-no-op. A deployment where they are missing AND the migrating role cannot create
-them will fail here, loudly, at deploy time — which is the correct outcome: the
-alternative is a module lineage later failing to grant to a role that was never
-created, much further from the cause.
+**Privileges this migration needs.** None beyond read access to ``pg_roles``.
+Creating a role requires ``CREATEROLE`` (or superuser), so it belongs to
+``scripts/bootstrap_commercial_module_prereqs.py``. A deployment where the roles
+are missing fails here, loudly, before any composed module grants to a role that
+does not exist.
 
 Additive, idempotent, and forward-only. Roles are NOT dropped on downgrade —
 they are cluster-wide objects another database or a later migration may be
@@ -46,32 +43,50 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
+
 from alembic import op
+from app.commercial_module_prereqs import (
+    MODULE_DATABASE_ROLE_CONTRACT,
+    RolePosture,
+    module_database_role_violations,
+)
 
 revision: str = "546_module_db_roles_prereq"
 down_revision: str | None = "545_tenant_scope_catalog_prereq"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-#: Kernel `0001`'s `_ensure_roles`, verbatim in attributes and idempotency.
-_ENSURE_ROLES = """
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_admin') THEN
-        CREATE ROLE app_admin LOGIN BYPASSRLS;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
-        CREATE ROLE app_user LOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'platform_api') THEN
-        CREATE ROLE platform_api LOGIN;
-    END IF;
-END$$;
-"""
+DATABASE_ROLE_CONTRACT: dict[str, RolePosture] = {
+    role: contract.posture for role, contract in MODULE_DATABASE_ROLE_CONTRACT.items()
+}
+
+
+def _observe_module_roles() -> dict[str, RolePosture]:
+    rows = op.get_bind().execute(
+        sa.text(
+            "SELECT rolname, rolcanlogin, rolbypassrls, rolsuper "
+            "FROM pg_roles WHERE rolname = ANY(:roles)"
+        ),
+        {"roles": list(DATABASE_ROLE_CONTRACT)},
+    )
+    return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
+
+
+def _assert_module_database_roles_exist() -> None:
+    violations = module_database_role_violations(_observe_module_roles())
+    if violations:
+        raise RuntimeError(
+            "module_database_roles.v1 is not satisfied: "
+            + "; ".join(violations)
+            + ". Run scripts/bootstrap_commercial_module_prereqs.py with "
+            "elevated BOOTSTRAP_DATABASE_URL, then rerun Alembic with the "
+            "restricted migration role."
+        )
 
 
 def upgrade() -> None:
-    op.execute(_ENSURE_ROLES)
+    _assert_module_database_roles_exist()
 
 
 def downgrade() -> None:

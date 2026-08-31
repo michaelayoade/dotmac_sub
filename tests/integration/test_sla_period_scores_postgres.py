@@ -93,7 +93,7 @@ def incremental_database() -> Iterator[URL]:
 @pytest.fixture(scope="module")
 def head_database() -> Iterator[URL]:
     with _temporary_database("dotmac_sla_scores_head") as target:
-        _alembic("head")
+        _alembic("heads")
         yield target
 
 

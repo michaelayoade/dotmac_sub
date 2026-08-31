@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -7,8 +8,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
+from app.models.auth import UserCredential
 from app.models.field_vendor import FieldVendorUser
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.services import vendor_admin
 from app.services import web_vendors as web_vendors_service
 from app.services.operator_tenant import provision_operator_tenant
@@ -29,6 +32,13 @@ def _client(db_session) -> TestClient:
             if dependency.call is not None and dependency.call is not get_db:
                 app.dependency_overrides[dependency.call] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_vendor_detail_pagination_omits_empty_project_status_query():
+    source = Path("templates/admin/vendors/detail.html").read_text()
+
+    assert "project_status_query" in source
+    assert "&project_status={{ project_status }}&project_page" not in source
 
 
 def test_add_portal_user_with_unused_email_succeeds(db_session):
@@ -81,10 +91,161 @@ def test_vendor_detail_exposes_login_enablement_actions(db_session):
 
     assert response.status_code == 200
     html = response.text
+    membership = db_session.query(FieldVendorUser).one()
+    assert "Ada Obi" in html
+    assert "Active" in html
     assert "/enable" in html
     assert "Enable" in html
     assert "/setup-link" in html
     assert "Send setup link" in html
+    assert f"/admin/vendors/{vendor_id}/users/{membership.id}/edit" in html
+    assert "Portal user actions" in html
+    assert "Edit portal user" in html
+    assert "Password reset" in html
+
+
+def test_vendor_list_shows_portal_access_statuses(db_session):
+    active_vendor = vendor_admin.create_committed(
+        db_session,
+        name="Portal Active Vendor",
+        code=f"PAV-{uuid4().hex[:8]}",
+    )
+    no_users_vendor = vendor_admin.create_committed(
+        db_session,
+        name="No Users Vendor",
+        code=f"NUV-{uuid4().hex[:8]}",
+    )
+    disabled_vendor = vendor_admin.create_committed(
+        db_session,
+        name="Disabled Portal Vendor",
+        code=f"DPV-{uuid4().hex[:8]}",
+    )
+    no_profile_vendor = Vendor(
+        name="No Profile Vendor",
+        code=f"NPV-{uuid4().hex[:8]}",
+        is_active=True,
+    )
+    db_session.add(no_profile_vendor)
+    db_session.commit()
+
+    client = _client(db_session)
+    client.post(
+        f"/admin/vendors/{active_vendor.id}/users",
+        data={
+            "first_name": "Ada",
+            "last_name": "Obi",
+            "email": f"list-{uuid4().hex[:8]}@vendor.example",
+            "role": "field",
+        },
+        follow_redirects=False,
+    )
+    vendor_admin.deactivate_committed(db_session, disabled_vendor.id)
+
+    response = client.get("/admin/vendors")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Portal Access" in html
+    assert "Yes - 1 user" in html
+    assert "No users" in html
+    assert "Disabled" in html
+    assert "No portal profile" in html
+    assert no_users_vendor.name in html
+
+
+def test_admin_can_update_existing_vendor_user_role(db_session):
+    vendor = vendor_admin.create_committed(
+        db_session,
+        name="Vendor Role Update",
+        code=f"VRU-{uuid4().hex[:8]}",
+    )
+    vendor_id = str(vendor.id)
+    client = _client(db_session)
+    client.post(
+        f"/admin/vendors/{vendor_id}/users",
+        data={
+            "first_name": "Ada",
+            "last_name": "Obi",
+            "email": f"role-{uuid4().hex[:8]}@vendor.example",
+            "role": "field",
+        },
+        follow_redirects=False,
+    )
+    membership = db_session.query(FieldVendorUser).one()
+
+    response = client.post(
+        f"/admin/vendors/{vendor_id}/users/{membership.id}/role",
+        data={"role": "supervisor"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/vendors/{vendor_id}"
+    db_session.refresh(membership)
+    assert membership.role == "supervisor"
+
+
+def test_vendor_detail_shows_empty_portal_access_state(db_session):
+    vendor = vendor_admin.create_committed(
+        db_session,
+        name="Vendor Without Users",
+        code=f"VWU-{uuid4().hex[:8]}",
+    )
+
+    response = _client(db_session).get(f"/admin/vendors/{vendor.id}")
+
+    assert response.status_code == 200
+    assert "No one is added yet." in response.text
+
+
+def test_admin_can_update_existing_vendor_user_profile(db_session):
+    vendor = vendor_admin.create_committed(
+        db_session,
+        name="Vendor Profile Update",
+        code=f"VPU-{uuid4().hex[:8]}",
+    )
+    vendor_id = str(vendor.id)
+    client = _client(db_session)
+    client.post(
+        f"/admin/vendors/{vendor_id}/users",
+        data={
+            "first_name": "Ada",
+            "last_name": "Obi",
+            "email": f"profile-{uuid4().hex[:8]}@vendor.example",
+            "role": "field",
+        },
+        follow_redirects=False,
+    )
+    membership = db_session.query(FieldVendorUser).one()
+    principal_id = membership.system_user_id
+    new_email = f"profile-edit-{uuid4().hex[:8]}@vendor.example"
+
+    response = client.post(
+        f"/admin/vendors/{vendor_id}/users/{membership.id}/edit",
+        data={
+            "first_name": "Nneka",
+            "last_name": "Okoro",
+            "email": new_email,
+            "role": "owner",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/vendors/{vendor_id}"
+    db_session.refresh(membership)
+    principal = db_session.get(SystemUser, principal_id)
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.system_user_id == principal_id)
+        .one()
+    )
+    assert membership.role == "owner"
+    assert principal.first_name == "Nneka"
+    assert principal.last_name == "Okoro"
+    assert principal.display_name == "Nneka Okoro"
+    assert principal.email == new_email
+    assert credential.username == new_email
 
 
 def test_setup_link_route_delegates_to_vendor_service(db_session, monkeypatch):

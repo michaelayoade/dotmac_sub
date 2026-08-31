@@ -32,6 +32,15 @@ from app.services.payment_webhook_commands import (
 logger = logging.getLogger(__name__)
 
 
+def _record_ingress_outcome(provider: PaymentWebhookProvider, outcome: str) -> None:
+    try:
+        from app.metrics import PAYMENT_PROVIDER_WEBHOOK_INGRESS
+
+        PAYMENT_PROVIDER_WEBHOOK_INGRESS.labels(provider.value, outcome).inc()
+    except Exception:
+        logger.debug("payment_provider_webhook_metric_failed", exc_info=True)
+
+
 @dataclass(frozen=True, slots=True)
 class _ErrorMapping:
     http_status: int
@@ -131,21 +140,26 @@ def _process_webhook(
         binding_id = binding.id
     except (InstallationError, payment_capability.PaymentCapabilityError) as exc:
         logger.error("%s webhook capability unavailable: %s", provider.value, exc)
+        _record_ingress_outcome(provider, "capability_unavailable")
         return JSONResponse({"status": "provider not configured"}, status_code=503)
     if not signature_valid:
         logger.warning("Invalid %s webhook signature", provider.value)
+        _record_ingress_outcome(provider, "invalid_signature")
         return JSONResponse({"status": "invalid signature"}, status_code=400)
     db_session_adapter.release_read_transaction(db)
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
+        _record_ingress_outcome(provider, "invalid_payload")
         return JSONResponse({"status": "invalid JSON"}, status_code=400)
     if not isinstance(payload, dict):
+        _record_ingress_outcome(provider, "invalid_payload")
         return JSONResponse({"status": "invalid JSON"}, status_code=400)
     try:
         identity = identify_verified_payment_webhook(provider, payload)
     except PaymentWebhookError as exc:
+        _record_ingress_outcome(provider, "rejected")
         mapping = _map_payment_webhook_error(exc)
         return _response_for_error(exc, mapping)
 
@@ -164,12 +178,15 @@ def _process_webhook(
         db_session_adapter.release_read_transaction(db)
     except ProviderEventIdentityCollision as exc:
         logger.error("%s webhook identity rejected: %s", provider.value, exc)
+        _record_ingress_outcome(provider, "identity_conflict")
         return JSONResponse({"status": "event identity conflict"}, status_code=409)
     except InboxError as exc:
         logger.error("%s webhook receipt unavailable: %s", provider.value, exc)
+        _record_ingress_outcome(provider, "receipt_unavailable")
         return JSONResponse({"status": "event requires replay"}, status_code=500)
 
     if not should_process:
+        _record_ingress_outcome(provider, "duplicate")
         return _processed_response(consequence)
 
     context = CommandContext.system(
@@ -202,6 +219,7 @@ def _process_webhook(
             error_detail=exc.message,
             max_attempts=mapping.max_attempts,
         )
+        _record_ingress_outcome(provider, "rejected")
         return _response_for_error(exc, mapping)
     except Exception as exc:
         logger.error(
@@ -217,8 +235,10 @@ def _process_webhook(
             error_detail=type(exc).__name__,
             max_attempts=10,
         )
+        _record_ingress_outcome(provider, "processing_error")
         return JSONResponse({"status": "error"}, status_code=500)
 
+    _record_ingress_outcome(provider, "processed")
     return _processed_response(result.consequence())
 
 

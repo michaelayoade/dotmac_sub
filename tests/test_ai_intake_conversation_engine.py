@@ -128,14 +128,20 @@ def _session(db_session, conversation, version, *, metadata=None, expires_at=Non
 
 
 def _classification(
-    intent="technical_support", category="no_internet", confidence=0.95
+    intent="technical_support",
+    category="no_internet",
+    confidence=0.95,
+    *,
+    requires_follow_up: bool = False,
+    follow_up_question: str | None = None,
 ):
     return AiIntakeClassification(
         intent=AiIntakeIntent(intent),
         category=AiIntakeCategory(category),
         confidence=confidence,
         department=None,
-        requires_follow_up=False,
+        requires_follow_up=requires_follow_up,
+        follow_up_question=follow_up_question,
         summary="Customer needs support.",
     )
 
@@ -162,7 +168,7 @@ def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatc
         classification=_classification(),
     )
 
-    assert decision.action == "handoff"
+    assert decision.action == "continue_classifier"
     assert "Portal ID" not in (decision.response_text or "")
     assert decision.state.subscriber_id == str(subscriber.id)
     assert decision.state.monitoring_results == []
@@ -202,6 +208,83 @@ def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
     assert "Portal ID" in (first.response_text or "")
     assert "portal_id" in first.state.already_requested_fields
     assert second.action == "handoff"
+
+
+def test_billing_issue_requests_account_identifier_before_handoff(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "permitted_identifiers": ["portal_id"],
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "handoff_after_classification": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Why are you suspending my office account again?",
+        classification=_classification(
+            intent=AiIntakeIntent.billing_issue,
+            category=AiIntakeCategory.other_billing_issue,
+        ),
+    )
+
+    assert decision.action == "respond"
+    assert "Portal ID" in (decision.response_text or "")
+    assert decision.metadata["reason"] == "missing_customer_identifier"
+    assert decision.state.collected_facts["account_status_problem"] is True
+    assert decision.state.collected_facts["organization_account"] is True
+    assert decision.state.handoff_status == "not_requested"
+
+
+def test_identifier_prompt_retries_when_customer_replies_without_identifier(
+    db_session,
+):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 1,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Please can you check our internet is very poor.",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="\U0001f446",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "missing_customer_identifier"
+    assert second.action == "respond"
+    assert second.metadata["reason"] == "identifier_reply_missing_value"
+    assert "Portal ID" in (second.response_text or "")
+    assert second.state.handoff_status == "not_requested"
+    assert second.state.collected_facts["missing_identifier_retry_count"] == 1
 
 
 def test_unlinked_customer_portal_id_does_not_trigger_directory_search(db_session):
@@ -383,6 +466,46 @@ def test_monitoring_no_data_and_unavailable_are_not_offline(db_session, monkeypa
         assert engine._monitoring_offline(state) is False
 
 
+def test_first_turn_handoff_rule_is_ignored_at_runtime(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {
+                            "type": "turn_count",
+                            "operator": ">=",
+                            "value": 0,
+                        },
+                        "action": "handoff",
+                        "reason": "bad_immediate_handoff",
+                    }
+                ],
+            }
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="I need to ask a general support question.",
+        classification=_classification(
+            intent=AiIntakeIntent.general_enquiry,
+            category=AiIntakeCategory.general_enquiry,
+        ),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.state.escalation_reason is None
+
+
 def test_rich_first_message_extracts_existing_facts(db_session):
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session, subscriber_id=subscriber.id)
@@ -407,6 +530,112 @@ def test_rich_first_message_extracts_existing_facts(db_session):
     assert decision.state.collected_facts["router_restarted"] is True
     assert "portal_id" not in decision.state.already_requested_fields
     assert "router_restarted" not in decision.state.already_requested_fields
+
+
+def test_configured_no_internet_playbook_asks_first_line_steps(db_session):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "first_line_playbooks": [
+                    {
+                        "key": "technical_support_no_internet",
+                        "intent": "technical_support",
+                        "category": "no_internet",
+                        "acknowledgement": "Sorry about the downtime.",
+                        "steps": [
+                            {
+                                "action": "request_field",
+                                "field": "router_powered",
+                                "response": "Is your router or ONU powered on right now?",
+                            },
+                            {
+                                "condition": {
+                                    "type": "field_value",
+                                    "field": "router_powered",
+                                    "value": True,
+                                },
+                                "action": "request_field",
+                                "field": "los_status",
+                                "response": "Are you seeing any red LOS warning light?",
+                            },
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet for the past one month.",
+        classification=_classification(),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="The router is powered on.",
+        classification=_classification(),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "playbook_required_field"
+    assert "Sorry about the downtime." in (first.response_text or "")
+    assert "router or ONU powered" in (first.response_text or "")
+    assert "router_powered" in first.state.already_requested_fields
+    assert second.action == "respond"
+    assert "red LOS" in (second.response_text or "")
+    assert "Sorry about the downtime." not in (second.response_text or "")
+    assert "los_status" in second.state.already_requested_fields
+
+
+def test_no_internet_without_playbook_does_not_auto_handoff_after_classification(
+    db_session,
+):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet.",
+        classification=_classification(),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.response_text is None
 
 
 def test_monitoring_troubleshooting_then_red_los_handoff_retains_state(db_session):
@@ -590,6 +819,41 @@ def test_explicit_human_request_escalates(db_session):
     assert decision.action == "handoff"
     assert decision.state.human_requested is True
     assert decision.state.escalation_reason == "human_requested"
+
+
+def test_follow_up_classification_is_not_handed_off_by_engine(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            }
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Hello",
+        classification=_classification(
+            intent="general_enquiry",
+            category="general_enquiry",
+            confidence=0.2,
+            requires_follow_up=True,
+            follow_up_question="Please tell me what you need help with today.",
+        ),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.state.classification_requires_follow_up is True
+    assert decision.state.classification_follow_up_question == (
+        "Please tell me what you need help with today."
+    )
 
 
 def test_turn_limit_and_timeout_escalate(db_session):

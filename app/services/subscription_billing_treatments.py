@@ -10,8 +10,9 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.audit import AuditActorType
 from app.models.catalog import BillingCycle, BillingMode, Subscription
@@ -723,6 +724,29 @@ def resolve_subscription_billing_treatments(
             drift_reason=drift_reason,
         )
     return decisions
+
+
+def effective_customer_billing_treatment_clause() -> ColumnElement[bool]:
+    """Return the correlated predicate for an effective non-standard treatment.
+
+    The arrangement suppresses customer billing even when its evidence has
+    drifted and the resolver would protect rather than grant. List/report owners
+    can compose this predicate with their own explicit lifecycle scope without
+    reproducing the effective-date or revocation rules.
+    """
+
+    observed_at = func.now()
+    return (
+        select(SubscriptionBillingArrangement.id)
+        .where(
+            SubscriptionBillingArrangement.subscription_id == Subscription.id,
+            SubscriptionBillingArrangement.status == BillingTreatmentStatus.active,
+            SubscriptionBillingArrangement.starts_at <= observed_at,
+            SubscriptionBillingArrangement.ends_at > observed_at,
+        )
+        .correlate(Subscription)
+        .exists()
+    )
 
 
 def resolve_subscription_billing_treatment(

@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -336,6 +337,7 @@ def test_string_leak_guard_is_red_sensitive(tmp_path: Path) -> None:
 
 _SNAPSHOT_BODY = (
     "import json, sys\n"
+    "composition_preloaded = 'app.composition' in sys.modules\n"
     "from app.main import app\n"
     "routes = sorted(\n"
     "    (getattr(r, 'path', ''),\n"
@@ -345,7 +347,11 @@ _SNAPSHOT_BODY = (
     "middleware = [\n"
     "    m.cls.__module__ + '.' + m.cls.__name__ for m in app.user_middleware\n"
     "]\n"
-    "print(json.dumps({'routes': routes, 'middleware': middleware}))\n"
+    "print(json.dumps({\n"
+    "    'routes': routes,\n"
+    "    'middleware': middleware,\n"
+    "    'composition_preloaded': composition_preloaded,\n"
+    "}))\n"
 )
 
 
@@ -363,14 +369,52 @@ def _app_snapshot(*, with_composition: bool) -> dict[str, object]:
     return snapshot
 
 
+def _app_snapshots() -> tuple[dict[str, object], dict[str, object]]:
+    """Build both isolated import orders concurrently.
+
+    Each snapshot still runs in its own fresh Python interpreter.  The two
+    probes have no dependency on one another, so making their expensive app
+    imports wait serially adds wall time without adding evidence.
+    """
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        baseline_future = executor.submit(_app_snapshot, with_composition=False)
+        composition_future = executor.submit(_app_snapshot, with_composition=True)
+        return baseline_future.result(), composition_future.result()
+
+
+def test_app_snapshot_pair_executes_both_import_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sensitivity proof: concurrency must not duplicate either probe."""
+
+    seen: list[bool] = []
+
+    def fake_snapshot(*, with_composition: bool) -> dict[str, object]:
+        seen.append(with_composition)
+        return {"composition_preloaded": with_composition}
+
+    monkeypatch.setattr(sys.modules[__name__], "_app_snapshot", fake_snapshot)
+    baseline, with_composition = _app_snapshots()
+
+    assert sorted(seen) == [False, True]
+    assert baseline["composition_preloaded"] is False
+    assert with_composition["composition_preloaded"] is True
+
+
 def test_importing_composition_changes_no_route_or_middleware() -> None:
     """Differential canary: the app with the composition module imported first
     is route-for-route and middleware-for-middleware identical to the app
     without it. Extends the S2 app-unchanged canary
     (``test_kernel_compatibility.py`` pins the top-level prefixes; this pins
     the delta to exactly zero)."""
-    baseline = _app_snapshot(with_composition=False)
-    with_composition = _app_snapshot(with_composition=True)
+    baseline, with_composition = _app_snapshots()
+    assert baseline["composition_preloaded"] is False, (
+        "baseline probe imported app.composition before app.main"
+    )
+    assert with_composition["composition_preloaded"] is True, (
+        "composition-first probe did not import app.composition before app.main"
+    )
     assert baseline["routes"] == with_composition["routes"], (
         "importing app.composition changed the route table"
     )

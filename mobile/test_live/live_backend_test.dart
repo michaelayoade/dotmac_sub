@@ -13,6 +13,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dotmac_portal/src/core/api_client.dart';
+import 'package:dotmac_portal/src/core/credential_bundle.dart';
+import 'package:dotmac_portal/src/core/data_scope.dart';
 import 'package:dotmac_portal/src/core/token_storage.dart';
 import 'package:dotmac_portal/src/repositories/auth_repository.dart';
 import 'package:dotmac_portal/src/repositories/billing_repository.dart';
@@ -24,20 +26,55 @@ const _user = String.fromEnvironment('SUB_USER');
 const _pass = String.fromEnvironment('SUB_PASS');
 
 /// In-memory TokenStorage so the test needs no flutter_secure_storage plugin.
+///
+/// Overrides [readBundle] rather than the token getters: the bundle IS the
+/// stored session now, and everything else (the fenced refresh write, the scope
+/// lookup, the token getters) is derived from it.
 class MemoryTokenStorage extends TokenStorage {
-  final Map<String, String> _m = {};
+  CredentialBundle? _bundle;
+  int _generation = 0;
+
   @override
-  Future<void> save({required String accessToken, String? refreshToken}) async {
-    _m['a'] = accessToken;
-    if (refreshToken != null) _m['r'] = refreshToken;
+  Future<int> beginSession({
+    required String accessToken,
+    String? refreshToken,
+    MobileDataScope scope = MobileDataScope.anonymous,
+  }) async {
+    _generation += 1;
+    _bundle = CredentialBundle(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      scope: scope,
+      generation: _generation,
+      issuedAt: DateTime.now().toUtc(),
+    );
+    return _generation;
   }
 
   @override
-  Future<String?> readAccessToken() async => _m['a'];
+  Future<CredentialBundle?> readBundle() async => _bundle;
+
   @override
-  Future<String?> readRefreshToken() async => _m['r'];
+  Future<bool> renewSession({
+    required int generation,
+    required String accessToken,
+    String? refreshToken,
+  }) async {
+    final current = _bundle;
+    if (current == null || current.generation != generation) return false;
+    _bundle = current.copyWith(
+      accessToken: accessToken,
+      refreshToken: refreshToken ?? current.refreshToken,
+    );
+    return true;
+  }
+
   @override
-  Future<void> clear() async => _m.clear();
+  Future<String?> readAccessToken() async => _bundle?.accessToken;
+  @override
+  Future<String?> readRefreshToken() async => _bundle?.refreshToken;
+  @override
+  Future<void> clear() async => _bundle = null;
 }
 
 void main() {

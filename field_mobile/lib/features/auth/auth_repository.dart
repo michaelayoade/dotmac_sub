@@ -96,7 +96,7 @@ class AuthRepository {
         path,
         data: {'username': username, 'password': password},
       );
-      return _handleTokens(response.data as Map, mode);
+      return await _handleTokens(response.data as Map, mode);
     } on DioException catch (error) {
       return LoginFailure(_message(error));
     }
@@ -115,7 +115,7 @@ class AuthRepository {
         path,
         data: {'mfa_token': mfaToken, 'code': code},
       );
-      return _handleTokens(response.data as Map, mode);
+      return await _handleTokens(response.data as Map, mode);
     } on DioException catch (error) {
       return LoginFailure(_message(error));
     }

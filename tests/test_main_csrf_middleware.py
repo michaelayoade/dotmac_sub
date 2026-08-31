@@ -11,6 +11,7 @@ from app.csrf import CSRF_COOKIE_NAME
 from app.main import (
     api_sync_pressure_guard_middleware,
     csrf_middleware,
+    payment_provider_webhook_rate_limit_middleware,
     security_headers_middleware,
     view_as_readonly_middleware,
 )
@@ -209,6 +210,91 @@ def test_api_sync_pressure_guard_uses_general_bucket_for_other_api_ips(monkeypat
 
     assert response.status_code == 200
     assert calls == [("api-v1-pressure:general:203.0.113.9", 240, 60)]
+
+
+def test_api_sync_pressure_guard_never_buckets_payment_provider_webhook(monkeypatch):
+    request = _build_request(
+        path="/api/v1/payment-events/paystack",
+        method="POST",
+        headers=[(b"x-forwarded-for", b"149.102.158.167")],
+    )
+    monkeypatch.setenv("API_SYNC_PRESSURE_EXEMPT_PATH_PREFIXES", "")
+
+    def fake_allow_operation(*args, **kwargs):
+        raise AssertionError("provider webhook must not use the API sync limiter")
+
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+
+
+def test_payment_provider_webhook_uses_dedicated_policy_for_listed_sync_ip(
+    monkeypatch,
+):
+    request = _build_request(
+        path="/api/v1/payment-events/paystack",
+        method="POST",
+        headers=[(b"x-forwarded-for", b"149.102.158.167")],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=False, retry_after_seconds=9)
+
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.effective_webhook_ingress_policy",
+        lambda _provider: SimpleNamespace(
+            enabled=True,
+            requests_per_window=80,
+            window_seconds=45,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        raise AssertionError("limited webhook traffic must not reach downstream")
+
+    response = _run_async(
+        payment_provider_webhook_rate_limit_middleware(request, call_next)
+    )
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "9"
+    assert calls == [("payment-provider-webhook:paystack:149.102.158.167", 80, 45)]
+
+
+def test_payment_provider_webhook_limiter_ignores_bulk_sync_path(monkeypatch):
+    request = _build_request(
+        path="/api/v1/payments/sync",
+        method="POST",
+        headers=[(b"x-forwarded-for", b"149.102.158.167")],
+    )
+
+    def fake_allow_operation(*args, **kwargs):
+        raise AssertionError("bulk sync belongs to the API pressure limiter")
+
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(
+        payment_provider_webhook_rate_limit_middleware(request, call_next)
+    )
+
+    assert response.status_code == 200
 
 
 def test_csrf_middleware_exempts_customer_logout_without_token():

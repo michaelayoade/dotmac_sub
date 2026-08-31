@@ -33,10 +33,8 @@ ANCHOR = INSTALLATION PROJECT (design doc 32 §D):
 * idempotency key ``po-ip-{installation_project.id}`` — one PO per install, stable
   across re-approvals of the same install so a re-enqueue returns the existing
   outbox row and a re-delivery is a no-op on the ERP side.
-* payload ``omni_work_order_id = str(installation_project.id)`` — the ERP field
-  name is legacy ("CRM work order ID for idempotency"); ERP treats it as an
-  opaque ≤36-char idempotency string, so sending the installation-project UUID is
-  contract-compatible.
+* payload ``source_work_order_id = str(installation_project.id)`` — the neutral
+  role carries the installation-project UUID used for ERP idempotency.
 
 A *re-quote* (a new accepted quote superseding the old for the same install)
 would ride a future ``purchase_order_variation`` flow (design doc 32 §D
@@ -102,7 +100,7 @@ def purchase_order_idempotency_key(installation_project: InstallationProject) ->
 
     Constant across re-approvals of the same install, so a re-enqueue returns the
     existing outbox row and a re-delivery is a no-op on the ERP side (ERP dedups a
-    PO per ``omni_work_order_id``, which carries this install's UUID).
+    PO per ``source_work_order_id``, which carries this install's UUID).
     """
     return f"po-ip-{installation_project.id}"
 
@@ -171,10 +169,10 @@ def _po_title(installation_project: InstallationProject) -> str:
 
 
 def build_purchase_order_payload(installation_project: InstallationProject) -> dict:
-    """Map an installation project's ACCEPTED quote to ERP's ``CRMPurchaseOrderPayload``.
+    """Map an accepted quote to ERP's ``SubPurchaseOrderPayload`` contract.
 
     Anchors the PO on the installation project (design doc 32 §D): the idempotency
-    field ``omni_work_order_id`` carries ``str(installation_project.id)``. Vendor
+    field ``source_work_order_id`` carries ``str(installation_project.id)``. Vendor
     identity, line items, and totals come strictly from ``approved_quote`` (never
     a WO, never material requests). Assumes the project is eligible — call
     ``purchase_order_eligibility_error`` first.
@@ -184,8 +182,8 @@ def build_purchase_order_payload(installation_project: InstallationProject) -> d
     project = installation_project.project
 
     payload: dict[str, object] = {
-        "omni_work_order_id": str(installation_project.id),
-        "omni_quote_id": str(quote.id),
+        "source_work_order_id": str(installation_project.id),
+        "source_quote_id": str(quote.id),
         "vendor_name": vendor.name,
         "title": _po_title(installation_project),
         "currency": quote.currency,
@@ -203,7 +201,7 @@ def build_purchase_order_payload(installation_project: InstallationProject) -> d
         payload["vendor_code"] = vendor_code[:30]
 
     if project is not None:
-        payload["omni_project_id"] = str(project.id)
+        payload["source_project_id"] = str(project.id)
         if getattr(project, "code", None):
             payload["project_code"] = str(project.code)[:80]
         if getattr(project, "name", None):

@@ -37,6 +37,8 @@ an authorization boundary.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -44,7 +46,9 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.models.field_vendor import FieldVendor
+from app.models.auth import AuthProvider, UserCredential
+from app.models.field_vendor import FieldVendor, FieldVendorUser
+from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.services.common import coerce_uuid
 
@@ -67,6 +71,108 @@ def get_field_vendor(db: Session, vendor: Vendor) -> FieldVendor | None:
         .filter(FieldVendor.crm_vendor_id == str(vendor.id))
         .one_or_none()
     )
+
+
+class VendorPortalAccessState(StrEnum):
+    active = "active"
+    no_users = "no_users"
+    disabled = "disabled"
+    no_profile = "no_profile"
+
+
+@dataclass(frozen=True, slots=True)
+class VendorPortalAccessSummary:
+    state: VendorPortalAccessState
+    label: str
+    badge_tone: str
+    active_user_count: int
+
+
+def _portal_access_summary(
+    field_vendor: FieldVendor | None,
+    *,
+    active_user_count: int,
+) -> VendorPortalAccessSummary:
+    if field_vendor is None:
+        return VendorPortalAccessSummary(
+            state=VendorPortalAccessState.no_profile,
+            label="No portal profile",
+            badge_tone="inactive",
+            active_user_count=0,
+        )
+    if not field_vendor.is_active:
+        return VendorPortalAccessSummary(
+            state=VendorPortalAccessState.disabled,
+            label="Disabled",
+            badge_tone="inactive",
+            active_user_count=0,
+        )
+    if active_user_count <= 0:
+        return VendorPortalAccessSummary(
+            state=VendorPortalAccessState.no_users,
+            label="No users",
+            badge_tone="warning",
+            active_user_count=0,
+        )
+    user_word = "user" if active_user_count == 1 else "users"
+    return VendorPortalAccessSummary(
+        state=VendorPortalAccessState.active,
+        label=f"Yes - {active_user_count} {user_word}",
+        badge_tone="success",
+        active_user_count=active_user_count,
+    )
+
+
+def _active_portal_user_counts(
+    db: Session,
+    field_vendor_ids: list[UUID],
+) -> dict[UUID, int]:
+    if not field_vendor_ids:
+        return {}
+    rows = (
+        db.query(
+            FieldVendorUser.vendor_id,
+            func.count(func.distinct(FieldVendorUser.id)),
+        )
+        .join(SystemUser, SystemUser.id == FieldVendorUser.system_user_id)
+        .join(UserCredential, UserCredential.system_user_id == SystemUser.id)
+        .filter(FieldVendorUser.vendor_id.in_(field_vendor_ids))
+        .filter(FieldVendorUser.is_active.is_(True))
+        .filter(SystemUser.is_active.is_(True))
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.is_active.is_(True))
+        .group_by(FieldVendorUser.vendor_id)
+        .all()
+    )
+    return {vendor_id: int(count) for vendor_id, count in rows}
+
+
+def portal_access_summaries(
+    db: Session,
+    vendors: list[Vendor],
+) -> dict[UUID, VendorPortalAccessSummary]:
+    """Summarize whether native vendors have usable portal access."""
+    vendor_ids = [str(vendor.id) for vendor in vendors]
+    field_vendors = (
+        db.query(FieldVendor).filter(FieldVendor.crm_vendor_id.in_(vendor_ids)).all()
+        if vendor_ids
+        else []
+    )
+    field_vendor_by_native_id = {
+        field_vendor.crm_vendor_id: field_vendor for field_vendor in field_vendors
+    }
+    user_counts = _active_portal_user_counts(
+        db, [field_vendor.id for field_vendor in field_vendors]
+    )
+    summaries: dict[UUID, VendorPortalAccessSummary] = {}
+    for vendor in vendors:
+        field_vendor = field_vendor_by_native_id.get(str(vendor.id))
+        active_user_count = user_counts.get(field_vendor.id, 0) if field_vendor else 0
+        summaries[vendor.id] = _portal_access_summary(
+            field_vendor,
+            active_user_count=active_user_count,
+        )
+    return summaries
 
 
 def unbridged_twin_candidates(db: Session, vendor: Vendor) -> list[FieldVendor]:

@@ -9,7 +9,7 @@
 
 <div class="relative space-y-8">
   {% call page_header(
-      title="NCC Complaints (Quarterly)",
+      title="NCC Complaints (Weekly)",
       subtitle="Complaint records, categories, SLA outcome and the filing workbook",
       icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
       color="amber",
@@ -41,8 +41,10 @@
       </label>
       <div class="flex items-end gap-2">
         <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white">Apply</button>
+        {% if can(request, "reports:ncc:export") %}
         <a href="/admin/reports/ncc-complaints/export?date_from={{ date_from }}&date_to={{ date_to }}"
            class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">Download workbook (.xlsx)</a>
+        {% endif %}
       </div>
     </div>
   </form>
@@ -172,7 +174,7 @@
             <td class="px-3 py-2">{{ run.status.value }}</td>
             <td class="px-3 py-2">{{ run.delivery_status.value if run.delivery_status else (run.failure_code or 'pending') }}</td>
             <td class="px-3 py-2">{{ run.row_count }}</td><td class="px-3 py-2">{{ run.not_filable_count }}</td>
-            <td class="px-3 py-2">{% if run.status.value == 'queued' %}<a class="text-amber-700 hover:underline dark:text-amber-300" href="/admin/reports/ncc-weekly-runs/{{ run.run_id }}/download">Download XLSX</a>{% else %}<span class="text-slate-400">Unavailable</span>{% endif %}</td>
+            <td class="px-3 py-2">{% if run.status.value == 'queued' and can(request, "reports:ncc:export") %}<a class="text-amber-700 hover:underline dark:text-amber-300" href="/admin/reports/ncc-weekly-runs/{{ run.run_id }}/download">Download XLSX</a>{% else %}<span class="text-slate-400">Unavailable</span>{% endif %}</td>
           </tr>
           {% else %}<tr><td colspan="6" class="px-3 py-6 text-center text-slate-500">No scheduled runs yet.</td></tr>{% endfor %}
         </tbody>

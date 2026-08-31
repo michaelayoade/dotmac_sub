@@ -11,6 +11,7 @@ from app.models.network import (
     OntUnit,
     OnuOnlineStatus,
     PollStatus,
+    PonPort,
 )
 from app.services.network.olt_ssh_ont._common import RegisteredOntEntry
 from app.services.network.ont_runtime_status import (
@@ -98,6 +99,137 @@ def test_bulk_huawei_refresh_persists_only_matched_observations(
     assert olt.last_poll_error is None
     assert olt.consecutive_poll_failures == 0
     assert olt.last_successful_ssh_at == NOW
+
+
+def test_bulk_huawei_refresh_falls_back_to_pon_port_when_port_is_full_fsp(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="Huawei dirty board test", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    pon = PonPort(olt_id=olt.id, name="0/0/3")
+    db_session.add(pon)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="HWTCAABBCCDD",
+        olt_device_id=olt.id,
+        pon_port_id=pon.id,
+        olt_status=OnuOnlineStatus.offline,
+        board="0/0",
+        port="0/0/3",
+    )
+    db_session.add(ont)
+    db_session.flush()
+    requested_fsps: list[list[str]] = []
+
+    def fake_registered(_olt, fsps, **_kwargs):
+        requested_fsps.append(list(fsps))
+        return (
+            True,
+            "ok",
+            [RegisteredOntEntry("0/0/3", 1, "48575443AABBCCDD", "online")],
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        fake_registered,
+    )
+
+    stats = refresh_huawei_olt_status(db_session, olt, now=NOW)
+
+    assert requested_fsps == [["0/0/3"]]
+    assert stats.invalid == 0
+
+
+def test_bulk_huawei_refresh_skips_invalid_ont_location_and_polls_valid_ports(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="Huawei mixed location test", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    valid = OntUnit(
+        serial_number="HWTCDDEEFF00",
+        olt_device_id=olt.id,
+        olt_status=OnuOnlineStatus.offline,
+        board="0/1",
+        port="0",
+    )
+    invalid = OntUnit(
+        serial_number="HWTCINVALID01",
+        olt_device_id=olt.id,
+        olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=NOW - timedelta(hours=1),
+        board="0/0",
+        port="0/0/3",
+    )
+    db_session.add_all([valid, invalid])
+    db_session.flush()
+    requested_fsps: list[list[str]] = []
+
+    def fake_registered(_olt, fsps, **_kwargs):
+        requested_fsps.append(list(fsps))
+        return (
+            True,
+            "ok",
+            [RegisteredOntEntry("0/1/0", 1, "48575443DDEEFF00", "online")],
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        fake_registered,
+    )
+
+    stats = refresh_huawei_olt_status(db_session, olt, now=NOW)
+
+    assert requested_fsps == [["0/1/0"]]
+    assert stats.observed == 1
+    assert stats.invalid == 1
+    assert valid.olt_status == OnuOnlineStatus.online
+    assert invalid.olt_status == OnuOnlineStatus.online
+    assert invalid.olt_status_seen_at == NOW - timedelta(hours=1)
+
+
+def test_bulk_huawei_refresh_all_invalid_locations_does_not_retry_transport(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(
+        name="Huawei invalid-only location test",
+        vendor="Huawei",
+        consecutive_poll_failures=2,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="HWTCINVALID02",
+        olt_device_id=olt.id,
+        olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=NOW - timedelta(hours=1),
+        board="0/0",
+        port="0/0/3",
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("invalid-only inventory must not call the OLT")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        fail_if_called,
+    )
+
+    stats = refresh_huawei_olt_status(db_session, olt, now=NOW)
+
+    assert stats.observed == 0
+    assert stats.invalid == 1
+    assert olt.last_poll_at == NOW
+    assert olt.last_poll_status == PollStatus.failed
+    assert olt.last_poll_error == (
+        "Huawei ONT inventory has no canonical pollable F/S/P locations"
+    )
+    assert olt.consecutive_poll_failures == 3
+    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status_seen_at == NOW - timedelta(hours=1)
 
 
 def _huawei_olt_with_online_ont(db_session):

@@ -93,7 +93,9 @@ void main() {
 
     test('billing-flavoured notifications deep-link to /billing', () {
       expect(
-          notificationRoute(n(subject: 'Your invoice is ready')), '/billing');
+        notificationRoute(n(subject: 'Your invoice is ready')),
+        '/billing',
+      );
       expect(notificationRoute(n(eventType: 'service_suspended')), '/billing');
       expect(notificationRoute(n(subject: 'Payment received')), '/billing');
     });
@@ -120,24 +122,22 @@ void main() {
   });
 
   group('push notification routing', () {
-    test('honours explicit internal routes from FCM data', () {
+    // Payload-supplied locations are no longer honoured at all — the payload
+    // names an intent and the app decides the route. The full security
+    // regression suite lives in push_intent_test.dart; this canary just keeps
+    // the old behaviour from creeping back into this file's expectations.
+    test('ignores a payload-supplied route', () {
       expect(
-        PushService.routeForNotificationData({'route': '/support/chat'}),
-        '/support/chat',
-      );
-      expect(
-        PushService.routeForNotificationData(
-          {'deep_link': 'dotmac://open/billing'},
-        ),
-        '/billing',
+        PushService.routeForNotificationData({'route': '/reset-password?t=x'}),
+        '/dashboard/notifications',
       );
     });
 
     test('routes chat-shaped push payloads to live chat', () {
       expect(
-        PushService.routeForNotificationData(
-          {'event_type': 'message.outbound'},
-        ),
+        PushService.routeForNotificationData({
+          'event_type': 'message.outbound',
+        }),
         '/support/chat',
       );
       expect(
@@ -149,7 +149,7 @@ void main() {
           const {},
           title: 'New support message',
         ),
-        '/support/chat',
+        '/dashboard/notifications',
       );
     });
 

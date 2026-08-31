@@ -993,12 +993,19 @@ SERVICES: tuple[SOTService, ...] = (
             "admin revenue report figure definitions",
             "payments-basis revenue definitions",
             "subscription movement and per-offer report counts",
+            "upcoming charge reminder candidate selection and read model",
         ),
-        depends_on=("financial.invoices", "financial.payments"),
+        depends_on=(
+            "financial.invoices",
+            "financial.payments",
+            "financial.prepaid_service_renewals",
+            "customer.financial_position",
+        ),
         notes=(
             "Read owner only: aggregates invoice/payment/subscription "
-            "facts for dashboards and the admin reports. It decides no "
-            "financial consequences."
+            "facts for dashboards and the admin reports. Upcoming Charges "
+            "selects bounded candidates before composing exact prepaid charge "
+            "and funding owners for one page. It decides no financial consequences."
         ),
     ),
     SOTService(

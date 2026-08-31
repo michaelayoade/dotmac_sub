@@ -589,6 +589,7 @@ def _initials(first_name: str, last_name: str, display_name: str | None) -> str:
 
 
 def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
+    observed_at = datetime.now(UTC)
     rows = (
         db.query(SystemUser)
         .join(
@@ -634,7 +635,9 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
             ),
             initials=_initials(row.first_name, row.last_name, row.display_name),
             presence_status=(
-                team_inbox_assignment.effective_presence_status(presence)
+                team_inbox_assignment.effective_presence_status(
+                    presence, now=observed_at
+                )
                 if (presence := presence_by_person.get(row.id)) is not None
                 else InboxAgentPresenceStatus.offline.value
             ),
@@ -788,7 +791,7 @@ def get_agent_presence(
         .one_or_none()
     )
     status = (
-        presence.manual_override_status or presence.status
+        team_inbox_assignment.effective_presence_status(presence)
         if presence is not None
         else InboxAgentPresenceStatus.offline.value
     )
@@ -817,10 +820,12 @@ def build_manager_dashboard_projection(
         else []
     )
     presence_by_person = {row.person_id: row for row in presence_rows}
+    observed_at = datetime.now(UTC)
     online_person_ids = {
         row.person_id
         for row in presence_rows
-        if (row.manual_override_status or row.status) == "online"
+        if team_inbox_assignment.effective_presence_status(row, now=observed_at)
+        == InboxAgentPresenceStatus.online.value
     }
 
     active_assignments = (
@@ -851,7 +856,9 @@ def build_manager_dashboard_projection(
                 name=agent.name,
                 initials=agent.initials,
                 presence_status=(
-                    (presence.manual_override_status or presence.status)
+                    team_inbox_assignment.effective_presence_status(
+                        presence, now=observed_at
+                    )
                     if presence is not None
                     else "offline"
                 ),

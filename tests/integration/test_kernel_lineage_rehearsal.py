@@ -107,6 +107,11 @@ EXPECTED_COLLISIONS = {
     "communication_suppressions",
     "domain_setting_history",
     "domain_settings",
+    # Added deliberately by revisions 556 and 557 as verified storage
+    # providers for composed modules. Like machine_credentials, these are
+    # kernel-identical by construction and their disposition is STAMP, not a
+    # competing-authority union.
+    "idempotency_records",
     # Added 2026-08-24 by `551_machine_credentials`, and unlike every other
     # entry here this collision was created ON PURPOSE. The others are Sub
     # tables that happen to overlap the kernel's and have to be reconciled
@@ -114,7 +119,10 @@ EXPECTED_COLLISIONS = {
     # it is identical by construction rather than by measurement. Its
     # disposition is STAMP, not union — see the dispositions inventory.
     "machine_credentials",
+    "outbox_events",
     "parties",
+    "platform_idempotency_records",
+    "platform_outbox_events",
     "roles",
     "tenant_domains",
     "tenants",

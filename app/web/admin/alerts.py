@@ -20,6 +20,17 @@ _ALERT_ACCESS = Depends(
     require_any_permission("system:read", "system:settings:read", "monitoring:read")
 )
 
+# Acknowledging or resolving an alert changes its durable state, so it must not
+# ride the read guard above: ``monitoring:read`` is UI-assignable and held by
+# the seeded ``operator`` role, which made "may look at alerts" and "may close
+# alerts" the same grant. This is the same any-of shape at the write tier, so
+# every domain that could read alerts can still act on them with its own write
+# grant. (``system:write``/``system:settings:write`` are admin-only in the
+# seeded catalogue; ``monitoring:write`` is the assignable one today.)
+_ALERT_ACT = Depends(
+    require_any_permission("system:write", "system:settings:write", "monitoring:write")
+)
+
 
 @router.get("", response_class=HTMLResponse, dependencies=[_ALERT_ACCESS])
 def alerts_index(
@@ -82,7 +93,7 @@ def open_notification(
 
 @router.post(
     "/{alert_id}/acknowledge",
-    dependencies=[_ALERT_ACCESS],
+    dependencies=[_ALERT_ACT],
 )
 def acknowledge_alert(
     alert_id: UUID,
@@ -94,7 +105,7 @@ def acknowledge_alert(
 
 @router.post(
     "/{alert_id}/resolve",
-    dependencies=[_ALERT_ACCESS],
+    dependencies=[_ALERT_ACT],
 )
 def resolve_alert(
     alert_id: UUID,

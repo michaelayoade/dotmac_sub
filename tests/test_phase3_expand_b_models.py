@@ -419,6 +419,7 @@ def test_migration_244_is_single_alembic_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; ONT confirmation added

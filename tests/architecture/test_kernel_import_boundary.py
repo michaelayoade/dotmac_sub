@@ -50,10 +50,12 @@ ALLOWED_KERNEL_MODULES = frozenset(
     {
         "dotmac_kernel.assembly",
         "dotmac_kernel.capabilities",
+        "dotmac_kernel.cache",
         "dotmac_kernel.features",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
+        "dotmac_kernel.planes",
         "dotmac_kernel.prerequisites",
         "dotmac_kernel.profiles",
         "dotmac_kernel.providers",
@@ -67,6 +69,22 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.settings_resolver",
     }
 )
+
+#: A provider migration may close by asking the pinned kernel to verify the
+#: live effect it just created. This is an Alembic-only admission: application
+#: runtime code still cannot import the verifier or the kernel persistence
+#: service whose storage is being supplied.
+ALEMBIC_ONLY_KERNEL_MODULES = frozenset(
+    {
+        "dotmac_kernel.migrations.verify",
+    }
+)
+
+#: Names admitted only from Alembic entry points even when their module also
+#: exposes application-safe composition value types.
+ALEMBIC_ONLY_KERNEL_NAMES = {
+    "dotmac_kernel.planes": frozenset({"install_module_plane_selections"}),
+}
 
 #: Names that stay forbidden even when their defining module is allowlisted.
 DENIED_NAMES = frozenset(
@@ -98,11 +116,16 @@ DENIED_NAMES = frozenset(
 #: claimed that narrowing in prose while nothing enforced it, so the name was
 #: importable here — this entry is what makes the sentence true.
 RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
+    "dotmac_kernel.cache": frozenset({"TenantScope"}),
+    "dotmac_kernel.migrations.verify": frozenset({"require_prerequisites"}),
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),
+    "dotmac_kernel.planes": frozenset({"ModulePlane", "ModulePlaneSelection"}),
     "dotmac_kernel.settings_models": frozenset({"SettingDomain"}),
     "dotmac_kernel.prerequisites": frozenset(
         {
+            "IDEMPOTENCY_LEDGER_V1",
             "MODULE_DATABASE_ROLES_V1",
+            "OUTBOX_RELAY_V1",
             "PrerequisiteBinding",
             "TENANT_SCOPE_CATALOG_V1",
             "install_prerequisite_bindings",
@@ -111,11 +134,20 @@ RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
 }
 
 
-def _kernel_import_violations(root: Path) -> list[str]:
+def _kernel_import_violations(
+    root: Path,
+    *,
+    extra_allowed: frozenset[str] = frozenset(),
+    extra_names: dict[str, frozenset[str]] | None = None,
+) -> list[str]:
     """Return every ``dotmac_kernel`` import under ``root`` that breaks the ledger.
 
     Pure static scan: parses source with ``ast``, never imports the package.
     """
+    allowed_modules = ALLOWED_KERNEL_MODULES | extra_allowed
+    restricted_names = dict(RESTRICTED_MODULE_NAMES)
+    for module, names in (extra_names or {}).items():
+        restricted_names[module] = restricted_names.get(module, frozenset()) | names
     violations: list[str] = []
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root)
@@ -128,13 +160,13 @@ def _kernel_import_violations(root: Path) -> list[str]:
                         "dotmac_kernel."
                     ):
                         continue
-                    if name not in ALLOWED_KERNEL_MODULES:
+                    if name not in allowed_modules:
                         violations.append(
                             f"{rel}:{node.lineno}: import {name} — not on the "
                             "ledger allowlist"
                         )
-                    elif name in RESTRICTED_MODULE_NAMES:
-                        permitted = ", ".join(sorted(RESTRICTED_MODULE_NAMES[name]))
+                    elif name in restricted_names:
+                        permitted = ", ".join(sorted(restricted_names[name]))
                         violations.append(
                             f"{rel}:{node.lineno}: import {name} — reaches every "
                             f"name in it; import only {permitted} by name"
@@ -156,9 +188,9 @@ def _kernel_import_violations(root: Path) -> list[str]:
                     # `from dotmac_kernel.providers import provisioning` imports
                     # the submodule; judge it as that submodule.
                     dotted = f"{module}.{alias.name}"
-                    if dotted in ALLOWED_KERNEL_MODULES:
+                    if dotted in allowed_modules:
                         continue
-                    if module not in ALLOWED_KERNEL_MODULES:
+                    if module not in allowed_modules:
                         violations.append(
                             f"{rel}:{node.lineno}: from {module} import "
                             f"{alias.name} — module not on the ledger allowlist"
@@ -169,10 +201,10 @@ def _kernel_import_violations(root: Path) -> list[str]:
                             f"{alias.name} — name is denied by the ledger"
                         )
                     elif (
-                        module in RESTRICTED_MODULE_NAMES
-                        and alias.name not in RESTRICTED_MODULE_NAMES[module]
+                        module in restricted_names
+                        and alias.name not in restricted_names[module]
                     ):
-                        permitted = ", ".join(sorted(RESTRICTED_MODULE_NAMES[module]))
+                        permitted = ", ".join(sorted(restricted_names[module]))
                         violations.append(
                             f"{rel}:{node.lineno}: from {module} import "
                             f"{alias.name} — only {permitted} are admitted "
@@ -207,7 +239,11 @@ def test_alembic_imports_only_allowlisted_kernel_modules() -> None:
     # Sensitivity: assert the scan actually reaches the one file that matters,
     # so a future layout change cannot quietly empty this test's input.
     assert ALEMBIC_DIR / "env.py" in scanned, "alembic/env.py is not being scanned"
-    violations = _kernel_import_violations(ALEMBIC_DIR)
+    violations = _kernel_import_violations(
+        ALEMBIC_DIR,
+        extra_allowed=ALEMBIC_ONLY_KERNEL_MODULES,
+        extra_names=ALEMBIC_ONLY_KERNEL_NAMES,
+    )
     assert not violations, (
         "Forbidden dotmac_kernel import(s) in alembic/ — the allowlist is "
         "docs/PLATFORM_ADOPTION_LEDGER.md 'Kernel import allowlist', amended "
@@ -278,6 +314,73 @@ def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
     admitted_binding_line = "offender.py:13:"
     assert not [v for v in violations if v.startswith(admitted_binding_line)], (
         violations
+    )
+
+
+def test_the_live_verifier_admission_is_alembic_only_and_name_restricted(
+    tmp_path: Path,
+) -> None:
+    migration = tmp_path / "migration.py"
+    migration.write_text(
+        "from dotmac_kernel.migrations.verify import require_prerequisites\n",
+        encoding="utf-8",
+    )
+
+    app_violations = _kernel_import_violations(tmp_path)
+    assert len(app_violations) == 1
+    assert "module not on the ledger allowlist" in app_violations[0]
+
+    assert not _kernel_import_violations(
+        tmp_path, extra_allowed=ALEMBIC_ONLY_KERNEL_MODULES
+    )
+
+    migration.write_text(
+        "from dotmac_kernel.migrations.verify import verify_idempotency_ledger\n",
+        encoding="utf-8",
+    )
+    alembic_violations = _kernel_import_violations(
+        tmp_path, extra_allowed=ALEMBIC_ONLY_KERNEL_MODULES
+    )
+    assert len(alembic_violations) == 1
+    assert "only require_prerequisites" in alembic_violations[0]
+
+
+def test_tenant_scope_is_admitted_but_platform_scope_is_not(tmp_path: Path) -> None:
+    subject = tmp_path / "scope.py"
+    subject.write_text(
+        "from dotmac_kernel.cache import TenantScope\n",
+        encoding="utf-8",
+    )
+    assert not _kernel_import_violations(tmp_path)
+
+    subject.write_text(
+        "from dotmac_kernel.cache import PlatformScope\n",
+        encoding="utf-8",
+    )
+    violations = _kernel_import_violations(tmp_path)
+    assert len(violations) == 1
+    assert "only TenantScope" in violations[0]
+
+
+def test_plane_values_are_app_safe_but_the_installer_is_alembic_only(
+    tmp_path: Path,
+) -> None:
+    composition = tmp_path / "composition.py"
+    composition.write_text(
+        "from dotmac_kernel.planes import (\n"
+        "    ModulePlane,\n"
+        "    ModulePlaneSelection,\n"
+        "    install_module_plane_selections,\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    app_violations = _kernel_import_violations(tmp_path)
+    assert len(app_violations) == 1
+    assert "install_module_plane_selections" in app_violations[0]
+
+    assert not _kernel_import_violations(
+        tmp_path, extra_names=ALEMBIC_ONLY_KERNEL_NAMES
     )
 
 

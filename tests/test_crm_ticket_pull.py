@@ -43,6 +43,8 @@ def test_pull_maps_legacy_resolved_to_closed_and_notifies_customer(
     assert ticket.status == "closed"
     assert push.call_args.kwargs["title"] == "Support ticket closed"
     assert "resolved" not in push.call_args.kwargs["body"].lower()
+    assert push.call_args.kwargs["intent"].intent_code == "ticket.closed"
+    assert push.call_args.kwargs["intent"].subject_id == str(ticket.id)
 
 
 class FakeCrmClient:

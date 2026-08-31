@@ -24,6 +24,7 @@ from app.services import (
     team_inbox_observations,
     team_inbox_receive,
 )
+from app.services.file_storage import PreparedFileUpload, file_uploads
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -52,6 +53,22 @@ def _attachment_observation(
         if isinstance(location_data, dict)
         else None
     )
+    prepared_data = item.get("prepared_file")
+    prepared_file = (
+        team_inbox_observations.InboundPreparedFileObservation(
+            entity_type=str(prepared_data["entity_type"]),
+            entity_id=str(prepared_data["entity_id"]),
+            original_filename=str(prepared_data["original_filename"]),
+            storage_key=str(prepared_data["storage_key"]),
+            file_size=int(str(prepared_data["file_size"])),
+            content_type=str(prepared_data["content_type"]),
+            checksum=str(prepared_data["checksum"])
+            if prepared_data.get("checksum")
+            else None,
+        )
+        if isinstance(prepared_data, dict)
+        else None
+    )
     return team_inbox_observations.InboundAttachmentObservation(
         asset_type=str(item.get("asset_type") or "file"),
         file_name=str(item["file_name"]) if item.get("file_name") else None,
@@ -60,6 +77,9 @@ def _attachment_observation(
             str(item["provider_media_id"]) if item.get("provider_media_id") else None
         ),
         source_url=str(item["source_url"]) if item.get("source_url") else None,
+        content_base64=(
+            str(item["content_base64"]) if item.get("content_base64") else None
+        ),
         caption=str(item["caption"]) if item.get("caption") else None,
         file_size=(
             int(str(item["file_size"])) if item.get("file_size") is not None else None
@@ -68,6 +88,7 @@ def _attachment_observation(
             str(item["download_status"]) if item.get("download_status") else None
         ),
         location=location,
+        prepared_file=prepared_file,
     )
 
 
@@ -81,11 +102,53 @@ def _attachment_metadata(
         "id": item.provider_media_id,
         "url": item.source_url,
         "source_url": item.source_url,
+        "content_base64": item.content_base64,
         "caption": item.caption,
         "file_size": item.file_size,
         "download_status": item.download_status,
         "location": item.location.to_metadata() if item.location else None,
     }
+
+
+def _materialize_email_attachment_metadata(
+    db: Session,
+    attachments: tuple[team_inbox_observations.InboundAttachmentObservation, ...],
+    *,
+    provider: str,
+) -> list[dict[str, object]]:
+    metadata: list[dict[str, object]] = []
+    for item in attachments:
+        values = _attachment_metadata(item)
+        values["provider"] = provider
+        prepared = item.prepared_file
+        if prepared is not None:
+            stored = file_uploads.stage_prepared_upload(
+                db=db,
+                prepared=PreparedFileUpload(
+                    owner_subscriber_id=None,
+                    entity_type=prepared.entity_type,
+                    entity_id=prepared.entity_id,
+                    original_filename=prepared.original_filename,
+                    storage_key=prepared.storage_key,
+                    file_size=prepared.file_size,
+                    content_type=prepared.content_type,
+                    checksum=prepared.checksum,
+                    uploaded_by=None,
+                ),
+            )
+            values.update(
+                {
+                    "filename": stored.original_filename,
+                    "mime_type": stored.content_type,
+                    "file_size": stored.file_size,
+                    "storage_url": stored.storage_key_or_relative_path,
+                    "stored_file_id": str(stored.id),
+                    "checksum_sha256": stored.checksum,
+                    "download_status": "stored",
+                }
+            )
+        metadata.append(values)
+    return metadata
 
 
 def _message_payload(
@@ -280,18 +343,15 @@ def process_provider_observation(
                             "authentication": payload.authentication,
                             "body_text": payload.body_text or payload.body,
                             "html_body": payload.html_body,
-                            "attachments": [
-                                _attachment_metadata(item)
-                                for item in payload.attachments
-                            ],
+                            "attachments": _materialize_email_attachment_metadata(
+                                db, payload.attachments, provider=row.provider
+                            ),
                         },
                     ),
                 )
                 message = db.get(InboxMessage, UUID(email_result.message_id))
                 if message is not None and payload.attachments:
-                    team_inbox_media.promote_message_attachments(
-                        db, message=message, provider=row.provider
-                    )
+                    team_inbox_media.promote_message_attachments(db, message=message)
                 inbound_result = email_result
             else:
                 inbound_result = team_inbox_channel_receive.receive_inbound_channel(

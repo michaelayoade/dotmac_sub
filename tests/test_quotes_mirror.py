@@ -162,6 +162,8 @@ def test_webhook_accepted_upserts_and_pushes(db_session):
         )
     assert out["status"] == "ok"
     push.assert_called_once()
+    assert push.call_args.kwargs["intent"].intent_code == "quote.accepted"
+    assert push.call_args.kwargs["intent"].subject_id == "q9"
     row = db_session.query(QuoteMirror).filter_by(crm_quote_id="q9").one()
     assert row.status == "accepted"
 

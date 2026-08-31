@@ -4,8 +4,15 @@ from textwrap import dedent
 from uuid import UUID
 
 from app.models.service_team import ServiceTeam, ServiceTeamType
-from app.models.team_inbox import InboxMessage, TeamInboxEmailRoute
-from app.services import team_inbox_rfc822, team_inbox_smtp_inbound
+from app.models.team_inbox import InboxMediaAsset, InboxMessage, TeamInboxEmailRoute
+from app.services import (
+    team_inbox_media,
+    team_inbox_read,
+    team_inbox_rfc822,
+    team_inbox_smtp_inbound,
+)
+from app.services.file_storage import file_uploads
+from app.services.object_storage import StreamResult
 
 
 def _team(db_session, name: str, team_type: str) -> ServiceTeam:
@@ -131,7 +138,9 @@ def test_multipart_email_prefers_text_and_preserves_html():
     assert "<strong>HTML</strong>" in parsed.payload.metadata["html_body"]
 
 
-def test_smtp_intake_routes_and_stores_attachment_metadata(db_session):
+def test_smtp_intake_stores_attachment_content_and_exposes_authenticated_url(
+    db_session, monkeypatch
+):
     """Same coverage, now over the path production actually uses.
 
     ``receive_rfc822_email`` was a second ingestion route that bypassed the
@@ -141,6 +150,21 @@ def test_smtp_intake_routes_and_stores_attachment_metadata(db_session):
     support = _team(db_session, "Support", ServiceTeamType.support.value)
     _route(db_session, support, "support@dotmac.io")
     db_session.commit()
+    objects: dict[str, tuple[bytes, str]] = {}
+
+    class FakeStorage:
+        def upload(self, key: str, data: bytes, content_type: str) -> None:
+            objects[key] = (data, content_type)
+
+        def stream(self, key: str) -> StreamResult:
+            data, content_type = objects[key]
+            return StreamResult(
+                chunks=iter([data]),
+                content_type=content_type,
+                content_length=len(data),
+            )
+
+    monkeypatch.setattr(file_uploads, "storage", FakeStorage())
     raw = dedent(
         """\
         From: customer@example.com
@@ -172,12 +196,32 @@ def test_smtp_intake_routes_and_stores_attachment_metadata(db_session):
     db_session.commit()
 
     message = db_session.get(InboxMessage, UUID(result.message_id))
+    asset = db_session.query(InboxMediaAsset).filter_by(message_id=message.id).one()
+    timeline = team_inbox_read.get_conversation_timeline(
+        db_session, message.conversation_id
+    )
 
     assert result.kind == "received"
     assert message.body == "See attached."
     assert message.metadata_["body_text"] == "See attached."
     assert message.metadata_["attachments"][0]["filename"] == "note.txt"
     assert message.metadata_["attachments"][0]["mime_type"] == "text/plain"
+    assert message.metadata_["attachments"][0]["stored_file_id"]
+    assert message.metadata_["attachments"][0]["download_status"] == "stored"
+    assert asset.download_status == "stored"
+    assert asset.storage_url
+    assert asset.metadata_["stored_file_id"]
+    assert timeline is not None
+    assert timeline.messages[0].attachments[0].content_available is True
+    assert timeline.messages[0].attachments[0].url == (
+        f"/admin/inbox/media/{asset.id}/content"
+    )
+    content = team_inbox_media.stream_asset_content(db_session, asset.id)
+    assert b"".join(content.stream.chunks) == b"hello attachment"
+    team_inbox_media.promote_unmaterialized_assets(db_session)
+    assert (
+        db_session.query(InboxMediaAsset).filter_by(message_id=message.id).count() == 1
+    )
     assert message.conversation.primary_service_team_id == support.id
 
 

@@ -119,6 +119,7 @@ class InboxQueueSweepResult:
 class InboxTeamCapacitySnapshot:
     active_assignments: int
     total_capacity: int
+    available_agent_count: int = 0
 
 
 def estimate_queue_wait_minutes(
@@ -158,11 +159,13 @@ def team_capacity_snapshot(
     service_team_id: str | UUID,
     *,
     default_max_concurrent: int | None = None,
+    now: datetime | None = None,
 ) -> InboxTeamCapacitySnapshot:
     snapshots = team_capacity_snapshots(
         db,
         (service_team_id,),
         default_max_concurrent=default_max_concurrent,
+        now=now,
     )
     team_uuid = _coerce_uuid(service_team_id)
     if team_uuid is None:
@@ -178,6 +181,7 @@ def team_capacity_snapshots(
     service_team_ids: Sequence[str | UUID],
     *,
     default_max_concurrent: int | None = None,
+    now: datetime | None = None,
 ) -> dict[UUID, InboxTeamCapacitySnapshot]:
     """Load capacity for several teams with one bounded set of queries."""
 
@@ -215,7 +219,8 @@ def team_capacity_snapshots(
     online_ids = {
         person_id
         for person_id, presence in presences.items()
-        if effective_presence_status(presence) == InboxAgentPresenceStatus.online.value
+        if effective_presence_status(presence, now=now)
+        == InboxAgentPresenceStatus.online.value
     }
     online_ids_by_team: dict[UUID, set[UUID]] = {team_id: set() for team_id in team_ids}
     for member, user in member_users:
@@ -242,6 +247,15 @@ def team_capacity_snapshots(
                 presences[person_id].max_concurrent_conversations
                 or default_max_concurrent
                 for person_id in online_ids_by_team[team_id]
+            ),
+            available_agent_count=sum(
+                1
+                for person_id in online_ids_by_team[team_id]
+                if int(active_by_person.get(person_id, 0))
+                < (
+                    presences[person_id].max_concurrent_conversations
+                    or default_max_concurrent
+                )
             ),
         )
         for team_id in team_ids
@@ -280,6 +294,36 @@ def effective_presence_status(
     if observed_at - last_seen_at > timedelta(seconds=AGENT_PRESENCE_FRESHNESS_SECONDS):
         return InboxAgentPresenceStatus.offline.value
     return status
+
+
+def record_agent_reply_activity(
+    db: Session,
+    *,
+    person_id: str | UUID | None,
+    now: datetime | None = None,
+) -> InboxAgentPresence | None:
+    person_uuid = _coerce_uuid(person_id)
+    if person_uuid is None:
+        return None
+    presence = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == person_uuid)
+        .one_or_none()
+    )
+    if presence is None:
+        return None
+    selected_status = (
+        presence.manual_override_status
+        or presence.status
+        or InboxAgentPresenceStatus.offline.value
+    )
+    if selected_status != InboxAgentPresenceStatus.online.value:
+        return presence
+    refreshed_at = now or datetime.now(UTC)
+    presence.last_seen_at = refreshed_at
+    db.flush()
+    presence.last_seen_at = refreshed_at
+    return presence
 
 
 def _active_assignment_count_query(db: Session, person_ids: list[UUID]):
@@ -323,10 +367,11 @@ def set_agent_presence(
         presence = InboxAgentPresence(person_id=person_uuid)
         db.add(presence)
 
-    previous_effective_status = effective_presence_status(presence)
+    previous_effective_status = effective_presence_status(presence, now=observed_at)
     if previous_effective_status == clean_status:
         presence.last_seen_at = observed_at
         db.flush()
+        presence.last_seen_at = observed_at
         return presence
     presence.status = clean_status
     presence.manual_override_status = clean_status
@@ -359,6 +404,7 @@ def set_agent_presence(
         )
     )
     db.flush()
+    presence.last_seen_at = observed_at
     return presence
 
 

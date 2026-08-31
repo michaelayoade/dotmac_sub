@@ -537,11 +537,15 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
         "control.settings_spec",
+        "events.dispatcher",
+        "integration.installations",
         "integration.runtime",
         "financial.account_credit_deposits",
+        "financial.payment_gateway_finance",
         "financial.payments",
         "financial.payment_provider_events",
         "financial.topup_intents",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
         "financial.access_resolution",
@@ -600,6 +604,8 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.account_visibility",
         "customer.accounts",
         "access.subscription_lifecycle",
+        "financial.billing_profile",
+        "financial.subscription_billing_treatments",
         "service_intent.catalog_policy",
         "network.identity",
         "network.ip_assignment_lifecycle",

@@ -50,6 +50,7 @@
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Code</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Contact</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Service Area</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Portal Access</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                     </tr>
                 </thead>
@@ -66,12 +67,15 @@
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ vendor.service_area or '—' }}</td>
                         <td class="px-6 py-4">
+                            {{ status_badge(vendor.portal_access.label, vendor.portal_access.badge_tone, size='sm') }}
+                        </td>
+                        <td class="px-6 py-4">
                             {{ status_badge('Active' if vendor.is_active else 'Inactive', 'success' if vendor.is_active else 'inactive', size='sm') }}
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                             No vendors yet. <a href="/admin/vendors/new" class="font-medium text-cyan-600 hover:underline">Create the first one.</a>
                         </td>
                     </tr>

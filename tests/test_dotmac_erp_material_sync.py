@@ -186,8 +186,8 @@ class _FakeERPClient:
             raise outcome
         return outcome
 
-    def get_material_request_status(self, omni_id):
-        self.status_calls.append(omni_id)
+    def get_material_request_status(self, source_request_id):
+        self.status_calls.append(source_request_id)
         outcome = self._status.pop(0) if self._status else None
         if isinstance(outcome, Exception):
             raise outcome
@@ -202,16 +202,16 @@ class _FakeERPClient:
 # ---------------------------------------------------------------------------
 
 
-def test_payload_mapping_matches_crm_shape(db_session):
+def test_payload_mapping_matches_neutral_erp_contract(db_session):
     request = _make_approved_request(db_session)
     payload = material_sync.build_material_request_payload(request)
 
-    assert payload["omni_id"] == str(request.id)
+    assert payload["source_request_id"] == str(request.id)
     assert payload["request_type"] == "ISSUE"
     assert payload["status"] == "submitted"
     assert payload["requested_by_email"] == request.requested_by_system_user.email
-    # ticket id comes off the work-order mirror (sub has no direct FK).
-    assert payload["ticket_crm_id"] == "crm-ticket-77"
+    # The neutral ticket reference comes from retained work-order provenance.
+    assert payload["ticket_source_reference"] == "crm-ticket-77"
     assert payload["remarks"] == "Need connectors for the drop"
     assert payload["schedule_date"] == request.approved_at.date().isoformat()
 
@@ -287,7 +287,7 @@ def test_approve_enqueues_with_owner_and_enabled_capability(db_session):
     assert row.flow == FieldErpSyncFlow.material_request.value
     assert row.idempotency_key == f"mr-{request.id}-approve-v1"
     assert row.status == FieldErpSyncStatus.pending.value
-    assert row.payload["omni_id"] == str(request.id)
+    assert row.payload["source_request_id"] == str(request.id)
     assert row.payload["request_type"] == "ISSUE"
 
 
@@ -364,7 +364,7 @@ def test_delivery_accepted_writes_erp_fields_back(db_session):
             {
                 "request_id": "ERP-MR-1",
                 "status": "issued",
-                "omni_id": str(request.id),
+                "source_request_id": str(request.id),
             }
         ]
     )

@@ -10,6 +10,7 @@ displayed numbers do not change.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +20,20 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberStatus
 from app.services import subscriber as subscriber_service
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyChurnSeries:
+    labels: tuple[str, ...]
+    rates: tuple[float, ...]
+    counts: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ChurnSummary:
+    total: int
+    cancelled_count: int
+    at_risk_count: int
 
 
 def _month_starts(months: int = 6) -> list[datetime]:
@@ -72,7 +87,7 @@ def monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str,
     return {"labels": labels, "total": totals, "new": new_counts}
 
 
-def monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
+def monthly_churn_series(db: Session, *, months: int = 6) -> MonthlyChurnSeries:
     """Monthly cancellation counts and churn rates for visible subscribers."""
     starts = _month_starts(months)
     labels: list[str] = []
@@ -103,7 +118,9 @@ def monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
         labels.append(start.strftime("%b"))
         counts.append(int(cancelled))
         rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
-    return {"labels": labels, "rate": rates, "count": counts}
+    return MonthlyChurnSeries(
+        labels=tuple(labels), rates=tuple(rates), counts=tuple(counts)
+    )
 
 
 def monthly_new_counts(db: Session) -> tuple[int, int]:
@@ -154,7 +171,7 @@ def _derived_cancelled_clause():
     )
 
 
-def churn_summary(db: Session) -> dict:
+def churn_summary(db: Session) -> ChurnSummary:
     """Cancelled / at-risk / total counts over admin-visible subscribers.
 
     Replicates in SQL the counts the churn report previously computed by
@@ -190,11 +207,11 @@ def churn_summary(db: Session) -> dict:
         )
         or 0
     )
-    return {
-        "total": int(total),
-        "cancelled_count": int(cancelled),
-        "at_risk_count": int(at_risk),
-    }
+    return ChurnSummary(
+        total=int(total),
+        cancelled_count=int(cancelled),
+        at_risk_count=int(at_risk),
+    )
 
 
 def recent_cancellations(db: Session, *, limit: int = 10) -> list[Subscriber]:

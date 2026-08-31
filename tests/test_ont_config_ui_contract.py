@@ -83,6 +83,29 @@ def test_configure_form_exposes_only_section_scoped_routed_actions() -> None:
             olt_assigned=True,
             config_pack_ready=True,
             acs_registered=False,
+            eligibility=SimpleNamespace(
+                routed_wan_message=(
+                    "Routed DHCP, PPPoE, and static WAN changes are owner-backed."
+                ),
+                bridge_mode_message=(
+                    "Bridge/routing conversion is not available from ONT Configure yet; "
+                    "it needs a dedicated WAN-mode transition owner."
+                ),
+                nat_message=(
+                    "NAT defaults to enabled for routed WAN. Disabling NAT is not "
+                    "available until NAT is added to the typed WAN intent and "
+                    "readback contract."
+                ),
+                lan_dhcp_message=(
+                    "LAN gateway, DHCP state, pool, and block size are owner-backed."
+                ),
+                move_message=(
+                    "Moving an ONT must use the inventory move flow, preserve logical "
+                    "desired configuration, and re-resolve OLT-local service ports and "
+                    "profile bindings on the target OLT; ONT Configure does not perform "
+                    "moves."
+                ),
+            ),
         ),
     )
 
@@ -90,13 +113,17 @@ def test_configure_form_exposes_only_section_scoped_routed_actions() -> None:
     assert "Apply All" not in html
     assert "Apply one section at a time" in html
     assert 'value="setup_via_onu" disabled selected' in html
-    assert "Bridge / Via ONU is provisioning-only" in html
+    assert "Bridge / Via ONU" in html
     assert ":disabled=\"wanMode === 'setup_via_onu'\"" in html
     assert 'name="pppoe_password"' not in html
     assert "This form cannot change or reveal them" in html
     assert "Leave blank to keep the current Wi-Fi password" in html
     assert "Supported path: Huawei routed ONTs" in html
     assert "ACS registration" in html
+    assert "Bridge/routing conversion is not available" in html
+    assert "NAT defaults to enabled for routed WAN" in html
+    assert "LAN gateway, DHCP state, pool, and block size are owner-backed" in html
+    assert "ONT Configure does not perform moves" in html
     assert "Not ready" in html
 
 
@@ -132,6 +159,8 @@ def test_configure_form_reports_queued_operation_without_claiming_delivery() -> 
 
     assert "Configuration queued" in html
     assert str(operation_id) in html
+    assert "Final delivery state is shown in Current lifecycle" in html
+    assert "queued does not mean verified" in html
     assert "border-emerald-200" in html
     assert "Applied" not in html
 

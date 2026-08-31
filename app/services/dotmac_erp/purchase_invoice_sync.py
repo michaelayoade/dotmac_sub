@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.field_erp_sync import (
     FieldErpSyncEvent,
     FieldErpSyncFlow,
@@ -23,11 +24,13 @@ from app.models.vendor_routes import (
 from app.services.dotmac_erp import outbox
 from app.services.file_storage import file_uploads
 from app.services.integrations.erp_capability import capability_client
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "vendor_purchase_invoice"
 PROVIDER = "dotmac_erp"
+ERP_TAX_PROFILE_SETTING = "vendor_purchase_invoice_erp_tax_profile"
 _AMOUNT_TOLERANCE = Decimal("0.02")
 
 
@@ -150,7 +153,15 @@ def purchase_invoice_eligibility_error(invoice: VendorPurchaseInvoice) -> str | 
     return None
 
 
-def build_purchase_invoice_payload(invoice: VendorPurchaseInvoice) -> dict:
+def purchase_invoice_erp_tax_profile(db: Session) -> str | None:
+    value = resolve_value(db, SettingDomain.billing, ERP_TAX_PROFILE_SETTING)
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def build_purchase_invoice_payload(
+    invoice: VendorPurchaseInvoice, *, erp_tax_profile: str | None = None
+) -> dict:
     reason = purchase_invoice_eligibility_error(invoice)
     if reason:
         raise ValueError(reason)
@@ -199,6 +210,8 @@ def build_purchase_invoice_payload(invoice: VendorPurchaseInvoice) -> dict:
         "total": str(invoice.total),
         "items": items,
     }
+    if erp_tax_profile:
+        payload["tax_profile"] = erp_tax_profile[:160]
     if base_project.code:
         payload["project_code"] = base_project.code
     if base_project.name:
@@ -220,6 +233,7 @@ def enqueue_purchase_invoice(
     if reason:
         invoice.payables_submission_error = reason[:500]
         return None
+    erp_tax_profile = purchase_invoice_erp_tax_profile(db)
     invoice.procurement_order_reference = invoice.project.procurement_order_reference
     invoice.payables_system = PROVIDER
     invoice.payables_submission_error = None
@@ -229,7 +243,10 @@ def enqueue_purchase_invoice(
         entity_type=ENTITY_TYPE,
         entity_id=invoice.id,
         idempotency_key=purchase_invoice_idempotency_key(invoice),
-        payload=build_purchase_invoice_payload(invoice),
+        payload=build_purchase_invoice_payload(
+            invoice,
+            erp_tax_profile=erp_tax_profile,
+        ),
         isolate=isolate,
     )
 
@@ -250,7 +267,10 @@ def event_ready(db: Session, event: FieldErpSyncEvent) -> bool:
         return False
     if event.payload.get("erp_purchase_order_id") != erp_po_id:
         invoice.procurement_order_reference = erp_po_id
-        event.payload = build_purchase_invoice_payload(invoice)
+        event.payload = build_purchase_invoice_payload(
+            invoice,
+            erp_tax_profile=purchase_invoice_erp_tax_profile(db),
+        )
     return True
 
 

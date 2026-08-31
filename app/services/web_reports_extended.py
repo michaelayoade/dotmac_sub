@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.services.common import parse_date_filter as _parse_date
 from app.services.status_presentation import invoice_status_presentation
+from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -100,39 +102,104 @@ def get_usage_by_plan_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_upcoming_charges_data(db: Session) -> dict:
-    """Active subscriptions with upcoming billing."""
+def get_upcoming_charges_data(
+    db: Session,
+    *,
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
+    page: int = 1,
+    per_page: int = 25,
+) -> dict:
+    """Present one lazy page from the registered billing reporting owner."""
+    from app.services import display_format
+    from app.services.billing import reporting as billing_reporting
+    from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
+
     try:
-        from app.models.catalog import CatalogOffer, Subscription
-        from app.models.subscriber import Subscriber
+        selected_mode = billing_reporting.UpcomingChargeMode(mode)
+    except ValueError:
+        selected_mode = billing_reporting.UpcomingChargeMode.postpaid
+    try:
+        selected_state = billing_reporting.UpcomingChargeState(state)
+    except ValueError:
+        selected_state = billing_reporting.UpcomingChargeState.all
 
-        stmt = (
-            select(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
-                CatalogOffer.name,
-                Subscription.unit_price,
-                Subscription.start_at,
-            )
-            .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
-            .join(Subscriber, Subscription.subscriber_id == Subscriber.id)
-            .where(Subscription.status == "active")
-            .order_by(Subscription.unit_price.desc())
-            .limit(100)
+    config, result = billing_reporting.get_upcoming_charges_page(
+        db,
+        query=billing_reporting.UpcomingChargesQuery(
+            mode=selected_mode,
+            state=selected_state,
+            band_key=band,
+            include_funded=include_funded,
+            page=page,
+            per_page=per_page,
+        ),
+    )
+    prepaid_currency = resolve_prepaid_enforcement_currency(db)
+    bands = []
+    for item in config.prepaid_amount_bands:
+        minimum = display_format.format_money(item.minimum, currency=prepaid_currency)
+        maximum = (
+            display_format.format_money(item.maximum, currency=prepaid_currency)
+            if item.maximum is not None
+            else None
         )
-        rows = db.execute(stmt).all()
-        charges = [
-            {"subscriber": r[0], "plan": r[1], "amount": r[2], "start_date": r[3]}
-            for r in rows
-        ]
-    except Exception as exc:
-        logger.warning("Could not query upcoming charges: %s", exc)
-        charges = []
-
-    total_amount = sum(c["amount"] or Decimal("0") for c in charges)
+        bands.append(
+            {
+                "key": item.key,
+                "label": f"{minimum} – {maximum}" if maximum else f"{minimum}+",
+            }
+        )
+    charges = [
+        {
+            "account_id": row.account_id,
+            "customer_url": (
+                f"/admin/customers/{'business' if row.is_business else 'person'}/"
+                f"{row.account_id}"
+            ),
+            "subscription_id": row.subscription_id,
+            "invoice_id": row.invoice_id,
+            "customer_name": row.customer_name,
+            "reference": row.reference,
+            "plan_name": row.plan_name,
+            "mode": row.billing_mode.value,
+            "due_at": row.due_at,
+            "days_remaining": row.days_remaining,
+            "amount_display": display_format.format_money(
+                row.amount, currency=row.currency
+            ),
+            "funding_display": display_format.format_money(
+                row.available_funding, currency=row.currency
+            ),
+            "needed_display": display_format.format_money(
+                row.amount_needed, currency=row.currency
+            ),
+            "status_label": row.status_label,
+            "status_tone": row.status_tone,
+        }
+        for row in result.rows
+    ]
+    resolved_include_funded = (
+        config.include_funded_prepaid_default
+        if include_funded is None
+        else include_funded
+    )
     return {
         "charges": charges,
-        "total_amount": total_amount,
-        "total_count": len(charges),
+        "candidate_count": result.candidate_count,
+        "page": result.page,
+        "per_page": result.per_page,
+        "has_previous": result.has_previous,
+        "has_next": result.has_next,
+        "mode": selected_mode.value,
+        "state": selected_state.value,
+        "selected_band": band or "",
+        "include_funded": resolved_include_funded,
+        "amount_bands": bands,
+        "postpaid_lead_days": config.postpaid_lead_days,
+        "prepaid_lead_days": config.prepaid_lead_days,
     }
 
 
@@ -507,36 +574,79 @@ def build_bandwidth_report_export_csv(data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_revenue_categories_data(db: Session) -> dict:
+@dataclass(frozen=True, slots=True)
+class RevenueCategoryReportRow:
+    name: str
+    invoice_count: int
+    revenue: float
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueCategoriesReportData:
+    categories: tuple[RevenueCategoryReportRow, ...]
+    category_count: StateValue
+    total_revenue: StateValue
+    revenue_mix_chart: ChartProjection
+
+    @classmethod
+    def unavailable(cls) -> RevenueCategoriesReportData:
+        return cls(
+            categories=(),
+            category_count=StateValue.unavailable(),
+            total_revenue=StateValue.unavailable(),
+            revenue_mix_chart=ChartProjection.unavailable(
+                "Revenue category data is temporarily unavailable."
+            ),
+        )
+
+
+def get_revenue_categories_data(db: Session) -> RevenueCategoriesReportData:
     """Revenue segmented by offer service type (read owner: billing.reporting)."""
     from app.services.billing import reporting as billing_reporting
 
-    try:
-        rows = billing_reporting.get_revenue_by_service_type(db)
-        categories = [
-            {
-                "name": (
-                    r["service_type"].value
-                    if hasattr(r["service_type"], "value")
-                    else str(r["service_type"] or "Uncategorized")
-                ),
-                "invoice_count": r["invoice_count"],
-                "revenue": float(r["total"] or 0),
-            }
-            for r in rows
-        ]
-    except Exception as exc:
-        logger.warning("Could not query revenue categories: %s", exc)
-        categories = []
+    rows = billing_reporting.get_revenue_by_service_type(db=db)
+    categories = tuple(
+        RevenueCategoryReportRow(
+            name=(
+                row.service_type.value
+                if row.service_type is not None
+                else "Uncategorized"
+            ),
+            invoice_count=row.invoice_count,
+            revenue=float(row.total),
+        )
+        for row in rows
+    )
 
-    total_revenue = sum(c["revenue"] for c in categories)
-    return {
-        "categories": categories,
-        "total": len(categories),
-        "total_revenue": total_revenue,
-        "chart_labels": [c["name"] for c in categories],
-        "chart_values": [c["revenue"] for c in categories],
-    }
+    total_revenue = sum(category.revenue for category in categories)
+    chart_categories = tuple(
+        category for category in categories if category.revenue > 0
+    )
+    if not categories:
+        revenue_mix_chart = ChartProjection.empty(
+            "No categorized invoice revenue is available."
+        )
+    elif not chart_categories:
+        revenue_mix_chart = ChartProjection.empty(
+            "Categorized invoice lines contain no positive revenue."
+        )
+    else:
+        revenue_mix_chart = ChartProjection.present(
+            labels=tuple(category.name for category in chart_categories),
+            series=(
+                ChartSeries(
+                    label="Revenue",
+                    values=tuple(category.revenue for category in chart_categories),
+                ),
+            ),
+            as_of=datetime.now(UTC),
+        )
+    return RevenueCategoriesReportData(
+        categories=categories,
+        category_count=StateValue.present(len(categories)),
+        total_revenue=StateValue.present(total_revenue),
+        revenue_mix_chart=revenue_mix_chart,
+    )
 
 
 def get_custom_pricing_data(db: Session) -> dict:

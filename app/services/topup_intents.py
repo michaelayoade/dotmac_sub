@@ -500,6 +500,28 @@ class RecordGatewayTopupObservationCommand:
     observation: PaymentGatewayVerificationObservation
     observed_at: datetime
     source: GatewayTopupObservationSource
+    next_reconcile_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordGatewayTopupReconciliationAttemptCommand:
+    """Durable scheduler claim recorded before external gateway I/O."""
+
+    intent_id: UUID
+    expected_provider_type: str
+    expected_reference: str
+    expected_status: TopupIntentStatus
+    attempted_at: datetime
+    next_reconcile_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TopupIntentReconciliationAttemptResult:
+    """Whether a due candidate was still current and was claimed."""
+
+    intent_id: UUID
+    status: TopupIntentStatus
+    claimed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -658,15 +680,19 @@ def project_topup_intent_lifecycle(
     evidence = _gateway_observation_metadata(intent)
     terminal_evidence = _gateway_terminal_metadata(intent)
     raw_observed_at = evidence.get("observed_at")
-    last_verification_at: datetime | None = None
+    last_verification_at = _as_utc(intent.gateway_last_observed_at)
     if isinstance(raw_observed_at, str):
         try:
-            last_verification_at = _as_utc(
+            last_verification_at = last_verification_at or _as_utc(
                 datetime.fromisoformat(raw_observed_at.replace("Z", "+00:00"))
             )
         except ValueError:
-            last_verification_at = None
-    reason_code = str(evidence.get("reason_code") or "").strip() or None
+            pass
+    reason_code = (
+        str(intent.gateway_last_reason_code or "").strip()
+        or str(evidence.get("reason_code") or "").strip()
+        or None
+    )
 
     try:
         stored = TopupIntentStatus(intent.status)
@@ -1028,6 +1054,74 @@ def stage_topup_intent_failure(
     )
 
 
+def stage_gateway_topup_reconciliation_attempt(
+    db: Session,
+    command: RecordGatewayTopupReconciliationAttemptCommand,
+) -> TopupIntentReconciliationAttemptResult:
+    """Advance a due intent before I/O so every failure path rotates fairly."""
+
+    attempted_at = _as_utc(command.attempted_at)
+    next_reconcile_at = _as_utc(command.next_reconcile_at)
+    if attempted_at is None or next_reconcile_at is None:
+        raise _error(
+            "reconciliation_attempt_time_invalid",
+            "Reconciliation attempt and retry times are required",
+        )
+    if next_reconcile_at <= attempted_at:
+        raise _error(
+            "reconciliation_retry_time_invalid",
+            "Reconciliation retry time must follow the attempt time",
+        )
+
+    intent = lock_topup_intent_scope(db, command.intent_id)
+    try:
+        status = TopupIntentStatus(intent.status)
+    except ValueError as exc:
+        raise _error(
+            "status_invalid",
+            "Top-up intent has an unsupported lifecycle status",
+            intent_id=str(intent.id),
+            status=intent.status,
+        ) from exc
+    if intent.provider_type != command.expected_provider_type:
+        raise _error(
+            "provider_mismatch",
+            "Reconciliation candidate provider changed before its attempt",
+            intent_id=str(intent.id),
+        )
+    if intent.reference != command.expected_reference:
+        raise _error(
+            "reference_mismatch",
+            "Reconciliation candidate reference changed before its attempt",
+            intent_id=str(intent.id),
+        )
+
+    current_due_at = _as_utc(intent.gateway_next_reconcile_at)
+    still_due = current_due_at is None or current_due_at <= attempted_at
+    if (
+        intent.completed_payment_id is not None
+        or status is not command.expected_status
+        or not still_due
+    ):
+        return TopupIntentReconciliationAttemptResult(
+            intent_id=intent.id,
+            status=status,
+            claimed=False,
+        )
+
+    intent.gateway_last_reconcile_attempt_at = attempted_at
+    intent.gateway_next_reconcile_at = next_reconcile_at
+    intent.gateway_reconcile_attempt_count = (
+        int(intent.gateway_reconcile_attempt_count or 0) + 1
+    )
+    db.add(intent)
+    return TopupIntentReconciliationAttemptResult(
+        intent_id=intent.id,
+        status=status,
+        claimed=True,
+    )
+
+
 def stage_gateway_topup_observation(
     db: Session,
     command: RecordGatewayTopupObservationCommand,
@@ -1082,6 +1176,13 @@ def stage_gateway_topup_observation(
     metadata = dict(intent.metadata_ or {})
     original_metadata = dict(metadata)
     metadata["gateway_verification"] = evidence
+    next_reconcile_at = _as_utc(command.next_reconcile_at)
+    intent.gateway_last_observed_at = observed_at
+    intent.gateway_last_outcome = observation.outcome.value
+    intent.gateway_last_reason_code = observation.reason_code.value
+    intent.gateway_next_reconcile_at = next_reconcile_at
+    intent.gateway_observation_count = int(intent.gateway_observation_count or 0) + 1
+    progress_changed = True
 
     previous_status = intent.status
     status_changed = False
@@ -1107,7 +1208,7 @@ def stage_gateway_topup_observation(
     if evidence_changed:
         intent.metadata_ = metadata
 
-    if evidence_changed or status_changed:
+    if evidence_changed or status_changed or progress_changed:
         db.add(intent)
         emit_event(
             db,
@@ -1126,6 +1227,10 @@ def stage_gateway_topup_observation(
                 "provider_status": evidence["provider_status"],
                 "reason_code": observation.reason_code.value,
                 "observed_at": observed_at.isoformat(),
+                "next_reconcile_at": (
+                    next_reconcile_at.isoformat() if next_reconcile_at else None
+                ),
+                "observation_count": intent.gateway_observation_count,
                 "previous_status": previous_status,
                 "status": intent.status,
                 "source": command.source.value,
@@ -1141,7 +1246,7 @@ def stage_gateway_topup_observation(
         intent_id=intent.id,
         status=TopupIntentStatus(intent.status),
         payment_id=intent.completed_payment_id,
-        changed=evidence_changed or status_changed,
+        changed=evidence_changed or status_changed or progress_changed,
     )
 
 
@@ -1273,12 +1378,14 @@ def stage_topup_intent_completion(
             round_money(to_decimal(intent.actual_amount or 0)) != amount,
             _as_utc(intent.completed_at) != completed_at,
             intent.status != TopupIntentStatus.completed.value,
+            intent.gateway_next_reconcile_at is not None,
         )
     )
     intent.completed_payment_id = payment.id
     intent.external_id = payment_external_id
     intent.actual_amount = amount
     intent.completed_at = completed_at
+    intent.gateway_next_reconcile_at = None
     set_topup_intent_status(
         intent,
         TopupIntentStatus.completed,

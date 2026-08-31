@@ -8,5 +8,20 @@
 		     signing then provisions the Push Notifications capability. -->
 		<key>aps-environment</key>
 		<string>development</string>
+		<!-- The VERIFIED redirect boundary for the OIDC ceremony (iOS Universal
+		     Links). iOS fetches
+		     https://links.dotmac.io/.well-known/apple-app-site-association and
+		     opens the link in this app ONLY if that document names
+		     <Team ID>.io.dotmac.field. The document lists exactly one path,
+		     /oidc/field/callback.
+
+		     `applinks:` only - no `webcredentials:`, no wildcard, and NO
+		     CFBundleURLTypes entry in Info.plist: a custom scheme is claimable
+		     by any app on the device and is exactly what this boundary replaces.
+		     See lib/core/deeplink/oidc_redirect.dart. -->
+		<key>com.apple.developer.associated-domains</key>
+		<array>
+			<string>applinks:links.dotmac.io</string>
+		</array>
 	</dict>
 </plist>
