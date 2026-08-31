@@ -125,6 +125,7 @@ jobs:
 
           bootstrap_url="$(python3 - <<'PY'
           import os
+          import subprocess
           from pathlib import Path
           from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -140,8 +141,32 @@ jobs:
               values[key.strip()] = value
 
           database_url = values.get("DATABASE_URL", "")
-          password = values.get("POSTGRES_PASSWORD", "")
           parsed = urlsplit(database_url)
+          password = values.get("PG_LOCAL_BOOTSTRAP_PASSWORD", "")
+          if not password and parsed.hostname in {
+              "postgres-local",
+              "dotmac_pg_local",
+              "localhost",
+              "127.0.0.1",
+          }:
+              result = subprocess.run(
+                  [
+                      "docker",
+                      "exec",
+                      "dotmac_pg_local",
+                      "sh",
+                      "-c",
+                      'printf %s "$POSTGRES_PASSWORD"',
+                  ],
+                  check=False,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.DEVNULL,
+                  text=True,
+              )
+              if result.returncode == 0:
+                  password = result.stdout
+          if not password:
+              password = values.get("POSTGRES_PASSWORD", "")
           if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
               raise SystemExit("production bootstrap inputs are incomplete")
           host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
