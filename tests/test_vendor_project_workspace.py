@@ -580,6 +580,7 @@ def test_staff_can_set_quote_tax_and_recalculate_submitted_quote(db_session):
     )
     db_session.add(quote)
     db_session.commit()
+    quote_id = str(quote.id)
     db_session_adapter.release_read_transaction(db_session)
 
     result = vendor_portal_operations.set_quote_tax(
@@ -587,10 +588,10 @@ def test_staff_can_set_quote_tax_and_recalculate_submitted_quote(db_session):
         SetVendorQuoteTaxCommand(
             context=_context(
                 actor=str(user.id),
-                scope=str(quote.id),
+                scope=quote_id,
                 reason="test quote tax update",
             ),
-            quote_id=str(quote.id),
+            quote_id=quote_id,
             vat_rate_percent=Decimal("7.5"),
         ),
     )
@@ -617,6 +618,7 @@ def test_staff_cannot_change_quote_tax_after_approval(db_session):
     )
     db_session.add(quote)
     db_session.commit()
+    quote_id = str(quote.id)
     db_session_adapter.release_read_transaction(db_session)
 
     with pytest.raises(VendorProjectWorkspaceError) as exc:
@@ -625,10 +627,10 @@ def test_staff_cannot_change_quote_tax_after_approval(db_session):
             SetVendorQuoteTaxCommand(
                 context=_context(
                     actor=str(user.id),
-                    scope=str(quote.id),
+                    scope=quote_id,
                     reason="test rejected quote tax update",
                 ),
-                quote_id=str(quote.id),
+                quote_id=quote_id,
                 vat_rate_percent=Decimal("7.5"),
             ),
         )
