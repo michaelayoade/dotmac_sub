@@ -232,12 +232,7 @@ collect_listeners() {
   # shellcheck disable=SC2086
   docker inspect ${ids} --format \
     '{"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"ports":{{json .NetworkSettings.Ports}}}' |
-    "${PYTHON_BIN}" -c 'import json, sys
-rows = [json.loads(line) for line in sys.stdin if line.strip()]
-for row in rows:
-    row["container"] = row["container"].lstrip("/")
-with open(sys.argv[1], "w") as handle:
-    json.dump(rows, handle)' "${out}"
+    run_repo_module scripts.published_ports normalise >"${out}"
 }
 
 BEFORE_JSON="$(mktemp)"

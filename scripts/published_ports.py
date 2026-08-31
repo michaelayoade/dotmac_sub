@@ -32,6 +32,7 @@ import json
 import re
 import sys
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -396,6 +397,28 @@ def normalise_inspect(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalised
 
 
+def normalise_inspect_lines(lines: Iterable[str]) -> list[dict[str, Any]]:
+    """Normalise the JSON-lines the shell collector emits.
+
+    The collector asks ``docker inspect`` for exactly three fields, so a
+    container's environment block -- which holds every secret -- never leaves
+    the daemon. This turns those lines into the list ``check_listeners`` wants.
+    Having it here rather than inline in a shell or workflow means there is one
+    copy of it, and it is covered by tests.
+    """
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        row = json.loads(line)
+        row["container"] = (row.get("container") or "").lstrip("/")
+        row["service"] = row.get("service") or ""
+        row["ports"] = row.get("ports") or {}
+        rows.append(row)
+    return rows
+
+
 def check_listeners(
     declaration: Declaration,
     environment: str,
@@ -590,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_cmd.add_argument("--environment", required=True)
 
     sub.add_parser("list")
+    sub.add_parser("normalise", help="normalise the collector's JSON lines from stdin")
 
     args = parser.parse_args(argv)
     try:
@@ -608,6 +632,10 @@ def main(argv: list[str] | None = None) -> int:
             check_compose(declaration, publishes),
             f"{len(publishes)} compose publish(es) match the declaration.",
         )
+
+    if args.command == "normalise":
+        json.dump(normalise_inspect_lines(sys.stdin), sys.stdout)
+        return 0
 
     if args.command == "list":
         for service in declaration.services():

@@ -134,24 +134,20 @@ jobs:
 
       - name: Sweep every declared listener on the host
         if: ${{ always() }}
-        env:
-          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
         run: |
           set -euo pipefail
           ids="$(docker ps -q --filter label=com.docker.compose.project=dotmac_sub)"
           test -n "$ids"
-          # Three fields only. The container environment block never leaves.
+          # Exactly three fields leave the daemon. The container environment
+          # block, which holds every secret, never does.
           # shellcheck disable=SC2086
-          docker inspect $ids --format \
-            '{"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"ports":{{json .NetworkSettings.Ports}}}' \
-            | python3 -c 'import json,sys
-rows=[json.loads(line) for line in sys.stdin if line.strip()]
-for row in rows:
-    row["container"] = row["container"].lstrip("/")
-json.dump(rows, open("listeners.json", "w"))'
-          # Reports the whole host, including services this run did not touch.
-          # It is expected to fail while known undeclared listeners remain, so
-          # it annotates rather than failing the reconcile it follows.
+          docker inspect $ids --format "$INSPECT_FORMAT" \
+            | python3 -m scripts.published_ports normalise >listeners.json
+          # Reports the whole host, including services this run did not touch,
+          # so it is expected to annotate rather than fail while known
+          # undeclared listeners remain elsewhere on the box.
           python3 -m scripts.published_ports check-listeners \
             --environment production --observed listeners.json \
-            || echo "::warning::Host still has listeners that do not match the declaration (see log)."
+            || echo "::warning::Host has listeners that do not match deploy/published_ports.toml (see log)."
+        env:
+          INSPECT_FORMAT: '{"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"ports":{{json .NetworkSettings.Ports}}}'

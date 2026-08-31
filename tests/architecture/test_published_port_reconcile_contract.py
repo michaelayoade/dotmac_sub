@@ -222,6 +222,35 @@ def test_the_reconcile_workflow_requires_attribution() -> None:
         )
 
 
+def test_the_workflow_and_the_script_collect_listeners_identically() -> None:
+    """One collector, not two that drift.
+
+    The workflow's sweep and the script's gate 5 must ask `docker inspect` for
+    the same three fields. If they diverge, the sweep can pass on a shape the
+    gate refuses -- or, worse, quietly start pulling a field the other does not.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    sweep = next(
+        step
+        for step in workflow["jobs"]["reconcile"]["steps"]
+        if "Sweep" in step["name"]
+    )
+    fmt = sweep["env"]["INSPECT_FORMAT"]
+    assert ".Config.Env" not in fmt, (
+        "the collector must never request the container environment block"
+    )
+    assert fmt in _script(), (
+        "the workflow's docker inspect format has drifted from the script's"
+    )
+
+
+def test_both_collectors_normalise_through_the_shared_subcommand() -> None:
+    """No caller embeds its own JSON parsing."""
+    body = WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts.published_ports normalise" in body
+    assert "scripts.published_ports normalise" in _script()
+
+
 def test_the_reconcile_workflow_invokes_the_script() -> None:
     body = WORKFLOW.read_text(encoding="utf-8")
     assert "scripts/reconcile_published_ports.sh" in body
