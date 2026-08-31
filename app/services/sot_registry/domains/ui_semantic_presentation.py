@@ -857,7 +857,8 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Builds the read-only comprehensive operations map from typed "
-                "inventory, geometry, device-state, customer-address, and exact "
+                "inventory, geometry, device-state, customer-address/account-"
+                "lifecycle, and exact "
                 "RADIUS-session inputs. network.radius_sessions owns connected, "
                 "stale, offline, and inactive observations; "
                 "ui.status_presentation owns their label, tone, and icon. The "
