@@ -329,9 +329,11 @@ def test_plan_produces_the_production_bind_for_postgres(
     declaration: pp.Declaration,
 ) -> None:
     result = pp.plan(declaration, "postgres-local", "production")
-    assert result["assignments"] == {"PG_LOCAL_BIND": "0.0.0.0:"}
-    assert result["targets"][0]["expected_listeners"] == ["0.0.0.0"]
-    assert result["recreated_by_deploy"] is False
+    assert result.assignments == (
+        pp.PublishedPortAssignment(key="PG_LOCAL_BIND", value="0.0.0.0:"),
+    )
+    assert result.targets[0].expected_listeners == ("0.0.0.0",)
+    assert result.recreated_by_deploy is False
 
 
 def test_plan_refuses_a_bind_that_strands_a_required_client() -> None:
