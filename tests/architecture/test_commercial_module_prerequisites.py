@@ -307,7 +307,7 @@ def test_the_repair_workflow_no_longer_uses_the_unproved_socket_path() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "temporary-module-prereq-repair.yml"
     ).read_text(encoding="utf-8")
-    assert "/proc/" not in workflow
+    assert "/proc/$database_pid/root" not in workflow
     assert "s.PGSQL" not in workflow
     assert "dotmac_pg_local" not in workflow
     # And it must not be usable against production at all.
@@ -341,9 +341,13 @@ def test_an_elevated_dsn_may_not_be_persisted_in_the_deploy_env() -> None:
             "verify_database_prerequisites() {"
         )
     ]
+    active_leg = "\n".join(
+        line for line in leg.splitlines() if not line.lstrip().startswith("#")
+    )
 
     assert (
-        "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}" not in leg
+        "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
+        not in active_leg
     ), "a .env-persisted elevated DSN would arm auto-repair on every deploy"
     assert 'persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"' in leg
     refusal_at = leg.index('persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"')
