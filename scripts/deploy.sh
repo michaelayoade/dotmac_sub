@@ -400,23 +400,186 @@ run_migrations() {
   done
 }
 
+# --- Module database prerequisites ----------------------------------------
+#
+# Schemas and cluster roles are privileged DEPLOYMENT prerequisites, not
+# Alembic effects: the restricted migration role deliberately never holds
+# database-level CREATE (ADR-0011). Until 2026-08-31 the repair leg below
+# short-circuited whenever no elevated credential was configured, and the
+# deploy carried on to a verification it could not possibly satisfy:
+# "nothing to do" and "nothing can be done" both returned 0.
+#
+# What that cost: 20e1fb9a6 (#2819) composed the dotmac-inbox lineage, which
+# added mod_inbox to the derived contract. No environment had it. Two staging
+# deploys then failed at the verification gate. Production was never attempted
+# - the gate stopped the pipeline first, which is the gate working - and it
+# remains unprovisioned to this day.
+#
+# The leg now reports one of three outcomes and never conflates them:
+#   already_satisfied - the contract holds; nothing was written
+#   repaired          - the managed credential brought it to contract
+#   blocked           - repair is required and cannot proceed; the deploy stops
+PREREQUISITE_OUTCOME="unknown"
+
+# Where the deployment adapter finds the dedicated schema-creation credential.
+# Root-owned, 0400, never readable by the app, the runner or dotmac_app. The
+# password is only ever read by libpq from this file - never the URL, argv,
+# environment or log.
+SCHEMA_BOOTSTRAP_PGPASS="${SCHEMA_BOOTSTRAP_PGPASS:-$(env_value SCHEMA_BOOTSTRAP_PGPASS)}"
+SCHEMA_BOOTSTRAP_PGPASS="${SCHEMA_BOOTSTRAP_PGPASS:-/etc/dotmac/sub/schema-bootstrap.pgpass}"
+SCHEMA_BOOTSTRAP_PGPASS_MOUNT="${SCHEMA_BOOTSTRAP_PGPASS_MOUNT:-/run/secrets/schema-bootstrap.pgpass}"
+SCHEMA_BOOTSTRAP_URL="${SCHEMA_BOOTSTRAP_URL:-$(env_value SCHEMA_BOOTSTRAP_URL)}"
+# The fixed user that owns the credential and runs the deployment adapter.
+# Overridable because a host may run the adapter as a dedicated non-root
+# account; root is the default and what production uses.
+SCHEMA_BOOTSTRAP_OWNER="${SCHEMA_BOOTSTRAP_OWNER:-root}"
+
+module_prerequisites_satisfied() {
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only' \
+    >/dev/null 2>&1
+}
+
+# Every refusal below names the exact thing that was wrong. A bare `test` that
+# exits 1 with no output is how the 2026-08-31 production repair became
+# undiagnosable from its own log.
+schema_bootstrap_credential_available() {
+  local ok=0
+  local authority userinfo
+
+  if [[ -z "${SCHEMA_BOOTSTRAP_URL}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: SCHEMA_BOOTSTRAP_URL is not set (expected a passwordless postgresql:// URL for the dedicated bootstrap role)." >&2
+    ok=1
+  else
+    # Inspect ONLY the userinfo. A naive `*:*@*` test also matches the scheme's
+    # own colon in `postgresql://`, which would reject every correct URL.
+    authority="${SCHEMA_BOOTSTRAP_URL#*://}"
+    if [[ "${authority}" == *@* ]]; then
+      userinfo="${authority%%@*}"
+      if [[ "${userinfo}" == *:* ]]; then
+        echo "PREREQUISITE PREFLIGHT: SCHEMA_BOOTSTRAP_URL carries an inline password; the credential must come from the pgpass file instead." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if [[ ! -e "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: credential file ${SCHEMA_BOOTSTRAP_PGPASS} does not exist." >&2
+    ok=1
+  elif [[ ! -f "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is not a regular file." >&2
+    ok=1
+  else
+    local mode owner
+    mode="$(stat -c '%a' "${SCHEMA_BOOTSTRAP_PGPASS}" 2>/dev/null || echo '?')"
+    owner="$(stat -c '%U' "${SCHEMA_BOOTSTRAP_PGPASS}" 2>/dev/null || echo '?')"
+    if [[ "${mode}" != "400" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} has mode ${mode}; expected 400 (libpq refuses a group- or world-readable pgpass)." >&2
+      ok=1
+    fi
+    if [[ "${owner}" != "${SCHEMA_BOOTSTRAP_OWNER}" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is owned by ${owner}; expected ${SCHEMA_BOOTSTRAP_OWNER}." >&2
+      ok=1
+    fi
+    if [[ ! -s "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is empty." >&2
+      ok=1
+    fi
+  fi
+
+  return "${ok}"
+}
+
 run_database_prerequisite_bootstrap() {
-  local bootstrap_url
-  bootstrap_url="${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
-  if [[ -z "${bootstrap_url}" ]]; then
-    log "No BOOTSTRAP_DATABASE_URL supplied; verifying existing database prerequisites only"
+  local bootstrap_url persisted_url
+
+  # An elevated DSN persisted in the deploy directory's .env would arm
+  # auto-repair on EVERY deployment, silently and permanently: `env_value`
+  # greps that file, so the old
+  #   "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
+  # made "nobody has typed it into .env" the entire safety property. Refuse it
+  # instead of depending on that. A one-off operator provisioning run passes
+  # the DSN in the PROCESS environment, where it lasts exactly one invocation.
+  persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"
+  if [[ -n "${persisted_url}" ]]; then
+    PREREQUISITE_OUTCOME="blocked"
+    log "PREREQUISITE OUTCOME: blocked"
+    cat >&2 <<'REFUSAL'
+DEPLOY REFUSED: BOOTSTRAP_DATABASE_URL is set in the deploy directory's .env.
+
+A persisted elevated DSN turns every deployment into an auto-repairing one,
+with superuser-shaped rights, for as long as the line stays in the file. The
+managed repair leg uses the least-privilege dotmac_schema_bootstrap credential
+from a root-owned 0400 pgpass file instead, and that credential carries no
+password in the URL at all.
+
+Remove the line from .env. For a one-off elevated provisioning run, pass
+BOOTSTRAP_DATABASE_URL in the environment of that single invocation.
+REFUSAL
+    exit 1
+  fi
+
+  # Operator provisioning path: an explicitly supplied elevated connection may
+  # create cluster ROLES as well as schemas. Environment-only, so it is one
+  # deliberate invocation rather than a standing configuration.
+  bootstrap_url="${BOOTSTRAP_DATABASE_URL:-}"
+  if [[ -n "${bootstrap_url}" ]]; then
+    log "Repairing commercial module database prerequisites with the elevated bootstrap connection"
+    BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+      python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+    log "Repairing outbox dispatcher database prerequisites with the elevated bootstrap connection"
+    BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+      python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+
+    PREREQUISITE_OUTCOME="repaired"
+    log "PREREQUISITE OUTCOME: repaired (elevated operator connection)"
     return 0
   fi
 
-  log "Repairing commercial module database prerequisites with the elevated bootstrap connection"
-  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
-    python scripts/bootstrap_commercial_module_prereqs.py --repair
+  log "Checking module database prerequisites with the restricted migration connection"
+  if module_prerequisites_satisfied; then
+    PREREQUISITE_OUTCOME="already_satisfied"
+    log "PREREQUISITE OUTCOME: already_satisfied (contract holds; nothing written)"
+    return 0
+  fi
 
-  log "Repairing outbox dispatcher database prerequisites with the elevated bootstrap connection"
-  BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-    "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
-    python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+  log "Module database prerequisites are NOT satisfied; the managed repair leg is required"
+  if ! schema_bootstrap_credential_available; then
+    PREREQUISITE_OUTCOME="blocked"
+    log "PREREQUISITE OUTCOME: blocked"
+    cat >&2 <<'REFUSAL'
+DEPLOY REFUSED: module database prerequisites need repair, but the dedicated
+schema-bootstrap credential is unavailable (see PREREQUISITE PREFLIGHT lines
+above for exactly which check failed).
+
+This deploy will NOT continue to migrations. Refusing here is the point: the
+previous behaviour was to carry on and fail the verification step with no
+statement of what was missing or why nothing had been attempted.
+
+To resolve, provision the dedicated role and its held credential on this host:
+  - role dotmac_schema_bootstrap (NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOREPLICATION NOBYPASSRLS NOINHERIT), CONNECT + CREATE on this database
+    only, member of dotmac_app without admin option
+  - credential materialised root-owned 0400 at the pgpass path above
+See docs/runbooks/PRODUCTION_DEPLOYMENT.md, "Module database prerequisites".
+REFUSAL
+    exit 1
+  fi
+
+  log "Repairing module schemas with the dedicated schema-bootstrap credential"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps --user 0:0 \
+    -v "${SCHEMA_BOOTSTRAP_PGPASS}:${SCHEMA_BOOTSTRAP_PGPASS_MOUNT}:ro" \
+    -e PGPASSFILE="${SCHEMA_BOOTSTRAP_PGPASS_MOUNT}" \
+    -e BOOTSTRAP_DATABASE_URL="${SCHEMA_BOOTSTRAP_URL}" \
+    app python scripts/bootstrap_commercial_module_prereqs.py --repair-schemas
+
+  PREREQUISITE_OUTCOME="repaired"
+  log "PREREQUISITE OUTCOME: repaired (managed schema-bootstrap credential)"
 }
 
 verify_database_prerequisites() {
@@ -1036,6 +1199,9 @@ stop_candidate_gracefully
 
 trap - ERR
 log "Deployed ${TAG} successfully (was ${PREV_IMAGE:-none})"
+# Part of the deployment receipt: a promotion should be able to show which
+# of the three prerequisite outcomes this release actually took.
+log "DEPLOY RECEIPT: tag=${TAG} revision=${FULL_SHA} prerequisites=${PREREQUISITE_OUTCOME}"
 
 log "Pruning old ${IMAGE_REPO} images (keeping ${IMAGE_RETAIN_COUNT} rollback images)"
 IMAGE_REPO="${IMAGE_REPO}" RETAIN_IMAGES="${IMAGE_RETAIN_COUNT}" \

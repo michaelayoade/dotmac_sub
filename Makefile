@@ -1,4 +1,4 @@
-.PHONY: help assert-full-test-host test test-v test-cov test-ci test-ci-shard test-fast bootstrap-test-database-roles test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
+.PHONY: help schema-contract schema-contract-check assert-full-test-host test test-v test-cov test-ci test-ci-shard test-fast bootstrap-test-database-roles test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -34,7 +34,13 @@ type-check: ## Run mypy type checker
 security: ## Run bandit security scan
 	poetry run bandit -r app/ -c pyproject.toml -q
 
-check: lint type-check security ## Run all quality checks (lint + type-check + security)
+check: lint type-check security schema-contract-check ## Run all quality checks (lint + type-check + security + derived schema contract)
+
+schema-contract: ## Regenerate the derived module schema contract document
+	poetry run python scripts/render_module_schema_contract.py
+
+schema-contract-check: ## Fail if the checked-in schema contract drifted from the module declarations
+	poetry run python scripts/render_module_schema_contract.py --check
 
 lint-file: ## Lint a single file (usage: make lint-file FILE=app/services/nas.py)
 	poetry run ruff check $(FILE)
