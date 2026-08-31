@@ -241,6 +241,14 @@ def _run_command(cutoff: datetime) -> RecordPhase2VerificationCommand:
     )
 
 
+def _stable_monthly_anchor() -> datetime:
+    now = datetime.now(UTC)
+    anchor = now.replace(day=15, hour=12, minute=0, second=0, microsecond=0)
+    if anchor <= now:
+        anchor = (anchor + timedelta(days=32)).replace(day=15)
+    return anchor
+
+
 def test_phase2_exact_postpaid_period_and_amount_parity_is_durable(
     db_session,
     subscriber,
@@ -248,7 +256,7 @@ def test_phase2_exact_postpaid_period_and_amount_parity_is_durable(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
@@ -298,7 +306,7 @@ def test_phase2_postpaid_preview_proves_base_and_recurring_addon_parity(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     base_amount = Decimal("25000.00")
     addon_amount = Decimal("2000.00")
     _prepare_subscription(
@@ -362,7 +370,7 @@ def test_phase2_postpaid_addon_requires_structural_target_line_identity(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
@@ -409,7 +417,7 @@ def test_phase2_postpaid_multiple_active_addon_prices_are_not_parity(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     base_amount = Decimal("25000.00")
     addon_amount = Decimal("2000.00")
     _prepare_subscription(
@@ -478,7 +486,7 @@ def test_phase2_exact_prepaid_monthly_parity_uses_the_prepaid_owner_preview(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
@@ -516,7 +524,7 @@ def test_phase2_prepaid_recurring_addon_exclusion_remains_a_cutover_blocker(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     base_amount = Decimal("25000.00")
     addon_amount = Decimal("2000.00")
     _prepare_subscription(
@@ -577,7 +585,7 @@ def test_phase2_new_prepaid_quarterly_cadence_is_explicit_expected_difference(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("72000.00")
     _prepare_subscription(
         db_session,
@@ -617,7 +625,7 @@ def test_phase2_missing_target_obligation_blocks_approval(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
@@ -656,7 +664,7 @@ def test_phase2_incomplete_legacy_rating_provenance_is_unresolved(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
@@ -750,7 +758,7 @@ def test_phase2_run_replay_returns_the_same_evidence(
 ) -> None:
     subscriber_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    cutoff = _stable_monthly_anchor()
     amount = Decimal("25000.00")
     _prepare_subscription(
         db_session,
