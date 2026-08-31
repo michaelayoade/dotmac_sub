@@ -94,6 +94,24 @@ BACKGROUND_RUNTIME_TIMEOUT_SECONDS="${BACKGROUND_RUNTIME_TIMEOUT_SECONDS:-90}"
 BACKGROUND_STABILITY_SECONDS="${BACKGROUND_STABILITY_SECONDS:-15}"
 CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # Every service that runs the app image and must be recreated on a new build.
+#
+# Note what is NOT here, because it is load-bearing and easy to miss:
+# postgres-local, redis-local, nominatim, freeradius, genieacs and the metrics
+# services are absent. A deploy never recreates them. So a change to one of
+# those service definitions -- a published port, a volume, a command flag --
+# does NOT take effect by deploying. The repository looking fixed is not the
+# same as the host being fixed.
+#
+# For PUBLISHED PORTS there is now a managed path for exactly this, and it is
+# the one to use -- not a hand `up -d` on the box:
+#
+#   scripts/reconcile_published_ports.sh --service <name> --environment <env>
+#
+# It applies deploy/published_ports.toml, proves the environment value is what
+# compose actually resolves BEFORE recreating, and re-reads the host's actual
+# listeners afterwards. See docs/runbooks/PUBLISHED_PORT_RECONCILE.md and
+# ADR-0014. Everything else about these services still needs a deliberate,
+# separately scheduled recreate.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
   celery-worker-monitoring celery-worker-notifications-immediate \
   celery-worker-notifications celery-worker-billing \
@@ -718,8 +736,13 @@ assert_no_source_mount() {
 # profile (added after a staging scheduler wrote to production) and pins
 # staging-only object storage. Deploying without it resurrects both.
 #
-# Production has no override file, so this resolves to exactly the previous
-# single-file behaviour there. Set IGNORE_COMPOSE_OVERRIDE=1 to force it.
+# Production DOES have an override file: /root/dotmac_sub/docker-compose.override.yml,
+# 21 services, measured 2026-08-31. (An earlier version of this comment said it
+# had none, which was wrong and is the sort of thing people reason from.) It
+# tunes resources and `command` for postgres-local, redis-local and the workers,
+# and publishes team-inbox-smtp on 127.0.0.1:18001. It declares no `ports:` for
+# postgres-local, so the base file's binding is what applies there.
+# Set IGNORE_COMPOSE_OVERRIDE=1 to force single-file behaviour.
 RELEASE_COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"
 HOST_COMPOSE_OVERRIDE="${DEPLOY_DIR}/docker-compose.override.yml"
 if [[ ! -f "${RELEASE_COMPOSE_FILE}" ]]; then
