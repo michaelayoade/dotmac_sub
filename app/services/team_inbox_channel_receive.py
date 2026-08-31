@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy import func, text
@@ -48,10 +49,16 @@ from app.services.customer_identity_normalization import (
     normalize_channel_address,
 )
 from app.services.integrations.connectors import whatsapp_runtime
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import (
+    CommandContext,
+    execute_owner_savepoint,
+    owner_command_active,
+)
 from app.services.realtime_platform import EventType
 
 logger = logging.getLogger(__name__)
+
+OptionalStepT = TypeVar("OptionalStepT")
 
 if TYPE_CHECKING:
     from app.services.team_inbox_observations import InboundAttachmentObservation
@@ -618,6 +625,21 @@ def _classify_inbound(
     return request, ai_intake.prepare_async_intake(db, request)
 
 
+def _run_optional_receive_step(
+    db: Session, operation: Callable[[], OptionalStepT]
+) -> OptionalStepT:
+    """Keep optional DB work from poisoning the observation consequence.
+
+    Provider observations invoke this service inside the Team Inbox processing
+    owner command. Legacy direct callers still own their surrounding
+    transaction and therefore retain the existing transaction-neutral behavior.
+    """
+
+    if owner_command_active(db):
+        return execute_owner_savepoint(db, operation)
+    return operation()
+
+
 def receive_inbound_channel(
     db: Session,
     payload: InboundChannelPayload,
@@ -727,13 +749,16 @@ def receive_inbound_channel(
     # individual assignment remain outside this service.
     intake_request: AiIntakeRequest | None = None
     try:
-        intake_request, intake_outcome = _classify_inbound(
+        intake_request, intake_outcome = _run_optional_receive_step(
             db,
-            conversation=conversation,
-            created_conversation=created_conversation,
-            payload=payload,
-            body=body,
-            metadata=metadata,
+            lambda: _classify_inbound(
+                db,
+                conversation=conversation,
+                created_conversation=created_conversation,
+                payload=payload,
+                body=body,
+                metadata=metadata,
+            ),
         )
     except Exception as exc:
         logger.warning(
@@ -757,27 +782,32 @@ def receive_inbound_channel(
         )
         conversation.metadata_ = conversation_metadata
         try:
-            ai_session_context = ai_conversation_intake.ensure_session_for_outcome(
-                db,
-                conversation=conversation,
-                outcome=intake_outcome,
-                provider=intake_request.provider,
-                account_scope=intake_request.account_scope,
-                created_conversation=created_conversation,
-            )
-            if ai_session_context is not None:
-                ai_conversation_intake.transition_conversation_status(
+
+            def start_ai_session() -> ai_conversation_intake.AiSessionContext | None:
+                session_context = ai_conversation_intake.ensure_session_for_outcome(
                     db,
                     conversation=conversation,
-                    status=InboxConversationStatus.pending,
-                    reason=team_inbox_status.InboxStatusReason.ai_intake_started,
-                    source_id=f"ai-intake-started:{ai_session_context.session.id}",
+                    outcome=intake_outcome,
+                    provider=intake_request.provider,
+                    account_scope=intake_request.account_scope,
+                    created_conversation=created_conversation,
                 )
-                ai_conversation_intake.mark_conversation_ai_metadata(
-                    conversation,
-                    session=ai_session_context.session,
-                    active=True,
-                )
+                if session_context is not None:
+                    ai_conversation_intake.transition_conversation_status(
+                        db,
+                        conversation=conversation,
+                        status=InboxConversationStatus.pending,
+                        reason=team_inbox_status.InboxStatusReason.ai_intake_started,
+                        source_id=f"ai-intake-started:{session_context.session.id}",
+                    )
+                    ai_conversation_intake.mark_conversation_ai_metadata(
+                        conversation,
+                        session=session_context.session,
+                        active=True,
+                    )
+                return session_context
+
+            ai_session_context = _run_optional_receive_step(db, start_ai_session)
         except Exception as exc:
             logger.warning(
                 "AI intake session creation failed",

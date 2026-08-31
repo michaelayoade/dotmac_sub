@@ -16,6 +16,7 @@ from app.models.field_material import (
     FieldWorkOrderMaterial,
 )
 from app.models.subscriber import Subscriber, UserType
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
@@ -366,6 +367,38 @@ def test_material_request_api(db_session):
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "submitted"
     assert db_session.query(FieldMaterialRequest).count() == 1
+
+
+def test_material_request_api_lists_ticket_request_without_work_order(db_session):
+    user = _user(db_session, "TicketMaterialReq")
+    profile = _profile(db_session, user, crm_person_id="ticket-material-request-tech")
+    ticket = Ticket(title="Customer signal fault")
+    db_session.add(ticket)
+    db_session.flush()
+    request = FieldMaterialRequest(
+        ticket_id=ticket.id,
+        requested_by_person_id=user.id,
+        requested_by_system_user_id=user.id,
+        requested_by_technician_id=profile.id,
+        status="draft",
+        priority="medium",
+        fulfillment_channel="manual",
+    )
+    db_session.add(request)
+    db_session.commit()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(user)
+
+    response = TestClient(app).get("/api/v1/field/material-requests")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["id"] == str(request.id)
+    assert items[0]["work_order_id"] is None
 
 
 def test_atomic_material_submission_prevents_duplicate_retries(db_session):

@@ -1958,7 +1958,10 @@ function customersPage(bulkContract) {
             const ids = this.selectedIds.length > 0
                 ? this.selectedIds.map(s => `${s.type}:${s.id}`).join(',')
                 : 'all';
-            const params = new URLSearchParams(window.location.search);
+            const form = document.getElementById('customers-filters');
+            const params = form
+                ? new URLSearchParams(new FormData(form))
+                : new URLSearchParams(window.location.search);
             params.set('ids', ids);
             return `/admin/customers/export?${params.toString()}`;
         },
