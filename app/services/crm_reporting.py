@@ -286,6 +286,97 @@ def _text(value: object) -> str:
     return str(raw).replace("_", " ").title() if raw != "" else "—"
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExportQuery:
+    search: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExport:
+    filename: str
+    content: str
+
+
+def build_customer_retention_export(
+    db: Session, query: CustomerRetentionExportQuery
+) -> CustomerRetentionExport:
+    """Export the billing-risk cohort shown by the retention work queue."""
+
+    raw_rows, _ = crm_api.billing_risk_rows(db, page=1, per_page=10000)
+    term = (query.search or "").strip().casefold()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        (
+            "customer_id",
+            "customer",
+            "phone",
+            "email",
+            "status",
+            "location",
+            "plan",
+            "balance",
+            "next_bill_date",
+            "billing_start_date",
+            "blocked_date",
+            "risk_segment",
+            "recommended_action",
+        )
+    )
+    rows: list[tuple[object, ...]] = []
+    for raw in raw_rows:
+        balance = float(raw.get("balance") or 0)
+        blocked = bool(str(raw.get("blocked_date") or "").strip())
+        if not blocked and balance <= 0:
+            continue
+        customer_id = str(raw.get("id") or "").strip()
+        if not customer_id:
+            continue
+        searchable = (
+            customer_id,
+            str(raw.get("name") or ""),
+            str(raw.get("phone") or ""),
+            str(raw.get("email") or ""),
+            str(raw.get("location") or ""),
+        )
+        if term and not any(term in value.casefold() for value in searchable):
+            continue
+        segment = "Suspended" if blocked else "Due Soon"
+        action = (
+            "Review the blocked account and confirm restore conditions."
+            if blocked
+            else "Prioritize the account for billing follow-up."
+            if balance >= 50000
+            else "Review billing position and keep the account under observation."
+        )
+        rows.append(
+            (
+                customer_id,
+                raw.get("name") or "Unknown customer",
+                raw.get("phone") or "",
+                raw.get("email") or "",
+                raw.get("status") or "Unknown",
+                raw.get("location") or "Unknown location",
+                raw.get("service_plan") or "N/A",
+                balance,
+                raw.get("next_bill_date") or "",
+                raw.get("billing_start_date") or "",
+                raw.get("blocked_date") or "",
+                segment,
+                action,
+            )
+        )
+    rows.sort(
+        key=lambda row: (
+            0 if row[11] == "Suspended" else 1,
+            -float(row[7]),
+            str(row[1]).casefold(),
+        )
+    )
+    writer.writerows(rows)
+    return CustomerRetentionExport("customer-retention.csv", output.getvalue())
+
+
 def _subscriber_name(subscriber: Subscriber | None) -> str:
     if subscriber is None:
         return "Unknown subscriber"

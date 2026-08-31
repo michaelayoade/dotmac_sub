@@ -1069,6 +1069,31 @@ def reports_ticket_sla(
     return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
 
 
+@router.get(
+    "/ticket-sla/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_ticket_sla_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    open_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    content = ticket_sla_reports_service.build_violation_export_csv(
+        db=db,
+        query=ticket_sla_reports_service.TicketSlaExportQuery(
+            start_at=_parse_date_start(date_from),
+            end_at=_parse_date_end(date_to),
+            open_only=open_only,
+        ),
+    )
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ticket-sla.csv"'},
+    )
+
+
 def _seconds_label(value: float | None) -> str:
     if value is None:
         return "-"
@@ -1570,6 +1595,57 @@ def reports_inbox_escalations_export(
 # ===================================================================
 
 
+_EXTENDED_EXPORT_PERMISSIONS = {
+    web_reports_ext_service.ExtendedReportExportKind.subscriber_growth: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.usage_by_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.upcoming_charges: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_per_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.invoices: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.statements: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.tax: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.mrr: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.new_services: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.custom_pricing: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_categories: "reports:billing:export",
+}
+
+
+@router.get(
+    "/extended-export/{report_kind}",
+    dependencies=[
+        Depends(require_any_permission("reports:billing:export", "customer:read"))
+    ],
+)
+def reports_extended_export(
+    request: Request,
+    report_kind: web_reports_ext_service.ExtendedReportExportKind,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    year: int | None = None,
+    days: int = Query(default=30, ge=1, le=3660),
+    db: Session = Depends(get_db),
+):
+    if not can(request, _EXTENDED_EXPORT_PERMISSIONS[report_kind]):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    export = web_reports_ext_service.build_extended_report_export(
+        db=db,
+        query=web_reports_ext_service.ExtendedReportExportQuery(
+            kind=report_kind,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            year=year,
+            days=days,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
+
+
 @router.get(
     "/subscriber-growth",
     response_class=HTMLResponse,
@@ -1847,6 +1923,46 @@ def reports_discounts(
         )
     context["report"] = report
     return templates.TemplateResponse("admin/reports/discounts.html", dict(context))
+
+
+@router.get(
+    "/discounts/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def reports_discounts_export(
+    tab: discount_report_service.DiscountReportTab = Query(
+        default=discount_report_service.DiscountReportTab.invoices
+    ),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = None,
+    customer: str | None = None,
+    salesperson_id: UUID | None = None,
+    discount_type: discount_report_service.DocumentDiscountType | None = None,
+    invoice_status: InvoiceStatus | None = None,
+    quote_status: QuoteStatus | None = None,
+    source: InvoiceDiscountSource | None = None,
+    db: Session = Depends(get_db),
+):
+    export = discount_report_service.build_document_discount_export(
+        db=db,
+        query=discount_report_service.DocumentDiscountReportQuery(
+            tab=tab,
+            date_from=date_from,
+            date_to=date_to,
+            customer=search or customer,
+            salesperson_id=salesperson_id,
+            discount_type=discount_type,
+            invoice_status=invoice_status if tab.value == "invoices" else None,
+            quote_status=quote_status if tab.value == "quotes" else None,
+            source=source if tab.value == "invoices" else None,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
 
 
 @router.get(
