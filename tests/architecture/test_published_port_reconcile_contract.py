@@ -98,9 +98,19 @@ def test_the_script_proves_the_container_was_actually_replaced() -> None:
 
 
 def test_doing_nothing_has_its_own_exit_code() -> None:
+    """Exit 3, not 0, when the service already matches.
+
+    Anchored on the branch that emits it -- not on the header comment that also
+    names it -- so the guard cannot be satisfied by documentation alone.
+    """
     script = _script()
-    assert "ALREADY RECONCILED" in script
-    assert re.search(r"ALREADY RECONCILED[\s\S]{0,400}?^exit 3$", script, re.MULTILINE)
+    branch = script.index('log "ALREADY RECONCILED:')
+    tail = script[branch : branch + 400]
+    assert re.search(r"^\s*exit 3$", tail, re.MULTILINE), (
+        "the ALREADY RECONCILED branch must exit 3, so that 'nothing was done' "
+        "can never be read as 'the operation fixed it'"
+    )
+    assert not re.search(r"^\s*exit 0$", tail, re.MULTILINE)
 
 
 def test_the_actual_listeners_are_re_read_after_the_recreate() -> None:
