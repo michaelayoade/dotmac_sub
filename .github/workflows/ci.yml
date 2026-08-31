@@ -368,9 +368,28 @@ jobs:
       - name: Run architecture guards
         run: make test-architecture
 
+  workflow-guidance:
+    name: Workflow Guidance Gate
+    needs: [changes]
+    if: needs.changes.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require guidance changes with Admin workflow changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="HEAD^"
+          fi
+          python3 scripts/architecture/workflow_guidance_gate.py --base "$BASE"
+
   test:
     name: Tests
-    needs: [changes, python-environment, unit-shards, architecture]
+    needs: [changes, python-environment, unit-shards, architecture, workflow-guidance]
     if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -384,10 +403,12 @@ jobs:
           PYTHON_ENVIRONMENT_RESULT: ${{ needs.python-environment.result }}
           UNIT_RESULT: ${{ needs.unit-shards.result }}
           ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
+          WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}
         run: |
           test "$PYTHON_ENVIRONMENT_RESULT" = "success"
           test "$UNIT_RESULT" = "success"
           test "$ARCHITECTURE_RESULT" = "success"
+          test "$WORKFLOW_GUIDANCE_RESULT" = "success"
 
   coverage:
     name: Combine Coverage
