@@ -15,6 +15,7 @@ ALEMBIC_INI = ROOT / "alembic.ini"
 MIGRATION_546 = ROOT / "alembic" / "versions" / "546_module_db_roles_prereq.py"
 DEPLOY = ROOT / "scripts" / "deploy.sh"
 BOOTSTRAP = ROOT / "scripts" / "bootstrap_commercial_module_prereqs.py"
+TEMPORARY_REPAIR = ROOT / ".github" / "workflows" / "temporary-module-prereq-repair.yml"
 
 
 def _executed_sql(path: Path) -> str:
@@ -105,4 +106,19 @@ def test_deploy_preflights_prerequisites_before_backup_and_alembic() -> None:
     assert verify_call.start() < deploy.index("Backing up database before migrations")
     assert verify_call.start() < deploy.index(
         'log "Applying migrations (alembic upgrade heads)"'
+    )
+
+
+def test_temporary_production_repair_discovers_the_container_socket() -> None:
+    workflow = TEMPORARY_REPAIR.read_text(encoding="utf-8")
+
+    assert "for container_socket_dir in /run/postgresql /var/run/postgresql" in workflow
+    assert (
+        'candidate_socket_dir="/proc/$database_pid/root$container_socket_dir"'
+        in workflow
+    )
+    assert '[[ -S "$candidate_socket_dir/.s.PGSQL.5432" ]]' in workflow
+    assert 'if [[ -z "$socket_dir" ]]' in workflow
+    assert '--mount "type=bind,src=$socket_dir,dst=/var/run/postgresql,readonly"' in (
+        workflow
     )

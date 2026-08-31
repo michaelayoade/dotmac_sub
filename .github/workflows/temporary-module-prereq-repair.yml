@@ -153,8 +153,18 @@ jobs:
 
           database_pid="$(docker inspect dotmac_pg_local --format '{{.State.Pid}}')"
           test "$database_pid" -gt 1
-          socket_dir="/proc/$database_pid/root/var/run/postgresql"
-          test -S "$socket_dir/.s.PGSQL.5432"
+          socket_dir=""
+          for container_socket_dir in /run/postgresql /var/run/postgresql; do
+            candidate_socket_dir="/proc/$database_pid/root$container_socket_dir"
+            if [[ -S "$candidate_socket_dir/.s.PGSQL.5432" ]]; then
+              socket_dir="$candidate_socket_dir"
+              break
+            fi
+          done
+          if [[ -z "$socket_dir" ]]; then
+            echo 'Production PostgreSQL socket was not found in the database container.' >&2
+            exit 1
+          fi
           bootstrap_url="postgresql://postgres@/$database_name?host=/var/run/postgresql"
 
           compose=(docker compose -f docker-compose.yml)
@@ -168,6 +178,7 @@ jobs:
             "$REPAIR_IMAGE" \
             python scripts/bootstrap_commercial_module_prereqs.py --repair
           unset bootstrap_url database_name database_pid socket_dir
+          unset container_socket_dir candidate_socket_dir
 
           APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
             "${compose[@]}" run --rm --no-deps app sh -c \

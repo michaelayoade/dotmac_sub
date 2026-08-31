@@ -136,6 +136,12 @@ is present in the deploy environment. Do not permanently grant database-level
 `CREATE` to `dotmac_app`; the bootstrap creates/adopts the schemas and Alembic
 skips already-present declared module schema creates.
 
+The temporary production prerequisite-repair workflow obtains the elevated
+connection through the local PostgreSQL container's Unix socket. It discovers
+the socket below the container process root, accepting `/run/postgresql` and
+the compatible `/var/run/postgresql` layout, and fails before repair when
+neither path contains the live PostgreSQL socket.
+
 The outbox dispatcher bootstrap also owns the function-ownership prerequisites
 for migration `557_outbox_relay_prereq`. The restricted migration role must be
 able to become the definer, and the definer must be able to own functions in
