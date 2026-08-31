@@ -14,6 +14,7 @@ MIGRATION = ROOT / "alembic/versions/472_service_extension_reversals.py"
 def test_service_extension_reversal_is_the_single_additive_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
 
     # Single-headed with this revision in the head's ancestry. Naming the exact

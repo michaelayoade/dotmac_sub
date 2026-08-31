@@ -434,7 +434,7 @@ def test_dispatch_staff_push_uses_fcm_service(db_session, monkeypatch):
         title,
         body,
         *,
-        data,
+        intent,
         notification_id,
     ):
         calls.append(
@@ -442,7 +442,7 @@ def test_dispatch_staff_push_uses_fcm_service(db_session, monkeypatch):
                 "system_user_id": system_user_id,
                 "title": title,
                 "body": body,
-                "data": data,
+                "intent": intent,
                 "notification_id": notification_id,
             }
         )
@@ -459,6 +459,8 @@ def test_dispatch_staff_push_uses_fcm_service(db_session, monkeypatch):
     assert calls[0]["system_user_id"] == str(user.id)
     assert calls[0]["title"] == "OUTAGE ESCALATION: Garki POP"
     assert calls[0]["body"] == "Owner update overdue"
+    assert calls[0]["intent"].intent_code == "operational.escalation"
+    assert calls[0]["intent"].subject_id == str(delivery.id)
     assert calls[0]["notification_id"] == str(delivery.id)
 
 

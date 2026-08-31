@@ -19,6 +19,9 @@ from scripts.release_artifact_contract import (
     GitTreeSha,
     MainAuthorizationEvidence,
     OCIImageDigest,
+    ProductionBootstrapAuthorization,
+    ProductionRollbackAuthorization,
+    ProductionServerName,
     ProductManifestDigest,
     ReleaseArtifactEvidence,
     ReleaseCandidateRecord,
@@ -33,6 +36,8 @@ SCHEMA_VERSION = 2
 _CANDIDATE_KIND = "dotmac.release_candidate"
 _STAGING_KIND = "dotmac.staging_acceptance"
 _PRODUCTION_KIND = "dotmac.production_authorization"
+_ROLLBACK_KIND = "dotmac.production_rollback_authorization"
+_BOOTSTRAP_KIND = "dotmac.production_bootstrap_authorization"
 
 
 class EvidenceDocumentError(ValueError):
@@ -256,6 +261,7 @@ def write_production_authorization(
             "product_manifest_digest": artifact.product_manifest_digest.value,
             "build_run_id": artifact.build_run_id.value,
             "staging_deployment_id": staging.deployment_id.value,
+            "authorization_main_revision": main.authorization_main_revision.value,
             "release_revision": main.release_revision.value,
             "release_tree": main.release_tree.value,
             "authorization_run_id": main.authorization_run_id.value,
@@ -276,6 +282,7 @@ def read_production_authorization(path: Path) -> ReleaseCandidateRecord:
             "product_manifest_digest",
             "build_run_id",
             "staging_deployment_id",
+            "authorization_main_revision",
             "release_revision",
             "release_tree",
             "authorization_run_id",
@@ -311,6 +318,9 @@ def read_production_authorization(path: Path) -> ReleaseCandidateRecord:
                 authorization_run_id=WorkflowRunId(
                     _required_positive_int(document, "authorization_run_id")
                 ),
+                authorization_main_revision=GitCommitSha(
+                    _required_string(document, "authorization_main_revision")
+                ),
                 release_revision=GitCommitSha(
                     _required_string(document, "release_revision")
                 ),
@@ -328,10 +338,130 @@ def read_production_authorization(path: Path) -> ReleaseCandidateRecord:
     return record
 
 
+def write_rollback_authorization(
+    path: Path,
+    authorization: ProductionRollbackAuthorization,
+) -> None:
+    """Write one transition-bound production rollback authorization."""
+
+    _write_document(
+        path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": _ROLLBACK_KIND,
+            "from_revision": authorization.from_revision.value,
+            "to_revision": authorization.to_revision.value,
+            "change_reference": authorization.change_reference,
+            "reason": authorization.reason,
+        },
+    )
+
+
+def read_rollback_authorization(path: Path) -> ProductionRollbackAuthorization:
+    """Read and validate a production rollback authorization document."""
+
+    document = _read_document(
+        path,
+        kind=_ROLLBACK_KIND,
+        fields={"from_revision", "to_revision", "change_reference", "reason"},
+    )
+    try:
+        return ProductionRollbackAuthorization(
+            from_revision=GitCommitSha(_required_string(document, "from_revision")),
+            to_revision=GitCommitSha(_required_string(document, "to_revision")),
+            change_reference=_required_string(document, "change_reference"),
+            reason=_required_string(document, "reason"),
+        )
+    except ReleaseContractError as exc:
+        raise EvidenceDocumentError(f"invalid rollback authorization: {exc}") from exc
+
+
+def verify_rollback_authorization(
+    authorization: ProductionRollbackAuthorization,
+    *,
+    running_revision: GitCommitSha,
+    target_revision: GitCommitSha,
+) -> None:
+    """Bind a rollback authorization to the exact transition it authorizes.
+
+    A document naming a different transition is refused rather than accepted
+    as a general permission, so yesterday's approved rollback cannot silently
+    authorize today's different one.
+    """
+
+    if authorization.from_revision != running_revision:
+        raise EvidenceDocumentError(
+            "rollback authorization does not name the running revision"
+        )
+    if authorization.to_revision != target_revision:
+        raise EvidenceDocumentError(
+            "rollback authorization does not name the deploying revision"
+        )
+
+
+def write_bootstrap_authorization(
+    path: Path,
+    authorization: ProductionBootstrapAuthorization,
+) -> None:
+    """Write one host- and revision-bound first-deployment authorization."""
+
+    _write_document(
+        path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": _BOOTSTRAP_KIND,
+            "target_revision": authorization.target_revision.value,
+            "target_server": authorization.target_server.value,
+            "change_reference": authorization.change_reference,
+            "reason": authorization.reason,
+        },
+    )
+
+
+def read_bootstrap_authorization(path: Path) -> ProductionBootstrapAuthorization:
+    """Read and validate a first-deployment authorization document."""
+
+    document = _read_document(
+        path,
+        kind=_BOOTSTRAP_KIND,
+        fields={"target_revision", "target_server", "change_reference", "reason"},
+    )
+    try:
+        return ProductionBootstrapAuthorization(
+            target_revision=GitCommitSha(_required_string(document, "target_revision")),
+            target_server=ProductionServerName(
+                _required_string(document, "target_server")
+            ),
+            change_reference=_required_string(document, "change_reference"),
+            reason=_required_string(document, "reason"),
+        )
+    except ReleaseContractError as exc:
+        raise EvidenceDocumentError(f"invalid bootstrap authorization: {exc}") from exc
+
+
+def verify_bootstrap_authorization(
+    authorization: ProductionBootstrapAuthorization,
+    *,
+    target_revision: GitCommitSha,
+    target_server: ProductionServerName,
+) -> None:
+    """Bind bootstrap authority to the exact empty-host deployment."""
+
+    if authorization.target_revision != target_revision:
+        raise EvidenceDocumentError(
+            "bootstrap authorization does not name the deploying revision"
+        )
+    if authorization.target_server != target_server:
+        raise EvidenceDocumentError(
+            "bootstrap authorization does not name the production server"
+        )
+
+
 def verify_production_authorization(
     candidate: ReleaseCandidateRecord,
     *,
     expected_authorization_run_id: WorkflowRunId | None = None,
+    expected_authorization_main_revision: GitCommitSha | None = None,
     expected_source_revision: GitCommitSha | None = None,
     expected_release_revision: GitCommitSha | None = None,
     expected_image_digest: OCIImageDigest | None = None,
@@ -345,6 +475,12 @@ def verify_production_authorization(
         and candidate.main.authorization_run_id != expected_authorization_run_id
     ):
         raise EvidenceDocumentError("authorization workflow run does not match")
+    if (
+        expected_authorization_main_revision is not None
+        and candidate.main.authorization_main_revision
+        != expected_authorization_main_revision
+    ):
+        raise EvidenceDocumentError("authorizing main revision does not match")
     if (
         expected_source_revision is not None
         and candidate.artifact.source_revision != expected_source_revision
@@ -408,15 +544,41 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
     )
     authorize.add_argument("--authorization-run-id", required=True, type=int)
+    authorize.add_argument("--authorization-main-revision", required=True)
     authorize.add_argument("--release-revision", required=True)
     authorize.add_argument("--release-tree", required=True)
     authorize.add_argument("--source-revision-is-ancestor", action="store_true")
     authorize.add_argument("--output", required=True, type=_document_path)
     authorize.add_argument("--github-output", required=True, type=Path)
 
+    write_rollback = commands.add_parser("write-rollback-authorization")
+    write_rollback.add_argument("--from-revision", required=True)
+    write_rollback.add_argument("--to-revision", required=True)
+    write_rollback.add_argument("--change-reference", required=True)
+    write_rollback.add_argument("--reason", required=True)
+    write_rollback.add_argument("--output", required=True, type=_document_path)
+
+    verify_rollback = commands.add_parser("verify-rollback-authorization")
+    verify_rollback.add_argument("--path", required=True, type=Path)
+    verify_rollback.add_argument("--running-revision", required=True)
+    verify_rollback.add_argument("--target-revision", required=True)
+
+    write_bootstrap = commands.add_parser("write-bootstrap-authorization")
+    write_bootstrap.add_argument("--target-revision", required=True)
+    write_bootstrap.add_argument("--target-server", required=True)
+    write_bootstrap.add_argument("--change-reference", required=True)
+    write_bootstrap.add_argument("--reason", required=True)
+    write_bootstrap.add_argument("--output", required=True, type=_document_path)
+
+    verify_bootstrap = commands.add_parser("verify-bootstrap-authorization")
+    verify_bootstrap.add_argument("--path", required=True, type=Path)
+    verify_bootstrap.add_argument("--target-revision", required=True)
+    verify_bootstrap.add_argument("--target-server", required=True)
+
     production = commands.add_parser("verify-production")
     production.add_argument("--path", required=True, type=Path)
     production.add_argument("--expected-authorization-run-id", type=int)
+    production.add_argument("--expected-authorization-main-revision")
     production.add_argument("--expected-source-revision")
     production.add_argument("--expected-release-revision")
     production.add_argument("--expected-image-digest")
@@ -491,6 +653,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             staging=staging_evidence,
             main=MainAuthorizationEvidence(
                 authorization_run_id=WorkflowRunId(args.authorization_run_id),
+                authorization_main_revision=GitCommitSha(
+                    args.authorization_main_revision
+                ),
                 release_revision=GitCommitSha(args.release_revision),
                 release_tree=GitTreeSha(args.release_tree),
                 required_ci_conclusion=EvidenceConclusion.SUCCESS,
@@ -507,10 +672,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "product_manifest_digest": artifact.product_manifest_digest.value,
                 "build_run_id": artifact.build_run_id.value,
                 "staging_deployment_id": staging_evidence.deployment_id.value,
+                "authorization_main_revision": args.authorization_main_revision,
                 "release_revision": args.release_revision,
                 "release_tree": args.release_tree,
                 "authorization_run_id": args.authorization_run_id,
             },
+        )
+        return 0
+
+    if args.command == "write-rollback-authorization":
+        write_rollback_authorization(
+            args.output,
+            ProductionRollbackAuthorization(
+                from_revision=GitCommitSha(args.from_revision),
+                to_revision=GitCommitSha(args.to_revision),
+                change_reference=args.change_reference,
+                reason=args.reason,
+            ),
+        )
+        return 0
+
+    if args.command == "verify-rollback-authorization":
+        verify_rollback_authorization(
+            read_rollback_authorization(args.path),
+            running_revision=GitCommitSha(args.running_revision),
+            target_revision=GitCommitSha(args.target_revision),
+        )
+        return 0
+
+    if args.command == "write-bootstrap-authorization":
+        write_bootstrap_authorization(
+            args.output,
+            ProductionBootstrapAuthorization(
+                target_revision=GitCommitSha(args.target_revision),
+                target_server=ProductionServerName(args.target_server),
+                change_reference=args.change_reference,
+                reason=args.reason,
+            ),
+        )
+        return 0
+
+    if args.command == "verify-bootstrap-authorization":
+        verify_bootstrap_authorization(
+            read_bootstrap_authorization(args.path),
+            target_revision=GitCommitSha(args.target_revision),
+            target_server=ProductionServerName(args.target_server),
         )
         return 0
 
@@ -521,6 +727,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_authorization_run_id=(
                 WorkflowRunId(args.expected_authorization_run_id)
                 if args.expected_authorization_run_id is not None
+                else None
+            ),
+            expected_authorization_main_revision=(
+                GitCommitSha(args.expected_authorization_main_revision)
+                if args.expected_authorization_main_revision is not None
                 else None
             ),
             expected_source_revision=(
@@ -556,6 +767,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         record.staging.deployment_id.value
                         if record.staging is not None
                         else 0
+                    ),
+                    "authorization_main_revision": (
+                        record.main.authorization_main_revision.value
                     ),
                     "release_revision": record.main.release_revision.value,
                     "release_tree": record.main.release_tree.value,

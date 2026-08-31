@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from app.services.dotmac_erp.client import (
+    DotMacERPAuthError,
     DotMacERPClient,
     DotMacERPError,
     DotMacERPRateLimitError,
@@ -91,6 +92,50 @@ class DotmacErpRunner:
             return ValidationResult(valid=False, error_codes=("erp_unreachable",))
         except Exception:
             return ValidationResult(valid=False, error_codes=("validation_failed",))
+        return ValidationResult(valid=True)
+
+    def validate_capability(
+        self,
+        *,
+        capability_id: str,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> ValidationResult:
+        if capability_id != ERP_OPERATIONAL_SYNC_CAPABILITY:
+            return self.validate(
+                manifest=manifest,
+                config=config,
+                secret_material=secret_material,
+            )
+        if not str(config.get("base_url") or "").strip():
+            return ValidationResult(valid=False, error_codes=("base_url_missing",))
+        if self._client_override is None and not secret_material.get(
+            "service_credentials"
+        ):
+            return ValidationResult(
+                valid=False,
+                error_codes=("service_credentials_missing",),
+            )
+        client = self._client(config, secret_material)
+        try:
+            client.sync_operational_domains(ErpOperationalSyncCommand())
+        except DotMacERPAuthError:
+            return ValidationResult(
+                valid=False,
+                error_codes=("erp_operational_scope_missing",),
+                details={"required_scope": "sub:domain:write"},
+            )
+        except DotMacERPError:
+            return ValidationResult(
+                valid=False,
+                error_codes=("erp_operational_sync_unavailable",),
+            )
+        except Exception:
+            return ValidationResult(valid=False, error_codes=("validation_failed",))
+        finally:
+            if self._client_override is None:
+                client.close()
         return ValidationResult(valid=True)
 
     def execute(
@@ -189,10 +234,16 @@ class DotmacErpRunner:
                 )
         elif capability_id == ERP_STATUS_CAPABILITY:
             if action == "expense_claim_status":
-                return {"item": client.get_expense_claim_status(str(params["omni_id"]))}
+                return {
+                    "item": client.get_expense_claim_status(
+                        str(params["source_claim_id"])
+                    )
+                }
             if action == "material_request_status":
                 return {
-                    "item": client.get_material_request_status(str(params["omni_id"]))
+                    "item": client.get_material_request_status(
+                        str(params["source_request_id"])
+                    )
                 }
             if action == "purchase_invoice_status":
                 return {

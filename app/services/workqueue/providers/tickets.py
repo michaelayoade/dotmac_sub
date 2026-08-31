@@ -29,7 +29,7 @@ from app.services.workqueue.types import ActionKind, ItemKind, WorkqueueItem
 CLOSED_TICKET_STATUSES = (
     TicketStatus.closed.value,
     TicketStatus.canceled.value,
-    TicketStatus.merged.value,
+    "merged",  # Rolling-deploy compatibility until the status backfill completes.
 )
 
 TRIAGE_STATUSES = frozenset({TicketStatus.new.value, TicketStatus.open.value})

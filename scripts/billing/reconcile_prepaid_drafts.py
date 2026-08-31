@@ -22,6 +22,7 @@ from app.services.prepaid_draft_reconciliation import (
     CreateReviewedPaidPrepaidInvoiceCommand,
     MissingPaidPrepaidInvoiceRepairQuery,
     OpeningSettlementCorrectionQuery,
+    PaidPrepaidInvoiceRepairCohortQuery,
     PaidPrepaidInvoiceRepairQuery,
     PrepaidDraftReconciliationPreview,
     PrepaidProformaAdoptionQuery,
@@ -32,6 +33,7 @@ from app.services.prepaid_draft_reconciliation import (
     create_reviewed_paid_prepaid_invoice,
     preview_funded_prepaid_proforma_adoption,
     preview_historical_paid_prepaid_invoice_repair,
+    preview_historical_paid_prepaid_invoice_repair_cohort,
     preview_missing_paid_prepaid_invoice_repair,
     preview_opening_settlement_correction,
     preview_prepaid_draft_cohort,
@@ -401,10 +403,19 @@ def main() -> int:
         missing = [name for name, value in required if not value]
         if missing:
             parser.error("--apply requires " + ", ".join(missing))
-        if not args.repair_missing_paid_invoice and (
-            args.account_id is not None or args.limit is not None
+        if (
+            not args.repair_missing_paid_invoice
+            and not args.repair_paid_invoice
+            and (args.account_id is not None or args.limit is not None)
         ):
             parser.error("--account-id and --limit are preview-only")
+        if args.repair_paid_invoice and (
+            args.account_id is not None or args.limit is not None
+        ):
+            parser.error(
+                "--repair-paid-invoice apply is single-document only; "
+                "--account-id and --limit are preview-only"
+            )
         with db_session_adapter.owner_command_session() as db:
             context = CommandContext.system(
                 actor=args.actor,
@@ -596,11 +607,27 @@ def main() -> int:
         )
         return 0
 
-    if (args.adopt_proforma or args.repair_paid_invoice) and (
+    if args.adopt_proforma and (
         args.invoice_id is None or args.subscription_id is None
     ):
         parser.error(
-            "document repair preview requires --invoice-id and --subscription-id"
+            "proforma adoption preview requires --invoice-id and --subscription-id"
+        )
+    if args.repair_paid_invoice and (
+        (args.invoice_id is None) != (args.subscription_id is None)
+    ):
+        parser.error(
+            "--repair-paid-invoice requires both --invoice-id and "
+            "--subscription-id for single-document preview/apply"
+        )
+    if (
+        args.repair_paid_invoice
+        and args.invoice_id is not None
+        and (args.account_id is not None or args.limit is not None)
+    ):
+        parser.error(
+            "--account-id and --limit can only be used with "
+            "--repair-paid-invoice cohort preview"
         )
     if args.subscription_id is not None and not (
         args.adopt_proforma
@@ -610,10 +637,8 @@ def main() -> int:
         parser.error(
             "--subscription-id requires --adopt-proforma or --repair-paid-invoice"
         )
-    if (args.adopt_proforma or args.repair_paid_invoice) and (
-        args.account_id is not None or args.limit is not None
-    ):
-        parser.error("--account-id and --limit cannot be used with document repair")
+    if args.adopt_proforma and (args.account_id is not None or args.limit is not None):
+        parser.error("--account-id and --limit cannot be used with proforma adoption")
 
     previews: tuple[PrepaidDraftReconciliationPreview, ...]
     with db_session_adapter.read_session() as db:
@@ -652,7 +677,7 @@ def main() -> int:
                 "operation": "adopt_funded_prepaid_proforma",
                 "item": _proforma_adoption_preview_payload(adoption_preview),
             }
-        elif args.repair_paid_invoice:
+        elif args.repair_paid_invoice and args.invoice_id is not None:
             repair_preview = preview_historical_paid_prepaid_invoice_repair(
                 db,
                 PaidPrepaidInvoiceRepairQuery(
@@ -664,6 +689,24 @@ def main() -> int:
                 "dry_run": True,
                 "operation": "repair_historical_paid_prepaid_invoice",
                 "item": _paid_invoice_repair_preview_payload(repair_preview),
+            }
+        elif args.repair_paid_invoice:
+            repair_previews = preview_historical_paid_prepaid_invoice_repair_cohort(
+                db,
+                PaidPrepaidInvoiceRepairCohortQuery(
+                    account_id=args.account_id,
+                    limit=args.limit,
+                ),
+            )
+            payload = {
+                "dry_run": True,
+                "operation": "repair_historical_paid_prepaid_invoice_cohort",
+                "candidate_count": len(repair_previews),
+                "actionable_count": sum(item.actionable for item in repair_previews),
+                "items": [
+                    _paid_invoice_repair_preview_payload(item)
+                    for item in repair_previews
+                ],
             }
         elif args.invoice_id is not None:
             previews = (preview_prepaid_draft_reconciliation(db, args.invoice_id),)

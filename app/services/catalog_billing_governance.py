@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -76,6 +78,27 @@ _VERSION_CRITICAL_FIELDS = frozenset(
         "status",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyOfferPriceAtRenewal:
+    """Apply a base catalog amount to future renewals of linked subscriptions."""
+
+    offer_price_id: UUID
+    offer_id: UUID
+    previous_amount: Decimal
+    next_amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyOfferPriceAtRenewalOutcome:
+    offer_price_id: UUID
+    offer_id: UUID
+    affected_subscription_ids: tuple[UUID, ...]
+
+    @property
+    def affected_subscription_count(self) -> int:
+        return len(self.affected_subscription_ids)
 
 
 def _comparable(value: Any) -> Any:
@@ -237,7 +260,8 @@ def assert_offer_price_update_safe(
                 },
             )
     critical = set(changes).intersection(_PRICE_CRITICAL_FIELDS)
-    if not critical:
+    blocked = critical - {"amount"}
+    if not blocked:
         return
     offer_ids = {price.offer_id}
     if changes.get("offer_id") is not None:
@@ -247,9 +271,44 @@ def assert_offer_price_update_safe(
         _raise_live_catalog_mutation(
             entity_type="offer_price",
             entity_id=price.id,
-            fields=critical,
+            fields=blocked,
             subscription_count=count,
         )
+
+
+def apply_offer_price_at_renewal(
+    db: Session,
+    command: ApplyOfferPriceAtRenewal,
+) -> ApplyOfferPriceAtRenewalOutcome:
+    """Project a changed base offer amount onto each future renewal.
+
+    Existing invoice lines and billing evidence are immutable and are not
+    touched.  The subscription price is the runtime renewal-price projection,
+    so changing it before ``next_billing_at`` makes the new amount effective at
+    the next charge.  Subscriptions pinned to an offer version are excluded;
+    their version price remains authoritative.
+    """
+
+    subscriptions = tuple(
+        db.scalars(
+            select(Subscription)
+            .where(
+                Subscription.offer_id == command.offer_id,
+                Subscription.offer_version_id.is_(None),
+                Subscription.status.in_(_LIVE_SUBSCRIPTION_STATUSES),
+            )
+            .order_by(Subscription.id)
+            .with_for_update()
+        ).all()
+    )
+    for subscription in subscriptions:
+        subscription.unit_price = command.next_amount
+    db.flush()
+    return ApplyOfferPriceAtRenewalOutcome(
+        offer_price_id=command.offer_price_id,
+        offer_id=command.offer_id,
+        affected_subscription_ids=tuple(row.id for row in subscriptions),
+    )
 
 
 def _live_add_on_subscription_count(db: Session, add_on_id: object) -> int:
@@ -481,7 +540,7 @@ def stage_billing_catalog_change(
             title="Billing-critical catalog changed",
             summary=(
                 f"{entity_type} {entity_id} was {action}. Review the audit trail "
-                "before migrating subscriptions."
+                "and affected renewal projections."
             ),
             details={
                 "entity_type": entity_type,
@@ -507,6 +566,8 @@ def stage_billing_catalog_change(
 
 
 __all__ = [
+    "ApplyOfferPriceAtRenewal",
+    "ApplyOfferPriceAtRenewalOutcome",
     "BILLING_CATALOG_PERMISSION",
     "assert_add_on_price_create_safe",
     "assert_add_on_price_update_safe",
@@ -516,6 +577,7 @@ __all__ = [
     "assert_offer_version_price_create_safe",
     "assert_offer_version_price_update_safe",
     "assert_offer_version_update_safe",
+    "apply_offer_price_at_renewal",
     "billing_critical_changes",
     "billing_field_changes",
     "stage_billing_catalog_change",

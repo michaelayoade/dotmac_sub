@@ -35,9 +35,10 @@ Column re-pointing (§1.8):
     in sub (``subscribers.metadata->>'crm_person_id'``);
   * ``projects.subscriber_id`` resolves through link key 1
     (``subscribers.crm_subscriber_id`` + ``crm_alias_ids``);
-  * staff person / Phase 4 agent / campaign / Phase 5 inventory UUIDs carry
-    verbatim (FK-dropped columns); ``--staff-map`` only feeds the
-    informational unmapped-staff CSV;
+  * CRM agent ownership resolves through ``crm_agents.person_id`` and the
+    ``--staff-map`` artifact so leads and sales orders store native sub
+    ``system_users.id`` values; unresolved owners retain their source UUID and
+    are reported for repair;
   * ``project_tasks.ticket_id`` re-keys through the Phase 1 map
     (``support_tickets.metadata->>'crm_ticket_id'``); dangling ids null out
     into a CSV (risk #14);
@@ -150,6 +151,7 @@ REPORT_ACTIONS = (
     "deferred_work_links",
     "subscriber_sales_order_mismatch",
     "unmapped_staff",
+    "unresolved_agent_owners",
 )
 
 # (table, column) pairs whose UUIDs are staff people carried verbatim (§1.8);
@@ -1005,6 +1007,7 @@ class RunContext:
     subscriber_map: dict[str, str]
     staff_map: dict[str, str]
     ticket_map: dict[str, str]
+    crm_agent_map: dict[str, str] = field(default_factory=dict)
     stats: ImportStats = field(default_factory=ImportStats)
     reports: dict[str, list[dict[str, Any]]] = field(
         default_factory=lambda: {name: [] for name in REPORT_ACTIONS}
@@ -1038,6 +1041,60 @@ class RunContext:
         person_id = _uuid_or_none(value)
         if person_id:
             self.staff_seen.setdefault((table, column), set()).add(person_id.lower())
+
+
+def resolve_imported_owner_agent_id(
+    owner_agent_id: Any, crm_agent_map: dict[str, str]
+) -> str | None:
+    """Translate a CRM agent identity to its native sub SystemUser identity."""
+
+    normalized = _uuid_or_none(owner_agent_id)
+    if not normalized:
+        return None
+    return crm_agent_map.get(normalized.lower(), normalized)
+
+
+def _resolve_and_report_owner_agent_id(
+    ctx: RunContext, *, table: str, row_id: str, owner_agent_id: Any
+) -> str | None:
+    resolved = resolve_imported_owner_agent_id(owner_agent_id, ctx.crm_agent_map)
+    source_id = _uuid_or_none(owner_agent_id)
+    if source_id and resolved == source_id:
+        ctx.reports["unresolved_agent_owners"].append(
+            {
+                "table": table,
+                "crm_id": row_id,
+                "crm_agent_id": source_id,
+                "reason": "missing_crm_agent_staff_mapping",
+            }
+        )
+    return resolved
+
+
+def _load_crm_agent_map(crm: Connection, staff_map: dict[str, str]) -> dict[str, str]:
+    """Build crm_agents.id -> system_users.id through the staff person map."""
+
+    if not staff_map:
+        return {}
+    rows = _rows(
+        crm.execute(
+            text(
+                """
+                SELECT id::text AS agent_id, person_id::text AS person_id
+                FROM crm_agents
+                WHERE person_id IS NOT NULL
+                """
+            )
+        )
+    )
+    resolved: dict[str, str] = {}
+    for row in rows:
+        agent_id = _uuid_or_none(row.get("agent_id"))
+        person_id = _uuid_or_none(row.get("person_id"))
+        system_user_id = staff_map.get(person_id.lower()) if person_id else None
+        if agent_id and system_user_id:
+            resolved[agent_id.lower()] = system_user_id
+    return resolved
 
 
 def _execute_upserts(
@@ -1255,7 +1312,12 @@ def _import_leads(sub: Connection, crm: Connection, ctx: RunContext) -> None:
                 "subscriber_id": resolution.subscriber_id,
                 "pipeline_id": row.get("pipeline_id"),
                 "stage_id": row.get("stage_id"),
-                "owner_agent_id": row.get("owner_agent_id"),
+                "owner_agent_id": _resolve_and_report_owner_agent_id(
+                    ctx,
+                    table="leads",
+                    row_id=row["id"],
+                    owner_agent_id=row.get("owner_agent_id"),
+                ),
                 "title": row.get("title"),
                 "status": row.get("status") or "new",
                 "estimated_value": row.get("estimated_value"),
@@ -1684,7 +1746,12 @@ def _import_sales_orders(
                 "id": row["id"],
                 "quote_id": quote_id,
                 "subscriber_id": resolution.subscriber_id,
-                "owner_agent_id": row.get("owner_agent_id"),
+                "owner_agent_id": _resolve_and_report_owner_agent_id(
+                    ctx,
+                    table="sales_orders",
+                    row_id=row["id"],
+                    owner_agent_id=row.get("owner_agent_id"),
+                ),
                 "source": row.get("source"),
                 "order_number": row.get("order_number"),
                 "status": row.get("status") or "draft",
@@ -2558,6 +2625,7 @@ def run_import(
     ctx: RunContext,
     validate_lead_fk_flag: bool,
 ) -> ImportStats:
+    ctx.crm_agent_map = _load_crm_agent_map(crm, ctx.staff_map)
     _import_pipelines(sub, crm, ctx)
     _import_pipeline_stages(sub, crm, ctx)
     _import_leads(sub, crm, ctx)
@@ -2634,8 +2702,8 @@ def main() -> None:
     parser.add_argument(
         "--staff-map",
         help=(
-            "staff_map.csv from build_crm_staff_map.py; staff UUIDs carry "
-            "verbatim either way — the map only feeds the unmapped_staff CSV."
+            "staff_map.csv from build_crm_staff_map.py; maps CRM agent owners "
+            "to native system users and feeds the unmapped_staff CSV."
         ),
     )
     parser.add_argument(

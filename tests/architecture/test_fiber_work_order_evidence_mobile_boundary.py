@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,8 +26,18 @@ def test_mobile_evidence_cache_identity_is_exact_job_plus_report_hash():
     assert "principalScope," in source
     assert "workOrderPublicId," in source
     assert "reportSha256," in source
-    assert "int get schemaVersion => 5" in source
+
+    # The identity this test is named for is the columns above plus the
+    # migration that creates the table at schema step 5. That step is the
+    # durable invariant; the CURRENT schema version is not, because every
+    # later migration moves it. Pinning the literal made an unrelated schema
+    # bump fail this guard with a message about evidence identity, so assert
+    # a floor the version can only advance past, never equality.
+    assert "if (from < 5) {" in source
     assert "await m.createTable(cachedWorkOrderEvidenceMaps)" in source
+    declared = re.search(r"int get schemaVersion => (\d+);", source)
+    assert declared, "field_mobile database.dart declares no schemaVersion"
+    assert int(declared.group(1)) >= 5
 
 
 def test_mobile_repository_is_get_only_and_never_falls_back_across_jobs():

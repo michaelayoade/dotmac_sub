@@ -22,11 +22,20 @@ def test_terminal_closed_not_reopened_by_crm_or_automation():
         assert t.status == "closed"
 
 
-def test_merged_and_canceled_are_terminal():
+def test_legacy_merged_and_canceled_are_terminal():
     for terminal in ("merged", "canceled"):
         t = Ticket(status=terminal)
         assert transition_ticket_status(t, "open", source="crm_pull") is False
         assert t.status == terminal
+
+
+def test_merged_cannot_be_persisted_as_a_new_status():
+    t = Ticket(status="open")
+
+    with pytest.raises(ValueError, match="Invalid ticket status"):
+        transition_ticket_status(t, "merged", source="api")
+
+    assert t.status == "open"
 
 
 def test_admin_may_reopen_with_allow_reopen():

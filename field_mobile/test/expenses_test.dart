@@ -4,13 +4,11 @@ import 'dart:io' as io;
 import 'package:dio/dio.dart';
 import 'package:dotmac_field/core/api/api_client.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
-import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/draft_store.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
-import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +16,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   late ProviderContainer container;
@@ -694,9 +693,12 @@ void main() {
   test(
     'DraftStore saves, loads and deletes an expense request draft',
     () async {
-      final db = AppDatabase(NativeDatabase.memory());
-      addTearDown(db.close);
-      final store = DraftStore(db);
+      final secure = await openTestStore();
+      final store = DraftStore(
+        db: secure.database,
+        cipher: secure.cipher,
+        scopeKey: secure.scopeKey,
+      );
 
       await store.save(
         id: expenseRequestDraftId,

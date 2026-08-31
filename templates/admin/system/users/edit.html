@@ -24,6 +24,11 @@
         {{ error }}
     </div>
     {% endif %}
+    {% if success %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
+        {{ success }}
+    </div>
+    {% endif %}
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="/admin/system/users/{{ user.id }}/edit" class="space-y-6 p-6">
@@ -117,6 +122,14 @@
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
             <h2 class="font-semibold text-slate-900 dark:text-white">Access assignments</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Local access changes are committed independently from profile updates. Source-managed roles are read-only here.</p>
+            <p class="mt-2 text-sm text-slate-700 dark:text-slate-300">
+                Field Service App:
+                {% if field_technician_access %}
+                <span class="font-medium text-emerald-700 dark:text-emerald-300">Enabled</span>
+                {% else %}
+                <span class="font-medium text-slate-500 dark:text-slate-400">Not enabled</span>
+                {% endif %}
+            </p>
         </div>
         <form method="post" action="/admin/system/users/{{ user.id }}/assignments" class="space-y-6 p-6">
             {% include "components/forms/csrf_input.html" %}

@@ -1082,6 +1082,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_service_coverage_reconciliation.command_contract_violation",
                     "financial.prepaid_service_coverage_reconciliation.idempotency_conflict",
                     "financial.prepaid_service_coverage_reconciliation.incomplete_repair",
+                    "financial.prepaid_service_coverage_reconciliation.invoice_not_found",
                     "financial.prepaid_service_coverage_reconciliation.invalid_command_context",
                     "financial.prepaid_service_coverage_reconciliation.invalid_reason",
                     "financial.prepaid_service_coverage_reconciliation.missing_idempotency_key",
@@ -1091,7 +1092,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_service_coverage_reconciliation.stale_preview",
                     "financial.prepaid_service_coverage_reconciliation.subscription_not_found",
                 ),
-                mapping_owner="operator CLI and future admin adapters",
+                mapping_owner=(
+                    "operator CLI and the invoice-scoped admin coverage-repair adapter"
+                ),
                 retryable_codes=(),
                 fail_closed_on=(
                     "missing, malformed, duplicate, or contradictory evidence",
@@ -1163,6 +1166,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_prepaid_coverage_reconciliation.py",
+                "tests/test_web_prepaid_coverage_reconciliation.py",
                 "tests/architecture/test_prepaid_threshold_boundary.py",
             ),
         ),

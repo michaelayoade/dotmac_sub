@@ -21,6 +21,7 @@ from app.schemas.field import (
     FieldExpenseRequestCreate,
     FieldExpenseRequestRead,
     FieldExpenseRequestSubmit,
+    FieldExpenseVendorRead,
 )
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
@@ -33,8 +34,10 @@ from app.services.field.expense_categories import (
 from app.services.field.expense_requests import (
     ExpenseRequestLineInput,
     FieldExpenseRequestError,
+    ListFieldExpenseVendors,
     SubmitFieldExpenseRequest,
     field_expense_requests,
+    list_expense_vendors,
     submit_field_expense_request_command,
 )
 from app.services.owner_commands import CommandContext
@@ -83,6 +86,29 @@ def list_field_expense_categories(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     return {"items": items, "count": len(items), "limit": len(items), "offset": 0}
+
+
+@router.get("/vendors", response_model=ListResponse[FieldExpenseVendorRead])
+def list_field_expense_vendors(
+    q: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    del auth
+    items = list_expense_vendors(
+        db=db,
+        query=ListFieldExpenseVendors(search=q, limit=limit, offset=offset),
+    )
+    return {
+        "items": [
+            FieldExpenseVendorRead(id=item.id, label=item.label) for item in items
+        ],
+        "count": len(items),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/receipts", response_model=FieldAttachmentRead, status_code=201)
@@ -197,7 +223,7 @@ def create_and_submit_field_expense_request(
 
 @router.get("/{expense_request_id}", response_model=FieldExpenseRequestRead)
 def get_field_expense_request(
-    expense_request_id: str,
+    expense_request_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
@@ -206,7 +232,7 @@ def get_field_expense_request(
 
 @router.post("/{expense_request_id}/submit", response_model=FieldExpenseRequestRead)
 def submit_field_expense_request(
-    expense_request_id: str,
+    expense_request_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
@@ -215,7 +241,7 @@ def submit_field_expense_request(
 
 @router.post("/{expense_request_id}/cancel", response_model=FieldExpenseRequestRead)
 def cancel_field_expense_request(
-    expense_request_id: str,
+    expense_request_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):

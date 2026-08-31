@@ -727,7 +727,10 @@ def run_due_delivery(
             )
             records = snapshot.record_mappings()
             rows = ncc_workbook.export_rows(records)
-            workbook = ncc_workbook.build_workbook(rows, list(ncc_workbook.COLUMNS))
+            workbook_rows = ncc_workbook.template_export_rows(records)
+            workbook = ncc_workbook.build_workbook(
+                workbook_rows, list(ncc_workbook.TEMPLATE_COLUMNS)
+            )
             if not workbook.startswith(b"PK\x03\x04"):
                 raise _error(
                     "artifact_generation_failed",

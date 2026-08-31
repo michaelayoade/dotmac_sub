@@ -122,10 +122,50 @@ def test_database_statement_correlation_is_stable_and_redacted():
     assert "email" not in first
 
 
-def test_paystack_operational_check_exposes_webhook_and_reconciliation_gap(
-    db_session, monkeypatch
-):
-    now = datetime(2026, 7, 23, 18, 0, tzinfo=UTC)
+def _topup_reconciliation_backlog(
+    observed_at: datetime,
+    *,
+    pending_fresh: int = 0,
+    pending_due: int = 0,
+    pending_cooling_down: int = 0,
+    pending_outside_window: int = 0,
+    terminal_due: int = 0,
+    terminal_cooling_down: int = 0,
+    terminal_outside_window: int = 0,
+    oldest_pending_at: datetime | None = None,
+    oldest_pending_due_at: datetime | None = None,
+    oldest_terminal_due_at: datetime | None = None,
+) -> TopupReconciliationBacklog:
+    return TopupReconciliationBacklog(
+        pending_total=(
+            pending_fresh + pending_due + pending_cooling_down + pending_outside_window
+        ),
+        pending_fresh=pending_fresh,
+        pending_due=pending_due,
+        pending_cooling_down=pending_cooling_down,
+        pending_outside_window=pending_outside_window,
+        terminal_recovery_total=(
+            terminal_due + terminal_cooling_down + terminal_outside_window
+        ),
+        terminal_recovery_due=terminal_due,
+        terminal_recovery_cooling_down=terminal_cooling_down,
+        terminal_recovery_outside_window=terminal_outside_window,
+        oldest_pending_at=oldest_pending_at,
+        oldest_pending_due_created_at=oldest_pending_due_at,
+        oldest_terminal_due_created_at=oldest_terminal_due_at,
+        stale_before=observed_at - timedelta(minutes=15),
+        oldest_eligible_at=observed_at - timedelta(days=7),
+    )
+
+
+def _stub_paystack_check(
+    monkeypatch,
+    *,
+    now: datetime,
+    result: dict[str, object],
+    backlog: TopupReconciliationBacklog,
+    webhook_at: datetime | None,
+) -> None:
     monkeypatch.setattr(
         operational_checks,
         "_paystack_binding_evidence",
@@ -142,43 +182,190 @@ def test_paystack_operational_check_exposes_webhook_and_reconciliation_gap(
     monkeypatch.setattr(
         operational_checks,
         "_task_result",
-        lambda _task_name: (
-            {
-                "status": "partial",
-                "detail": {"checked": 8, "recovered": 0, "errors": 3},
-            },
-            now - timedelta(minutes=5),
-        ),
+        lambda _task_name: (result, now - timedelta(minutes=5)),
     )
     monkeypatch.setattr(
         operational_checks.job_heartbeat,
         "get_last_success",
         lambda _task_name: now - timedelta(minutes=5),
     )
+
+    def read_backlog(_db, *, observed_at, provider_types):
+        assert observed_at == now
+        assert provider_types == (operational_checks.PaymentProviderType.paystack,)
+        return backlog
+
     monkeypatch.setattr(
         operational_checks,
         "topup_reconciliation_backlog",
-        lambda _db, observed_at: TopupReconciliationBacklog(
-            pending=3,
-            eligible=3,
-            outside_window=0,
-            oldest_pending_at=observed_at - timedelta(hours=1),
-            stale_before=observed_at - timedelta(minutes=15),
-            oldest_eligible_at=observed_at - timedelta(days=7),
-        ),
+        read_backlog,
     )
     monkeypatch.setattr(
         operational_checks,
         "_latest_paystack_webhook_at",
-        lambda _db: None,
+        lambda _db: webhook_at,
+    )
+
+
+def test_paystack_operational_check_exposes_webhook_and_reconciliation_gap(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=UTC)
+    _stub_paystack_check(
+        monkeypatch,
+        now=now,
+        result={
+            "status": "partial",
+            "detail": {
+                "selected": 8,
+                "checked": 8,
+                "unchanged": 5,
+                "errors": 3,
+                "pending_due_remaining": 3,
+                "terminal_due_remaining": 2,
+                "outside_window": 0,
+                "saturated": True,
+                "partial": True,
+            },
+        },
+        backlog=_topup_reconciliation_backlog(
+            now,
+            pending_fresh=1,
+            pending_due=3,
+            terminal_due=2,
+            terminal_cooling_down=2,
+            oldest_pending_at=now - timedelta(hours=1),
+            oldest_pending_due_at=now - timedelta(hours=1),
+            oldest_terminal_due_at=now - timedelta(days=2),
+        ),
+        webhook_at=None,
     )
 
     check = operational_checks.paystack_payment_check(db_session, now=now)
 
     assert check.needs_attention is True
     assert check.last_result == (
-        "Reconciliation checked 8, recovered 0, and rejected 3; "
-        "3 stale intent(s) remain."
+        "Reconciliation selected 8, checked 8, left 5 unchanged, and encountered "
+        "3 error(s); the last run left 3 pending and 2 terminal attempt(s) due, "
+        "with 0 outside the automatic window."
     )
+    assert "pending due=3 (oldest age 1.0 hours)" in check.evidence
+    assert "terminal due=2 (oldest age 2.0 days)" in check.evidence
     assert operational_checks.PAYSTACK_WEBHOOK_PATH in check.expected
     assert "Set the Paystack live webhook URL" in check.next_step
+
+
+def test_paystack_due_pending_needs_attention_even_after_a_verified_webhook(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    _stub_paystack_check(
+        monkeypatch,
+        now=now,
+        result={
+            "status": "ok",
+            "detail": {
+                "selected": 1,
+                "checked": 1,
+                "unchanged": 1,
+                "errors": 0,
+                "pending_due_remaining": 0,
+                "terminal_due_remaining": 0,
+                "outside_window": 0,
+                "saturated": False,
+                "partial": False,
+            },
+        },
+        backlog=_topup_reconciliation_backlog(
+            now,
+            pending_due=2,
+            terminal_cooling_down=1,
+            oldest_pending_at=now - timedelta(hours=3),
+            oldest_pending_due_at=now - timedelta(hours=3),
+        ),
+        webhook_at=now - timedelta(minutes=10),
+    )
+
+    check = operational_checks.paystack_payment_check(db_session, now=now)
+
+    assert check.needs_attention is True
+    assert "pending due=2 (oldest age 3.0 hours)" in check.evidence
+    assert "Inspect the due pending Paystack intents" in check.next_step
+
+
+def test_paystack_partial_last_result_needs_attention_with_empty_live_backlog(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    _stub_paystack_check(
+        monkeypatch,
+        now=now,
+        result={
+            "status": "partial",
+            "detail": {
+                "selected": 1,
+                "checked": 1,
+                "unchanged": 0,
+                "errors": 1,
+                "pending_due_remaining": 0,
+                "terminal_due_remaining": 0,
+                "outside_window": 0,
+                "saturated": False,
+                "partial": True,
+            },
+        },
+        backlog=_topup_reconciliation_backlog(now),
+        webhook_at=now - timedelta(minutes=10),
+    )
+
+    check = operational_checks.paystack_payment_check(db_session, now=now)
+
+    assert check.needs_attention is True
+    assert "encountered 1 error(s)" in check.last_result
+    assert "Inspect the partial reconciliation result" in check.next_step
+
+
+def test_paystack_failed_last_result_needs_attention_with_fresh_success_heartbeat(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    _stub_paystack_check(
+        monkeypatch,
+        now=now,
+        result={"status": "error", "detail": {"error": "provider timeout"}},
+        backlog=_topup_reconciliation_backlog(now),
+        webhook_at=now - timedelta(minutes=10),
+    )
+
+    check = operational_checks.paystack_payment_check(db_session, now=now)
+
+    assert check.needs_attention is True
+    assert check.last_result == (
+        "The last reconciliation execution failed; result counters are not "
+        "treated as successful evidence."
+    )
+    assert "Inspect the failed reconciliation task" in check.next_step
+
+
+def test_paystack_outside_window_needs_explicit_finance_reconciliation(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    _stub_paystack_check(
+        monkeypatch,
+        now=now,
+        result={"status": "ok", "detail": {}},
+        backlog=_topup_reconciliation_backlog(
+            now,
+            pending_outside_window=1,
+            terminal_outside_window=1,
+            oldest_pending_at=now - timedelta(days=8),
+        ),
+        webhook_at=now - timedelta(minutes=10),
+    )
+
+    check = operational_checks.paystack_payment_check(db_session, now=now)
+
+    assert check.needs_attention is True
+    assert "outside-window=1" in check.evidence
+    assert "canonical finance owner" in check.next_step

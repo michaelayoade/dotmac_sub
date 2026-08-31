@@ -373,6 +373,15 @@ class InboxAgentOption:
     presence_status: str
     email: str = ""
     team_ids: tuple[UUID, ...] = ()
+    active_conversation_count: int = 0
+    max_concurrent_conversations: int = (
+        team_inbox_assignment.DEFAULT_MAX_CONCURRENT_CONVERSATIONS
+    )
+    available_capacity: int = 0
+    assignment_eligible: bool = False
+    unavailability_reason: (
+        team_inbox_assignment.InboxAgentUnavailabilityReason | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,6 +598,7 @@ def _initials(first_name: str, last_name: str, display_name: str | None) -> str:
 
 
 def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
+    observed_at = datetime.now(UTC)
     rows = (
         db.query(SystemUser)
         .join(
@@ -602,14 +612,11 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
         .all()
     )
     user_ids = [row.id for row in rows]
-    presence_rows = (
-        db.query(InboxAgentPresence)
-        .filter(InboxAgentPresence.person_id.in_(user_ids))
-        .all()
-        if user_ids
-        else []
+    availability_by_person = team_inbox_assignment.agent_availability_snapshots(
+        db,
+        user_ids,
+        now=observed_at,
     )
-    presence_by_person = {row.person_id: row for row in presence_rows}
     person_party_ids = [row.person_party_id for row in rows]
     membership_rows = (
         db.query(ServiceTeamMember)
@@ -633,11 +640,7 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
                 or row.email
             ),
             initials=_initials(row.first_name, row.last_name, row.display_name),
-            presence_status=(
-                team_inbox_assignment.effective_presence_status(presence)
-                if (presence := presence_by_person.get(row.id)) is not None
-                else InboxAgentPresenceStatus.offline.value
-            ),
+            presence_status=availability_by_person[row.id].presence_status.value,
             email=row.email,
             team_ids=tuple(
                 sorted(
@@ -646,6 +649,15 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
             )
             if row.person_party_id is not None
             else (),
+            active_conversation_count=(
+                availability_by_person[row.id].active_conversation_count
+            ),
+            max_concurrent_conversations=(
+                availability_by_person[row.id].max_concurrent_conversations
+            ),
+            available_capacity=availability_by_person[row.id].available_capacity,
+            assignment_eligible=availability_by_person[row.id].assignment_eligible,
+            unavailability_reason=availability_by_person[row.id].unavailability_reason,
         )
         for row in rows
     )
@@ -659,8 +671,6 @@ def list_mentionable_users(
     limit: int = 10,
 ) -> tuple[InboxAgentOption, ...]:
     term = str(search or "").strip()
-    if not term:
-        return ()
     conversation = db.get(InboxConversation, conversation_id)
     if conversation is None or not conversation.is_active:
         return ()
@@ -673,8 +683,7 @@ def list_mentionable_users(
         active_team_ids = [conversation.primary_service_team_id]
     if not active_team_ids:
         return ()
-    like = f"%{term}%"
-    rows = (
+    query = (
         db.query(SystemUser)
         .join(
             ServiceTeamMember,
@@ -683,13 +692,17 @@ def list_mentionable_users(
         .filter(SystemUser.is_active.is_(True))
         .filter(ServiceTeamMember.is_active.is_(True))
         .filter(ServiceTeamMember.team_id.in_(active_team_ids))
-        .filter(
+    )
+    if term:
+        like = f"%{term}%"
+        query = query.filter(
             (SystemUser.display_name.ilike(like))
             | (SystemUser.first_name.ilike(like))
             | (SystemUser.last_name.ilike(like))
             | (SystemUser.email.ilike(like))
         )
-        .distinct()
+    rows = (
+        query.distinct()
         .order_by(SystemUser.first_name.asc(), SystemUser.last_name.asc())
         .limit(max(1, min(int(limit), 20)))
         .all()
@@ -788,7 +801,7 @@ def get_agent_presence(
         .one_or_none()
     )
     status = (
-        presence.manual_override_status or presence.status
+        team_inbox_assignment.effective_presence_status(presence)
         if presence is not None
         else InboxAgentPresenceStatus.offline.value
     )
@@ -817,10 +830,12 @@ def build_manager_dashboard_projection(
         else []
     )
     presence_by_person = {row.person_id: row for row in presence_rows}
+    observed_at = datetime.now(UTC)
     online_person_ids = {
         row.person_id
         for row in presence_rows
-        if (row.manual_override_status or row.status) == "online"
+        if team_inbox_assignment.effective_presence_status(row, now=observed_at)
+        == InboxAgentPresenceStatus.online.value
     }
 
     active_assignments = (
@@ -851,7 +866,9 @@ def build_manager_dashboard_projection(
                 name=agent.name,
                 initials=agent.initials,
                 presence_status=(
-                    (presence.manual_override_status or presence.status)
+                    team_inbox_assignment.effective_presence_status(
+                        presence, now=observed_at
+                    )
                     if presence is not None
                     else "offline"
                 ),

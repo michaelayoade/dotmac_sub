@@ -398,6 +398,36 @@
         </div>
     </section>
     {% endif %}
+    {% if pending_plan_change %}
+    <section class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100" aria-labelledby="pending-plan-change-title">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+                <h2 id="pending-plan-change-title" class="font-semibold">Pending plan-change request</h2>
+                <p class="mt-1">Requested plan: <span class="font-semibold">{{ pending_plan_change.offer_name }}</span></p>
+                <p>Effective date: {{ pending_plan_change.effective_date.strftime('%b %d, %Y') }}</p>
+                <p>Execution state: {{ pending_plan_change.execution_state | replace('_', ' ') | title }}</p>
+                <p class="mt-1 text-xs">Request {{ pending_plan_change.id }} · submitted {{ pending_plan_change.requested_at | app_datetime('%b %d, %Y %H:%M') }}</p>
+            </div>
+            {% if can_cancel_pending_plan_change %}
+            <form method="post"
+                  action="/admin/catalog/subscriptions/{{ subscription.id }}/pending-change/{{ pending_plan_change.id }}/cancel"
+                  class="min-w-64 space-y-2"
+                  data-confirm="Cancel this pending plan-change request? The subscription will remain on its current plan."
+                  data-confirm-variant="warning"
+                  data-confirm-label="Cancel request">
+                {% include "components/forms/csrf_input.html" %}
+                <label for="pending-plan-change-cancel-reason" class="block text-xs font-semibold">Cancellation reason</label>
+                <input id="pending-plan-change-cancel-reason" name="reason" required maxlength="500"
+                       placeholder="Why is this request being canceled?"
+                       class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-amber-700 dark:bg-slate-900 dark:text-white">
+                <button type="submit" class="w-full rounded-lg border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/40">
+                    Cancel pending request
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
     {% if scheduled_plan_change %}
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
         <div>

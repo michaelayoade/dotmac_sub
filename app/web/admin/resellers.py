@@ -492,10 +492,12 @@ def reseller_user_create(
         "first_name": _form_str(form, "first_name").strip(),
         "last_name": _form_str(form, "last_name").strip(),
         "email": _form_str(form, "email").strip(),
-        "username": _form_str(form, "email").strip(),
+        "username": _form_str(form, "username").strip(),
         "role": _form_str(form, "role").strip() or None,
     }
-    if not all([fields["first_name"], fields["last_name"], fields["email"]]):
+    if not all(
+        [fields["first_name"], fields["last_name"], fields["email"], fields["username"]]
+    ):
         detail = reseller_svc.get_reseller_detail_context(
             db,
             reseller_id,
@@ -504,7 +506,7 @@ def reseller_user_create(
         )
         context = _base_context(request, db, active_page="resellers")
         context.update(detail or {})
-        context["error"] = "First name, last name, and email are required."
+        context["error"] = "First name, last name, email, and username are required."
         return templates.TemplateResponse(
             "admin/resellers/detail.html", context, status_code=400
         )

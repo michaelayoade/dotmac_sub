@@ -20,6 +20,10 @@ from app.services.network.effective_ont_config import (
     resolve_effective_ont_config,
 )
 from app.services.network.ont_lan_block_choices import operator_lan_block_prefix_choices
+from app.services.network.ont_service_configuration import (
+    OntServiceConfigurationEligibility,
+    get_ont_service_configuration_eligibility,
+)
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
@@ -36,6 +40,7 @@ class OntConfigureReadiness:
     olt_assigned: bool
     config_pack_ready: bool
     acs_registered: bool
+    eligibility: OntServiceConfigurationEligibility
 
 
 def _enum_value(value: object) -> str | None:
@@ -388,6 +393,9 @@ def _configure_form_context_from_state(
         config_pack_name = getattr(config_pack, "name", None)
         config_pack_olt_id = getattr(config_pack, "olt_id", None)
 
+    configuration_eligibility = get_ont_service_configuration_eligibility(
+        db, ont_unit_id=ont.id
+    )
     mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
     current_block_prefix = IpBlockPrefix.from_mask(str(lan_subnet or ""))
     return {
@@ -426,7 +434,9 @@ def _configure_form_context_from_state(
             olt_assigned=bool(getattr(ont, "olt_device_id", None)),
             config_pack_ready=config_pack is not None,
             acs_registered=has_tr069,
+            eligibility=configuration_eligibility,
         ),
+        "configuration_eligibility": configuration_eligibility,
         "mgmt_ip_pool": mgmt_ip_pool_ctx.get("mgmt_ip_pool"),
         "available_mgmt_ips": mgmt_ip_pool_ctx.get("available_mgmt_ips", []),
         "mgmt_ip_choice_message": mgmt_ip_pool_ctx.get("mgmt_ip_choice_message"),

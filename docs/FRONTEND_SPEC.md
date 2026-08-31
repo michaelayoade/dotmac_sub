@@ -400,6 +400,13 @@ caller cutover.
 | `pagination` | `page, total_pages, total, per_page, base_url, hx_target, color, extra_params` | HTMX-powered pagination |
 | `status_filter_card` | `label, value, icon, href, color, color2, is_active` | Clickable filter card |
 
+The full-featured `components/data/data_grid.html` component accepts
+`compact=true` for dense operational lists. Compact mode reduces header and
+body cell padding while preserving column visibility, sorting, pagination,
+empty-state dimensions, and mobile horizontal overflow as a fallback. Use it
+only when the bounded default columns fit at standard desktop widths; do not
+use density to retain irrelevant columns or duplicate row actions.
+
 ### Buttons & Forms
 
 | Macro | Parameters | Purpose |
@@ -707,9 +714,20 @@ Dashboard implementation notes:
     "total_pages": int,
     "search": str | None,
     "customer_type": str | None,        # filter: "person" | "organization" | None
+    "billing_mode": str | None,         # "prepaid" | "postpaid" | "non_billable"
     "active_page": "customers",
 }
 ```
+
+The Billing filter is owned by `ui.customer_list_projection`. Prepaid and
+postpaid consume `financial.billing_profile`, including its collectible-service
+precedence and mixed-mode fail-closed behavior. Non-billable means every
+collectible service is currently charge-suppressed by an effective
+complimentary/sponsored treatment or is a genuinely zero-priced recurring
+catalog product. Missing price evidence, `Subscriber.billing_enabled`, and plan
+name text (including names containing "Non Billing") do not classify the
+customer. An account with both paid and free services remains in its canonical
+prepaid/postpaid cohort.
 
 #### `GET /admin/customers/{type}/{id}` (Person Detail)
 **Template:** `admin/customers/detail.html`
@@ -793,6 +811,21 @@ their existing customer, access, and identity owners.
   from the integrations surface rather than displayed on Customer 360.
 - Subscription records are investigated and managed in the Services tab; the
   Account tab does not duplicate an Active Subscriptions preview.
+
+**Billing Ledger tab presentation contract:**
+`app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
+customer-scoped read model. The first page contains the 10 newest financial
+entries in deterministic reverse-chronological order. Previous and Next controls
+request older or newer 10-entry pages without replacing the customer-detail URL.
+Credit, debit, and net headline values always summarize the complete scoped
+ledger, not only the visible page. The full-ledger and CSV actions retain the
+same customer scope and existing ledger-read permission.
+
+**Network tab presentation contract:** The lazy Network projection remains a
+sibling of the other primary customer tabs. HTMX replaces only the inner Network
+fragment; the stable outer element retains the `activeTab === 'network'`
+visibility owner so Network Access content cannot appear beneath Billing or
+another primary tab after refresh.
 
 **Timeline tab presentation contract:**
 `ui.customer_timeline_projection` supplies each typed `CustomerTimelineItem`.
@@ -1005,9 +1038,17 @@ contract used by the invoice table; internal account UUIDs are not exported.
     "is_proforma": bool,
     "prepaid_draft_reconciliation_preview": PrepaidDraftReconciliationPreview | None,
     "prepaid_draft_issue_notice": str | None,
+    "prepaid_coverage_reconciliation_state": PrepaidCoverageInvoiceDetailState | None,
     "active_page": "billing",
 }
 ```
+
+The overflow menu exposes a permission-scoped invoice email action. A draft
+shows **Issue & send invoice** and confirms that issuing is part of the
+customer-visible action; an issued, overdue, or partially-paid invoice shows
+**Send invoice**. Both use the canonical `invoice.sent` consequence, whose
+email delivery attaches the same PDF produced by the invoice download owner.
+Proformas, void invoices, and written-off invoices do not expose the action.
 
 An actionable prepaid draft exposes **Reconcile prepaid draft** only to staff
 with `billing:invoice:update`. Its POST preview renders the authoritative
@@ -1020,6 +1061,16 @@ the owner-provided funded-coverage warning beside **Reconcile prepaid draft**.
 An attempted issue redirects back with the same safe explanation. Ambiguous
 coverage displays the classifier reason and requires Finance review; the page
 does not translate a generic request conflict or decide coverage itself.
+
+For a paid prepaid invoice with exact missing-entitlement evidence, the same
+detail page exposes **Repair prepaid coverage** only to staff with
+`billing:invoice:update`. Its preview identifies the exact subscription and
+paid invoice line, then supplies an actor-bound, expiring confirmation token
+and owner fingerprint to `financial.prepaid_service_coverage_reconciliation`.
+The owner rechecks and locks that invoice-scoped evidence before creating an
+entitlement; the action never changes payment amounts or forces access status.
+If the invoice cannot support one exact repair, the page explains that Finance
+review is required and provides no forced-confirmation action.
 
 #### Invoice Form (New)
 
@@ -1275,6 +1326,14 @@ full-value payment experience.
 ---
 
 ### Catalog — Offers
+
+The admin catalog list defaults to Tariff, Category, Family, Type, Bandwidth,
+Subscriptions, and Status. Tariff name is the row drill-down, so the list does
+not duplicate view/edit/archive controls in an Actions column. Edit and the
+permission-scoped archive/restore lifecycle actions remain on the tariff detail
+page. At standard desktop widths the bounded defaults use compact grid density
+and fit the work surface without horizontal scrolling; mobile retains overflow
+as a responsive fallback.
 
 #### `GET /admin/catalog/offers`
 **Template:** `admin/catalog/offers/index.html`

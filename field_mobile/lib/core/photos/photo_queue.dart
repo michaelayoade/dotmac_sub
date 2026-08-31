@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
@@ -7,6 +8,7 @@ import 'package:uuid/uuid.dart';
 
 import '../location/location_source.dart';
 import '../offline/database.dart';
+import '../secure/evidence_files.dart';
 
 /// Source of raw photo bytes. The device implementation uses image_picker's
 /// camera; tests inject canned bytes.
@@ -82,25 +84,32 @@ Uint8List processPhoto(Uint8List raw) {
   return Uint8List.fromList(img.encodeJpg(image, quality: jpegQuality));
 }
 
-/// Captures photos into the offline queue: processed file on disk + a
-/// PendingPhotos row that the sync service uploads.
+/// Captures photos into the offline queue: an AES-GCM envelope in the scope's
+/// evidence directory + a PendingPhotos row that the sync service uploads.
+///
+/// Nothing here ever leaves a readable JPEG on disk. The bytes are downscaled
+/// in memory and sealed on the way out, so a copied evidence file — including
+/// the completion-capture marker, which names a work order — is meaningless
+/// without the scope's key.
 class PhotoQueue {
   PhotoQueue({
     required this.db,
     required this.source,
     required this.location,
-    required this.storageDir,
+    required this.evidence,
   });
 
   final AppDatabase db;
   final ImageSourceAdapter source;
   final LocationSource location;
-  final Directory storageDir;
+  final EvidenceFiles evidence;
+
+  String get scopeKey => evidence.scopeKey;
 
   static const _uuid = Uuid();
+  static const _captureMarkerName = 'pending_completion_capture.evidence';
 
-  File get _pendingCompletionCapture =>
-      File('${storageDir.path}/.pending_completion_capture');
+  File get _pendingCompletionCapture => evidence.fileNamed(_captureMarkerName);
 
   Future<bool> captureForJob({
     String? workOrderId,
@@ -108,7 +117,12 @@ class PhotoQueue {
     String kind = 'photo',
   }) async {
     if (workOrderId != null && kind == 'photo') {
-      await _pendingCompletionCapture.writeAsString(workOrderId, flush: true);
+      await evidence.write(
+        _captureMarkerName,
+        utf8.encode(workOrderId),
+        purpose: 'capture-marker',
+        reference: 'pending',
+      );
     }
     try {
       final raw = await source.pick();
@@ -130,7 +144,7 @@ class PhotoQueue {
 
   Future<bool> recoverForJob({required String workOrderId}) async {
     if (!await _pendingCompletionCapture.exists() ||
-        await _pendingCompletionCapture.readAsString() != workOrderId) {
+        await _markedWorkOrder() != workOrderId) {
       return false;
     }
     try {
@@ -150,11 +164,24 @@ class PhotoQueue {
     }
   }
 
+  Future<String?> _markedWorkOrder() async {
+    try {
+      final raw = await evidence.read(
+        _pendingCompletionCapture,
+        purpose: 'capture-marker',
+        reference: 'pending',
+      );
+      return utf8.decode(raw);
+    } on Object {
+      // A marker we cannot open is a marker from another scope or another
+      // install: treat it as absent rather than as a match.
+      return null;
+    }
+  }
+
   Future<void> _deletePendingCompletionCapture() async {
     try {
-      if (await _pendingCompletionCapture.exists()) {
-        await _pendingCompletionCapture.delete();
-      }
+      await evidence.delete(_pendingCompletionCapture);
     } on FileSystemException {
       // Best effort: a stale marker cannot recover without image-picker data.
     }
@@ -173,13 +200,18 @@ class PhotoQueue {
   }) async {
     final processed = processPhoto(bytes);
     final clientRef = _uuid.v4();
-    final file = File('${storageDir.path}/$clientRef.jpg');
-    await file.writeAsBytes(processed, flush: true);
+    final file = await evidence.write(
+      '$clientRef.evidence',
+      processed,
+      purpose: 'photo',
+      reference: clientRef,
+    );
     try {
       await db
           .into(db.pendingPhotos)
           .insert(
             PendingPhotosCompanion.insert(
+              scopeKey: scopeKey,
               clientRef: clientRef,
               localPath: file.path,
               kind: Value(kind),
@@ -191,20 +223,19 @@ class PhotoQueue {
             ),
           );
     } catch (_) {
-      // Don't orphan the file if the row insert fails.
-      try {
-        file.deleteSync();
-      } on FileSystemException {
-        // best effort
-      }
+      // Don't orphan the envelope if the row insert fails.
+      await evidence.delete(file);
       rethrow;
     }
   }
 
   Future<int> pendingCount() async {
-    final rows = await (db.select(
-      db.pendingPhotos,
-    )..where((row) => row.uploaded.equals(false))).get();
+    final rows =
+        await (db.select(db.pendingPhotos)..where(
+              (row) =>
+                  row.scopeKey.equals(scopeKey) & row.uploaded.equals(false),
+            ))
+            .get();
     return rows.length;
   }
 }

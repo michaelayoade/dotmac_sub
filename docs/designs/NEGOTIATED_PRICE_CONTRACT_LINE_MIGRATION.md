@@ -2,9 +2,9 @@
 
 Status: implementation inventory; not production cutover evidence
 Source revision: `0324d2dcf91e2be038459e41aa013125128e9d43`
-Target contract: `dotmac-subscriptions 0.1.0a2` candidate at Starter
-`6de5ac7fd8e45423c0eb2f6936eb67ca6d80b9f3` on
-`feat/catalog-contract-line-owners` (PR #386)
+Target contract: `dotmac-subscriptions 0.1.0a2`, released as
+`dotmac-subscriptions-v0.1.0a2`; merged to Starter `main` in PR #386 as
+`473b473f94f194cbd768b5e110a4dc3f58d97cb7`
 
 ## Decision
 
@@ -196,6 +196,32 @@ revision—not keeping two live price owners. After the last cohort:
    are deleted; and
 6. architecture ratchets reject new price reads/writes outside the contract-line
    owner and demonstrate sensitivity in both directions.
+
+## The read-only inventory command
+
+`scripts/negotiated_price_offer_inventory.py` builds the inventory described
+above. It has been written and unit-tested against its SQL construction; it has
+**not** been run against any database, and this document records no inventory
+result.
+
+Three properties are structural rather than conventional:
+
+- it takes its target from `--database-url` or `SUB_INVENTORY_DATABASE_URL`, has
+  no default, never inherits the ambient application `DATABASE_URL`, and refuses
+  to run when no target is named;
+- every statement it can build is compiled and asserted to begin with `SELECT`
+  before execution, and the session is pinned through `app.db`'s single
+  read-only seam (`READ_ONLY_SNAPSHOT_OPTIONS`) to one `REPEATABLE READ, READ
+  ONLY` snapshot;
+- it reports evidence and signals only. The eight adjudication classes above are
+  decisions owned by this migration and adjudicated by an operator; the command
+  does not assign them. A "customer-like name" is reported as two separate
+  signals — name tokens outside the product vocabulary, and name tokens that
+  also occur in a stored customer name — each carrying the tokens that produced
+  it, so a reviewer can see why a row surfaced. An offer name is never used as
+  an identity or a merge key.
+
+Contract tests: `tests/test_negotiated_price_offer_inventory.py`.
 
 ## Outstanding evidence before F1 can close
 

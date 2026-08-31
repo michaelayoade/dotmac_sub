@@ -116,6 +116,23 @@
                     <dd class="font-medium text-slate-900 dark:text-white">{{ reseller_portal_users }}</dd>
                 </div>
             </dl>
+            <div class="mt-5 border-t border-slate-200 pt-4 dark:border-slate-700">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Portal access</h3>
+                <div class="mt-3 space-y-3">
+                    {% for portal_user in reseller_portal_user_views | default([]) %}
+                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ portal_user.display_name }}</p>
+                        <p class="mt-1 break-all text-xs text-slate-500 dark:text-slate-400">{{ portal_user.email or 'No email recorded' }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Username: {{ portal_user.username or 'No local username' }}</p>
+                        <p class="mt-1 text-xs {% if portal_user.is_active %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                            {{ 'Active' if portal_user.is_active else 'Inactive' }}{% if portal_user.invite_pending %} · Invite pending{% endif %}
+                        </p>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No portal users have been granted access.</p>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
 
         <div id="linked-subscribers" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-2">
@@ -456,6 +473,11 @@
                 <div>
                     <label for="email" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Email</label>
                     <input type="email" name="email" id="email" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                </div>
+                <div>
+                    <label for="username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                    <input type="text" name="username" id="username" required autocomplete="username" class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used to sign in; it must be unique. The email may be shared with a customer.</p>
                 </div>
                 {% include "admin/resellers/_invite_role_field.html" %}
                 <div class="flex items-center justify-end gap-3">

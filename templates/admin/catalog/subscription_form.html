@@ -524,6 +524,7 @@
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Address</label>
                                 <input type="text" :name="'ipv4_addresses'" x-model="row.ip" :list="'ipv4-address-options-' + idx"
                                     @focus="loadAvailableIps(row, { autoSelect: !row.ip, preserveExisting: true })"
+                                    @input.debounce.300ms="searchAvailableIps(row)"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <datalist :id="'ipv4-address-options-' + idx">
                                     <template x-for="ip in availableIpsForRow(row)" :key="ip">
@@ -839,6 +840,26 @@ function subscriptionProvisioning() {
             }
             return 'Auto-fills the next free IP. You can replace it with another free IP from the selected block.';
         },
+        isCompleteIpv4Text(value) {
+            const parts = String(value || "").trim().split(".");
+            return parts.length === 4 && parts.every((part) => {
+                if (!/^\d{1,3}$/.test(part)) {
+                    return false;
+                }
+                const octet = Number(part);
+                return octet >= 0 && octet <= 255;
+            });
+        },
+        searchAvailableIps(row) {
+            const query = String(row.ip || "").trim();
+            if (!query) {
+                this.loadAvailableIps(row);
+                return;
+            }
+            if (this.isCompleteIpv4Text(query)) {
+                this.loadAvailableIps(row, { query });
+            }
+        },
         async loadAvailableIps(row, options = {}) {
             row.ipOptions = row.ip ? [row.ip] : [];
             row.ipError = "";
@@ -855,6 +876,9 @@ function subscriptionProvisioning() {
                     selector: row.blockId,
                     limit: '1000',
                 });
+                if (options.query) {
+                    params.set('q', options.query);
+                }
                 const response = await fetch(`/admin/catalog/subscription-ipv4-addresses?${params.toString()}`, {
                     headers: { 'Accept': 'application/json' },
                 });

@@ -87,13 +87,31 @@ IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 MIGRATION_MAX_ATTEMPTS="${MIGRATION_MAX_ATTEMPTS:-4}"
 MIGRATION_RETRY_SECONDS="${MIGRATION_RETRY_SECONDS:-10}"
 CANDIDATE_CONTAINER="${CANDIDATE_CONTAINER:-dotmac_sub_app_candidate}"
-CANDIDATE_PORT="${CANDIDATE_PORT:-18001}"
+CANDIDATE_PORT="${CANDIDATE_PORT:-18002}"
 CANDIDATE_HEALTH_URL="${CANDIDATE_HEALTH_URL:-http://127.0.0.1:${CANDIDATE_PORT}/health}"
 CANDIDATE_DRAIN_SECONDS="${CANDIDATE_DRAIN_SECONDS:-2}"
 BACKGROUND_RUNTIME_TIMEOUT_SECONDS="${BACKGROUND_RUNTIME_TIMEOUT_SECONDS:-90}"
 BACKGROUND_STABILITY_SECONDS="${BACKGROUND_STABILITY_SECONDS:-15}"
 CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # Every service that runs the app image and must be recreated on a new build.
+#
+# Note what is NOT here, because it is load-bearing and easy to miss:
+# postgres-local, redis-local, nominatim, freeradius, genieacs and the metrics
+# services are absent. A deploy never recreates them. So a change to one of
+# those service definitions -- a published port, a volume, a command flag --
+# does NOT take effect by deploying. The repository looking fixed is not the
+# same as the host being fixed.
+#
+# For PUBLISHED PORTS there is now a managed path for exactly this, and it is
+# the one to use -- not a hand `up -d` on the box:
+#
+#   scripts/reconcile_published_ports.sh --service <name> --environment <env>
+#
+# It applies deploy/published_ports.toml, proves the environment value is what
+# compose actually resolves BEFORE recreating, and re-reads the host's actual
+# listeners afterwards. See docs/runbooks/PUBLISHED_PORT_RECONCILE.md and
+# ADR-0014. Everything else about these services still needs a deliberate,
+# separately scheduled recreate.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
   celery-worker-monitoring celery-worker-notifications-immediate \
   celery-worker-notifications celery-worker-billing \
@@ -150,11 +168,21 @@ log() { printf '\n==> %s\n' "$*"; }
 wait_for_health() {
   local url="$1"
   local label="$2"
+  local watched_container="${3:-}"
   local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  local state
   while true; do
     if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" \
       --max-time "${HEALTH_CURL_TIMEOUT}" -o /dev/null "${url}" 2>/dev/null; then
       return 0
+    fi
+    if [[ -n "${watched_container}" ]]; then
+      state="$(docker inspect "${watched_container}" \
+        --format '{{.State.Status}}' 2>/dev/null || true)"
+      if [[ "${state}" != "running" ]]; then
+        echo "${label} stopped before becoming healthy: ${state:-unavailable}" >&2
+        return 1
+      fi
     fi
     if ((SECONDS >= deadline)); then
       echo "${label} health gate failed: ${url}" >&2
@@ -162,6 +190,31 @@ wait_for_health() {
     fi
     sleep 5
   done
+}
+
+report_candidate_failure() {
+  echo "Warm candidate container state:" >&2
+  if ! docker inspect "${CANDIDATE_CONTAINER}" \
+    --format 'status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restarting={{.State.Restarting}} error={{json .State.Error}}' \
+    >&2; then
+    echo "  unavailable (container may have exited before inspection)" >&2
+  fi
+  echo "Warm candidate logs (last 200 lines):" >&2
+  if ! docker logs --tail 200 "${CANDIDATE_CONTAINER}" >&2; then
+    echo "  unavailable (container produced no readable logs)" >&2
+  fi
+}
+
+require_candidate_health() {
+  if wait_for_health \
+    "${CANDIDATE_HEALTH_URL}" "Warm candidate" "${CANDIDATE_CONTAINER}"; then
+    return 0
+  fi
+  # Capture bounded diagnostics before the ERR trap removes the failed
+  # candidate and restores the previous release. Application logging rules
+  # prohibit secret material, so this emits runtime logs rather than env/config.
+  report_candidate_failure
+  return 1
 }
 
 service_container_id() {
@@ -297,6 +350,29 @@ assert_proxy_handoff_contract() {
   fi
 }
 
+assert_candidate_port_available() {
+  local port_owner
+
+  docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+  port_owner="$(
+    docker ps --format '{{.Names}} {{.Ports}}' \
+      | grep -E "(^|[ ,])127\\.0\\.0\\.1:${CANDIDATE_PORT}->|(^|[ ,])0\\.0\\.0\\.0:${CANDIDATE_PORT}->|\\[::\\]:${CANDIDATE_PORT}->" \
+      || true
+  )"
+  if [[ -n "${port_owner}" ]]; then
+    echo "DEPLOY AVAILABILITY FAILURE: candidate port 127.0.0.1:${CANDIDATE_PORT} is already allocated." >&2
+    printf '%s\n' "${port_owner}" | sed 's/^/  owner: /' >&2
+    echo "Set CANDIDATE_PORT to a free warm-candidate port before retrying." >&2
+    return 1
+  fi
+  if command -v ss >/dev/null \
+    && ss -H -ltn | awk '{print $4}' | grep -Eq "(^|:|\\])${CANDIDATE_PORT}$"; then
+    echo "DEPLOY AVAILABILITY FAILURE: candidate port 127.0.0.1:${CANDIDATE_PORT} is already in use by a host process." >&2
+    echo "Set CANDIDATE_PORT to a free warm-candidate port before retrying." >&2
+    return 1
+  fi
+}
+
 CANDIDATE_STARTED=0
 PRIMARY_REPLACED=0
 
@@ -342,6 +418,281 @@ run_migrations() {
   done
 }
 
+# --- Module database prerequisites ----------------------------------------
+#
+# Schemas and cluster roles are privileged DEPLOYMENT prerequisites, not
+# Alembic effects: the restricted migration role deliberately never holds
+# database-level CREATE (ADR-0011). Until 2026-08-31 the repair leg below
+# short-circuited whenever no elevated credential was configured, and the
+# deploy carried on to a verification it could not possibly satisfy:
+# "nothing to do" and "nothing can be done" both returned 0.
+#
+# What that cost: 20e1fb9a6 (#2819) composed the dotmac-inbox lineage, which
+# added mod_inbox to the derived contract. No environment had it. Two staging
+# deploys then failed at the verification gate. Production was never attempted
+# - the gate stopped the pipeline first, which is the gate working - and it
+# remains unprovisioned to this day.
+#
+# The leg now reports one of three outcomes and never conflates them:
+#   already_satisfied - the contract holds; nothing was written
+#   repaired          - the managed credential brought it to contract
+#   blocked           - repair is required and cannot proceed; the deploy stops
+PREREQUISITE_OUTCOME="unknown"
+
+# Where the deployment adapter finds the dedicated schema-creation credential.
+# Root-owned, 0400, never readable by the app, the runner or dotmac_app. The
+# password is only ever read by libpq from this file - never the URL, argv,
+# environment or log.
+SCHEMA_BOOTSTRAP_PGPASS="${SCHEMA_BOOTSTRAP_PGPASS:-$(env_value SCHEMA_BOOTSTRAP_PGPASS)}"
+SCHEMA_BOOTSTRAP_PGPASS="${SCHEMA_BOOTSTRAP_PGPASS:-/etc/dotmac/sub/schema-bootstrap.pgpass}"
+SCHEMA_BOOTSTRAP_PGPASS_MOUNT="${SCHEMA_BOOTSTRAP_PGPASS_MOUNT:-/run/secrets/schema-bootstrap.pgpass}"
+SCHEMA_BOOTSTRAP_URL="${SCHEMA_BOOTSTRAP_URL:-$(env_value SCHEMA_BOOTSTRAP_URL)}"
+# The fixed user that owns the credential and runs the deployment adapter.
+# Overridable because a host may run the adapter as a dedicated non-root
+# account; root is the default and what production uses.
+SCHEMA_BOOTSTRAP_OWNER="${SCHEMA_BOOTSTRAP_OWNER:-root}"
+
+module_prerequisites_satisfied() {
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only' \
+    >/dev/null 2>&1
+}
+
+# Every refusal below names the exact thing that was wrong. A bare `test` that
+# exits 1 with no output is how the 2026-08-31 production repair became
+# undiagnosable from its own log.
+schema_bootstrap_credential_available() {
+  local ok=0
+  local authority userinfo
+
+  if [[ -z "${SCHEMA_BOOTSTRAP_URL}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: SCHEMA_BOOTSTRAP_URL is not set (expected a passwordless postgresql:// URL for the dedicated bootstrap role)." >&2
+    ok=1
+  else
+    # Inspect ONLY the userinfo. A naive `*:*@*` test also matches the scheme's
+    # own colon in `postgresql://`, which would reject every correct URL.
+    authority="${SCHEMA_BOOTSTRAP_URL#*://}"
+    if [[ "${authority}" == *@* ]]; then
+      userinfo="${authority%%@*}"
+      if [[ "${userinfo}" == *:* ]]; then
+        echo "PREREQUISITE PREFLIGHT: SCHEMA_BOOTSTRAP_URL carries an inline password; the credential must come from the pgpass file instead." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if [[ ! -e "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: credential file ${SCHEMA_BOOTSTRAP_PGPASS} does not exist." >&2
+    ok=1
+  elif [[ ! -f "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+    echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is not a regular file." >&2
+    ok=1
+  else
+    local mode owner
+    mode="$(stat -c '%a' "${SCHEMA_BOOTSTRAP_PGPASS}" 2>/dev/null || echo '?')"
+    owner="$(stat -c '%U' "${SCHEMA_BOOTSTRAP_PGPASS}" 2>/dev/null || echo '?')"
+    if [[ "${mode}" != "400" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} has mode ${mode}; expected 400 (libpq refuses a group- or world-readable pgpass)." >&2
+      ok=1
+    fi
+    if [[ "${owner}" != "${SCHEMA_BOOTSTRAP_OWNER}" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is owned by ${owner}; expected ${SCHEMA_BOOTSTRAP_OWNER}." >&2
+      ok=1
+    fi
+    if [[ ! -s "${SCHEMA_BOOTSTRAP_PGPASS}" ]]; then
+      echo "PREREQUISITE PREFLIGHT: ${SCHEMA_BOOTSTRAP_PGPASS} is empty." >&2
+      ok=1
+    fi
+  fi
+
+  return "${ok}"
+}
+
+run_database_prerequisite_bootstrap() {
+  local bootstrap_url persisted_url
+
+  # An elevated DSN persisted in the deploy directory's .env would arm
+  # auto-repair on EVERY deployment, silently and permanently: `env_value`
+  # greps that file, so the old
+  #   "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
+  # made "nobody has typed it into .env" the entire safety property. Refuse it
+  # instead of depending on that. A one-off operator provisioning run passes
+  # the DSN in the PROCESS environment, where it lasts exactly one invocation.
+  persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"
+  if [[ -n "${persisted_url}" ]]; then
+    PREREQUISITE_OUTCOME="blocked"
+    log "PREREQUISITE OUTCOME: blocked"
+    cat >&2 <<'REFUSAL'
+DEPLOY REFUSED: BOOTSTRAP_DATABASE_URL is set in the deploy directory's .env.
+
+A persisted elevated DSN turns every deployment into an auto-repairing one,
+with superuser-shaped rights, for as long as the line stays in the file. The
+managed repair leg uses the least-privilege dotmac_schema_bootstrap credential
+from a root-owned 0400 pgpass file instead, and that credential carries no
+password in the URL at all.
+
+Remove the line from .env. For a one-off elevated provisioning run, pass
+BOOTSTRAP_DATABASE_URL in the environment of that single invocation.
+REFUSAL
+    exit 1
+  fi
+
+  # Operator provisioning path: an explicitly supplied elevated connection may
+  # create cluster ROLES as well as schemas. Environment-only, so it is one
+  # deliberate invocation rather than a standing configuration.
+  bootstrap_url="${BOOTSTRAP_DATABASE_URL:-}"
+  if [[ -n "${bootstrap_url}" ]]; then
+    log "Repairing commercial module database prerequisites with the elevated bootstrap connection"
+    BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+      python scripts/bootstrap_commercial_module_prereqs.py --repair
+
+    log "Repairing outbox dispatcher database prerequisites with the elevated bootstrap connection"
+    BOOTSTRAP_DATABASE_URL="${bootstrap_url}" APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
+      python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+
+    PREREQUISITE_OUTCOME="repaired"
+    log "PREREQUISITE OUTCOME: repaired (elevated operator connection)"
+    return 0
+  fi
+
+  log "Checking module database prerequisites with the restricted migration connection"
+  if module_prerequisites_satisfied; then
+    PREREQUISITE_OUTCOME="already_satisfied"
+    log "PREREQUISITE OUTCOME: already_satisfied (contract holds; nothing written)"
+    return 0
+  fi
+
+  log "Module database prerequisites are NOT satisfied; the managed repair leg is required"
+  if ! schema_bootstrap_credential_available; then
+    PREREQUISITE_OUTCOME="blocked"
+    log "PREREQUISITE OUTCOME: blocked"
+    cat >&2 <<'REFUSAL'
+DEPLOY REFUSED: module database prerequisites need repair, but the dedicated
+schema-bootstrap credential is unavailable (see PREREQUISITE PREFLIGHT lines
+above for exactly which check failed).
+
+This deploy will NOT continue to migrations. Refusing here is the point: the
+previous behaviour was to carry on and fail the verification step with no
+statement of what was missing or why nothing had been attempted.
+
+To resolve, provision the dedicated role and its held credential on this host:
+  - role dotmac_schema_bootstrap (NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOREPLICATION NOBYPASSRLS NOINHERIT), CONNECT + CREATE on this database
+    only, member of dotmac_app without admin option
+  - credential materialised root-owned 0400 at the pgpass path above
+See docs/runbooks/PRODUCTION_DEPLOYMENT.md, "Module database prerequisites".
+REFUSAL
+    exit 1
+  fi
+
+  log "Repairing module schemas with the dedicated schema-bootstrap credential"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps --user 0:0 \
+    -v "${SCHEMA_BOOTSTRAP_PGPASS}:${SCHEMA_BOOTSTRAP_PGPASS_MOUNT}:ro" \
+    -e PGPASSFILE="${SCHEMA_BOOTSTRAP_PGPASS_MOUNT}" \
+    -e BOOTSTRAP_DATABASE_URL="${SCHEMA_BOOTSTRAP_URL}" \
+    app python scripts/bootstrap_commercial_module_prereqs.py --repair-schemas
+
+  PREREQUISITE_OUTCOME="repaired"
+  log "PREREQUISITE OUTCOME: repaired (managed schema-bootstrap credential)"
+}
+
+verify_database_prerequisites() {
+  log "Verifying commercial module prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+
+  log "Verifying outbox dispatcher prerequisites with the restricted migration connection"
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
+}
+
+database_heads() {
+  local backup_db_user
+  local backup_db_name
+  local database_url
+
+  backup_db_user="${DB_BACKUP_DB_USER:-$(env_value DB_BACKUP_DB_USER)}"
+  backup_db_user="${backup_db_user:-postgres}"
+  backup_db_name="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
+  if [[ -z "${backup_db_name}" ]]; then
+    database_url="$(env_value DATABASE_URL)"
+    backup_db_name="${database_url##*/}"
+    backup_db_name="${backup_db_name%%\?*}"
+  fi
+  if [[ -z "${backup_db_name}" || "${backup_db_name}" == "$(env_value DATABASE_URL)" ]]; then
+    echo "RESUME POLICY REJECTED: cannot resolve database name for alembic head verification." >&2
+    return 1
+  fi
+  docker exec "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
+    -d "${backup_db_name}" \
+    -c 'SELECT version_num FROM alembic_version ORDER BY version_num'
+}
+
+candidate_heads() {
+  docker run --rm --entrypoint alembic "${IMAGE}" heads \
+    | sed -E 's/[[:space:]].*$//' \
+    | grep -E '^[A-Za-z0-9_.-]+$'
+}
+
+verify_post_migration_resume() {
+  local prior_run_id="${PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID:-}"
+  local backup_path="${PRODUCTION_DEPLOY_RESUME_BACKUP_PATH:-}"
+  local authorization_run_id="${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID:-}"
+  local current_app_image
+  local -a database_head_args=()
+  local -a candidate_head_args=()
+  local -a database_head_values=()
+  local -a candidate_head_values=()
+  local head
+
+  [[ "${PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION:-0}" == "1" ]] || return 1
+  [[ "${DEPLOYMENT_TARGET}" == "production" ]] || {
+    echo "RESUME POLICY REJECTED: post-migration resume is production-only." >&2
+    return 1
+  }
+  [[ "${prior_run_id}" =~ ^[0-9]+$ && "${prior_run_id}" -gt 0 ]] || {
+    echo "RESUME POLICY REJECTED: prior failed deployment run ID is required." >&2
+    return 1
+  }
+  [[ "${authorization_run_id}" =~ ^[0-9]+$ && "${authorization_run_id}" -gt 0 ]] || {
+    echo "RESUME POLICY REJECTED: authorization run ID is required." >&2
+    return 1
+  }
+  current_app_image="$(
+    docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true
+  )"
+  mapfile -t database_head_values < <(database_heads)
+  mapfile -t candidate_head_values < <(candidate_heads)
+  if ((${#database_head_values[@]} == 0 || ${#candidate_head_values[@]} == 0)); then
+    echo "RESUME POLICY REJECTED: database or candidate Alembic heads could not be proven." >&2
+    return 1
+  fi
+  for head in "${database_head_values[@]}"; do
+    database_head_args+=(--database-head "${head}")
+  done
+  for head in "${candidate_head_values[@]}"; do
+    candidate_head_args+=(--candidate-head "${head}")
+  done
+  run_repo_module scripts.deploy_resume_policy verify-post-migration \
+    --prior-failed-run-id "${prior_run_id}" \
+    --authorization-run-id "${authorization_run_id}" \
+    --expected-authorization-run-id "${authorization_run_id}" \
+    --backup-path "${backup_path}" \
+    --candidate-digest "${TAG}" \
+    --authorized-digest "${TAG}" \
+    "${database_head_args[@]}" \
+    "${candidate_head_args[@]}" \
+    --current-app-image "${current_app_image}" \
+    --previous-image "${PREV_IMAGE}" \
+    --candidate-image "${IMAGE}"
+}
+
 # Deploy-integrity gate. The immutable image must not be shadowed by a host
 # source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
 # or an override carrying a working-tree mount) got layered on, so the RUNNING
@@ -385,8 +736,13 @@ assert_no_source_mount() {
 # profile (added after a staging scheduler wrote to production) and pins
 # staging-only object storage. Deploying without it resurrects both.
 #
-# Production has no override file, so this resolves to exactly the previous
-# single-file behaviour there. Set IGNORE_COMPOSE_OVERRIDE=1 to force it.
+# Production DOES have an override file: /root/dotmac_sub/docker-compose.override.yml,
+# 21 services, measured 2026-08-31. (An earlier version of this comment said it
+# had none, which was wrong and is the sort of thing people reason from.) It
+# tunes resources and `command` for postgres-local, redis-local and the workers,
+# and publishes team-inbox-smtp on 127.0.0.1:18001. It declares no `ports:` for
+# postgres-local, so the base file's binding is what applies there.
+# Set IGNORE_COMPOSE_OVERRIDE=1 to force single-file behaviour.
 RELEASE_COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"
 HOST_COMPOSE_OVERRIDE="${DEPLOY_DIR}/docker-compose.override.yml"
 if [[ ! -f "${RELEASE_COMPOSE_FILE}" ]]; then
@@ -567,7 +923,7 @@ case "$(env_value APP_ENV):$(env_value SERVER_NAME)" in
     fi
     ;;
   staging:dotmac-sub-staging)
-    GITHUB_RELEASE_BRANCH="dev"
+    GITHUB_RELEASE_BRANCH="main"
     DEPLOYMENT_TARGET="staging"
     if [[ "${SKIP_BACKUP:-0}" == "1" ]]; then
       echo "BACKUP POLICY REJECTED: use the verified staging adapter." >&2
@@ -599,6 +955,8 @@ log "Compose files: ${COMPOSE_FILES_DESC}"
 # having touched anything, including read-only queries.
 log "Verifying Nginx warm-handoff contract"
 assert_proxy_handoff_contract
+log "Verifying warm-candidate port availability"
+assert_candidate_port_available
 
 log "Resolving declared Compose services"
 load_declared_services
@@ -650,12 +1008,19 @@ if [[ "${DEPLOYMENT_TARGET}" == "production" ]]; then
     echo "PRODUCTION RELEASE GATE REJECTED: typed production authorization is required." >&2
     exit 1
   fi
+  PRODUCTION_VERIFY_ARGS=(
+    verify-production
+    --path "${PRODUCTION_RELEASE_EVIDENCE}"
+    --expected-source-revision "${FULL_SHA}"
+    --expected-image-digest "${TAG}"
+  )
+  if [[ -n "${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID:-}" ]]; then
+    PRODUCTION_VERIFY_ARGS+=(
+      --expected-authorization-run-id "${PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID}"
+    )
+  fi
   if ! GITHUB_RELEASE_REVISION="$(
-    run_repo_module scripts.release_candidate_evidence \
-      verify-production \
-      --path "${PRODUCTION_RELEASE_EVIDENCE}" \
-      --expected-source-revision "${FULL_SHA}" \
-      --expected-image-digest "${TAG}"
+    run_repo_module scripts.release_candidate_evidence "${PRODUCTION_VERIFY_ARGS[@]}"
   )"; then
     echo "PRODUCTION RELEASE GATE REJECTED: authorization evidence did not match the image." >&2
     exit 1
@@ -665,6 +1030,9 @@ fi
   --repository "${GITHUB_RELEASE_REPOSITORY}" \
   --revision "${GITHUB_RELEASE_REVISION}" \
   --branch "${GITHUB_RELEASE_BRANCH}"
+
+run_database_prerequisite_bootstrap
+verify_database_prerequisites
 
 # If this script is killed mid-backup -- an SSH session dropping is enough --
 # the pg_dump it started does NOT die with it. It keeps running, and the next
@@ -696,6 +1064,11 @@ elif [[ -n "${PRODUCTION_BACKUP_DECISION_FILE:-}" ]]; then
     echo "BACKUP POLICY REJECTED: production hotfix evidence is invalid." >&2
     exit 1
   fi
+elif [[ "${PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION:-0}" == "1" ]]; then
+  if ! BACKUP_MODE="$(verify_post_migration_resume)"; then
+    echo "BACKUP POLICY REJECTED: production post-migration resume evidence is invalid." >&2
+    exit 1
+  fi
 fi
 
 if [[ "${BACKUP_MODE}" == "required" ]]; then
@@ -706,7 +1079,12 @@ if [[ "${BACKUP_MODE}" == "required" ]]; then
   # REPO_DIR is the ephemeral Actions workspace and DEPLOY_DIR is the pinned
   # host directory that actually holds .env, so the backup aborted with
   # "Missing <workspace>/.env" and no production deploy ever completed.
-  ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  if [[ "${DEPLOYMENT_TARGET}" == "production" && -n "${DEPLOY_RUN_ID:-}" && -z "${DB_BACKUP_BASENAME:-}" ]]; then
+    DB_BACKUP_BASENAME="dotmac_sub_run_${DEPLOY_RUN_ID}" \
+      ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  else
+    ROOT_DIR="${DEPLOY_DIR}" bash "${REPO_DIR}/scripts/db_backup.sh" &
+  fi
   BACKUP_PID=$!
   wait "${BACKUP_PID}"
   BACKUP_PID=""
@@ -714,6 +1092,8 @@ elif [[ "${BACKUP_MODE}" == "skip_staging" ]]; then
   log "Skipping staging database backup under the verified staging host policy"
 elif [[ "${BACKUP_MODE}" == "skip_production_hotfix" ]]; then
   log "Skipping production backup under verified no-migration hotfix evidence"
+elif [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+  log "Skipping production backup under verified post-migration resume evidence"
 else
   echo "BACKUP POLICY REJECTED: unrecognized backup mode ${BACKUP_MODE}." >&2
   exit 1
@@ -768,7 +1148,11 @@ set_env_value GIT_SHA "${FULL_SHA}"
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
 log "Applying migrations (alembic upgrade heads)"
-run_migrations
+if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+  log "Skipping migrations under verified post-migration resume evidence"
+else
+  run_migrations
+fi
 
 log "Verifying database schema contracts"
 "${COMPOSE[@]}" run --rm --no-deps app \
@@ -784,13 +1168,15 @@ log "Verifying CRM ticket capability readiness"
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT}"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
-"${COMPOSE[@]}" run --rm --no-deps -d \
+# Do not use `--rm`: an early process exit must leave its state and bounded log
+# stream available to `report_candidate_failure` before rollback cleanup.
+"${COMPOSE[@]}" run --no-deps -d \
   --name "${CANDIDATE_CONTAINER}" \
   -p "127.0.0.1:${CANDIDATE_PORT}:8001" \
   app >/dev/null
 CANDIDATE_STARTED=1
 assert_no_source_mount "${CANDIDATE_CONTAINER}"
-wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"
+require_candidate_health
 
 log "Recreating services: ${APP_SERVICES[*]}"
 PRIMARY_REPLACED=1
@@ -836,6 +1222,9 @@ stop_candidate_gracefully
 
 trap - ERR
 log "Deployed ${TAG} successfully (was ${PREV_IMAGE:-none})"
+# Part of the deployment receipt: a promotion should be able to show which
+# of the three prerequisite outcomes this release actually took.
+log "DEPLOY RECEIPT: tag=${TAG} revision=${FULL_SHA} prerequisites=${PREREQUISITE_OUTCOME}"
 
 log "Pruning old ${IMAGE_REPO} images (keeping ${IMAGE_RETAIN_COUNT} rollback images)"
 IMAGE_REPO="${IMAGE_REPO}" RETAIN_IMAGES="${IMAGE_RETAIN_COUNT}" \

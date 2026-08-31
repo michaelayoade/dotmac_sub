@@ -1329,6 +1329,118 @@ def set_web_credentials(
     return result
 
 
+def _bind_internet_wan_via_olt_policy_route(
+    db: Session,
+    ont_id: str,
+    *,
+    requested_binds: dict[str, bool],
+    request: Request | None,
+) -> ActionResult:
+    """Fallback for Huawei ONTs whose OMCI PPP WAN is not visible in ACS."""
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return ActionResult(
+            success=False,
+            message="ONT is missing OLT/FSP/ONT-ID context for Huawei OMCI bind.",
+            data={"missing_olt_context": True},
+        )
+
+    effective = resolve_effective_ont_config(db, ont) if ont is not None else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
+    effective_values = effective_values if isinstance(effective_values, dict) else {}
+    wan_mode = str(effective_values.get("wan_mode") or "").strip().lower()
+    pppoe_username = str(effective_values.get("pppoe_username") or "").strip()
+    wan_vlan = _int_or_none(effective_values.get("wan_vlan"))
+    if wan_mode != "pppoe" or not pppoe_username or wan_vlan is None:
+        return ActionResult(
+            success=False,
+            message=(
+                "Huawei OLT bind fallback requires active PPPoE internet intent "
+                "with username and VLAN."
+            ),
+            data={
+                "wan_mode": wan_mode or None,
+                "pppoe_username_present": bool(pppoe_username),
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    eth_ports = tuple(
+        port
+        for field, port in (
+            ("Lan1Enable", 1),
+            ("Lan2Enable", 2),
+            ("Lan3Enable", 3),
+            ("Lan4Enable", 4),
+        )
+        if requested_binds.get(field)
+    )
+    ssid1 = bool(requested_binds.get("SSID1Enable"))
+    if not eth_ports and not ssid1:
+        return ActionResult(
+            success=False,
+            message="Select at least one LAN port or SSID to bind.",
+        )
+
+    bind_result = get_protocol_adapter(olt).bind_policy_route(
+        fsp,
+        olt_ont_id,
+        policy_profile_id=0,
+        eth_ports=eth_ports,
+        ssid1=ssid1,
+    )
+    if not bind_result.success:
+        return ActionResult(
+            success=False,
+            message=bind_result.message,
+            data=getattr(bind_result, "data", None),
+        )
+
+    bound_interfaces = [*(f"Lan{port}" for port in eth_ports)]
+    if ssid1:
+        bound_interfaces.append("SSID1")
+    _persist_ont_plan_step(
+        db,
+        ont_id,
+        "bind_internet_wan_olt_policy_route",
+        {
+            "olt_id": str(olt.id),
+            "fsp": fsp,
+            "olt_ont_id": olt_ont_id,
+            "policy_profile_id": 0,
+            "bound_interfaces": bound_interfaces,
+        },
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="bind_internet_wan_olt_policy_route",
+        ont_id=ont_id,
+        metadata={
+            "success": True,
+            "olt_id": str(olt.id),
+            "fsp": fsp,
+            "olt_ont_id": olt_ont_id,
+            "policy_profile_id": 0,
+            "bound_interfaces": bound_interfaces,
+        },
+    )
+    return ActionResult(
+        success=True,
+        message=(
+            "Internet WAN bound through Huawei OLT policy-route to "
+            + ", ".join(bound_interfaces)
+            + "."
+        ),
+        data=getattr(bind_result, "data", None),
+    )
+
+
 def bind_internet_wan(
     db: Session,
     ont_id: str,
@@ -1362,16 +1474,39 @@ def bind_internet_wan(
             data={"raw_error": str(exc)},
         )
 
+    selected_binds = {
+        "Lan1Enable": lan1,
+        "Lan2Enable": lan2,
+        "Lan3Enable": lan3,
+        "Lan4Enable": lan4,
+        "SSID1Enable": ssid1,
+    }
+    if not any(selected_binds.values()):
+        return ActionResult(
+            success=False,
+            message="Select at least one LAN port or SSID to bind.",
+        )
+
     found = _find_internet_wan_ppp(device if isinstance(device, dict) else {})
     if found is None:
+        result = _bind_internet_wan_via_olt_policy_route(
+            db,
+            ont_id,
+            requested_binds=selected_binds,
+            request=request,
+        )
+        if result.success:
+            return result
         return ActionResult(
             success=False,
             message=(
-                "Bind Internet WAN cannot run because the ONT does not show an "
-                "internet WAN object yet. Apply PPPoE WAN first, wait for ACS "
-                "to refresh, then retry the bind."
+                "Bind Internet WAN could not find an ACS PPP WAN object and "
+                f"the Huawei OLT OMCI bind fallback failed: {result.message}"
             ),
-            data={"required_step": "create_or_refresh_ppp_wan"},
+            data={
+                "required_step": "create_or_refresh_ppp_wan",
+                "fallback_error": result.data,
+            },
         )
     wcd_index, ppp_index, ppp_data = found
     status = str(_tr069_value(ppp_data, "ConnectionStatus") or "").strip()
@@ -1393,11 +1528,7 @@ def bind_internet_wan(
     # Huawei HG8546M exposes X_HW_LANBIND as unsigned-int flags. Write the
     # complete object so stale bindings are cleared as part of the same task.
     requested_binds = {
-        "Lan1Enable": lan1,
-        "Lan2Enable": lan2,
-        "Lan3Enable": lan3,
-        "Lan4Enable": lan4,
-        "SSID1Enable": ssid1,
+        **selected_binds,
         "SSID2Enable": False,
         "SSID3Enable": False,
         "SSID4Enable": False,

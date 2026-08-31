@@ -7,16 +7,15 @@ owner for routing, queueing, assignment, outbound delivery, and human takeover.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from string import Template
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
-from app.models.subscriber import Subscriber
 from app.models.team_inbox import InboxConversation
 from app.schemas.ai_intake import AiIntakeClassification
 from app.services.common import coerce_uuid
@@ -24,10 +23,18 @@ from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
 )
-from app.services.customer_network_context import get_customer_network_context
+from app.services.network import support_monitoring
+from app.services.team_inbox_support_identity import (
+    CustomerIdentifierKind,
+    CustomerIdentityQuery,
+    CustomerIdentityStatus,
+    SupportReadContext,
+    resolve_customer_identity,
+)
 
 STATE_KEY = "conversation_state"
 EVENTS_KEY = "conversation_events"
+CUSTOMER_IDENTIFIER_REQUEST = "customer_identifier"
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?:\+?234|0)?[789][01]\d{8}\b")
@@ -88,6 +95,41 @@ SUPPORTED_RULE_ACTIONS = frozenset(
         "mark_resolved",
     }
 )
+SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset(
+    {
+        "portal_id",
+        "registered_email",
+        "registered_phone",
+    }
+)
+DEFAULT_IDENTIFIER_REQUEST_ORDER: tuple[str, ...] = (
+    "registered_phone",
+    "registered_email",
+    "portal_id",
+)
+PLAYBOOK_POLICY_KEYS: tuple[str, ...] = ("first_line_playbooks", "playbooks")
+ACCOUNT_BOUND_INTENTS = frozenset(
+    {
+        "billing_issue",
+        "payment_confirmation",
+        "subscription_renewal",
+        "plan_change",
+        "account_access",
+    }
+)
+ACCOUNT_BOUND_CATEGORIES = frozenset(
+    {
+        "payment_not_reflected",
+        "invoice_request",
+        "subscription_expired",
+        "renewal_request",
+        "plan_change_request",
+        "login_problem",
+        "account_information",
+        "other_billing_issue",
+        "payment_confirmation",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +156,8 @@ class ConversationalState:
     previous_intent: str | None = None
     category: str | None = None
     confidence: float | None = None
+    classification_requires_follow_up: bool = False
+    classification_follow_up_question: str | None = None
     subscriber_id: str | None = None
     contact_identity: dict[str, object] = field(default_factory=dict)
     portal_id: str | None = None
@@ -163,6 +207,12 @@ class ConversationalState:
                 previous_intent=_text_or_none(raw.get("previous_intent")),
                 category=_text_or_none(raw.get("category")),
                 confidence=_float_or_none(raw.get("confidence")),
+                classification_requires_follow_up=bool(
+                    raw.get("classification_requires_follow_up")
+                ),
+                classification_follow_up_question=_text_or_none(
+                    raw.get("classification_follow_up_question")
+                ),
                 subscriber_id=_text_or_none(raw.get("subscriber_id")),
                 contact_identity=_dict(raw.get("contact_identity")),
                 portal_id=_text_or_none(raw.get("portal_id")),
@@ -210,6 +260,10 @@ class ConversationalState:
             "previous_intent": self.previous_intent,
             "category": self.category,
             "confidence": self.confidence,
+            "classification_requires_follow_up": (
+                self.classification_requires_follow_up
+            ),
+            "classification_follow_up_question": self.classification_follow_up_question,
             "subscriber_id": self.subscriber_id,
             "contact_identity": self.contact_identity,
             "portal_id": self.portal_id,
@@ -313,19 +367,6 @@ def run_conversational_turn(
             ),
         )
 
-    max_turns = _bounded_int(
-        policy.get("max_turns"), default=session.max_turns, low=1, high=10
-    )
-    if state.turn_count > max_turns:
-        return _handoff_decision(
-            policy,
-            state,
-            reason="turn_limit",
-            response=_handoff_response(
-                policy,
-                default="I will pass the details I have collected to the support team.",
-            ),
-        )
     if session.expires_at is not None and session.expires_at <= now:
         return _handoff_decision(
             policy,
@@ -345,18 +386,48 @@ def run_conversational_turn(
         tool_mode=tool_mode,
     )
 
-    if _requires_identity_before_tools(state, policy):
-        requested = _next_identifier_to_request(state, policy)
-        if requested is not None:
+    max_turns = _bounded_int(
+        policy.get("max_turns"), default=session.max_turns, low=1, high=10
+    )
+    if state.turn_count > max_turns:
+        if _should_retry_missing_identifier_response(state, policy, facts):
+            requested = _requested_identifier_label(state, policy)
             state.missing_facts = _with_unique(state.missing_facts, requested)
             state.already_requested_fields = _with_unique(
                 state.already_requested_fields, requested
             )
             state.clarification_count += 1
+            _record_missing_identifier_retry(state)
             return ConversationEngineDecision(
                 action="respond",
                 state=state,
-                response_text=_identifier_question(requested),
+                response_text=_identifier_retry_question(requested),
+                metadata={"reason": "identifier_reply_missing_value"},
+            )
+        return _handoff_decision(
+            policy,
+            state,
+            reason="turn_limit",
+            response=_handoff_response(
+                policy,
+                default=_turn_limit_handoff_response(state, policy),
+            ),
+        )
+
+    if _requires_identity_before_tools(state, policy):
+        requested_identifier = _next_identifier_to_request(state, policy)
+        if requested_identifier is not None:
+            state.missing_facts = _with_unique(
+                state.missing_facts, requested_identifier
+            )
+            state.already_requested_fields = _with_unique(
+                state.already_requested_fields, requested_identifier
+            )
+            state.clarification_count += 1
+            return ConversationEngineDecision(
+                action="respond",
+                state=state,
+                response_text=_identifier_question(requested_identifier),
                 metadata={"reason": "missing_customer_identifier"},
             )
         return _handoff_decision(
@@ -378,6 +449,7 @@ def run_conversational_turn(
             "subscriber_monitoring",
             {"subscriber_id": state.subscriber_id},
             policy=policy,
+            conversation=conversation,
             tool_mode=tool_mode,
         )
         _record_tool_result(state, "subscriber_monitoring", result)
@@ -405,10 +477,21 @@ def run_conversational_turn(
                 ),
             )
 
+    playbook_decision = _configured_playbook_decision(
+        db,
+        state,
+        policy,
+        conversation=conversation,
+        tool_mode=tool_mode,
+    )
+    if playbook_decision is not None:
+        return playbook_decision
+
     rule_decision = _configured_troubleshooting_decision(
         db,
         state,
         policy,
+        conversation=conversation,
         tool_mode=tool_mode,
     )
     if rule_decision is not None:
@@ -518,6 +601,31 @@ def extract_facts(text: str) -> dict[str, object]:
         facts["connectivity_problem"] = True
     if "slow" in lowered:
         facts["slow_internet"] = True
+    if any(
+        item in lowered
+        for item in (
+            "suspend",
+            "suspended",
+            "suspending",
+            "disconnect",
+            "disconnected",
+            "barred",
+        )
+    ):
+        facts["account_status_problem"] = True
+    if any(
+        item in lowered
+        for item in (
+            "outstanding bill",
+            "outstanding balance",
+            "what bill",
+            "which bill",
+            "why are you charging",
+        )
+    ):
+        facts["billing_dispute"] = True
+    if "office account" in lowered or "company account" in lowered:
+        facts["organization_account"] = True
     if "restart" in lowered or "reboot" in lowered:
         facts["router_restarted"] = True
     outage_context = OUTAGE_CONTEXT_RE.search(value)
@@ -544,6 +652,7 @@ def execute_tool(
     inputs: dict[str, object],
     *,
     policy: dict[str, object],
+    conversation: InboxConversation | None = None,
     tool_mode: str = "live_read_only",
 ) -> dict[str, object]:
     descriptor = TOOL_CATALOG.get(key)
@@ -552,9 +661,14 @@ def execute_tool(
     if not _tool_enabled(policy, key):
         return {"status": "unauthorized", "reason": "tool_disabled_by_policy"}
     if tool_mode == "simulation":
+        configured_results = policy.get("simulated_tool_results")
+        if isinstance(configured_results, dict):
+            configured = configured_results.get(key)
+            if isinstance(configured, dict):
+                return dict(configured)
         return _simulated_tool_result(key, inputs)
     if key == "customer_lookup":
-        return _customer_lookup(db, inputs)
+        return _customer_lookup(db, inputs, conversation=conversation)
     if key == "subscriber_monitoring":
         return _subscriber_monitoring(db, inputs)
     return {"status": "unavailable", "reason": "tool_not_implemented"}
@@ -576,66 +690,65 @@ def _simulated_tool_result(key: str, inputs: dict[str, object]) -> dict[str, obj
     if key == "subscriber_monitoring":
         return {
             "status": "available",
-            "service_state": "offline",
-            "radius_online": False,
-            "has_access_equipment": True,
-            "active_radius_session_count": 0,
-            "ont_states": [{"online": False, "reason": "simulated_preview"}],
+            "radius_observation": {
+                "source": "network.radius_sessions",
+                "state": "offline",
+                "active_session_count": 0,
+                "framed_ip_addresses": [],
+                "observed_at": None,
+            },
+            "ont_observations": [
+                {
+                    "source": "network.ont_runtime_status",
+                    "reference": "preview-ont",
+                    "serial_number": None,
+                    "effective_state": "offline",
+                }
+            ],
             "simulated": True,
         }
     return {"status": "unavailable", "reason": "simulation_not_available"}
 
 
-def _customer_lookup(db: Session, inputs: dict[str, object]) -> dict[str, object]:
+def _customer_lookup(
+    db: Session,
+    inputs: dict[str, object],
+    *,
+    conversation: InboxConversation | None,
+) -> dict[str, object]:
+    """Verify an identifier only against the trusted Inbox-linked subscriber."""
+    if conversation is None:
+        return {"status": "unavailable", "reason": "trusted_context_required"}
     identifier_type = str(inputs.get("identifier_type") or "").strip()
     identifier_value = str(inputs.get("identifier_value") or "").strip()
     if not identifier_type or not identifier_value:
         return {"status": "unavailable", "reason": "missing_identifier"}
+    identifier_kind = {
+        "registered_email": CustomerIdentifierKind.email,
+        "registered_phone": CustomerIdentifierKind.phone,
+        "portal_id": CustomerIdentifierKind.account_number,
+    }.get(identifier_type)
+    if identifier_kind is None:
+        return {"status": "unauthorized", "reason": "identifier_not_permitted"}
     try:
-        if identifier_type == "registered_email":
-            normalized = normalize_email_identifier(identifier_value)
-            if not normalized:
-                return {"status": "not_found"}
-            rows = (
-                db.query(Subscriber)
-                .filter(func.lower(func.trim(Subscriber.email)) == normalized)
-                .all()
-            )
-        elif identifier_type == "registered_phone":
-            normalized = normalize_phone_identifier(identifier_value)
-            rows = [
-                row
-                for row in db.query(Subscriber).all()
-                if normalize_phone_identifier(row.phone) == normalized
-            ]
-        elif identifier_type == "portal_id":
-            rows = (
-                db.query(Subscriber)
-                .filter(
-                    (Subscriber.account_number == identifier_value)
-                    | (Subscriber.subscriber_number == identifier_value)
-                )
-                .all()
-            )
-        else:
-            return {"status": "unauthorized", "reason": "identifier_not_permitted"}
+        result = resolve_customer_identity(
+            db,
+            CustomerIdentityQuery(
+                context=_support_read_context(conversation),
+                identifier_kind=identifier_kind,
+                identifier_value=identifier_value,
+            ),
+        )
     except Exception:
         return {"status": "unavailable", "reason": "lookup_failed"}
-    active_rows = [row for row in rows if bool(row.is_active)]
-    if not active_rows:
-        return {"status": "not_found"}
-    if len(active_rows) > 1:
-        return {"status": "ambiguous", "matched_count": len(active_rows)}
-    row = active_rows[0]
+    if result.status is not CustomerIdentityStatus.found or result.customer is None:
+        return {"status": result.status.value}
     return {
-        "status": "found",
-        "subscriber_id": str(row.id),
-        "display_name": row.display_name or row.full_name or row.email,
-        "account_number": row.account_number,
-        "subscriber_number": row.subscriber_number,
-        "email": row.email,
-        "phone": row.phone,
-        "subscriber_status": getattr(row.status, "value", row.status),
+        "status": result.status.value,
+        "subscriber_id": str(result.customer.subscriber_id),
+        "display_name": result.customer.display_name,
+        "account_number": result.customer.account_number,
+        "subscriber_status": result.customer.status,
     }
 
 
@@ -644,54 +757,60 @@ def _subscriber_monitoring(db: Session, inputs: dict[str, object]) -> dict[str, 
     if subscriber_id is None:
         return {"status": "unavailable", "reason": "subscriber_required"}
     try:
-        context = get_customer_network_context(db, subscriber_id)
+        projection = support_monitoring.project_support_monitoring(
+            db,
+            support_monitoring.SupportMonitoringQuery(
+                subscriber_id=subscriber_id,
+                authorized=True,
+            ),
+        )
     except Exception:
         return {"status": "unavailable", "reason": "monitoring_query_failed"}
-    ont_states: list[dict[str, object]] = []
-    try:
-        from app.services.network.ont_status import resolve_effective_ont_status
-
-        for assignment in context.ont_assignments[:5]:
-            ont = assignment.ont_unit
-            if ont is None:
-                continue
-            resolved = resolve_effective_ont_status(ont)
-            ont_states.append(
-                {
-                    "serial": ont.serial_number,
-                    "online": resolved.is_online,
-                    "reason": resolved.reason,
-                }
-            )
-    except Exception:
-        ont_states = []
-    return {
-        "status": "available",
-        "service_state": "online" if context.is_online else "offline",
-        "radius_online": context.is_online,
-        "has_access_equipment": context.has_access_equipment,
-        "active_radius_session_count": len(context.active_radius_sessions),
-        "framed_ipv4_addresses": list(context.framed_ipv4_addresses[:3]),
-        "assigned_ipv4_addresses": list(context.assigned_ipv4_addresses[:3]),
-        "ont_states": ont_states,
-    }
+    result: dict[str, object] = {"status": projection.status.value}
+    if projection.radius is not None:
+        result["radius_observation"] = {
+            "source": projection.radius.source,
+            "state": projection.radius.state,
+            "active_session_count": projection.radius.active_session_count,
+            "framed_ip_addresses": list(projection.radius.framed_ip_addresses),
+            "observed_at": (
+                projection.radius.observed_at.isoformat()
+                if projection.radius.observed_at is not None
+                else None
+            ),
+        }
+    if projection.onts:
+        result["ont_observations"] = [
+            {
+                "source": observation.source,
+                "reference": observation.reference,
+                "serial_number": observation.serial_number,
+                "effective_state": observation.effective_state,
+            }
+            for observation in projection.onts
+        ]
+    return result
 
 
 def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
     metadata = dict(version.metadata_ or {}) if version is not None else {}
     policy = dict(metadata.get("conversation_policy") or {})
+    conversation_templates = _dict(metadata.get("conversation_templates"))
+    standard_handoff = str(conversation_templates.get("standard_handoff") or "").strip()
     policy["tools"] = metadata.get("tools") or policy.get("tools") or {}
     policy["permitted_identifiers"] = (
         metadata.get("permitted_identifiers")
         or policy.get("permitted_identifiers")
-        or ("registered_phone", "registered_email", "portal_id")
+        or DEFAULT_IDENTIFIER_REQUEST_ORDER
     )
     policy["require_identity_before_tools"] = bool(
         policy.get("require_identity_before_tools", True)
     )
     handoff_policy = _dict(policy.get("handoff"))
     policy["handoff"] = {
-        "customer_message": str(handoff_policy.get("customer_message") or "").strip(),
+        "customer_message": str(
+            handoff_policy.get("customer_message") or standard_handoff
+        ).strip(),
         "summary_template": str(handoff_policy.get("summary_template") or "").strip(),
         "announce_destination": bool(handoff_policy.get("announce_destination")),
     }
@@ -713,27 +832,37 @@ def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
 def _merge_contact_from_conversation(
     state: ConversationalState, conversation: InboxConversation, db: Session
 ) -> None:
-    if conversation.subscriber_id and not state.subscriber_id:
-        state.subscriber_id = str(conversation.subscriber_id)
-    if state.subscriber_id and not state.service_account_identity:
-        subscriber = db.get(Subscriber, coerce_uuid(state.subscriber_id))
-        if subscriber is not None:
-            state.registered_email = state.registered_email or subscriber.email
-            state.registered_phone = state.registered_phone or subscriber.phone
-            state.portal_id = (
-                state.portal_id
-                or subscriber.account_number
-                or subscriber.subscriber_number
-            )
-            state.service_account_identity = {
-                "subscriber_id": str(subscriber.id),
-                "display_name": subscriber.display_name
-                or subscriber.full_name
-                or subscriber.email,
-                "subscriber_status": getattr(
-                    subscriber.status, "value", subscriber.status
-                ),
-            }
+    if state.subscriber_id and state.service_account_identity:
+        return
+    try:
+        result = resolve_customer_identity(
+            db,
+            CustomerIdentityQuery(
+                context=_support_read_context(conversation),
+                identifier_kind=CustomerIdentifierKind.inbox_linked,
+            ),
+        )
+    except Exception:
+        return
+    if result.status is not CustomerIdentityStatus.found or result.customer is None:
+        return
+    customer = result.customer
+    state.subscriber_id = str(customer.subscriber_id)
+    state.portal_id = state.portal_id or customer.account_number
+    state.service_account_identity = {
+        "subscriber_id": state.subscriber_id,
+        "display_name": customer.display_name,
+        "subscriber_status": customer.status,
+    }
+
+
+def _support_read_context(conversation: InboxConversation) -> SupportReadContext:
+    """Build owner input from the trusted Team Inbox runtime context, never AI output."""
+    return SupportReadContext(
+        conversation_id=conversation.id,
+        actor_person_id=None,
+        can_read_support_context=True,
+    )
 
 
 def _merge_facts(state: ConversationalState, facts: dict[str, object]) -> None:
@@ -761,6 +890,8 @@ def _merge_classification(
     state.current_intent = next_intent
     state.category = classification.category.value
     state.confidence = classification.confidence
+    state.classification_requires_follow_up = classification.requires_follow_up
+    state.classification_follow_up_question = classification.follow_up_question
 
 
 def _identify_customer(
@@ -773,12 +904,9 @@ def _identify_customer(
 ) -> None:
     if state.subscriber_id:
         return
-    for identifier_type, value in (
-        ("registered_email", state.registered_email),
-        ("registered_phone", state.registered_phone),
-        ("portal_id", state.portal_id),
-    ):
-        if not value or identifier_type not in _permitted_identifiers(policy):
+    for identifier_type in _permitted_identifiers(policy):
+        value = _identifier_value(state, identifier_type)
+        if not value:
             continue
         result = execute_tool(
             db,
@@ -789,12 +917,12 @@ def _identify_customer(
                 "conversation_id": str(conversation.id),
             },
             policy=policy,
+            conversation=conversation,
             tool_mode=tool_mode,
         )
         _record_tool_result(state, "customer_lookup", result)
         if result.get("status") == "found":
             state.subscriber_id = str(result["subscriber_id"])
-            conversation.subscriber_id = coerce_uuid(result["subscriber_id"])
             state.service_account_identity = {
                 "subscriber_id": state.subscriber_id,
                 "display_name": result.get("display_name"),
@@ -830,9 +958,79 @@ def _requires_identity_before_tools(
     state: ConversationalState, policy: dict[str, object]
 ) -> bool:
     return (
-        _technical_issue(state)
+        _account_context_required(state)
         and not state.subscriber_id
         and bool(policy.get("require_identity_before_tools", True))
+    )
+
+
+def _should_retry_missing_identifier_response(
+    state: ConversationalState,
+    policy: dict[str, object],
+    latest_facts: dict[str, object],
+) -> bool:
+    if not _requires_identity_before_tools(state, policy):
+        return False
+    if _latest_reply_supplied_identifier(latest_facts, policy):
+        return False
+    if not _identifier_was_requested(state, policy):
+        return False
+    return _missing_identifier_retry_count(state) < 1
+
+
+def _latest_reply_supplied_identifier(
+    latest_facts: dict[str, object], policy: dict[str, object]
+) -> bool:
+    return any(
+        latest_facts.get(identifier) for identifier in _permitted_identifiers(policy)
+    )
+
+
+def _identifier_was_requested(
+    state: ConversationalState, policy: dict[str, object]
+) -> bool:
+    requested = set(state.already_requested_fields)
+    if CUSTOMER_IDENTIFIER_REQUEST in requested:
+        return True
+    return any(identifier in requested for identifier in _permitted_identifiers(policy))
+
+
+def _requested_identifier_label(
+    state: ConversationalState, policy: dict[str, object]
+) -> str:
+    for identifier in _permitted_identifiers(policy):
+        if identifier in state.already_requested_fields:
+            return identifier
+    if CUSTOMER_IDENTIFIER_REQUEST in state.already_requested_fields:
+        return _permitted_identifiers(policy)[0]
+    return _permitted_identifiers(policy)[0]
+
+
+def _missing_identifier_retry_count(state: ConversationalState) -> int:
+    value = state.collected_facts.get("missing_identifier_retry_count")
+    if not isinstance(value, int | str):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_missing_identifier_retry(state: ConversationalState) -> None:
+    state.collected_facts["missing_identifier_retry_count"] = (
+        _missing_identifier_retry_count(state) + 1
+    )
+
+
+def _account_context_required(state: ConversationalState) -> bool:
+    return (
+        _technical_issue(state)
+        or (state.current_intent or "") in ACCOUNT_BOUND_INTENTS
+        or (state.category or "") in ACCOUNT_BOUND_CATEGORIES
+        or bool(
+            state.collected_facts.get("account_status_problem")
+            or state.collected_facts.get("billing_dispute")
+        )
     )
 
 
@@ -857,7 +1055,198 @@ def _technical_issue(state: ConversationalState) -> bool:
 
 def _monitoring_offline(state: ConversationalState) -> bool:
     latest = state.monitoring_results[-1] if state.monitoring_results else {}
-    return latest.get("service_state") == "offline"
+    radius = latest.get("radius_observation")
+    return isinstance(radius, dict) and radius.get("state") == "offline"
+
+
+def _configured_playbook_decision(
+    db: Session,
+    state: ConversationalState,
+    policy: dict[str, object],
+    *,
+    conversation: InboxConversation,
+    tool_mode: str,
+) -> ConversationEngineDecision | None:
+    for playbook in _matching_playbooks(state, policy):
+        steps = playbook.get("steps")
+        if not isinstance(steps, list):
+            continue
+        playbook_key = _playbook_key(playbook)
+        for index, raw_step in enumerate(steps):
+            if not isinstance(raw_step, dict):
+                continue
+            condition = raw_step.get("condition")
+            if isinstance(condition, dict) and not _condition_matches(state, condition):
+                continue
+            action = str(raw_step.get("action") or "").strip()
+            if action in {"execute_tool", "invoke_tool"}:
+                tool_key = str(raw_step.get("tool") or "").strip()
+                if not tool_key:
+                    continue
+                if any(item.get("tool") == tool_key for item in state.tool_executions):
+                    continue
+                inputs: dict[str, object] = {}
+                if tool_key == "subscriber_monitoring":
+                    if not state.subscriber_id:
+                        continue
+                    inputs["subscriber_id"] = state.subscriber_id
+                result = execute_tool(
+                    db,
+                    tool_key,
+                    inputs,
+                    policy=policy,
+                    conversation=conversation,
+                    tool_mode=tool_mode,
+                )
+                _record_tool_result(state, tool_key, result)
+                continue
+            if action in {"respond", "provide_guidance"}:
+                step_key = _playbook_step_key(playbook_key, index, raw_step)
+                if step_key in state.troubleshooting_completed:
+                    continue
+                response = str(raw_step.get("response") or "").strip()
+                if response:
+                    state.troubleshooting_completed = _with_unique(
+                        state.troubleshooting_completed,
+                        step_key,
+                    )
+                    return ConversationEngineDecision(
+                        action="respond",
+                        state=state,
+                        response_text=_playbook_response(playbook, state, response),
+                        metadata={
+                            "reason": str(
+                                raw_step.get("reason") or "playbook_guidance"
+                            ),
+                            "playbook": playbook_key,
+                        },
+                    )
+            if action == "request_field":
+                field = str(raw_step.get("field") or raw_step.get("tool") or "").strip()
+                if not field:
+                    continue
+                if _field_value(state, field) not in (None, "", False):
+                    continue
+                if field in state.already_requested_fields:
+                    return None
+                state.missing_facts = _with_unique(state.missing_facts, field)
+                state.already_requested_fields = _with_unique(
+                    state.already_requested_fields,
+                    field,
+                )
+                state.clarification_count += 1
+                response = str(raw_step.get("response") or _field_question(field))
+                return ConversationEngineDecision(
+                    action="respond",
+                    state=state,
+                    response_text=_playbook_response(playbook, state, response),
+                    metadata={
+                        "reason": str(
+                            raw_step.get("reason") or "playbook_required_field"
+                        ),
+                        "playbook": playbook_key,
+                    },
+                )
+            if action == "mark_resolved":
+                state.resolution_status = "resolved"
+                response = str(raw_step.get("response") or "").strip()
+                return ConversationEngineDecision(
+                    action="respond",
+                    state=state,
+                    response_text=response
+                    or "Thanks. I have recorded this as resolved from the details provided.",
+                    metadata={
+                        "reason": str(raw_step.get("reason") or "playbook_resolved"),
+                        "playbook": playbook_key,
+                    },
+                )
+            if action == "handoff":
+                return _handoff_decision(
+                    policy,
+                    state,
+                    reason=str(raw_step.get("reason") or "playbook_handoff"),
+                    response=_handoff_response(
+                        policy,
+                        default=str(
+                            raw_step.get("response")
+                            or "I will pass this to the support team for investigation."
+                        ),
+                    ),
+                )
+    return None
+
+
+def _matching_playbooks(
+    state: ConversationalState, policy: dict[str, object]
+) -> tuple[dict[str, object], ...]:
+    raw_playbooks: object = None
+    for key in PLAYBOOK_POLICY_KEYS:
+        raw_playbooks = policy.get(key)
+        if isinstance(raw_playbooks, list):
+            break
+    if not isinstance(raw_playbooks, list):
+        return ()
+    matched: list[dict[str, object]] = []
+    for raw in raw_playbooks:
+        if not isinstance(raw, dict):
+            continue
+        intent = str(raw.get("intent") or "").strip()
+        if intent and intent != state.current_intent:
+            continue
+        category = str(raw.get("category") or "").strip()
+        if category and category != state.category:
+            continue
+        matched.append(raw)
+    return tuple(matched)
+
+
+def _playbook_key(playbook: dict[str, object]) -> str:
+    return str(
+        playbook.get("key")
+        or playbook.get("name")
+        or playbook.get("category")
+        or playbook.get("intent")
+        or "default"
+    ).strip()[:80]
+
+
+def _playbook_step_key(playbook_key: str, index: int, step: dict[str, object]) -> str:
+    raw_key = str(step.get("key") or step.get("id") or "").strip()
+    if raw_key:
+        return f"playbook:{playbook_key}:{raw_key}"[:120]
+    return f"playbook:{playbook_key}:step:{index}"
+
+
+def _playbook_response(
+    playbook: dict[str, object], state: ConversationalState, response: str
+) -> str:
+    text = " ".join(str(response or "").split())[:800]
+    prefix = str(
+        playbook.get("acknowledgement") or playbook.get("empathy_prefix") or ""
+    ).strip()
+    prefix_key = f"playbook_ack:{_playbook_key(playbook)}"
+    if prefix and prefix_key not in state.troubleshooting_completed:
+        state.troubleshooting_completed = _with_unique(
+            state.troubleshooting_completed,
+            prefix_key,
+        )
+        if not text.lower().startswith(prefix.lower()):
+            text = f"{prefix} {text}".strip()
+    return text[:800]
+
+
+def _field_question(field: str) -> str:
+    if field in SUPPORTED_IDENTIFIER_TYPES:
+        return _identifier_question(field)
+    if field == "router_powered":
+        return "Is your router or ONU powered on right now?"
+    if field == "los_status":
+        return "Are you seeing a red LOS warning light on the ONU?"
+    if field == "router_restarted":
+        return "Have you restarted the router recently?"
+    if field == "outage_context":
+        return "How long has this been happening?"
+    return "Please share that detail so I can continue checking this."
 
 
 def _configured_troubleshooting_decision(
@@ -865,6 +1254,7 @@ def _configured_troubleshooting_decision(
     state: ConversationalState,
     policy: dict[str, object],
     *,
+    conversation: InboxConversation,
     tool_mode: str,
 ) -> ConversationEngineDecision | None:
     rules = policy.get("troubleshooting_rules")
@@ -873,12 +1263,18 @@ def _configured_troubleshooting_decision(
     for raw in rules:
         if not isinstance(raw, dict):
             continue
+        if raw.get("enabled") is False:
+            continue
         condition = raw.get("condition")
         if not isinstance(condition, dict):
             continue
+        action = str(raw.get("action") or "").strip()
+        if state.turn_count <= 1 and _handoff_rule_matches_first_turn(
+            action, condition
+        ):
+            continue
         if not _condition_matches(state, condition):
             continue
-        action = str(raw.get("action") or "").strip()
         if action in {"execute_tool", "invoke_tool"}:
             tool_key = str(raw.get("tool") or "").strip()
             if not tool_key:
@@ -895,6 +1291,7 @@ def _configured_troubleshooting_decision(
                 tool_key,
                 inputs,
                 policy=policy,
+                conversation=conversation,
                 tool_mode=tool_mode,
             )
             _record_tool_result(state, tool_key, result)
@@ -919,9 +1316,7 @@ def _configured_troubleshooting_decision(
                 return ConversationEngineDecision(
                     action="respond",
                     state=state,
-                    response_text=str(
-                        raw.get("response") or _identifier_question(field)
-                    ),
+                    response_text=str(raw.get("response") or _field_question(field)),
                     metadata={"reason": "troubleshooting_required_field"},
                 )
         if action == "mark_resolved":
@@ -948,6 +1343,16 @@ def _configured_troubleshooting_decision(
                 ),
             )
     return None
+
+
+def _handoff_rule_matches_first_turn(
+    action: str, condition: dict[str, object] | Mapping[str, object]
+) -> bool:
+    if action != "handoff":
+        return False
+    if str(condition.get("type") or "").strip() != "turn_count":
+        return False
+    return _compare_number(1, dict(condition))
 
 
 def _condition_matches(
@@ -1054,7 +1459,9 @@ def _compare_number(value: int, condition: dict[str, object]) -> bool:
 def _should_handoff_after_classification(
     state: ConversationalState, policy: dict[str, object]
 ) -> bool:
-    if policy.get("handoff_after_classification") is False:
+    if not bool(policy.get("handoff_after_classification", False)):
+        return False
+    if state.classification_requires_follow_up:
         return False
     return bool(state.current_intent and state.confidence is not None)
 
@@ -1190,23 +1597,51 @@ def _strip_empty_summary_lines(text: str) -> str:
 
 
 def _identifier_question(identifier_type: str) -> str:
+    if identifier_type == "portal_id":
+        return "Please send your Portal ID or account number so I can identify the service."
     if identifier_type == "registered_email":
         return "Please send the registered email on the account so I can identify it."
     if identifier_type == "registered_phone":
         return "Please send the registered phone number on the account."
-    return "Please send your Portal ID or account number so I can identify the service."
+    if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
+        return (
+            "Please send the registered phone number, registered email, or "
+            "Portal ID on the account."
+        )
+    return "Please share that detail so I can continue checking this."
+
+
+def _identifier_retry_question(identifier_type: str) -> str:
+    if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
+        return (
+            "I still need the registered phone number, registered email, or "
+            "Portal ID on the account. Please send one of those details."
+        )
+    if identifier_type == "portal_id":
+        return "I still need the Portal ID or account number for the service."
+    if identifier_type == "registered_email":
+        return "I still need the registered email on the account."
+    if identifier_type == "registered_phone":
+        return "I still need the registered phone number on the account."
+    return "I still need that detail so I can continue checking this."
+
+
+def _turn_limit_handoff_response(
+    state: ConversationalState, policy: dict[str, object]
+) -> str:
+    if _requires_identity_before_tools(state, policy) and not state.subscriber_id:
+        return (
+            "I could not safely identify the account from the details provided. "
+            "I will pass this to the support team."
+        )
+    return "I will pass the details I have collected to the support team."
 
 
 def _next_identifier_to_request(
     state: ConversationalState, policy: dict[str, object]
 ) -> str | None:
-    supplied = {
-        "registered_email": bool(state.registered_email),
-        "registered_phone": bool(state.registered_phone),
-        "portal_id": bool(state.portal_id),
-    }
     for identifier in _permitted_identifiers(policy):
-        if supplied.get(identifier):
+        if _identifier_supplied(state, identifier):
             continue
         if identifier in state.already_requested_fields:
             continue
@@ -1214,20 +1649,39 @@ def _next_identifier_to_request(
     return None
 
 
+def _identifier_value(state: ConversationalState, identifier_type: str) -> str | None:
+    if identifier_type == "portal_id":
+        return state.portal_id
+    if identifier_type == "registered_email":
+        return state.registered_email
+    if identifier_type == "registered_phone":
+        return state.registered_phone
+    return None
+
+
+def _identifier_supplied(state: ConversationalState, identifier_type: str) -> bool:
+    return bool(_identifier_value(state, identifier_type))
+
+
 def _permitted_identifiers(policy: dict[str, object]) -> tuple[str, ...]:
+    """Return the identifier request order the policy declared.
+
+    The declared order is authoritative and is the single source consumed by
+    both prompting (`_next_identifier_to_request`) and identification lookup
+    (`_identify_customer`). Values are kept in declaration order,
+    de-duplicated by first occurrence, and unsupported values are dropped
+    without reordering the valid ones. The engine never imposes a canonical
+    order over a declared one; when no order is configured the historical
+    default applies.
+    """
     raw = policy.get("permitted_identifiers")
     if isinstance(raw, str):
         raw = [raw]
-    allowed = {
-        "portal_id",
-        "registered_email",
-        "registered_phone",
-    }
-    return tuple(item for item in _list(raw) if item in allowed) or (
-        "registered_phone",
-        "registered_email",
-        "portal_id",
-    )
+    declared: list[str] = []
+    for item in _list(raw):
+        if item in SUPPORTED_IDENTIFIER_TYPES and item not in declared:
+            declared.append(item)
+    return tuple(declared) or DEFAULT_IDENTIFIER_REQUEST_ORDER
 
 
 def _tool_enabled(policy: dict[str, object], key: str) -> bool:

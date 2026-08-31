@@ -140,12 +140,40 @@
                         value="{{ olt.default_tr069_olt_profile_id if olt.default_tr069_olt_profile_id is not none else '' }}"
                         class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
+                {% if olt.show_huawei_config_pack_fields %}
+                <div>
+                    <label for="default_internet_config_ip_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">Internet IP Index</label>
+                    <input type="number" name="default_internet_config_ip_index" id="default_internet_config_ip_index" min="0" max="32"
+                        value="{{ olt.default_internet_config_ip_index if olt.default_internet_config_ip_index is not none else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                {% endif %}
                 <div>
                     <label for="default_wan_config_profile_id" class="text-xs font-medium text-slate-600 dark:text-slate-400">WAN Profile</label>
                     <input type="number" name="default_wan_config_profile_id" id="default_wan_config_profile_id" min="0" max="65535"
                         value="{{ olt.default_wan_config_profile_id if olt.default_wan_config_profile_id is not none else '' }}"
                         class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
+                {% if olt.show_huawei_config_pack_fields %}
+                <div>
+                    <label for="mgmt_wcd_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">Mgmt WCD</label>
+                    <input type="number" name="mgmt_wcd_index" id="mgmt_wcd_index" min="1" max="32"
+                        value="{{ olt.mgmt_wcd_index if olt.mgmt_wcd_index is not none else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="pppoe_wcd_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">PPPoE WCD</label>
+                    <input type="number" name="pppoe_wcd_index" id="pppoe_wcd_index" min="1" max="32"
+                        value="{{ olt.pppoe_wcd_index if olt.pppoe_wcd_index is not none else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="voip_wcd_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">VoIP WCD</label>
+                    <input type="number" name="voip_wcd_index" id="voip_wcd_index" min="1" max="32"
+                        value="{{ olt.voip_wcd_index if olt.voip_wcd_index is not none else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                {% endif %}
                 <div>
                     <label for="mgmt_ip_pool_id" class="text-xs font-medium text-slate-600 dark:text-slate-400">Mgmt IP Pool</label>
                     <select name="mgmt_ip_pool_id" id="mgmt_ip_pool_id"

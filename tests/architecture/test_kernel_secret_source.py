@@ -13,6 +13,8 @@ convenient one would be the bug.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from app.services import kernel_secret_source as kss
@@ -35,16 +37,59 @@ def test_the_five_ruled_secrets_are_the_ones_declared() -> None:
     }
 
 
-def test_the_optional_set_holds_only_the_trust_anchor() -> None:
+def test_the_optional_set_holds_only_approved_feature_scoped_material() -> None:
     """Optional is a narrow exception, not a second general-purpose set.
 
     A name lands here only when its material belongs to ONE feature, so a
     deployment not using that feature has nothing to provision. Anything the
     whole process needs belongs in the required set above, where a missing
     value stops the boot.
+
+    `machine_credential_hmac_key` qualifies only because machine auth is still
+    DORMANT: no credential has been minted, so `_machine_principal` falls back
+    to the legacy `api_keys` verifier and a deployment without the key has a
+    dormant feature rather than a broken one. That premise is enforced by
+    `test_machine_key_is_optional_only_while_the_legacy_verifier_exists`.
     """
 
-    assert set(kss.OPTIONAL_SECRET_REFS) == {"prepaid_attestation_public_key"}
+    assert set(kss.OPTIONAL_SECRET_REFS) == {
+        "machine_credential_hmac_key",
+        "prepaid_attestation_public_key",
+    }
+
+
+def test_machine_key_is_optional_only_while_the_legacy_verifier_exists() -> None:
+    """The dormancy premise is checkable, so check it rather than trust a comment.
+
+    `machine_credential_hmac_key` is optional ONLY because the legacy `api_keys`
+    branch still answers when the key is absent. Delete that branch and absence
+    stops meaning "not configured yet" and starts meaning "every integration
+    fails closed" — at which point the key must move to `SECRET_REFS` and a boot
+    that refuses is the correct answer.
+
+    Without this, the documented move is a comment nobody is obliged to honour,
+    and the retirement change could ship machine auth as the only verifier while
+    its key was still allowed to be missing.
+    """
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "app"
+        / "services"
+        / "auth_dependencies.py"
+    ).read_text()
+    legacy_verifier_present = "ApiKey.key_hash.in_(hash_api_key_candidates(" in source
+
+    if "machine_credential_hmac_key" in kss.OPTIONAL_SECRET_REFS:
+        assert legacy_verifier_present, (
+            "machine_credential_hmac_key is still OPTIONAL, but the legacy "
+            "api_keys verifier it falls back to is gone. Move the key to "
+            "SECRET_REFS in this same change - absence is no longer dormancy."
+        )
+    else:
+        assert "machine_credential_hmac_key" in kss.SECRET_REFS, (
+            "machine_credential_hmac_key must be declared in exactly one set"
+        )
 
 
 def test_every_reference_points_at_openbao() -> None:
@@ -57,6 +102,25 @@ def test_no_name_is_both_required_and_optional() -> None:
     """Two entries for one name would make its absence mean two things."""
 
     assert not set(kss.SECRET_REFS) & set(kss.OPTIONAL_SECRET_REFS)
+
+
+def test_optional_secrets_do_not_share_required_paths() -> None:
+    """Optional means the entire secret path may be absent.
+
+    `resolve_openbao_ref_optional` deliberately returns ``None`` only for a
+    missing path. A missing field on an existing required path is treated as
+    drift and raises, so co-locating optional material there would turn a
+    legitimate unprovisioned feature into an application-wide boot failure.
+    """
+
+    required_paths = {
+        reference.rsplit("#", 1)[0] for reference in kss.SECRET_REFS.values()
+    }
+    optional_paths = {
+        reference.rsplit("#", 1)[0] for reference in kss.OPTIONAL_SECRET_REFS.values()
+    }
+
+    assert required_paths.isdisjoint(optional_paths)
 
 
 @pytest.fixture

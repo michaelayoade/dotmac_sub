@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,18 @@ if TYPE_CHECKING:
     from app.models.network import OLTDevice, Vlan
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StandardOltConfigPackProfile:
+    """Fleet-standard Huawei config pack selected from OLT identity."""
+
+    key: str
+    name: str
+    model_family: str
+    command_profile_name: str
+    firmware_standardized: bool
+    standardization_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,12 @@ class OltConfigPack:
     # OLT identity
     olt_id: str
     olt_name: str
+    name: str | None = None
+    standard_pack_key: str | None = None
+    standard_pack_family: str | None = None
+    command_profile_name: str | None = None
+    firmware_standardized: bool = True
+    standardization_note: str | None = None
 
     # TR-069 configuration
     tr069_acs_server_id: str | None = None
@@ -145,6 +163,12 @@ class OltConfigPack:
         return {
             "olt_id": self.olt_id,
             "olt_name": self.olt_name,
+            "name": self.name,
+            "standard_pack_key": self.standard_pack_key,
+            "standard_pack_family": self.standard_pack_family,
+            "command_profile_name": self.command_profile_name,
+            "firmware_standardized": self.firmware_standardized,
+            "standardization_note": self.standardization_note,
             "tr069_acs_server_id": self.tr069_acs_server_id,
             "tr069_olt_profile_id": self.tr069_olt_profile_id,
             "internet_vlan": {
@@ -201,6 +225,73 @@ def _int_or_none(value: object) -> int | None:
         return int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return None
+
+
+def resolve_standard_olt_config_pack_profile(
+    olt: object,
+) -> StandardOltConfigPackProfile | None:
+    """Resolve the approved fleet config pack from OLT model and firmware.
+
+    The returned profile is only the model-family pack identity. Per-site values
+    such as VLANs, profile IDs, WCD indices, and credentials remain owned by the
+    OLT config_pack JSON and related imported OLT state.
+    """
+    vendor = str(getattr(olt, "vendor", "") or "").strip().lower()
+    model = str(getattr(olt, "model", "") or "").strip().upper()
+    if vendor and "huawei" not in vendor:
+        return None
+
+    try:
+        from app.models.network import OLTDevice
+        from app.services.network.huawei_command_profiles import (
+            get_huawei_command_profile,
+        )
+
+        # ``olt`` is accepted as ``object`` so callers may pass duck-typed
+        # stand-ins (see tests/test_olt_standard_config_pack_resolution.py);
+        # get_huawei_command_profile only reads attributes via getattr, so
+        # this cast is safe for any object shaped like an OLTDevice.
+        command_profile_name = get_huawei_command_profile(cast(OLTDevice, olt)).name
+    except Exception:
+        logger.exception(
+            "Failed to resolve Huawei command profile while selecting config pack"
+        )
+        command_profile_name = "huawei-generic"
+
+    if "MA5608T" in model:
+        firmware_standardized = command_profile_name == "huawei-ma5608t-v800r018"
+        return StandardOltConfigPackProfile(
+            key="huawei-ma5608t-standard",
+            name="Huawei MA5608T standard pack",
+            model_family="MA5608T",
+            command_profile_name=command_profile_name,
+            firmware_standardized=firmware_standardized,
+            standardization_note=(
+                None
+                if firmware_standardized
+                else "MA5608T should run the approved V800R018+ firmware train."
+            ),
+        )
+
+    if "MA5800" in model:
+        firmware_standardized = command_profile_name in {
+            "huawei-ma5800-v100r019",
+            "huawei-ma5800-v800r019",
+        }
+        return StandardOltConfigPackProfile(
+            key="huawei-ma5800-x2-standard",
+            name="Huawei MA5800-X2 standard pack",
+            model_family="MA5800-X2",
+            command_profile_name=command_profile_name,
+            firmware_standardized=firmware_standardized,
+            standardization_note=(
+                None
+                if firmware_standardized
+                else "MA5800-X2 should run the approved R019+ firmware train."
+            ),
+        )
+
+    return None
 
 
 def _resolve_internet_config_ip_index(
@@ -319,6 +410,7 @@ def resolve_olt_config_pack(
         return None
 
     pack = olt.config_pack or {}
+    standard_profile = resolve_standard_olt_config_pack_profile(olt)
     tr069_olt_profile_id = _resolve_tr069_olt_profile_id(db, olt, pack)
     internet_vlan = _resolve_vlan(db, pack.get("internet_vlan_id"))
     management_vlan = _resolve_vlan(db, pack.get("management_vlan_id"))
@@ -353,6 +445,20 @@ def resolve_olt_config_pack(
     return OltConfigPack(
         olt_id=str(olt.id),
         olt_name=olt.name or "",
+        name=standard_profile.name if standard_profile else None,
+        standard_pack_key=standard_profile.key if standard_profile else None,
+        standard_pack_family=(
+            standard_profile.model_family if standard_profile else None
+        ),
+        command_profile_name=(
+            standard_profile.command_profile_name if standard_profile else None
+        ),
+        firmware_standardized=(
+            standard_profile.firmware_standardized if standard_profile else True
+        ),
+        standardization_note=(
+            standard_profile.standardization_note if standard_profile else None
+        ),
         # TR-069 config (ACS server ID is still a FK on OLT, not in JSON)
         tr069_acs_server_id=(
             str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
@@ -600,6 +706,9 @@ def validate_config_pack_comprehensive(
         validation.warnings.append(
             "Missing connection request credentials - ACS cannot push config changes"
         )
+
+    if not config_pack.firmware_standardized and config_pack.standardization_note:
+        validation.warnings.append(config_pack.standardization_note)
 
     return validation
 

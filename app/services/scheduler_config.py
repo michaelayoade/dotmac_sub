@@ -402,10 +402,31 @@ def _scheduled_row_to_entry(task) -> tuple[str, dict] | None:
     }
 
 
+def _append_enabled_scheduled_task_entries(schedule: dict[str, dict], session) -> None:
+    tasks = session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
+    for task in tasks:
+        entry = _scheduled_row_to_entry(task)
+        if entry is not None:
+            schedule[entry[0]] = entry[1]
+
+
+def _sync_billing_health_snapshot_schedule(session) -> None:
+    # Keep this liveness producer available even when a later scheduler-setting
+    # read fails. It publishes bounded metrics only; it does not bill customers.
+    _sync_scheduled_task(
+        session,
+        name="billing_health_snapshot",
+        task_name="app.tasks.billing.refresh_billing_health_snapshot",
+        enabled=True,
+        interval_seconds=900,
+    )
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
     try:
+        _sync_billing_health_snapshot_schedule(session)
         enabled = control_registry.is_enabled(session, "gis.sync")
         interval_minutes = resolve_integer(
             session, SettingDomain.gis, "sync_interval_minutes"
@@ -750,15 +771,6 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.billing.check_billing_switch",
             enabled=True,
             interval_seconds=3600,
-        )
-        # Heavy cohort health is produced out of band. Prometheus scrapes only
-        # the bounded Redis snapshot and never walks customer financial rows.
-        _sync_scheduled_task(
-            session,
-            name="billing_health_snapshot",
-            task_name="app.tasks.billing.refresh_billing_health_snapshot",
-            enabled=True,
-            interval_seconds=900,
         )
         cutover_audit_enabled = _scheduler_setting_enabled(
             session,
@@ -2291,15 +2303,14 @@ def build_beat_schedule() -> dict:
                 "schedule": timedelta(minutes=5),
             }
 
-        tasks = (
-            session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
-        )
-        for task in tasks:
-            entry = _scheduled_row_to_entry(task)
-            if entry is not None:
-                schedule[entry[0]] = entry[1]
+        _append_enabled_scheduled_task_entries(schedule, session)
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
+        try:
+            session.rollback()
+            _append_enabled_scheduled_task_entries(schedule, session)
+        except Exception:
+            logger.exception("Failed to append existing DB scheduled tasks.")
     finally:
         session.close()
     return schedule

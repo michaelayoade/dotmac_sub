@@ -95,7 +95,7 @@ def ticket_reference(ticket: Ticket) -> CustomerTicketReference:
         number=ticket.number,
         title=ticket.title,
         status=ticket.status,
-        status_presentation=ticket_status_presentation(ticket.status),
+        status_presentation=ticket_status_presentation(ticket.display_status),
         resolved_at=ticket.resolved_at,
         closed_at=ticket.closed_at,
         actions=ticket_actions(ticket),

@@ -86,10 +86,31 @@ class InboxAgentCandidate:
 
 class InboxPresenceReason(StrEnum):
     manual_change = "manual_change"
+    staff_sign_in = "staff_sign_in"
     session_timeout = "session_timeout"
     logout = "logout"
     connection_lost = "connection_lost"
     account_deactivated = "account_deactivated"
+
+
+class InboxAgentUnavailabilityReason(StrEnum):
+    presence_unavailable = "presence_unavailable"
+    at_capacity = "at_capacity"
+
+
+@dataclass(frozen=True)
+class AgentSignedInPresenceCommand:
+    system_user_id: UUID
+    auth_session_id: UUID
+    signed_in_at: datetime
+
+
+@dataclass(frozen=True)
+class AgentSignedInPresenceOutcome:
+    system_user_id: UUID
+    presence_id: UUID
+    status: InboxAgentPresenceStatus
+    transition_recorded: bool
 
 
 @dataclass(frozen=True)
@@ -119,6 +140,19 @@ class InboxQueueSweepResult:
 class InboxTeamCapacitySnapshot:
     active_assignments: int
     total_capacity: int
+    available_agent_count: int = 0
+
+
+@dataclass(frozen=True)
+class InboxAgentAvailabilitySnapshot:
+    system_user_id: UUID
+    presence_status: InboxAgentPresenceStatus
+    presence_observed_at: datetime | None
+    active_conversation_count: int
+    max_concurrent_conversations: int
+    available_capacity: int
+    assignment_eligible: bool
+    unavailability_reason: InboxAgentUnavailabilityReason | None
 
 
 def estimate_queue_wait_minutes(
@@ -158,11 +192,13 @@ def team_capacity_snapshot(
     service_team_id: str | UUID,
     *,
     default_max_concurrent: int | None = None,
+    now: datetime | None = None,
 ) -> InboxTeamCapacitySnapshot:
     snapshots = team_capacity_snapshots(
         db,
         (service_team_id,),
         default_max_concurrent=default_max_concurrent,
+        now=now,
     )
     team_uuid = _coerce_uuid(service_team_id)
     if team_uuid is None:
@@ -178,6 +214,7 @@ def team_capacity_snapshots(
     service_team_ids: Sequence[str | UUID],
     *,
     default_max_concurrent: int | None = None,
+    now: datetime | None = None,
 ) -> dict[UUID, InboxTeamCapacitySnapshot]:
     """Load capacity for several teams with one bounded set of queries."""
 
@@ -206,42 +243,35 @@ def team_capacity_snapshots(
             team_id: InboxTeamCapacitySnapshot(active_assignments=0, total_capacity=0)
             for team_id in team_ids
         }
-    presences = {
-        row.person_id: row
-        for row in db.query(InboxAgentPresence)
-        .filter(InboxAgentPresence.person_id.in_(person_ids))
-        .all()
-    }
+    availability_by_person = agent_availability_snapshots(
+        db,
+        person_ids,
+        default_max_concurrent=default_max_concurrent,
+        now=now,
+    )
     online_ids = {
         person_id
-        for person_id, presence in presences.items()
-        if effective_presence_status(presence) == InboxAgentPresenceStatus.online.value
+        for person_id, snapshot in availability_by_person.items()
+        if snapshot.presence_status is InboxAgentPresenceStatus.online
     }
     online_ids_by_team: dict[UUID, set[UUID]] = {team_id: set() for team_id in team_ids}
     for member, user in member_users:
         if user.id in online_ids:
             online_ids_by_team[member.team_id].add(user.id)
-    active_by_person = dict(
-        _active_assignment_count_query(db, list(online_ids))
-        .with_entities(
-            InboxConversationAssignment.person_id,
-            func.count(InboxConversationAssignment.id),
-        )
-        .group_by(InboxConversationAssignment.person_id)
-        .all()
-        if online_ids
-        else ()
-    )
     return {
         team_id: InboxTeamCapacitySnapshot(
             active_assignments=sum(
-                int(active_by_person.get(person_id, 0))
+                availability_by_person[person_id].active_conversation_count
                 for person_id in online_ids_by_team[team_id]
             ),
             total_capacity=sum(
-                presences[person_id].max_concurrent_conversations
-                or default_max_concurrent
+                availability_by_person[person_id].max_concurrent_conversations
                 for person_id in online_ids_by_team[team_id]
+            ),
+            available_agent_count=sum(
+                1
+                for person_id in online_ids_by_team[team_id]
+                if availability_by_person[person_id].assignment_eligible
             ),
         )
         for team_id in team_ids
@@ -282,9 +312,68 @@ def effective_presence_status(
     return status
 
 
-def _active_assignment_count_query(db: Session, person_ids: list[UUID]):
-    return (
-        db.query(func.count(InboxConversationAssignment.id))
+def record_agent_reply_activity(
+    db: Session,
+    *,
+    person_id: str | UUID | None,
+    now: datetime | None = None,
+) -> InboxAgentPresence | None:
+    person_uuid = _coerce_uuid(person_id)
+    if person_uuid is None:
+        return None
+    presence = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == person_uuid)
+        .one_or_none()
+    )
+    if presence is None:
+        return None
+    selected_status = (
+        presence.manual_override_status
+        or presence.status
+        or InboxAgentPresenceStatus.offline.value
+    )
+    if selected_status != InboxAgentPresenceStatus.online.value:
+        return presence
+    refreshed_at = now or datetime.now(UTC)
+    presence.last_seen_at = refreshed_at
+    db.flush()
+    presence.last_seen_at = refreshed_at
+    return presence
+
+
+def agent_availability_snapshots(
+    db: Session,
+    system_user_ids: Sequence[str | UUID],
+    *,
+    default_max_concurrent: int | None = None,
+    now: datetime | None = None,
+) -> dict[UUID, InboxAgentAvailabilitySnapshot]:
+    """Return the routing owner's exact availability decision inputs."""
+
+    person_ids = tuple(
+        dict.fromkeys(
+            person_id
+            for value in system_user_ids
+            if (person_id := _coerce_uuid(value)) is not None
+        )
+    )
+    if not person_ids:
+        return {}
+    if default_max_concurrent is None:
+        default_max_concurrent = resolve_default_max_concurrent_conversations(db)
+    observed_at = now or datetime.now(UTC)
+    presences = {
+        row.person_id: row
+        for row in db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id.in_(person_ids))
+        .all()
+    }
+    active_count_rows = (
+        db.query(
+            InboxConversationAssignment.person_id,
+            func.count(InboxConversationAssignment.id),
+        )
         .join(
             InboxConversation,
             InboxConversation.id == InboxConversationAssignment.conversation_id,
@@ -293,7 +382,47 @@ def _active_assignment_count_query(db: Session, person_ids: list[UUID]):
         .filter(InboxConversationAssignment.person_id.in_(person_ids))
         .filter(InboxConversation.status.in_(COUNTABLE_CAPACITY_STATUSES))
         .filter(InboxConversation.is_active.is_(True))
+        .group_by(InboxConversationAssignment.person_id)
+        .all()
     )
+    active_counts: dict[UUID, int] = {
+        person_id: int(assignment_count)
+        for person_id, assignment_count in active_count_rows
+    }
+    snapshots: dict[UUID, InboxAgentAvailabilitySnapshot] = {}
+    for person_id in person_ids:
+        presence = presences.get(person_id)
+        presence_status = InboxAgentPresenceStatus(
+            effective_presence_status(presence, now=observed_at)
+            if presence is not None
+            else InboxAgentPresenceStatus.offline.value
+        )
+        active_count = int(active_counts.get(person_id, 0))
+        max_concurrent = (
+            presence.max_concurrent_conversations
+            if presence is not None and presence.max_concurrent_conversations
+            else default_max_concurrent
+        )
+        available_capacity = max(0, max_concurrent - active_count)
+        if presence_status is not InboxAgentPresenceStatus.online:
+            unavailability_reason = InboxAgentUnavailabilityReason.presence_unavailable
+        elif available_capacity == 0:
+            unavailability_reason = InboxAgentUnavailabilityReason.at_capacity
+        else:
+            unavailability_reason = None
+        snapshots[person_id] = InboxAgentAvailabilitySnapshot(
+            system_user_id=person_id,
+            presence_status=presence_status,
+            presence_observed_at=(
+                presence.last_seen_at if presence is not None else None
+            ),
+            active_conversation_count=active_count,
+            max_concurrent_conversations=max_concurrent,
+            available_capacity=available_capacity,
+            assignment_eligible=unavailability_reason is None,
+            unavailability_reason=unavailability_reason,
+        )
+    return snapshots
 
 
 def set_agent_presence(
@@ -305,6 +434,7 @@ def set_agent_presence(
     actor_person_id: str | UUID | None = None,
     reason_code: InboxPresenceReason = InboxPresenceReason.manual_change,
     source_id: str | None = None,
+    manual_override: bool = True,
 ) -> InboxAgentPresence:
     person_uuid = _coerce_uuid(person_id)
     if person_uuid is None:
@@ -323,28 +453,33 @@ def set_agent_presence(
         presence = InboxAgentPresence(person_id=person_uuid)
         db.add(presence)
 
-    previous_effective_status = effective_presence_status(presence)
+    previous_effective_status = effective_presence_status(presence, now=observed_at)
     if previous_effective_status == clean_status:
+        if not manual_override:
+            presence.status = clean_status
+            presence.manual_override_status = None
         presence.last_seen_at = observed_at
         db.flush()
+        presence.last_seen_at = observed_at
         return presence
     presence.status = clean_status
-    presence.manual_override_status = clean_status
+    presence.manual_override_status = clean_status if manual_override else None
     presence.last_seen_at = observed_at
-    metadata = dict(presence.metadata_ or {})
-    history = metadata.get("manual_status_history")
-    if not isinstance(history, list):
-        history = []
-    history.append(
-        {
-            "from": previous_effective_status,
-            "to": clean_status,
-            "at": observed_at.isoformat(),
-            "source": "admin_inbox_presence_toggle",
-        }
-    )
-    metadata["manual_status_history"] = history[-50:]
-    presence.metadata_ = metadata
+    if manual_override:
+        metadata = dict(presence.metadata_ or {})
+        history = metadata.get("manual_status_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "from": previous_effective_status,
+                "to": clean_status,
+                "at": observed_at.isoformat(),
+                "source": "admin_inbox_presence_toggle",
+            }
+        )
+        metadata["manual_status_history"] = history[-50:]
+        presence.metadata_ = metadata
     db.add(
         InboxAgentPresenceEvent(
             person_id=person_uuid,
@@ -359,7 +494,57 @@ def set_agent_presence(
         )
     )
     db.flush()
+    presence.last_seen_at = observed_at
     return presence
+
+
+def record_agent_signed_in_presence(
+    db: Session,
+    *,
+    command: AgentSignedInPresenceCommand,
+) -> AgentSignedInPresenceOutcome:
+    """Default a successfully signed-in staff principal to online.
+
+    This is a flush-only Team Inbox participant in the auth-session issuance
+    transaction. The caller owns commit/rollback, so a delivered staff session
+    and its default availability cannot disagree.
+    """
+
+    locked_principal_id = (
+        db.query(SystemUser.id)
+        .filter(SystemUser.id == command.system_user_id)
+        .filter(SystemUser.is_active.is_(True))
+        .with_for_update()
+        .scalar()
+    )
+    if locked_principal_id is None:
+        raise ValueError("system_user_id must reference an active staff user")
+    existing = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == command.system_user_id)
+        .one_or_none()
+    )
+    previous_status = (
+        effective_presence_status(existing, now=command.signed_in_at)
+        if existing is not None
+        else InboxAgentPresenceStatus.offline.value
+    )
+    presence = set_agent_presence(
+        db,
+        person_id=command.system_user_id,
+        status=InboxAgentPresenceStatus.online.value,
+        now=command.signed_in_at,
+        actor_person_id=command.system_user_id,
+        reason_code=InboxPresenceReason.staff_sign_in,
+        source_id=f"auth-session:{command.auth_session_id}",
+        manual_override=False,
+    )
+    return AgentSignedInPresenceOutcome(
+        system_user_id=command.system_user_id,
+        presence_id=presence.id,
+        status=InboxAgentPresenceStatus.online,
+        transition_recorded=(previous_status != InboxAgentPresenceStatus.online.value),
+    )
 
 
 def list_available_team_agents(
@@ -395,58 +580,27 @@ def list_available_team_agents(
         return []
 
     person_ids = [user.id for _member, user in member_users]
-    presences = {
-        row.person_id: row
-        for row in db.query(InboxAgentPresence)
-        .filter(InboxAgentPresence.person_id.in_(person_ids))
-        .all()
-    }
-    active_count_rows = (
-        db.query(
-            InboxConversationAssignment.person_id,
-            func.count(InboxConversationAssignment.id),
-        )
-        .join(
-            InboxConversation,
-            InboxConversation.id == InboxConversationAssignment.conversation_id,
-        )
-        .filter(InboxConversationAssignment.is_active.is_(True))
-        .filter(InboxConversationAssignment.person_id.in_(person_ids))
-        .filter(InboxConversation.status.in_(COUNTABLE_CAPACITY_STATUSES))
-        .filter(InboxConversation.is_active.is_(True))
-        .group_by(InboxConversationAssignment.person_id)
-        .all()
+    availability_by_person = agent_availability_snapshots(
+        db,
+        person_ids,
+        default_max_concurrent=default_max_concurrent,
+        now=observed_at,
     )
-    active_counts = {
-        person_id: int(assignment_count)
-        for person_id, assignment_count in active_count_rows
-    }
 
     candidates: list[InboxAgentCandidate] = []
     for _member, user in member_users:
-        presence = presences.get(user.id)
-        if presence is None:
-            continue
-        if (
-            effective_presence_status(presence, now=observed_at)
-            != InboxAgentPresenceStatus.online.value
-        ):
-            continue
-        active_count = active_counts.get(user.id, 0)
-        max_concurrent = (
-            presence.max_concurrent_conversations
-            or default_max_concurrent
-            or DEFAULT_MAX_CONCURRENT_CONVERSATIONS
-        )
-        if active_count >= max_concurrent:
+        availability = availability_by_person[user.id]
+        if not availability.assignment_eligible:
             continue
         candidates.append(
             InboxAgentCandidate(
                 person_id=str(user.id),
-                active_conversation_count=active_count,
-                max_concurrent_conversations=max_concurrent,
-                presence_status=effective_presence_status(presence, now=observed_at),
-                presence_observed_at=presence.last_seen_at,
+                active_conversation_count=(availability.active_conversation_count),
+                max_concurrent_conversations=(
+                    availability.max_concurrent_conversations
+                ),
+                presence_status=availability.presence_status.value,
+                presence_observed_at=availability.presence_observed_at,
             )
         )
 
@@ -567,6 +721,18 @@ def _active_assignment(
         db.query(InboxConversationAssignment)
         .filter(InboxConversationAssignment.conversation_id == conversation.id)
         .filter(InboxConversationAssignment.is_active.is_(True))
+        .with_for_update()
+        .one_or_none()
+    )
+
+
+def _lock_active_conversation(
+    db: Session, conversation: InboxConversation
+) -> InboxConversation | None:
+    return (
+        db.query(InboxConversation)
+        .filter(InboxConversation.id == conversation.id)
+        .filter(InboxConversation.is_active.is_(True))
         .with_for_update()
         .one_or_none()
     )
@@ -776,26 +942,56 @@ def assign_conversation_to_agent(
                 reason="person_id must reference an active staff user",
             )
 
+    locked_conversation = _lock_active_conversation(db, conversation)
+    if locked_conversation is None:
+        return InboxAssignmentResult(
+            kind="conversation_not_found",
+            service_team_id=str(team_uuid),
+            reason="Conversation not found",
+        )
+    conversation = locked_conversation
+
+    previous_assignment = _active_assignment(db, conversation)
+    if (
+        previous_assignment is not None
+        and previous_assignment.service_team_id == team_uuid
+        and previous_assignment.person_id == person_uuid
+    ):
+        return InboxAssignmentResult(
+            kind="assigned",
+            service_team_id=str(team_uuid),
+            assigned_person_id=str(person_uuid),
+            reason="already_assigned",
+        )
+
     if decision_mode is InboxRoutingDecisionMode.manual and require_team_membership:
-        available_person_ids = {
-            candidate.person_id
-            for candidate in list_available_team_agents(
-                db,
-                team_uuid,
-                now=assigned_at,
-            )
-        }
-        if str(person_uuid) not in available_person_ids:
+        availability = agent_availability_snapshots(
+            db,
+            (person_uuid,),
+            now=assigned_at,
+        )[person_uuid]
+        if not availability.assignment_eligible:
+            if (
+                availability.unavailability_reason
+                is InboxAgentUnavailabilityReason.at_capacity
+            ):
+                refusal_reason = (
+                    "Agent is at capacity "
+                    f"({availability.active_conversation_count} of "
+                    f"{availability.max_concurrent_conversations} active "
+                    "conversations)."
+                )
+            else:
+                refusal_reason = (
+                    "Agent is not currently available for assignment "
+                    f"(status: {availability.presence_status.value})."
+                )
             return InboxAssignmentResult(
                 kind="agent_unavailable",
                 service_team_id=str(team_uuid),
-                reason=(
-                    "Agent must be online with recent presence evidence and "
-                    "available capacity before assignment."
-                ),
+                reason=refusal_reason,
             )
 
-    previous_assignment = _active_assignment(db, conversation)
     set_conversation_owner_team(
         db,
         conversation=conversation,
@@ -910,6 +1106,15 @@ def queue_conversation_for_team(
             service_team_id=str(team_uuid),
             reason="service_team_id must reference an active team",
         )
+
+    locked_conversation = _lock_active_conversation(db, conversation)
+    if locked_conversation is None:
+        return InboxAssignmentResult(
+            kind="conversation_not_found",
+            service_team_id=str(team_uuid),
+            reason="Conversation not found",
+        )
+    conversation = locked_conversation
 
     previous_assignment = _active_assignment(db, conversation)
     set_conversation_owner_team(

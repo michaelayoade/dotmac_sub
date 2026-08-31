@@ -7,6 +7,7 @@ from playwright.sync_api import Page, Route, expect
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "static/js/admin-attendance.js"
+REMINDER_SCRIPT = ROOT / "static/js/admin-attendance-reminder.js"
 
 
 @pytest.fixture()
@@ -51,6 +52,47 @@ def _open(page: Page, html: str) -> None:
     )
     page.goto("https://selfcare.test/admin/dashboard")
     page.add_script_tag(path=str(SCRIPT))
+
+
+def _open_reminder_page(page: Page) -> None:
+    page.route(
+        "https://selfcare.test/admin/customers",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="text/html",
+            body="<html><body><main>Customers</main></body></html>",
+        ),
+    )
+    page.route(
+        "https://selfcare.test/admin/dashboard",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="text/html",
+            body="<html><body><main>Dashboard</main></body></html>",
+        ),
+    )
+    page.goto("https://selfcare.test/admin/customers")
+    page.add_script_tag(path=str(REMINDER_SCRIPT))
+
+
+def test_attendance_reminder_appears_on_other_admin_pages(attendance_page: Page):
+    page = attendance_page
+    page.route(
+        "**/admin/dashboard/attendance",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="text/html",
+            body="""<section id="attendance-widget" data-attendance-state="not_checked_in" data-attendance-date="2026-08-09" data-attendance-can-check-in="true"><button data-attendance-action="check-in">Check In</button></section>""",
+        ),
+    )
+    _open_reminder_page(page)
+
+    expect(
+        page.get_by_role("dialog", name="Attendance check-in reminder")
+    ).to_be_visible()
+    page.get_by_role("button", name="Go to Dashboard").click()
+
+    expect(page).to_have_url("https://selfcare.test/admin/dashboard")
 
 
 def test_check_in_uses_browser_location_and_updates_authoritative_state(

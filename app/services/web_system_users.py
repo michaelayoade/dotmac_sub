@@ -17,6 +17,7 @@ from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRo
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.schemas.status_presentation import StatusTone
+from app.services import staff_provisioning
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
@@ -76,6 +77,33 @@ def customer_experience_user_options(db: Session) -> list[dict[str, str]]:
         }
         for user in rows
     ]
+
+
+def system_user_labels_by_id(
+    db: Session, user_ids: set[UUID]
+) -> dict[str, dict[str, str]]:
+    """Resolve persisted staff ownership without applying picker eligibility.
+
+    Historical records must keep rendering their recorded owner after that user
+    becomes inactive or loses the Customer Experience role. Eligibility is a
+    write-time concern; this read projection resolves every referenced native
+    SystemUser and never invents a label for an unknown UUID.
+    """
+
+    outcome = staff_provisioning.resolve_staff_display_identities(
+        db,
+        query=staff_provisioning.StaffDisplayIdentityQuery(
+            user_ids=frozenset(user_ids)
+        ),
+    )
+    return {
+        str(identity.user_id): {
+            "id": str(identity.user_id),
+            "name": identity.display_name,
+            "email": identity.email,
+        }
+        for identity in outcome.identities
+    }
 
 
 def _labels_by_uuid(db: Session, model, label_attr: str, ids: set[str]) -> list[str]:

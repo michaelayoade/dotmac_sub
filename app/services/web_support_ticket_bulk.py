@@ -108,12 +108,12 @@ def _normalize_changes(db: Session, raw_updates: object) -> SupportTicketBulkCha
     if raw_status not in (None, ""):
         if not isinstance(raw_status, (TicketStatus, str)):
             raise ValueError("Select a configured ticket status")
+        if support_ticket_settings.status_is_merged(str(raw_status)):
+            raise ValueError("Use the ticket merge workflow to merge tickets")
         status = support_ticket_settings.normalize_ticket_status(raw_status)
         configured_statuses = set(support_ticket_settings.list_status_options(db))
         if not status or status not in configured_statuses:
             raise ValueError("Select a configured ticket status")
-        if support_ticket_settings.status_is_merged(status):
-            raise ValueError("Use the ticket merge workflow to set merged status")
 
     priority: str | None = None
     if raw_updates.get("priority") not in (None, ""):

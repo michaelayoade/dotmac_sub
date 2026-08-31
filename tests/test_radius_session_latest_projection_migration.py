@@ -27,6 +27,7 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
     module = _module()
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
 
     assert module.revision == "408_radius_session_latest_projection"

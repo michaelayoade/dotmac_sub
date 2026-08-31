@@ -39,6 +39,7 @@ from app.models.auth import (
 from app.models.auth import (
     Session as AuthSession,
 )
+from app.models.catalog import AccessCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.rbac import (
     Permission,
@@ -48,11 +49,11 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import ResellerUser, Subscriber
+from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
-from app.services import auth_cache, staff_party_authentication
+from app.services import auth_cache, staff_party_authentication, team_inbox_assignment
 from app.services import radius_auth as radius_auth_service
 from app.services.capability_recipient import resolve_capability_recipient
 from app.services.common import coerce_uuid
@@ -255,11 +256,16 @@ def _refresh_cookie_name(db: Session | None) -> str:
     )
 
 
-def _wants_refresh_in_body(request: Request | None) -> bool:
+def wants_refresh_in_body(request: Request | None) -> bool:
     """Native clients (mobile) can't read the httpOnly refresh cookie, so they
     opt into receiving the refresh token in the JSON body via this header and
     persist it in the platform secure store instead. Browser clients omit the
-    header and keep the safer httpOnly-cookie behaviour."""
+    header and keep the safer httpOnly-cookie behaviour.
+
+    Public because it is ONE policy for the whole JSON API: the vendor
+    authentication adapter (``app/api/vendor_auth.py``) has to answer the same
+    question for the same field client, and a second copy of the header name
+    would drift."""
     if request is None:
         return False
     return request.headers.get("x-auth-refresh-in-body", "").strip().lower() in {
@@ -407,21 +413,47 @@ def _issue_access_token(
         principal_type = principal_type_or_session_id
         resolved_session_id = session_id
 
-    now = _now()
+    return _encode_access_token(
+        principal_id=principal_id,
+        principal_type=principal_type,
+        session_id=resolved_session_id,
+        roles=roles,
+        permissions=permissions,
+        issued_at=_now(),
+        ttl_minutes=_access_ttl_minutes(db),
+        secret=_jwt_secret(db),
+        algorithm=_jwt_algorithm(db),
+    )
+
+
+def _encode_access_token(
+    *,
+    principal_id: str,
+    principal_type: str,
+    session_id: str,
+    issued_at: datetime,
+    ttl_minutes: int,
+    secret: str,
+    algorithm: str,
+    roles: list[str] | None = None,
+    permissions: list[str] | None = None,
+) -> str:
+    """Encode an access token from immutable values, with no persistence reads."""
+
     payload = {
         "sub": principal_id,
         "principal_id": principal_id,
         "principal_type": principal_type,
-        "session_id": resolved_session_id,
+        "session_id": session_id,
         "typ": "access",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=_access_ttl_minutes(db))).timestamp()),
+        "iat": int(issued_at.timestamp()),
+        "exp": int((issued_at + timedelta(minutes=ttl_minutes)).timestamp()),
     }
     if roles:
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+    return _jwt_encode_token(payload, secret, algorithm)
 
 
 def issue_impersonation_access_token(
@@ -820,6 +852,40 @@ def _principal_for_credential(
     return "subscriber", "", None
 
 
+def _resolve_access_credential_login(
+    db: Session, *, identifier: str, password: str
+) -> tuple[str, str, Subscriber] | None:
+    normalized_identifier = identifier.strip()
+    if not normalized_identifier:
+        return None
+
+    credential = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.username == normalized_identifier)
+        .filter(AccessCredential.is_active.is_(True))
+        .order_by(AccessCredential.created_at.desc())
+        .first()
+    )
+    if not credential or not credential.secret_hash:
+        return None
+
+    try:
+        password_matches = verify_password(password, credential.secret_hash)
+    except ValueError:
+        logger.info(
+            "Access credential login refused: stored PPPoE secret unavailable",
+            extra={"access_credential_id": str(credential.id)},
+        )
+        return None
+    if not password_matches:
+        return None
+
+    subscriber = db.get(Subscriber, credential.subscriber_id)
+    if not subscriber:
+        return None
+    return "subscriber", str(subscriber.id), subscriber
+
+
 def _primary_totp_method(
     db: Session, principal_type: str, principal_id: str
 ) -> MFAMethod | None:
@@ -1107,7 +1173,7 @@ class AuthFlow(ListResponseMixin):
         provider: str | None,
     ):
         result = AuthFlow.login(db, username, password, request, provider)
-        if result.get("refresh_token") and not _wants_refresh_in_body(request):
+        if result.get("refresh_token") and not wants_refresh_in_body(request):
             return AuthFlow._response_with_refresh_cookie(
                 db, result, LoginResponse, status.HTTP_200_OK
             )
@@ -1139,26 +1205,30 @@ class AuthFlow(ListResponseMixin):
             provider=resolved_provider,
             identifier=username,
         )
-        if not credential:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Check the lock before verifying the password: a locked account must
         # answer identically to right and wrong passwords (no correctness
         # oracle), and attempts made while locked must not extend the lock.
         now = _now()
-        locked_until = _as_utc(credential.locked_until)
-        if locked_until and locked_until > now:
-            raise HTTPException(
-                status_code=403,
-                detail=lockout_detail("Account locked", locked_until=locked_until),
-            )
-        if locked_until:
-            # Lock expired: start a fresh window so a single wrong attempt
-            # doesn't immediately re-lock for another full period.
-            credential.failed_login_attempts = 0
-            credential.locked_until = None
+        authenticated_access_credential = False
+        principal_type: str
+        principal_id: str
+        principal: object | None
 
-        if resolved_provider == AuthProvider.radius:
+        if credential:
+            locked_until = _as_utc(credential.locked_until)
+            if locked_until and locked_until > now:
+                raise HTTPException(
+                    status_code=403,
+                    detail=lockout_detail("Account locked", locked_until=locked_until),
+                )
+            if locked_until:
+                # Lock expired: start a fresh window so a single wrong attempt
+                # doesn't immediately re-lock for another full period.
+                credential.failed_login_attempts = 0
+                credential.locked_until = None
+
+        if credential and resolved_provider == AuthProvider.radius:
             try:
                 radius_auth_service.authenticate(
                     db,
@@ -1172,10 +1242,22 @@ class AuthFlow(ListResponseMixin):
                 if exc.status_code in (401, 403):
                     _record_login_failure(db, credential, now)
                 raise
+        elif credential and verify_password(password, credential.password_hash):
+            pass
         else:
-            if not verify_password(password, credential.password_hash):
-                _record_login_failure(db, credential, now)
+            access_result = None
+            if resolved_provider == AuthProvider.local and (
+                credential is None or credential.subscriber_id is not None
+            ):
+                access_result = _resolve_access_credential_login(
+                    db, identifier=username, password=password
+                )
+            if access_result is None:
+                if credential:
+                    _record_login_failure(db, credential, now)
                 raise HTTPException(status_code=401, detail="Invalid credentials")
+            principal_type, principal_id, principal = access_result
+            authenticated_access_credential = True
 
         # Eligibility is decided BEFORE any successful-login mutation. It used to
         # run after `db.commit()` below, so a correct password against a disabled
@@ -1187,23 +1269,35 @@ class AuthFlow(ListResponseMixin):
         # first would answer an unauthenticated caller differently for a disabled
         # account than for a wrong password, which is the account-state oracle the
         # lock check above is careful to avoid.
-        try:
-            principal_type, principal_id, principal = _principal_for_credential(
-                db, credential
-            )
-        except staff_party_authentication.StaffProjectionError as exc:
-            # Fail closed. A staff credential whose Party projection is missing,
-            # conflicting or ambiguous does not authenticate — it does not fall
-            # back to the legacy principal key. The refusal code is logged for
-            # the operator; the caller is told only "Account disabled", so this
-            # cannot be used to probe projection state.
-            logger.error(
-                "Staff login refused: %s (credential=%s)",
-                exc.refusal.value,
-                exc.credential_id,
-            )
-            raise HTTPException(status_code=403, detail="Account disabled") from exc
+        if not authenticated_access_credential:
+            assert credential is not None
+            try:
+                principal_type, principal_id, principal = _principal_for_credential(
+                    db, credential
+                )
+            except staff_party_authentication.StaffProjectionError as exc:
+                # Fail closed. A staff credential whose Party projection is missing,
+                # conflicting or ambiguous does not authenticate — it does not fall
+                # back to the legacy principal key. The refusal code is logged for
+                # the operator; the caller is told only "Account disabled", so this
+                # cannot be used to probe projection state.
+                logger.error(
+                    "Staff login refused: %s (credential=%s)",
+                    exc.refusal.value,
+                    exc.credential_id,
+                )
+                raise HTTPException(status_code=403, detail="Account disabled") from exc
         if not principal or not getattr(principal, "is_active", False):
+            raise HTTPException(status_code=403, detail="Account disabled")
+        if (
+            principal_type == "subscriber"
+            and isinstance(principal, Subscriber)
+            and principal.status
+            in {
+                SubscriberStatus.disabled,
+                SubscriberStatus.canceled,
+            }
+        ):
             raise HTTPException(status_code=403, detail="Account disabled")
         staff_binding = (
             staff_party_authentication.binding_for_principal(principal)
@@ -1211,7 +1305,11 @@ class AuthFlow(ListResponseMixin):
             else None
         )
 
-        if credential.must_change_password:
+        if (
+            credential
+            and not authenticated_access_credential
+            and credential.must_change_password
+        ):
             raise HTTPException(
                 status_code=428,
                 detail={
@@ -1220,10 +1318,11 @@ class AuthFlow(ListResponseMixin):
                 },
             )
 
-        credential.failed_login_attempts = 0
-        credential.locked_until = None
-        credential.last_login_at = now
-        db.commit()
+        if credential:
+            credential.failed_login_attempts = 0
+            credential.locked_until = None
+            credential.last_login_at = now
+            db.commit()
         if _primary_totp_method(db, principal_type, principal_id):
             return {
                 "mfa_required": True,
@@ -1579,7 +1678,7 @@ class AuthFlow(ListResponseMixin):
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
         result = AuthFlow.mfa_verify(db, mfa_token, code, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
@@ -1662,7 +1761,7 @@ class AuthFlow(ListResponseMixin):
         if not resolved:
             raise HTTPException(status_code=401, detail="Missing refresh token")
         result = AuthFlow.refresh(db, resolved, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
@@ -1765,6 +1864,12 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        # Resolve every signing input while this issuance transaction owns the
+        # session. Reading settings after commit would start an implicit caller
+        # transaction and make the next owner command fail its entry guard.
+        access_ttl_minutes = _access_ttl_minutes(db)
+        access_secret = _jwt_secret(db)
+        access_algorithm = _jwt_algorithm(db)
         device_id = _clean_device_id(active_request.headers.get("x-device-id"))
         session_kwargs = dict(
             status=SessionStatus.active,
@@ -1813,15 +1918,68 @@ class AuthFlow(ListResponseMixin):
         else:
             session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
+        db.flush()
+        if principal_type == "system_user":
+            team_inbox_assignment.record_agent_signed_in_presence(
+                db,
+                command=team_inbox_assignment.AgentSignedInPresenceCommand(
+                    system_user_id=principal_uuid,
+                    auth_session_id=session.id,
+                    signed_in_at=now,
+                ),
+            )
+        session_id = str(session.id)
         db.commit()
-        db.refresh(session)
-        access_token = _issue_access_token(
-            db, str(principal_uuid), principal_type, str(session.id)
+        access_token = _encode_access_token(
+            principal_id=str(principal_uuid),
+            principal_type=principal_type,
+            session_id=session_id,
+            issued_at=now,
+            ttl_minutes=access_ttl_minutes,
+            secret=access_secret,
+            algorithm=access_algorithm,
         )
         return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 auth_flow = AuthFlow()
+
+
+def issue_session_tokens(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: str,
+    request: Request,
+    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
+) -> dict[str, str]:
+    """The PUBLIC name of the one session-issuance seam.
+
+    ``AuthFlow._issue_tokens`` is and stays the only place a Sub session is
+    minted. What was missing was a name another mechanism could call without
+    reaching through a private attribute — which is how a second issuer gets
+    written: not out of ambition, but because the first one had no door.
+
+    This adds no policy of its own. Device supersession, refresh-token
+    generation and hashing, the staff Party/context re-check, and the access
+    token's claims all stay where they are; this only fixes the arguments in
+    keyword form so a later parameter insertion cannot silently rebind them.
+
+    A caller that has already AUTHENTICATED a principal by some other means
+    (password, RADIUS, a verified external assertion) calls this. A caller that
+    has not is looking for ``AuthFlow.login``.
+    """
+
+    return cast(
+        dict[str, str],
+        AuthFlow._issue_tokens(  # noqa: SLF001 - the owner's own public seam
+            db,
+            principal_type,
+            principal_id,
+            request,
+            staff_binding=staff_binding,
+        ),
+    )
 
 
 def change_password(

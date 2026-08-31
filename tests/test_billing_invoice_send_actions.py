@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
@@ -20,6 +21,8 @@ from app.services.communication_intents import (
     CommunicationIntent,
     submit,
 )
+from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
+from app.services.events.types import EventType
 from app.services.web_billing_invoice_bulk import (
     BulkInvoiceActionResult,
     bulk_mark_paid,
@@ -29,8 +32,10 @@ from app.services.web_billing_invoice_bulk import (
 )
 from app.services.web_billing_invoices import (
     InvoiceIssueFromDetailError,
+    SendInvoiceFromDetailCommand,
     issue_invoice_from_detail,
     maybe_send_invoice_notification,
+    send_invoice_from_detail,
 )
 from app.web.admin import billing_invoice_bulk as bulk_routes
 
@@ -105,6 +110,17 @@ def test_invoice_notification_delegates_once_to_canonical_event_owner(
     ]
 
 
+def test_invoice_sent_email_copy_explains_the_attached_review_document():
+    spec = EVENT_NOTIFICATION_SPECS[EventType.invoice_sent]
+
+    assert spec.subject == "Invoice #{invoice_number} for your review"
+    assert spec.body.startswith("Hello {subscriber_name},")
+    assert "Please find attached invoice #{invoice_number}" in spec.body
+    assert "review regarding your service" in spec.body
+    assert "Amount: {amount}" in spec.body
+    assert "Due date: {due_date}" in spec.body
+
+
 def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     db_session, subscriber, monkeypatch
 ):
@@ -174,6 +190,110 @@ def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     assert captured[0]["apply_available_credit"] is True
     assert captured[0]["require_full_available_credit"] is True
     assert captured[0]["commit"] is True
+
+
+def test_invoice_detail_draft_send_issues_and_announces_once(
+    db_session, subscriber, monkeypatch
+):
+    due_at = datetime.now(UTC) + timedelta(days=30)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-SEND",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("15000.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("15000.00"),
+        balance_due=Decimal("15000.00"),
+        due_at=due_at,
+        due_date_basis=InvoiceDueDateBasis.contract_terms,
+        due_date_basis_ref="test:invoice-detail-send",
+        due_date_policy_version="test-v1",
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    captured: list[dict[str, object]] = []
+
+    def _fake_issue(
+        db,
+        invoice_id,
+        *,
+        issuance,
+        announce,
+        apply_available_credit,
+        require_full_available_credit,
+        commit,
+    ):
+        captured.append(
+            {
+                "invoice_id": invoice_id,
+                "announce": announce,
+                "apply_available_credit": apply_available_credit,
+                "require_full_available_credit": require_full_available_credit,
+                "commit": commit,
+            }
+        )
+        invoice.status = InvoiceStatus.issued
+        return SimpleNamespace(invoice=invoice)
+
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices."
+        "web_prepaid_draft_reconciliation_service.preview_for_invoice_detail",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices.billing_service.invoices.issue_draft_system",
+        _fake_issue,
+    )
+
+    result = send_invoice_from_detail(
+        db_session,
+        SendInvoiceFromDetailCommand(invoice_id=invoice.id, issue_draft=True),
+    )
+
+    assert result.invoice_id == invoice.id
+    assert result.status is InvoiceStatus.issued
+    assert result.issued_now is True
+    assert captured == [
+        {
+            "invoice_id": str(invoice.id),
+            "announce": True,
+            "apply_available_credit": True,
+            "require_full_available_credit": True,
+            "commit": True,
+        }
+    ]
+
+
+def test_invoice_detail_draft_send_requires_explicit_issue(
+    db_session, subscriber, monkeypatch
+):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-SEND-GUARD",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("15000.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("15000.00"),
+        balance_due=Decimal("15000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices.billing_service.invoices.issue_draft_system",
+        lambda *_args, **_kwargs: pytest.fail("draft issuance must be explicit"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        send_invoice_from_detail(
+            db_session,
+            SendInvoiceFromDetailCommand(invoice_id=invoice.id),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Only a final issued invoice can be sent"
 
 
 def test_invoice_detail_issue_rejects_exact_prepaid_coverage_before_owner(

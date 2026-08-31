@@ -32,7 +32,7 @@ SLA_COMPLETE_STATUSES = frozenset(
         TicketStatus.pending_confirmation.value,
         TicketStatus.closed.value,
         TicketStatus.canceled.value,
-        TicketStatus.merged.value,
+        "merged",  # Rolling-deploy compatibility until the status backfill completes.
     }
 )
 SLA_APPLICABLE_STATUSES = frozenset(

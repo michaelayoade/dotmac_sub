@@ -166,7 +166,7 @@ def _project_payload(row: Project) -> ErpProjectProjection:
         start_at=row.start_at,
         due_at=row.due_at,
         customer_name=customer_name or None,
-        customer_crm_id=row.subscriber_id,
+        customer_source_reference=row.subscriber_id,
         metadata={"source_system": "dotmac_sub", **(row.metadata_ or {})},
         service_team_name=row.service_team.name if row.service_team else None,
     )
@@ -182,7 +182,7 @@ def _ticket_payload(row: Ticket) -> ErpTicketProjection:
         status=row.status,
         priority=row.priority,
         description=row.description,
-        customer_crm_id=row.subscriber_id,
+        customer_source_reference=row.subscriber_id,
         metadata={
             "source_system": "dotmac_sub",
             "channel": str(channel) if channel else None,
@@ -225,8 +225,10 @@ def _work_order_payload(row: WorkOrder) -> ErpWorkOrderProjection:
         work_type=row.work_type,
         status=row.status,
         priority=row.priority,
-        project_crm_id=str(row.project_id) if row.project_id else row.crm_project_id,
-        ticket_crm_id=(
+        project_source_reference=(
+            str(row.project_id) if row.project_id else row.crm_project_id
+        ),
+        ticket_source_reference=(
             str(row.origin_ticket_id) if row.origin_ticket_id else row.crm_ticket_id
         ),
         scheduled_start=row.scheduled_start,

@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from fastapi import HTTPException
 from starlette.datastructures import FormData
 
 from app.services import web_catalog_subscription_workflows as workflow_service
@@ -127,3 +130,76 @@ def test_invoice_new_resolves_single_customer_account_from_legacy_query_params(
     )
 
     assert resolved == str(subscriber.id)
+
+
+def test_generate_invoice_from_subscription_error_renders_invoice_list_contract(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+    request = SimpleNamespace(state=SimpleNamespace(auth={"permissions": []}))
+    list_state = {
+        "list_query": SimpleNamespace(page=1),
+        "invoices": [],
+        "page_meta": SimpleNamespace(),
+        "invoice_status_presentations": {},
+    }
+    bulk_contract = {"selection_enabled": False, "actions": []}
+
+    monkeypatch.setattr(
+        billing_invoices_web.web_billing_invoices_service,
+        "generate_invoice_from_subscription_web",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            HTTPException(status_code=400, detail="Prepaid subscriptions use review.")
+        ),
+    )
+    monkeypatch.setattr(
+        billing_invoices_web,
+        "_actor_id",
+        lambda _request: "staff-1",
+    )
+    monkeypatch.setattr(
+        billing_invoices_web.web_billing_overview_service,
+        "build_invoice_list_query",
+        lambda **_kwargs: list_state["list_query"],
+    )
+    monkeypatch.setattr(
+        billing_invoices_web.web_billing_overview_service,
+        "build_invoices_list_data",
+        lambda _db, *, list_query: list_state,
+    )
+    monkeypatch.setattr(
+        billing_invoices_web.web_billing_invoice_bulk_actions_service,
+        "build_invoice_bulk_action_contract",
+        lambda _db, *, auth, invoices: bulk_contract,
+    )
+    monkeypatch.setattr(
+        "app.web.admin.get_current_user",
+        lambda _request: {"actor_id": "staff-1"},
+    )
+    monkeypatch.setattr("app.web.admin.get_sidebar_stats", lambda _db: {})
+
+    def capture_template(name, context, *, status_code=200):
+        captured["name"] = name
+        captured["context"] = context
+        captured["status_code"] = status_code
+        return captured
+
+    monkeypatch.setattr(
+        billing_invoices_web.templates,
+        "TemplateResponse",
+        capture_template,
+    )
+
+    result = billing_invoices_web.invoice_generate_from_subscription(
+        request,
+        subscriber_id="subscriber-1",
+        subscription_id="subscription-1",
+        db=object(),
+    )
+
+    context = result["context"]
+    assert result["name"] == "admin/billing/invoices.html"
+    assert result["status_code"] == 400
+    assert context["error"] == "Prepaid subscriptions use review."
+    assert context["invoice_bulk_action_contract"] == bulk_contract
+    assert context["invoices"] == []

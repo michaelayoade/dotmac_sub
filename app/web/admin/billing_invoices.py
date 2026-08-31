@@ -460,17 +460,47 @@ def invoice_generate_from_subscription(
     except Exception as exc:
         from app.web.admin import get_current_user, get_sidebar_stats
 
+        list_query = web_billing_overview_service.build_invoice_list_query(
+            account_id=None,
+            partner_id=None,
+            status=None,
+            proforma_only=False,
+            customer_ref=None,
+            search=None,
+            start_date=None,
+            end_date=None,
+            sort_by="created_at",
+            sort_dir="desc",
+            page=1,
+            per_page="25",
+        )
+        state = web_billing_overview_service.build_invoices_list_data(
+            db,
+            list_query=list_query,
+        )
+        invoices = state["invoices"]
+        assert isinstance(invoices, list)
+        state["invoice_bulk_action_contract"] = (
+            web_billing_invoice_bulk_actions_service.build_invoice_bulk_action_contract(
+                db,
+                auth=getattr(request.state, "auth", None) or {},
+                invoices=invoices,
+            )
+        )
+        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
+        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
         return templates.TemplateResponse(
             "admin/billing/invoices.html",
             {
                 "request": request,
-                "error": str(exc),
+                **state,
+                "error": error,
                 "active_page": "invoices",
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
             },
-            status_code=400,
+            status_code=status_code,
         )
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice.id}", status_code=303

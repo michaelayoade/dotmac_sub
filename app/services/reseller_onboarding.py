@@ -92,7 +92,6 @@ class ResellerPortalUserSpec:
     last_name: str
     email: str
     username: str | None = None
-    password: str | None = None
     role_name: str | None = None
     send_invite: bool = True
 
@@ -132,7 +131,6 @@ class _NormalizedUser:
     last_name: str
     email: str
     username: str
-    password: str | None
     role_name: str | None
     send_invite: bool
 
@@ -203,7 +201,6 @@ def _normalize_user(spec: ResellerPortalUserSpec) -> _NormalizedUser:
         last_name=last_name,
         email=email,
         username=username,
-        password=spec.password,
         role_name=role_name,
         send_invite=spec.send_invite,
     )
@@ -264,20 +261,10 @@ def _ensure_identity_available(
             "identity_conflict",
             "Username is already assigned to another local principal.",
         )
-    if (
-        db.execute(
-            select(Subscriber.id).where(func.lower(Subscriber.email) == email)
-        ).first()
-        is not None
-        or db.execute(
-            select(ResellerUser.id).where(func.lower(ResellerUser.email) == email)
-        ).first()
-        is not None
-    ):
-        raise _error(
-            "identity_conflict",
-            "Email is already assigned to another portal principal.",
-        )
+    # Email is contact information, not a local-login identity. A customer and
+    # a reseller principal may legitimately use the same mailbox; their
+    # credentials remain unambiguous through the globally unique username
+    # above. Do not infer an identity conflict from contact data.
 
 
 def _locked_reseller(db: Session, reseller_id: UUID) -> Reseller:
@@ -316,11 +303,22 @@ def _create_credential(
     db: Session,
     *,
     username: str,
-    password: str | None,
     subscriber_id: UUID | None = None,
     reseller_user_id: UUID | None = None,
 ) -> None:
-    placeholder = password or secrets.token_urlsafe(32)
+    """Mint a per-account, single-use secret nobody has ever seen.
+
+    This owner deliberately accepts NO caller-supplied password. It used to,
+    and the parameter had no production caller — the admin surface always
+    passed None — which is exactly the shape that lets an ad-hoc call or a
+    one-off script hand the SAME chosen value to a whole cohort. One shared
+    reseller password reached two dozen external organisations that way
+    (removed in #2825). A value minted here is per-account by construction and
+    is never rendered, returned or logged; the holder reaches their account
+    through the emailed reset flow, never through a credential someone typed.
+    """
+
+    placeholder = secrets.token_urlsafe(32)
     db.add(
         UserCredential(
             subscriber_id=subscriber_id,
@@ -364,7 +362,6 @@ def _create_portal_principal(
         _create_credential(
             db,
             username=user.username,
-            password=user.password,
             reseller_user_id=reseller_user.id,
         )
         return "reseller_user", reseller_user.id, None, reseller_user.id, ()
@@ -383,7 +380,6 @@ def _create_portal_principal(
     _create_credential(
         db,
         username=user.username,
-        password=user.password,
         subscriber_id=subscriber.id,
     )
     link = ResellerUser(

@@ -1063,10 +1063,15 @@ Pass the same CC/BCC arrays through both send paths:
 
 Also preserve existing email reply headers and attachments when applicable:
 
+- `Message-ID` (generated and persisted before delivery; reuse it on retries)
 - `Reply-To`
 - `In-Reply-To`
 - `References`
 - Attachments
+
+For an Inbox reply, derive `In-Reply-To` and `References` only from exact stored
+message identities on that conversation. Never merge threads by similar sender
+or subject.
 
 ### Delivery result
 

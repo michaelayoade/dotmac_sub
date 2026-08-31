@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import Request
 
+from app.models.support import ticket_status_display_value
 from app.services import crm_portal
 from app.services.support_ticket_settings import (
     PortalTicketTeamRoutingSource,
@@ -35,6 +36,7 @@ def _ticket(
     due="2026-01-03T00:00:00+00:00",
     resolved=None,
     closed=None,
+    merged_into_ticket_id=None,
 ) -> Mock:
     """A stand-in for a local support Ticket ORM row."""
     t = Mock()
@@ -51,6 +53,10 @@ def _ticket(
     t.due_at = datetime.fromisoformat(due) if due else None
     t.resolved_at = datetime.fromisoformat(resolved) if resolved else None
     t.closed_at = datetime.fromisoformat(closed) if closed else None
+    t.merged_into_ticket_id = merged_into_ticket_id
+    # Mirror Ticket.display_status rather than pinning a literal, so the
+    # stand-in cannot drift from the model's own merge projection.
+    t.display_status = ticket_status_display_value(status, merged_into_ticket_id)
     t.attachments = []
     return t
 

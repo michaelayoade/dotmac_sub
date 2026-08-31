@@ -1,0 +1,27 @@
+{% if rows %}
+<div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+        <thead class="bg-slate-50 dark:bg-slate-900/40">
+            <tr>
+                {% for column in columns %}
+                <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">{{ column.label }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700 dark:bg-slate-800">
+            {% for row in rows %}
+            <tr>
+                {% for column in columns %}
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row[column.key] }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="px-6 py-12 text-center">
+    <p class="text-sm font-medium text-slate-700 dark:text-slate-200">No KPI data for this period</p>
+    <p class="mt-1 text-sm text-slate-500">Adjust the date range or return when sales records are available.</p>
+</div>
+{% endif %}

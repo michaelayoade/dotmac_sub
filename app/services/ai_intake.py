@@ -185,6 +185,8 @@ class AiIntakeConfigMetadataOutcome:
     approved_isp_information: str | None = None
     clarification_questions: tuple[str, str] = DEFAULT_CLARIFICATION_QUESTIONS
     queue_templates: dict | None = None
+    conversation_templates: dict | None = None
+    channel_overrides: dict | None = None
     data_cleanup_policy: dict | None = None
     data_cleanup_enabled: bool = False
 
@@ -330,6 +332,16 @@ def _config_outcome(
             queue_templates=(
                 raw_metadata.get("queue_templates")
                 if isinstance(raw_metadata.get("queue_templates"), dict)
+                else None
+            ),
+            conversation_templates=(
+                raw_metadata.get("conversation_templates")
+                if isinstance(raw_metadata.get("conversation_templates"), dict)
+                else None
+            ),
+            channel_overrides=(
+                raw_metadata.get("channel_overrides")
+                if isinstance(raw_metadata.get("channel_overrides"), dict)
                 else None
             ),
             data_cleanup_policy=(
@@ -592,12 +604,22 @@ def _normalize_key(value: object) -> str:
     return "_".join(str(value or "").strip().lower().replace("-", "_").split())
 
 
+_PROVIDER_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "meta.social": ("meta.social", "meta_social"),
+    "meta_social": ("meta.social", "meta_social"),
+}
+
+
 def _scope_candidates(request: AiIntakeRequest) -> tuple[str, ...]:
     provider = _normalize_key(request.provider) or "default"
     channel = _normalize_key(request.channel_type)
     scope = str(request.account_scope or "default").strip()[:160] or "default"
+    provider_scopes = tuple(
+        f"{provider_candidate}:{scope}"
+        for provider_candidate in _PROVIDER_SCOPE_ALIASES.get(provider, (provider,))
+    )
     values = (
-        f"{provider}:{scope}",
+        *provider_scopes,
         f"{channel}:{scope}",
         scope,
         "default",
@@ -1039,7 +1061,11 @@ def prepare_async_intake(db: Session, request: AiIntakeRequest) -> AiIntakeOutco
             channel=channel,
             reason=AiIntakeReason.active_owner,
         )
-    if not request.created_conversation and not request.awaiting_follow_up:
+    if (
+        not request.created_conversation
+        and not request.awaiting_follow_up
+        and not request.active_ai_session
+    ):
         return _skipped_outcome(
             started=started,
             channel=channel,
@@ -1114,7 +1140,11 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
             channel=channel,
             reason=AiIntakeReason.active_owner,
         )
-    if not request.created_conversation and not request.awaiting_follow_up:
+    if (
+        not request.created_conversation
+        and not request.awaiting_follow_up
+        and not request.active_ai_session
+    ):
         return _skipped_outcome(
             started=started,
             channel=channel,

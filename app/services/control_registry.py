@@ -123,6 +123,22 @@ _SUB = SettingDomain.subscriber
 
 _FEATURE_CONTROLS: tuple[Control, ...] = (
     Control(
+        # Field-mobile OIDC federation
+        # (docs/designs/OIDC_MOBILE_FEDERATION.md). DEFAULT OFF and
+        # FAIL CLOSED so backend and app deploy dark: off means the ceremony
+        # and exchange endpoints refuse every request, no ceremony row is
+        # written, and the identity provider is never contacted. No
+        # `owner_module` — federated login is not an optional product module,
+        # it is an authentication mechanism, and gating it behind a module
+        # toggle would make disabling that module silently disable a login
+        # path.
+        key="auth.oidc_mobile_federation",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        description="Field mobile OIDC ceremony and assertion exchange.",
+    ),
+    Control(
         # Master gate for the loyalty + data-capture programme
         # (docs/designs/LOYALTY_AND_CAPTURE.md). DEFAULT OFF: off means no
         # milestone review, no sends, and no field-arrival location capture.

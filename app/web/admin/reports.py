@@ -5,8 +5,8 @@ import logging
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from io import StringIO
-from typing import Literal, TypedDict
-from urllib.parse import quote, quote_plus
+from typing import Literal, TypedDict, cast
+from urllib.parse import quote, quote_plus, urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -97,11 +97,32 @@ class SalesReportMetric(TypedDict):
     value: int
 
 
+SalesReportRowKey = Literal[
+    "agent_name",
+    "leads_won",
+    "leads_contacted",
+    "blocked_customers_contacted",
+    "customers_brought_back",
+    "orders_created",
+    "orders_confirmed",
+    "orders_paid",
+    "orders_fulfilled",
+    "orders_cancelled",
+    "order_value",
+    "collected_value",
+]
+
+
+class SalesReportColumn(TypedDict):
+    label: str
+    key: SalesReportRowKey
+
+
 class SalesReportContext(TypedDict):
     report_kind: str
     title: str
     description: str
-    columns: tuple[str, ...]
+    columns: tuple[SalesReportColumn, ...]
     rows: list[SalesReportRow]
     metrics: tuple[SalesReportMetric, ...]
     date_from: str
@@ -288,19 +309,19 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "name": "NCC Subscriber Data (Quarterly)",
                 "url": "/admin/reports/ncc-subscribers",
                 "description": "Active subscriptions by type, connection, speed, State & region",
-                "permission": "customer:read",
+                "permission": "reports:ncc:read",
             },
             {
-                "name": "NCC Complaints (Quarterly)",
+                "name": "NCC Complaints (Weekly)",
                 "url": "/admin/reports/ncc-complaints",
                 "description": "Complaint records, categories, SLA and the filing workbook",
-                "permission": "provisioning:read",
+                "permission": "reports:ncc:read",
             },
             {
                 "name": "NCC Regulatory Pack",
                 "url": "/admin/reports/ncc-pack",
                 "description": "All three NCC returns assembled into one filing view",
-                "permission": "provisioning:read",
+                "permission": "reports:ncc:read",
             },
         ],
     },
@@ -326,12 +347,6 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "name": "Subscriber Service Quality",
                 "url": "/admin/reports/operational/service-quality",
                 "description": "Support, field-work, and outage observations by subscriber",
-                "permission": "reports:support:read",
-            },
-            {
-                "name": "CRM Performance",
-                "url": "/admin/reports/operational/crm-performance",
-                "description": "Inbox performance by service team",
                 "permission": "reports:support:read",
             },
             {
@@ -456,6 +471,7 @@ def _operational_report_query(
     per_page: int | None,
     personal: bool,
     search: str | None = None,
+    service_team_id: str | None = None,
 ) -> crm_reporting_service.CrmReportQuery:
     person_id = None
     if personal:
@@ -465,12 +481,21 @@ def _operational_report_query(
             person_id = UUID(str(raw_person_id)) if raw_person_id else None
         except ValueError:
             person_id = None
+    parsed_team_id = None
+    if service_team_id:
+        try:
+            parsed_team_id = UUID(service_team_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="Invalid service team"
+            ) from None
     return crm_reporting_service.CrmReportQuery(
         date_from=_parse_report_date(date_from),
         date_to=_parse_report_date(date_to),
         page=page,
         per_page=per_page,
         person_id=person_id,
+        service_team_id=parsed_team_id,
         search=search.strip() if search else None,
     )
 
@@ -485,7 +510,7 @@ def _operational_report_query(
                 "reports:network:read",
                 "reports:support:read",
                 "customer:read",
-                "provisioning:read",
+                "reports:ncc:read",
             )
         )
     ],
@@ -541,11 +566,14 @@ def _sales_lead_report_context(
         "title": "Lead Performance",
         "description": "Sales-agent conversion and customer recovery KPIs.",
         "columns": (
-            "Agent",
-            "Leads won",
-            "Leads contacted",
-            "Blocked customers contacted",
-            "Customers brought back",
+            {"label": "Agent", "key": "agent_name"},
+            {"label": "Leads won", "key": "leads_won"},
+            {"label": "Leads contacted", "key": "leads_contacted"},
+            {
+                "label": "Blocked customers contacted",
+                "key": "blocked_customers_contacted",
+            },
+            {"label": "Customers brought back", "key": "customers_brought_back"},
         ),
         "rows": rows,
         "metrics": (
@@ -602,14 +630,14 @@ def _sales_order_report_context(
         "title": "Sales Order Performance",
         "description": "Sales-agent order, payment, and fulfillment KPIs.",
         "columns": (
-            "Agent",
-            "Orders created",
-            "Confirmed",
-            "Paid",
-            "Fulfilled",
-            "Cancelled",
-            "Order value",
-            "Collected value",
+            {"label": "Agent", "key": "agent_name"},
+            {"label": "Orders created", "key": "orders_created"},
+            {"label": "Confirmed", "key": "orders_confirmed"},
+            {"label": "Paid", "key": "orders_paid"},
+            {"label": "Fulfilled", "key": "orders_fulfilled"},
+            {"label": "Cancelled", "key": "orders_cancelled"},
+            {"label": "Order value", "key": "order_value"},
+            {"label": "Collected value", "key": "collected_value"},
         ),
         "rows": rows,
         "metrics": (
@@ -633,32 +661,10 @@ def _sales_order_report_context(
 def _sales_report_csv(context: SalesReportContext) -> str:
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(context["columns"])
+    writer.writerow(column["label"] for column in context["columns"])
     for row in context["rows"]:
-        writer.writerow(
-            [
-                row.get(_sales_report_column_key(column), "")
-                for column in context["columns"]
-            ]
-        )
+        writer.writerow(row.get(column["key"], "") for column in context["columns"])
     return output.getvalue()
-
-
-def _sales_report_column_key(column: str) -> str:
-    return {
-        "Agent": "agent_name",
-        "Leads won": "leads_won",
-        "Leads contacted": "leads_contacted",
-        "Blocked customers contacted": "blocked_customers_contacted",
-        "Customers brought back": "customers_brought_back",
-        "Orders created": "orders_created",
-        "Confirmed": "orders_confirmed",
-        "Paid": "orders_paid",
-        "Fulfilled": "orders_fulfilled",
-        "Cancelled": "orders_cancelled",
-        "Order value": "order_value",
-        "Collected value": "collected_value",
-    }[column]
 
 
 @router.get(
@@ -755,7 +761,7 @@ def sales_order_performance_export(
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_revenue_report_data(db)
+    report_data = web_reports_service.get_revenue_report_data(db=db)
 
     context = {
         "request": request,
@@ -763,14 +769,14 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "total_revenue": report_data["total_revenue"],
-        "revenue_growth": report_data["revenue_growth"],
-        "recurring_revenue": report_data["recurring_revenue"],
-        "outstanding_amount": report_data["outstanding_amount"],
-        "outstanding_count": report_data["outstanding_count"],
-        "collection_rate": report_data["collection_rate"],
-        "recent_payments": report_data["recent_payments"],
-        "revenue_data": report_data["revenue_data"],
+        "total_revenue": report_data.total_revenue,
+        "revenue_growth": report_data.revenue_growth,
+        "recurring_revenue": report_data.recurring_revenue,
+        "outstanding_amount": report_data.outstanding_amount,
+        "outstanding_count": report_data.outstanding_count,
+        "collection_rate": report_data.collection_rate,
+        "recent_payments": report_data.recent_payments,
+        "revenue_chart": report_data.revenue_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/revenue.html", context)
@@ -886,7 +892,7 @@ def reports_subscribers_export(
 def reports_churn(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_churn_report_data(db)
+    report_data = web_reports_service.get_churn_report_data(db=db)
 
     context = {
         "request": request,
@@ -894,14 +900,14 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "churn_kpis": report_data["churn_kpis"],
-        "churn_rate": report_data["churn_rate"],
-        "retention_rate": report_data["retention_rate"],
-        "cancelled_count": report_data["cancelled_count"],
-        "at_risk_count": report_data["at_risk_count"],
-        "churn_reasons": report_data["churn_reasons"],
-        "churn_data": report_data["churn_data"],
-        "recent_cancellations": report_data["recent_cancellations"],
+        "churn_kpis": report_data.churn_kpis,
+        "churn_rate": report_data.churn_rate,
+        "retention_rate": report_data.retention_rate,
+        "cancelled_count": report_data.cancelled_count,
+        "at_risk_count": report_data.at_risk_count,
+        "churn_reasons": report_data.churn_reasons,
+        "recent_cancellations": report_data.recent_cancellations,
+        "churn_chart": report_data.churn_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/churn.html", context)
@@ -935,23 +941,25 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "total_olts": report_data["total_olts"],
-        "active_olts": report_data["active_olts"],
-        "total_onts": report_data["total_onts"],
-        "connected_onts": report_data["connected_onts"],
-        "ip_pool_usage": report_data["ip_pool_usage"],
-        "used_ips": report_data["used_ips"],
-        "total_ips": report_data["total_ips"],
-        "active_vlans": report_data["active_vlans"],
-        "pon_capacity": report_data["pon_capacity"],
-        "pon_utilization": report_data["pon_utilization"],
-        "total_fiber_strands": report_data["total_fiber_strands"],
-        "available_fiber_strands": report_data["available_fiber_strands"],
-        "total_fdh": report_data["total_fdh"],
-        "splitter_capacity": report_data["splitter_capacity"],
-        "olts": report_data["olts"],
-        "ip_pools": report_data["pool_data"],
-        "recent_ont_activity": report_data["recent_ont_activity"],
+        "total_olts": report_data.total_olts,
+        "active_olts": report_data.active_olts,
+        "total_onts": report_data.total_onts,
+        "connected_onts": report_data.connected_onts,
+        "ip_pool_usage": report_data.ip_pool_usage,
+        "used_ips": report_data.used_ips,
+        "total_ips": report_data.total_ips,
+        "active_vlans": report_data.active_vlans,
+        "pon_capacity": report_data.pon_capacity,
+        "pon_utilization": report_data.pon_utilization,
+        "total_fiber_strands": report_data.total_fiber_strands,
+        "available_fiber_strands": report_data.available_fiber_strands,
+        "total_fdh": report_data.total_fdh,
+        "splitter_capacity": report_data.splitter_capacity,
+        "olts": report_data.olts,
+        "ip_pools": report_data.pool_data,
+        "recent_ont_activity": report_data.recent_ont_activity,
+        "device_health_chart": report_data.device_health_chart,
+        "ip_pool_chart": report_data.ip_pool_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/network.html", context)
@@ -963,7 +971,9 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
 )
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
-    content = web_reports_service.build_network_export_csv(report_data, hours=hours)
+    content = web_reports_service.build_network_export_csv(
+        data=report_data, hours=hours
+    )
     return Response(
         content,
         media_type="text/csv",
@@ -1107,12 +1117,9 @@ def _percent(value: float | None) -> float:
     return round((value or 0) * 100, 1)
 
 
-def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: bool):
-    rows = team_inbox_metrics_service.team_performance_report(
-        db,
-        response_sla_seconds=response_sla_seconds,
-        include_inactive=include_inactive,
-    )
+def _inbox_team_rows(
+    rows: tuple[team_inbox_metrics_service.InboxTeamPerformanceReportRow, ...],
+) -> list[dict[str, object]]:
     team_rows = []
     for row in rows:
         metrics = row.metrics
@@ -1155,11 +1162,12 @@ def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: b
     return team_rows
 
 
-def _inbox_agent_rows(db: Session):
-    rows = team_inbox_metrics_service.agent_performance_report(db)
+def _inbox_agent_rows(
+    rows: tuple[team_inbox_metrics_service.InboxAgentPerformanceReportRow, ...],
+) -> list[dict[str, object]]:
     return [
         {
-            "person_id": row.person_id,
+            "agent_name": row.agent_name,
             "service_team_id": row.service_team_id,
             "service_team_name": row.service_team_name,
             "service_team_capabilities": ", ".join(row.service_team_capabilities),
@@ -1189,17 +1197,8 @@ def _reason_label(reason: str) -> str:
 
 
 def _inbox_escalation_rows(
-    db: Session,
-    response_sla_seconds: int,
-    queue_sla_seconds: int,
-    include_inactive: bool,
-):
-    rows = team_inbox_metrics_service.escalation_candidates(
-        db,
-        response_sla_seconds=response_sla_seconds,
-        queue_sla_seconds=queue_sla_seconds,
-        include_inactive=include_inactive,
-    )
+    rows: tuple[team_inbox_metrics_service.InboxEscalationCandidate, ...],
+) -> list[dict[str, object]]:
     return [
         {
             "conversation_id": row.conversation_id,
@@ -1220,6 +1219,33 @@ def _inbox_escalation_rows(
         }
         for row in rows
     ]
+
+
+def _inbox_performance_period(
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, str, datetime, datetime]:
+    today = datetime.now(UTC).date()
+    parsed_to = _parse_report_date(date_to) or today
+    parsed_from = _parse_report_date(date_from) or (
+        parsed_to
+        - timedelta(days=team_inbox_metrics_service.DEFAULT_PERFORMANCE_WINDOW_DAYS - 1)
+    )
+    start_at = datetime.combine(parsed_from, time.min, UTC)
+    end_at = datetime.combine(parsed_to + timedelta(days=1), time.min, UTC)
+    if start_at >= end_at:
+        raise HTTPException(status_code=422, detail="Invalid Inbox performance period")
+    if end_at - start_at > timedelta(
+        days=team_inbox_metrics_service.MAX_PERFORMANCE_WINDOW_DAYS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Inbox performance periods cannot exceed "
+                f"{team_inbox_metrics_service.MAX_PERFORMANCE_WINDOW_DAYS} days"
+            ),
+        )
+    return parsed_from.isoformat(), parsed_to.isoformat(), start_at, end_at
 
 
 def _active_service_team_options(db: Session):
@@ -1250,15 +1276,37 @@ def reports_inbox_performance(
     request: Request,
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     include_inactive: bool = False,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    team_rows = _inbox_team_rows(db, response_sla_seconds, include_inactive)
-    agent_rows = _inbox_agent_rows(db)
-    inbound_total = sum(row["inbound_message_count"] for row in team_rows)
-    breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
-    responded_total = sum(row["responded_count"] for row in team_rows)
+    effective_from, effective_to, start_at, end_at = _inbox_performance_period(
+        date_from, date_to
+    )
+    performance_query = team_inbox_metrics_service.InboxPerformanceQuery(
+        period_start_at=start_at,
+        period_end_at=end_at,
+        include_inactive_teams=include_inactive,
+        limit=None,
+    )
+    team_page = team_inbox_metrics_service.team_performance_page(
+        db,
+        query=performance_query,
+        response_sla_seconds=response_sla_seconds,
+    )
+    agent_page = team_inbox_metrics_service.agent_performance_page(
+        db,
+        query=performance_query,
+    )
+    team_rows = _inbox_team_rows(team_page.rows)
+    agent_rows = _inbox_agent_rows(agent_page.rows)
+    inbound_total = sum(cast(int, row["inbound_message_count"]) for row in team_rows)
+    breached_total = sum(
+        cast(int, row["response_sla_breached_count"]) for row in team_rows
+    )
+    responded_total = sum(cast(int, row["responded_count"]) for row in team_rows)
     context = {
         "request": request,
         "active_page": "reports-inbox-performance",
@@ -1267,11 +1315,15 @@ def reports_inbox_performance(
         "sidebar_stats": get_sidebar_stats(db),
         "response_sla_seconds": response_sla_seconds,
         "include_inactive": include_inactive,
+        "date_from": effective_from,
+        "date_to": effective_to,
         "team_rows": team_rows,
         "agent_rows": agent_rows,
         "team_count": len(team_rows),
-        "open_count": sum(row["open_count"] for row in team_rows),
-        "unassigned_open_count": sum(row["unassigned_open_count"] for row in team_rows),
+        "open_count": sum(cast(int, row["open_count"]) for row in team_rows),
+        "unassigned_open_count": sum(
+            cast(int, row["unassigned_open_count"]) for row in team_rows
+        ),
         "breached_total": breached_total,
         "response_rate_percent": _percent(
             responded_total / inbound_total if inbound_total else None
@@ -1291,8 +1343,23 @@ def reports_inbox_performance(
 def reports_inbox_performance_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     include_inactive: bool = False,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
+    _effective_from, _effective_to, start_at, end_at = _inbox_performance_period(
+        date_from, date_to
+    )
+    page = team_inbox_metrics_service.team_performance_page(
+        db,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            period_start_at=start_at,
+            period_end_at=end_at,
+            include_inactive_teams=include_inactive,
+            limit=None,
+        ),
+        response_sla_seconds=response_sla_seconds,
+    )
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -1314,7 +1381,7 @@ def reports_inbox_performance_export(
         ],
     )
     writer.writeheader()
-    for row in _inbox_team_rows(db, response_sla_seconds, include_inactive):
+    for row in _inbox_team_rows(page.rows):
         writer.writerow({field: row[field] for field in writer.fieldnames})
     return Response(
         output.getvalue(),
@@ -1333,16 +1400,23 @@ def reports_inbox_escalations(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
     include_inactive: bool = False,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    rows = _inbox_escalation_rows(
+    escalation_page = team_inbox_metrics_service.escalation_page(
         db,
-        response_sla_seconds,
-        queue_sla_seconds,
-        include_inactive,
+        query=team_inbox_metrics_service.InboxEscalationQuery(
+            response_sla_seconds=response_sla_seconds,
+            queue_sla_seconds=queue_sla_seconds,
+            include_inactive_teams=include_inactive,
+            limit=per_page,
+            offset=(page - 1) * per_page,
+        ),
     )
+    rows = _inbox_escalation_rows(escalation_page.rows)
     context = {
         "request": request,
         "active_page": "reports-inbox-escalations",
@@ -1354,16 +1428,14 @@ def reports_inbox_escalations(
         "include_inactive": include_inactive,
         "rows": rows,
         "service_team_options": _active_service_team_options(db),
-        "candidate_count": len(rows),
-        "response_breach_count": sum(
-            "response_sla_breached" in row["reason_keys"] for row in rows
-        ),
-        "queue_breach_count": sum(
-            "unassigned_queue_breached" in row["reason_keys"] for row in rows
-        ),
-        "no_agent_count": sum(
-            "no_available_agent" in row["reason_keys"] for row in rows
-        ),
+        "candidate_count": escalation_page.total_count,
+        "response_breach_count": escalation_page.response_breach_count,
+        "queue_breach_count": escalation_page.queue_breach_count,
+        "no_agent_count": escalation_page.no_agent_count,
+        "page": page,
+        "per_page": per_page,
+        "has_previous": page > 1,
+        "has_next": page * per_page < escalation_page.total_count,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
@@ -1554,6 +1626,15 @@ def reports_inbox_escalations_export(
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
+    page = team_inbox_metrics_service.escalation_page(
+        db,
+        query=team_inbox_metrics_service.InboxEscalationQuery(
+            response_sla_seconds=response_sla_seconds,
+            queue_sla_seconds=queue_sla_seconds,
+            include_inactive_teams=include_inactive,
+            limit=None,
+        ),
+    )
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -1574,14 +1655,9 @@ def reports_inbox_escalations_export(
         ],
     )
     writer.writeheader()
-    for row in _inbox_escalation_rows(
-        db,
-        response_sla_seconds,
-        queue_sla_seconds,
-        include_inactive,
-    ):
+    for row in _inbox_escalation_rows(page.rows):
         export_row = {field: row[field] for field in writer.fieldnames}
-        export_row["reasons"] = "; ".join(row["reasons"])
+        export_row["reasons"] = "; ".join(cast(list[str], row["reasons"]))
         writer.writerow(export_row)
     return Response(
         output.getvalue(),
@@ -1624,6 +1700,10 @@ def reports_extended_export(
     status: str | None = None,
     year: int | None = None,
     days: int = Query(default=30, ge=1, le=3660),
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
     db: Session = Depends(get_db),
 ):
     if not can(request, _EXTENDED_EXPORT_PERMISSIONS[report_kind]):
@@ -1637,6 +1717,10 @@ def reports_extended_export(
             status=status,
             year=year,
             days=days,
+            mode=mode,
+            state=state,
+            band=band,
+            include_funded=include_funded,
         ),
     )
     return Response(
@@ -1691,14 +1775,31 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("reports:billing:read"))],
 )
-def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_upcoming_charges_data(db)
+def reports_upcoming_charges(
+    request: Request,
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
+    page: int = 1,
+    per_page: int = 25,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_upcoming_charges_data(
+        db,
+        mode=mode,
+        state=state,
+        band=band,
+        include_funded=include_funded,
+        page=page,
+        per_page=per_page,
+    )
     ctx = _base_context(
         request,
         db,
         "reports-upcoming-charges",
         "Upcoming Charges",
-        "Active subscriptions with upcoming billing",
+        "Customers approaching a collectible payment or prepaid renewal boundary",
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/upcoming_charges.html", ctx)
@@ -1989,7 +2090,17 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_revenue_categories_data(db)
+    status_code = 200
+    try:
+        data = web_reports_ext_service.get_revenue_categories_data(db=db)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "Revenue category report projection is unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        db_session_adapter.discard_failed_transaction(db)
+        data = web_reports_ext_service.RevenueCategoriesReportData.unavailable()
+        status_code = 503
     ctx = _base_context(
         request,
         db,
@@ -1997,8 +2108,17 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
         "Revenue by Category",
         "Income breakdown by service type",
     )
-    ctx.update(data)
-    return templates.TemplateResponse("admin/reports/revenue_categories.html", ctx)
+    ctx.update(
+        {
+            "categories": data.categories,
+            "category_count": data.category_count,
+            "total_revenue": data.total_revenue,
+            "revenue_mix_chart": data.revenue_mix_chart,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/reports/revenue_categories.html", ctx, status_code=status_code
+    )
 
 
 @router.get(
@@ -2084,7 +2204,7 @@ def _ncc_params(
 @router.get(
     "/ncc-subscribers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_subscribers(
     request: Request,
@@ -2132,7 +2252,7 @@ def reports_ncc_subscribers(
 
 @router.get(
     "/ncc-subscribers/export",
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_subscribers_export(
     as_of: str | None = None,
@@ -2165,14 +2285,17 @@ def reports_ncc_subscribers_export(
     )
 
 
-# ── NCC quarterly Complaints return (①) ──────────────────────────────────────
+# ── NCC weekly Complaints return (①) ──────────────────────────────────────
 def _ncc_complaints_window(
     date_from: str | None, date_to: str | None
 ) -> tuple[datetime, datetime]:
-    """Bound the complaints window. Defaults to the trailing 90 days — the
-    quarterly cadence the return is filed on — anchored on ``created_at``."""
+    """Bound the complaints window.
+
+    Defaults to the trailing seven days, matching the weekly complaints report
+    cadence, anchored on ``created_at``.
+    """
     end = _parse_date_end(date_to) or datetime.now(UTC)
-    start = _parse_date_start(date_from) or (end - timedelta(days=90))
+    start = _parse_date_start(date_from) or (end - timedelta(days=7))
     if end < start:
         start, end = end, start
     return start, end
@@ -2181,7 +2304,7 @@ def _ncc_complaints_window(
 @router.get(
     "/ncc-complaints",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_complaints(
     request: Request,
@@ -2256,7 +2379,7 @@ def reports_ncc_complaints(
 
 @router.get(
     "/ncc-complaints/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_complaints_export(
     date_from: str | None = None,
@@ -2265,8 +2388,8 @@ def reports_ncc_complaints_export(
 ):
     start, end = _ncc_complaints_window(date_from, date_to)
     report = ncc_complaints_service.build_report(db, start=start, end=end)
-    rows = ncc_workbook.export_rows(report["records"])
-    content = ncc_workbook.build_workbook(rows, report["columns"])
+    rows = ncc_workbook.template_export_rows(report["records"])
+    content = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
     filename = ncc_workbook.export_filename(end)
     return Response(
         content,
@@ -2286,7 +2409,7 @@ def _ncc_pack_window(
 
 @router.get(
     "/ncc-regulatory-pack",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_regulatory_pack(
     date_from: str | None = None,
@@ -2307,7 +2430,7 @@ def reports_ncc_regulatory_pack(
 @router.get(
     "/ncc-pack",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:read"))],
 )
 def reports_ncc_pack_page(
     request: Request,
@@ -2340,7 +2463,7 @@ def reports_ncc_pack_page(
 
 @router.get(
     "/ncc-regulatory-pack.pdf",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_regulatory_pack_pdf(
     date_from: str | None = None,
@@ -2391,7 +2514,7 @@ def _render_ncc_pack_html(pack: dict, start: datetime, end: datetime) -> str:
     complete = "COMPLETE" if meta.get("complete") else "INCOMPLETE — see sections below"
     rows = "".join(
         [
-            _section_row("① Quarterly complaints", pack.get("complaints", {})),
+            _section_row("① Weekly complaints", pack.get("complaints", {})),
             _section_row("② Quarterly subscribers", pack.get("subscribers", {})),
             _section_row("③ Annual financials", pack.get("financials", {})),
             _section_row("③ Annual staff", pack.get("staff", {})),
@@ -2480,7 +2603,7 @@ def reports_ncc_email_settings(
 
 @router.get(
     "/ncc-weekly-runs/{run_id}/download",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:ncc:export"))],
 )
 def reports_ncc_weekly_run_download(
     run_id: UUID,
@@ -2513,6 +2636,12 @@ _OPERATIONAL_REPORT_PERMISSIONS = tuple(
     )
 )
 
+_INBOX_PERFORMANCE_REPORT_SLUGS = {
+    crm_reporting_service.CrmReportSlug.CRM_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+}
+
 
 def _operational_definition(
     request: Request, report_slug: str
@@ -2527,6 +2656,78 @@ def _operational_definition(
     return definition
 
 
+_LAZY_AGENT_REPORTS = {
+    crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE,
+    crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+}
+
+
+def _agent_performance_period(
+    *,
+    range_value: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> crm_reporting_service.AgentPerformancePeriod:
+    try:
+        preset = crm_reporting_service.AgentPerformancePeriodPreset(range_value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid report period") from None
+    try:
+        return crm_reporting_service.resolve_agent_performance_period(
+            preset=preset,
+            date_from=_parse_report_date(date_from),
+            date_to=_parse_report_date(date_to),
+        )
+    except crm_reporting_service.CrmReportQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _agent_report_url_params(
+    *,
+    period: crm_reporting_service.AgentPerformancePeriod,
+    search: str | None,
+    page: int,
+    per_page: int,
+    service_team_id: str | None = None,
+) -> str:
+    values: dict[str, str | int] = {
+        "range": period.preset.value,
+        "date_from": period.start_date.isoformat(),
+        "date_to": period.end_date.isoformat(),
+        "page": page,
+        "per_page": per_page,
+    }
+    if search:
+        values["search"] = search
+    if service_team_id:
+        values["service_team_id"] = service_team_id
+    return urlencode(values)
+
+
+@router.get(
+    "/operational/crm-performance",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
+
+
+@router.get(
+    "/operational/crm-performance/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_export_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
+
+
+@router.get(
+    "/operational/crm-performance/data",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_data_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
+
+
 @router.get(
     "/operational/{report_slug}/export",
     dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
@@ -2534,13 +2735,23 @@ def _operational_definition(
 def reports_operational_export(
     request: Request,
     report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     definition = _operational_definition(request, report_slug)
-    if not definition.supports_date_filter:
+    if definition.slug in _LAZY_AGENT_REPORTS:
+        period = _agent_performance_period(
+            range_value=range_value,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        date_from = period.start_date.isoformat()
+        date_to = period.end_date.isoformat()
+    elif not definition.supports_date_filter:
         date_from = date_to = None
     query = _operational_report_query(
         request=request,
@@ -2552,12 +2763,190 @@ def reports_operational_export(
         search=search
         if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
         else None,
+        service_team_id=(
+            service_team_id if definition.slug in _LAZY_AGENT_REPORTS else None
+        ),
     )
     report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
     return Response(
         content=crm_reporting_service.build_csv(report),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{report_slug}.csv"'},
+    )
+
+
+@router.get(
+    "/operational/{report_slug}/data",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
+)
+def reports_operational_agent_data(
+    request: Request,
+    report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
+    db: Session = Depends(get_db),
+):
+    definition = _operational_definition(request, report_slug)
+    if definition.slug not in _LAZY_AGENT_REPORTS:
+        raise HTTPException(status_code=404, detail="Lazy report endpoint not found")
+    period = _agent_performance_period(
+        range_value=range_value,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    effective_search = (
+        search
+        if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
+        else None
+    )
+    query = _operational_report_query(
+        request=request,
+        date_from=period.start_date.isoformat(),
+        date_to=period.end_date.isoformat(),
+        page=page,
+        per_page=per_page,
+        personal=definition.slug == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+        search=effective_search,
+        service_team_id=service_team_id,
+    )
+    report = None
+    detail = None
+    report_error = None
+    try:
+        if definition.slug == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE:
+            detail = crm_reporting_service.agent_performance_detail(db, query=query)
+        else:
+            report = crm_reporting_service.get_report(
+                db, slug=definition.slug, query=query
+            )
+    except crm_reporting_service.CrmReportQueryError as exc:
+        report_error = str(exc)
+    except SQLAlchemyError:
+        logger.exception(
+            "agent_performance_report_read_failed",
+            extra={"report_slug": definition.slug.value},
+        )
+        db_session_adapter.release_read_transaction(db)
+        report_error = (
+            "Agent performance data is temporarily unavailable. "
+            "No values have been estimated."
+        )
+
+    effective_page = report.page if report is not None else page
+
+    def link(target_page: int, *, data: bool) -> str:
+        suffix = "/data" if data else ""
+        params = _agent_report_url_params(
+            period=period,
+            search=effective_search,
+            page=target_page,
+            per_page=per_page,
+            service_team_id=service_team_id,
+        )
+        return f"/admin/reports/operational/{report_slug}{suffix}?{params}"
+
+    context = {
+        "request": request,
+        "report": report,
+        "detail": detail,
+        "report_error": report_error,
+        "is_personal": definition.slug
+        == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+        "range_value": period.preset.value,
+        "date_from": period.start_date.isoformat(),
+        "date_to": period.end_date.isoformat(),
+        "service_team_id": service_team_id or "",
+        "retry_url": link(effective_page, data=True),
+        "previous_data_url": (
+            link(effective_page - 1, data=True) if effective_page > 1 else None
+        ),
+        "previous_page_url": (
+            link(effective_page - 1, data=False) if effective_page > 1 else None
+        ),
+        "next_data_url": link(effective_page + 1, data=True),
+        "next_page_url": link(effective_page + 1, data=False),
+    }
+    return templates.TemplateResponse(
+        "admin/reports/_agent_performance_results.html",
+        context,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get(
+    "/operational/agent-performance/{agent_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_agent_detail(
+    request: Request,
+    agent_id: UUID,
+    range_value: str = Query(default="month", alias="range"),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    service_team_id: str | None = None,
+    preserve_period: bool = False,
+    db: Session = Depends(get_db),
+):
+    _operational_definition(request, "agent-performance")
+    period = _agent_performance_period(
+        range_value=(
+            crm_reporting_service.AgentPerformancePeriodPreset.CUSTOM.value
+            if preserve_period and date_from and date_to
+            else range_value
+        ),
+        date_from=date_from,
+        date_to=date_to,
+    )
+    base_query = _operational_report_query(
+        request=request,
+        date_from=period.start_date.isoformat(),
+        date_to=period.end_date.isoformat(),
+        page=1,
+        per_page=None,
+        personal=False,
+        service_team_id=service_team_id,
+    )
+    query = crm_reporting_service.CrmReportQuery(
+        date_from=base_query.date_from,
+        date_to=base_query.date_to,
+        page=1,
+        per_page=None,
+        person_id=agent_id,
+        service_team_id=base_query.service_team_id,
+    )
+    try:
+        detail = crm_reporting_service.agent_performance_detail(db, query=query)
+    except crm_reporting_service.CrmReportQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    context = _base_context(
+        request,
+        db,
+        "reports-agent-performance-detail",
+        detail.agent_name,
+        "Agent performance detail",
+    )
+    context.update(
+        {
+            "detail": detail,
+            "is_personal": False,
+            "range_value": period.preset.value,
+            "date_from": period.start_date.isoformat(),
+            "date_to": period.end_date.isoformat(),
+            "service_team_id": service_team_id or "",
+            "service_teams": team_inbox_metrics_service.active_service_team_options(db),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/reports/agent_performance_detail.html",
+        context,
+        headers={"Cache-Control": "private, no-store"},
     )
 
 
@@ -2569,15 +2958,26 @@ def reports_operational_export(
 def reports_operational_page(
     request: Request,
     report_slug: str,
+    range_value: str = Query(default="month", alias="range"),
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     definition = _operational_definition(request, report_slug)
-    if not definition.supports_date_filter:
+    period = None
+    if definition.slug in _LAZY_AGENT_REPORTS:
+        period = _agent_performance_period(
+            range_value=range_value,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        date_from = period.start_date.isoformat()
+        date_to = period.end_date.isoformat()
+    elif not definition.supports_date_filter:
         date_from = date_to = None
     query = _operational_report_query(
         request=request,
@@ -2589,8 +2989,16 @@ def reports_operational_page(
         search=search
         if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
         else None,
+        service_team_id=(
+            service_team_id if definition.slug in _LAZY_AGENT_REPORTS else None
+        ),
     )
-    report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+    lazy_load = definition.slug in _LAZY_AGENT_REPORTS
+    report = (
+        None
+        if lazy_load
+        else crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+    )
     context = _base_context(
         request,
         db,
@@ -2601,9 +3009,35 @@ def reports_operational_page(
     context.update(
         {
             "report": report,
+            "definition": definition,
             "date_from": date_from or "",
             "date_to": date_to or "",
             "search": search or "",
+            "service_team_id": service_team_id or "",
+            "service_teams": (
+                team_inbox_metrics_service.active_service_team_options(db)
+                if definition.slug in _LAZY_AGENT_REPORTS
+                else ()
+            ),
+            "range_value": period.preset.value if period else range_value,
+            "lazy_load": lazy_load,
+            "lazy_data_url": (
+                "/admin/reports/operational/"
+                f"{report_slug}/data?"
+                + _agent_report_url_params(
+                    period=period,
+                    search=search
+                    if definition.slug
+                    == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
+                    else None,
+                    page=page,
+                    per_page=per_page,
+                    service_team_id=service_team_id,
+                )
+                if period
+                else None
+            ),
+            "per_page": per_page,
         }
     )
     return templates.TemplateResponse("admin/reports/operational.html", context)

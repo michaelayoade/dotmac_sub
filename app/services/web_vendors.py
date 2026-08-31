@@ -7,13 +7,14 @@ need is assembled here and handed to the route as a plain dict.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
 from app.models.field_vendor import VENDOR_USER_ROLES
-from app.models.vendor_routes import InstallationProjectStatus
+from app.models.vendor_routes import InstallationProjectStatus, Vendor
 from app.services import credential_recovery, vendor_admin, vendor_user_provisioning
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
@@ -38,6 +39,37 @@ def _active_filter(value: str | None) -> bool | None:
     if choice == "inactive":
         return False
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class VendorListRow:
+    id: UUID
+    name: str
+    code: str | None
+    contact_name: str | None
+    contact_email: str | None
+    service_area: str | None
+    is_active: bool
+    portal_access: vendor_admin.VendorPortalAccessSummary
+
+
+def _vendor_list_rows(db: Session, vendors: list[Vendor]) -> list[VendorListRow]:
+    portal_access = vendor_admin.portal_access_summaries(db, vendors)
+    rows: list[VendorListRow] = []
+    for vendor in vendors:
+        rows.append(
+            VendorListRow(
+                id=vendor.id,
+                name=vendor.name,
+                code=vendor.code,
+                contact_name=vendor.contact_name,
+                contact_email=vendor.contact_email,
+                service_area=vendor.service_area,
+                is_active=vendor.is_active,
+                portal_access=portal_access[vendor.id],
+            )
+        )
+    return rows
 
 
 def _vendor_form_fields(
@@ -84,7 +116,7 @@ def build_vendors_list_context(
     )
     total = vendor_admin.count(db, search=search or None, is_active=is_active)
     return {
-        "vendors": vendors,
+        "vendors": _vendor_list_rows(db, vendors),
         "total": total,
         "page": page,
         "per_page": per_page,
@@ -192,6 +224,8 @@ def _vendor_user_row(membership: Any) -> dict[str, Any]:
         "role": role,
         "capability_summary": _capability_summary(role),
         "is_active": membership.is_active,
+        "first_name": getattr(principal, "first_name", None),
+        "last_name": getattr(principal, "last_name", None),
         "display_name": getattr(principal, "display_name", None),
         "email": getattr(principal, "email", None),
     }
@@ -309,6 +343,54 @@ def _admin_command_context(
         actor=actor_id or "system:vendor-admin",
         scope=scope,
         reason=reason,
+    )
+
+
+def update_vendor_user_role(
+    db: Session,
+    *,
+    membership_id: str,
+    role: str,
+    actor_id: str | None = None,
+) -> None:
+    db_session_adapter.release_read_transaction(db)
+    vendor_user_provisioning.set_role_committed(
+        db,
+        coerce_uuid(membership_id),
+        role,
+        context=_admin_command_context(
+            actor_id=actor_id,
+            scope=membership_id,
+            reason="Administrative vendor role change",
+        ),
+    )
+
+
+def update_vendor_user_profile_from_form(
+    db: Session,
+    *,
+    membership_id: str,
+    first_name: str,
+    last_name: str,
+    email: str,
+    role: str,
+    actor_id: str | None = None,
+) -> None:
+    db_session_adapter.release_read_transaction(db)
+    vendor_user_provisioning.update_profile_committed(
+        db,
+        vendor_user_provisioning.UpdateVendorUserProfile(
+            membership_id=coerce_uuid(membership_id),
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            role=role,
+        ),
+        context=_admin_command_context(
+            actor_id=actor_id,
+            scope=membership_id,
+            reason="Administrative vendor profile update",
+        ),
     )
 
 

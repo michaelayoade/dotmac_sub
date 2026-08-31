@@ -1,7 +1,164 @@
 {% extends "layouts/admin.html" %}
 {% block title %}Help center{% endblock %}
+{% block content_container_class %}!max-w-none{% endblock %}
+
+{% macro article_menu(container_class="") %}
+<div class="{{ container_class }}">
+    <form method="get" action="/admin/help" class="space-y-3">
+        <input name="q" value="{{ query }}" placeholder="Search guides..."
+               class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+        <select name="category"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+            <option value="">All categories</option>
+            {% for category in categories %}
+            <option value="{{ category }}" {% if category == selected_category %}selected{% endif %}>{{ category }}</option>
+            {% endfor %}
+        </select>
+        <button class="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Search</button>
+    </form>
+
+    <nav class="mt-6 space-y-5" aria-label="Help articles">
+        {% for group in grouped_articles %}
+        <section>
+            <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ group.category }}</h2>
+            <div class="mt-2 space-y-1">
+                {% for item in group.articles %}
+                <a href="/admin/help?article={{ item.slug }}{% if query %}&q={{ query|urlencode }}{% endif %}{% if selected_category %}&category={{ selected_category|urlencode }}{% endif %}"
+                   class="block rounded-lg px-3 py-2 text-sm {% if selected_article and selected_article.slug == item.slug %}bg-teal-50 font-semibold text-teal-800 ring-1 ring-teal-200 dark:bg-teal-950/40 dark:text-teal-200 dark:ring-teal-800{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white{% endif %}">
+                    {{ item.title }}
+                </a>
+                {% endfor %}
+            </div>
+        </section>
+        {% else %}
+        <p class="rounded-lg border border-dashed border-slate-300 px-3 py-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No articles found.</p>
+        {% endfor %}
+    </nav>
+</div>
+{% endmacro %}
+
 {% block content %}
-<div class="space-y-6"><div><h1 class="text-2xl font-bold text-slate-900 dark:text-white">Help center</h1><p class="mt-1 text-sm text-slate-500">Search practical guides for Selfcare workflows.</p></div>
-<form class="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 sm:grid-cols-[1fr_14rem_auto]"><input name="q" value="{{ query }}" placeholder="Search guides…" class="rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-900 dark:text-white"><select name="category" class="rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="">All categories</option>{% for category in categories %}<option {% if category == selected_category %}selected{% endif %}>{{ category }}</option>{% endfor %}</select><button class="rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white">Search</button></form>
-<div class="grid gap-4 lg:grid-cols-2">{% for article in articles %}<article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"><p class="text-xs font-semibold uppercase tracking-wide text-teal-600">{{ article.category }}</p><h2 class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ article.title }}</h2><p class="mt-1 text-sm text-slate-500">{{ article.summary }}</p><ol class="mt-4 space-y-2">{% for step in article.steps %}<li class="flex gap-3 text-sm text-slate-700 dark:text-slate-300"><span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-slate-100 text-xs dark:bg-slate-700">{{ loop.index }}</span><span>{{ step }}</span></li>{% endfor %}</ol></article>{% else %}<div class="col-span-full rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500">No help articles match your search.</div>{% endfor %}</div></div>
+<div class="mx-auto max-w-[1600px]">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Help center</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Search practical guides for Selfcare workflows.</p>
+    </div>
+
+    <details class="mb-4 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900 lg:hidden">
+        <summary class="flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white [&::-webkit-details-marker]:hidden">
+            <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300" aria-hidden="true">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/>
+                </svg>
+            </span>
+            <span>Help articles</span>
+        </summary>
+        {{ article_menu("border-t border-slate-200 p-4 dark:border-slate-700") }}
+    </details>
+
+    <div class="grid items-start gap-6 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,56rem)_16rem]">
+        <aside class="sticky top-6 hidden max-h-[calc(100vh-8rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900 lg:block" aria-label="Help article navigation">
+            {{ article_menu() }}
+        </aside>
+
+        <main class="min-w-0">
+            {% if selected_article %}
+            <article class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                <header class="border-b border-slate-200 px-5 py-5 dark:border-slate-700 sm:px-8">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-teal-600 dark:text-teal-300">{{ selected_article.category }}</p>
+                    <h2 class="mt-2 text-2xl font-bold text-slate-950 dark:text-white">{{ selected_article.title }}</h2>
+                </header>
+
+                <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-700 sm:px-8 xl:hidden">
+                    <details class="group">
+                        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-sm text-slate-700 dark:text-slate-200 [&::-webkit-details-marker]:hidden">
+                            <span class="inline-flex items-center gap-2 font-semibold">
+                                On this page
+                                <svg class="h-4 w-4 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 9 6 6 6-6"/>
+                                </svg>
+                            </span>
+                            <span id="help-current-section" class="truncate text-slate-500 dark:text-slate-400">Overview</span>
+                        </summary>
+                        <nav class="mt-3 grid gap-1 border-t border-slate-200 pt-3 dark:border-slate-700" aria-label="On this page">
+                            <a href="#overview" data-help-section-link="Overview" class="rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">Overview</a>
+                            <a href="#steps" data-help-section-link="Steps" class="rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">Steps</a>
+                        </nav>
+                    </details>
+                </div>
+
+                <div class="space-y-10 px-5 py-8 sm:px-8">
+                    <section id="overview" data-help-section="Overview" class="scroll-mt-24">
+                        <h3 class="text-lg font-semibold text-slate-950 dark:text-white">Overview</h3>
+                        <p class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300">{{ selected_article.summary }}</p>
+                    </section>
+
+                    <section id="steps" data-help-section="Steps" class="scroll-mt-24">
+                        <h3 class="text-lg font-semibold text-slate-950 dark:text-white">Steps</h3>
+                        <ol class="mt-4 space-y-3">
+                            {% for step in selected_article.steps %}
+                            <li class="flex gap-3 text-sm leading-6 text-slate-700 dark:text-slate-300">
+                                <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ loop.index }}</span>
+                                <span>{{ step }}</span>
+                            </li>
+                            {% endfor %}
+                        </ol>
+                    </section>
+                </div>
+            </article>
+            {% else %}
+            <div class="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                No help articles match your search.
+            </div>
+            {% endif %}
+        </main>
+
+        {% if selected_article %}
+        <aside class="sticky top-6 hidden max-h-[calc(100vh-8rem)] overflow-y-auto xl:block" aria-label="On this page">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">On this page</h2>
+                <nav class="mt-3 space-y-1">
+                    <a href="#overview" data-help-section-link="Overview" class="block rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">Overview</a>
+                    <a href="#steps" data-help-section-link="Steps" class="block rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">Steps</a>
+                </nav>
+            </div>
+        </aside>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const label = document.getElementById('help-current-section');
+        const sections = Array.from(document.querySelectorAll('[data-help-section]'));
+        if (!label || sections.length === 0) return;
+
+        const setCurrent = function (value) {
+            label.textContent = value;
+        };
+
+        document.querySelectorAll('[data-help-section-link]').forEach(function (link) {
+            link.addEventListener('click', function () {
+                const value = link.getAttribute('data-help-section-link');
+                if (value) setCurrent(value);
+            });
+        });
+
+        if (!('IntersectionObserver' in window)) return;
+        const observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting) {
+                    setCurrent(entry.target.getAttribute('data-help-section') || 'Overview');
+                }
+            });
+        }, { rootMargin: '-20% 0px -65% 0px', threshold: 0.01 });
+
+        sections.forEach(function (section) {
+            observer.observe(section);
+        });
+    });
+</script>
 {% endblock %}

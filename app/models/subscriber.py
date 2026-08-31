@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -30,6 +31,7 @@ from sqlalchemy.orm import (
     relationship,
     synonym,
 )
+from sqlalchemy.orm.attributes import get_history
 
 from app.db import Base
 from app.models.catalog import BillingMode
@@ -835,3 +837,48 @@ class ResellerUser(Base):
     party_membership = relationship(
         "PartyMembership", foreign_keys=[party_membership_id]
     )
+
+
+def _reject_out_of_domain_billing_day(
+    mapper: object, connection: object, target: "Subscriber"
+) -> None:
+    """Fail a write that creates or changes ``billing_day`` outside its domain.
+
+    Registered on this MODEL rather than in a service because the service
+    layer is not the only writer: the admin form handler, the bulk-update
+    path, the JSON API through ``SubscriberUpdate``, the activation defaults
+    in ``app.services.subscriber`` and any importer all persist this column.
+    Enumerating them is how the original defect survived -- the admin form
+    enforced ``1..28`` and every other path enforced nothing, so the browser
+    was the only validator and a 31 written by activation could never be
+    edited away.
+
+    Enforcement is on CHANGE, not on presence. ``get_history`` distinguishes
+    "this flush assigned a new value" from "this column was untouched", so an
+    unrelated edit -- a phone number, say -- leaves a legacy 29-31 exactly as
+    it was instead of failing the save or silently correcting it. Correcting
+    it would change when a real customer is billed.
+
+    The import is local, matching ``app.models.domain_settings``, to keep
+    ``app.models`` free of a service-layer dependency at import time.
+    """
+
+    from app.services.billing_day import (
+        billing_day_domain,
+        validate_billing_day_change,
+    )
+
+    history = get_history(target, "billing_day")
+    if not history.has_changes():
+        return
+
+    previous = history.deleted[0] if history.deleted else None
+    validate_billing_day_change(
+        current=previous,
+        proposed=target.billing_day,
+        domain=billing_day_domain(),
+    )
+
+
+event.listen(Subscriber, "before_insert", _reject_out_of_domain_billing_day)
+event.listen(Subscriber, "before_update", _reject_out_of_domain_billing_day)

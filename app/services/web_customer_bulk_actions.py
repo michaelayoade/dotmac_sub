@@ -10,6 +10,8 @@ from app.services.bulk_actions import (
     BulkResourceDefinition,
 )
 
+CUSTOMER_MESSAGE_SEND_PERMISSION = "communications:customer:send"
+
 CUSTOMER_BULK_ACTION_DEFINITION = BulkResourceDefinition(
     key="customers",
     filtered_selection_supported=True,
@@ -25,7 +27,7 @@ CUSTOMER_BULK_ACTION_DEFINITION = BulkResourceDefinition(
             key="send_message",
             label="Send message",
             description="Queue a template-based notification for the selected scope.",
-            permission="customer:write",
+            permission=CUSTOMER_MESSAGE_SEND_PERMISSION,
             tone="info",
             execution_mode="queued",
             result_reference="notification_ids",

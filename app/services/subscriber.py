@@ -36,6 +36,7 @@ from app.schemas.subscriber import (
     SubscriberSyncRead,
     SubscriberUpdate,
 )
+from app.services import billing_day as billing_day_service
 from app.services import geocoding as geocoding_service
 from app.services import numbering, settings_spec
 from app.services.common import (
@@ -411,15 +412,24 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
     prefix = f"{mode}_default"
 
     if subscriber.billing_day is None:
-        val = settings_spec.resolve_value(
-            db, SettingDomain.billing, f"{prefix}_billing_day"
-        )
+        billing_day_key = f"{prefix}_billing_day"
+        val = settings_spec.resolve_value(db, SettingDomain.billing, billing_day_key)
         if val is not None:
             billing_day = int(str(val))
-            # 0 means "day of activation" — use today's day
-            subscriber.billing_day = (
-                billing_day if billing_day > 0 else datetime.now(UTC).day
-            )
+            if billing_day <= 0:
+                # 0 means "day of activation". The activation day can be the
+                # 29th, 30th or 31st, which is outside the domain the setting
+                # spec declares and the admin form renders. Storing one made
+                # the customer's edit form unsubmittable in the browser — see
+                # app/services/billing_day.py for the full account. The bound
+                # is read from the spec, never restated here.
+                billing_day = billing_day_service.resolve_activation_day(
+                    datetime.now(UTC),
+                    billing_day_service.billing_day_domain(billing_day_key),
+                )
+            # Resolved above rather than assigned per branch, so this stays ONE
+            # cohort write site (tests/architecture/test_isp_cohort_source_writers.py).
+            subscriber.billing_day = billing_day
 
     if subscriber.payment_due_days is None:
         val = settings_spec.resolve_value(

@@ -3,17 +3,18 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:sqlite3/open.dart';
 import 'package:dotmac_field/core/api/api_client.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:drift/drift.dart' show Value;
-import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   // Host machines ship libsqlite3.so.0 without the unversioned symlink.
@@ -24,6 +25,7 @@ void main() {
     );
   }
 
+  late SecureFieldStore store;
   late AppDatabase db;
   late FakeHttpAdapter adapter;
   late FakeConnectivity connectivity;
@@ -37,13 +39,14 @@ void main() {
 
   setUp(() async {
     tempDir = Directory.systemTemp.createTempSync('sync-test');
-    db = AppDatabase(NativeDatabase.memory());
+    store = await openTestStore();
+    db = store.database;
     adapter = FakeHttpAdapter();
     connectivity = FakeConnectivity();
     delays = [];
 
-    final store = InMemoryTokenStore();
-    await store.save(
+    final tokens = InMemoryTokenStore();
+    await tokens.save(
       accessToken: freshToken,
       refreshToken: 'r',
       loginMode: LoginMode.staff,
@@ -52,7 +55,7 @@ void main() {
     dio.httpClientAdapter = adapter;
     final api = ApiClient(
       baseUrl: 'https://test.local',
-      tokenStore: store,
+      tokenStore: tokens,
       dio: dio,
     );
 
@@ -60,6 +63,7 @@ void main() {
       db: db,
       api: api,
       connectivity: connectivity,
+      evidence: store.evidence,
       delay: (duration) async => delays.add(duration),
     );
   });
@@ -267,18 +271,25 @@ void main() {
       return (200, {'ok': true});
     });
 
-    // A pending photo and a queued complete transition.
+    // A pending photo and a queued complete transition. The photo on disk is
+    // an envelope, so the queue proves the upload path decrypts before sending.
+    final envelope = await store.evidence.write(
+      'pp-1.evidence',
+      [1, 2, 3],
+      purpose: 'photo',
+      reference: 'pp-1',
+    );
     await db
         .into(db.pendingPhotos)
         .insert(
           PendingPhotosCompanion.insert(
+            scopeKey: store.scopeKey,
             clientRef: 'pp-1',
-            localPath: '${tempDir.path}/pp-1.jpg',
+            localPath: envelope.path,
             capturedAt: DateTime.now().toUtc(),
             workOrderId: const Value('wo-1'),
           ),
         );
-    File('${tempDir.path}/pp-1.jpg').writeAsBytesSync([1, 2, 3]);
     await sync.enqueue(
       kind: 'transition',
       clientRef: 'tx-1',
@@ -327,17 +338,23 @@ void main() {
   );
 
   test('permanently-4xx photo is marked failed and not retried', () async {
+    final envelope = await store.evidence.write(
+      'pp-bad.evidence',
+      [1, 2, 3],
+      purpose: 'photo',
+      reference: 'pp-bad',
+    );
     await db
         .into(db.pendingPhotos)
         .insert(
           PendingPhotosCompanion.insert(
+            scopeKey: store.scopeKey,
             clientRef: 'pp-bad',
-            localPath: '${tempDir.path}/pp-bad.jpg',
+            localPath: envelope.path,
             capturedAt: DateTime.now().toUtc(),
             workOrderId: const Value('wo-1'),
           ),
         );
-    File('${tempDir.path}/pp-bad.jpg').writeAsBytesSync([1, 2, 3]);
 
     var calls = 0;
     adapter.on('POST', '/api/v1/field/attachments', (_) {

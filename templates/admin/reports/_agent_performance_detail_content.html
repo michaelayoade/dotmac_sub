@@ -1,0 +1,35 @@
+{% from "components/ui/macros.html" import card %}
+<div class="space-y-6">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {% for metric in detail.metrics %}
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
+            {% if metric.detail %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ metric.detail }}</p>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div><p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Performance status</p><p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ detail.status.value }} <span class="text-sm font-normal text-slate-500">{{ detail.score_label }}</span></p></div>
+            <p class="text-sm text-slate-500">{{ detail.team_context }}</p>
+        </div>
+        {% if detail.indicators %}<ul class="mt-4 grid gap-2 text-sm text-amber-800 dark:text-amber-200 sm:grid-cols-2">{% for indicator in detail.indicators %}<li class="rounded-lg bg-amber-50 px-3 py-2 dark:bg-amber-950/30">{{ indicator }}</li>{% endfor %}</ul>{% else %}<p class="mt-3 text-sm text-slate-500">No needs-attention indicator is present in the selected period.</p>{% endif %}
+    </div>
+
+    <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">{{ detail.note }}</div>
+
+    {% call card("Team breakdown", color="violet", padding=False) %}
+    <div class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+        <thead class="bg-slate-50 dark:bg-slate-900/40"><tr>{% for label in ["Team", "Assigned", "Resolved", "Active now", "Avg first response", "Avg resolution", "First response SLA", "Resolution SLA", "Status"] %}<th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">{{ label }}</th>{% endfor %}</tr></thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for row in detail.team_rows %}<tr>
+            <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ row.service_team_name }}</td><td class="px-4 py-3 text-sm">{{ row.assigned }}</td><td class="px-4 py-3 text-sm">{{ row.resolved }}</td><td class="px-4 py-3 text-sm">{{ row.active_now }}</td><td class="px-4 py-3 text-sm">{{ row.average_first_response_label }}</td><td class="px-4 py-3 text-sm">{{ row.average_resolution_label }}</td><td class="px-4 py-3 text-sm">{{ row.first_response_sla_label }}</td><td class="px-4 py-3 text-sm">{{ row.resolution_sla_label }}</td><td class="px-4 py-3 text-sm">{{ row.status.value }}<span class="block text-xs text-slate-500">{{ row.score_label }}</span></td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% endcall %}
+
+    {% call card("Conversation evidence", color="blue", padding=False) %}
+    {% if detail.evidence %}<div class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700"><thead class="bg-slate-50 dark:bg-slate-900/40"><tr>{% for label in ["Conversation", "Team", "Assigned", "Resolved", "Active", "First response", "Resolution"] %}<th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">{{ label }}</th>{% endfor %}</tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for row in detail.evidence %}<tr><td class="px-4 py-3 text-sm"><a class="font-medium text-violet-700 hover:underline dark:text-violet-300" href="/admin/inbox/{{ row.conversation_id }}">{{ row.subject }}</a></td><td class="px-4 py-3 text-sm">{{ row.service_team_name }}</td><td class="px-4 py-3 text-sm">{{ row.assigned_at }}</td><td class="px-4 py-3 text-sm">{{ row.resolved_at }}</td><td class="px-4 py-3 text-sm">{{ "Yes" if row.active_now else "No" }}</td><td class="px-4 py-3 text-sm">{{ row.first_response }}</td><td class="px-4 py-3 text-sm">{{ row.resolution }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="px-6 py-10 text-center text-sm text-slate-500">No bounded conversation evidence is available for this period.</p>{% endif %}
+    {% endcall %}
+</div>

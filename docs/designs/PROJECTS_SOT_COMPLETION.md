@@ -65,6 +65,12 @@ semantics across projects and tasks. The retired Site Project Coordinator
 column remains readable on historical records but is absent from new-project
 input and is no longer populated by regional or assignment rules.
 
+Staff/team tag tokens on Project and ProjectTask tags stage in-app staff
+notifications for newly added targets. `person:`, `user:`, and `staff:` tokens
+address an individual staff user; `team:` and `group:` tokens address active
+Service Team members. The notification links back to the tagged project or task.
+Ordinary descriptive tags remain metadata and do not notify anyone.
+
 `operations.work_order_commands` remains the writer of WorkOrder bindings. The
 project owner validates the native Project-to-ProjectTask side; neither owner
 may infer a relationship from a CRM identifier. CRM and other external
@@ -113,8 +119,11 @@ editable. Work-order creation and technician assignment are separate decisions:
 creation never derives a technician from task assignees, and the existing
 assignment/queue owner remains the next visible dispatch action.
 
-The dispatch work-order list exposes an explicit primary create action and keeps
-the creation form collapsed until requested. Each list row and each ticket,
+The dispatch work-order list exposes one explicit primary create action in the
+context bar. That action opens the creation form directly in a focused dialog;
+there is no duplicate collapsed create-form launcher in the work surface. A
+task-originated deep link opens the same form with its authoritative scope
+prefilled. Each list row and each ticket,
 project, or project-task work-order projection links to the canonical work-order
 detail route by `public_id`. The detail projection composes the subscriber,
 ticket, project, project task, schedule, and current assignment evidence through
@@ -179,6 +188,8 @@ Project and task comment creation now participates in the same typed Project
 owner boundary as attachment staging, audit evidence, and explicit-mention
 notification staging. Task assignment and explicit project/task comment
 mentions may stage one deduplicated `nextcloud_talk` row per mapped staff user.
+Project and task staff/team tag notifications remain in-app notifications owned
+by the Project lifecycle command and do not create Talk delivery rows.
 The feature defaults disabled, and no Nextcloud HTTP occurs before the Project
 transaction commits; delivery, room reuse, stale-room repair, and retry policy
 belong to `communications.nextcloud_talk_staff`.

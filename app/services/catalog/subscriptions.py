@@ -90,11 +90,78 @@ def _subscription_billing_mode_for_write(
 
 
 def _add_months(value: datetime, months: int) -> datetime:
+    """Exact calendar month arithmetic, clamped to the target month's last day.
+
+    Equivalent to ``dateutil.relativedelta(months=months)`` and deliberately
+    NOT a 30/90/365-day approximation: a billing period is a calendar span, so
+    31 Jan + 1 month is 28/29 Feb and 29 Feb - 12 months is 28 Feb. Never use
+    ``datetime.replace(year=...)`` for this — it raises ``ValueError`` on
+    29 February in a non-leap target year.
+    """
     total = value.month - 1 + months
     year = value.year + total // 12
     month = total % 12 + 1
     day = min(value.day, monthrange(year, month)[1])
     return value.replace(year=year, month=month, day=day)
+
+
+# One TOTAL table over ``BillingCycle`` giving the calendar length of a single
+# billing period as ``(months, days)``; exactly one component is non-zero.
+#
+# This is the whole cadence geometry of
+# ``service_intent.subscription_billing_cadence``. It is a mapping rather than
+# an ``if``/``elif`` chain on purpose: a chain that ends in a bare ``else``
+# silently absorbs any cadence it forgot, which is exactly how the cancellation
+# credit billed a quarterly subscription against a one-month period and
+# over-credited it ~2.9x. A cadence missing from this table raises; a new
+# ``BillingCycle`` member fails the build in
+# ``test_every_billing_cycle_has_a_declared_period_length``.
+_CYCLE_PERIOD_LENGTH: dict[BillingCycle, tuple[int, int]] = {
+    BillingCycle.daily: (0, 1),
+    BillingCycle.weekly: (0, 7),
+    BillingCycle.monthly: (1, 0),
+    BillingCycle.quarterly: (3, 0),
+    BillingCycle.annual: (12, 0),
+}
+
+
+def _shift_by_cycle(value: datetime, cycle: BillingCycle, periods: int) -> datetime:
+    """Move ``value`` by ``periods`` whole billing cycles (negative goes back)."""
+
+    try:
+        months, days = _CYCLE_PERIOD_LENGTH[cycle]
+    except KeyError:
+        raise ValueError(
+            f"No billing-period length is declared for cadence {cycle!r}. "
+            "Declare it in catalog.subscriptions._CYCLE_PERIOD_LENGTH — the "
+            "owner of service_intent.subscription_billing_cadence — rather "
+            "than defaulting it to monthly."
+        ) from None
+    if months:
+        return _add_months(value, periods * months)
+    return value + timedelta(days=periods * days)
+
+
+def billing_cycle_end(period_start: datetime, cycle: BillingCycle) -> datetime:
+    """The exclusive end of the billing period that opens at ``period_start``."""
+
+    return _shift_by_cycle(period_start, cycle, 1)
+
+
+def billing_cycle_start(next_billing_at: datetime, cycle: BillingCycle) -> datetime:
+    """The inclusive start of the billing period that closes at ``next_billing_at``.
+
+    The exact inverse of :func:`billing_cycle_end` for every cadence except the
+    month-end clamp, which is not invertible by construction (28 Feb + 1 month
+    is 28 Mar, and 31 Jan + 1 month is also 28 Feb).
+
+    Public because the cancellation-credit path in ``billing_automation`` needs
+    the period a cancelled subscription was last billed for, and any second
+    implementation of that reverse is a money bug waiting to happen: the one
+    this replaced had no ``quarterly`` branch and crashed on 29 February.
+    """
+
+    return _shift_by_cycle(next_billing_at, cycle, -1)
 
 
 def _resolve_billing_cycle(
@@ -142,16 +209,7 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
     Returns:
         The next billing date
     """
-    if cycle == BillingCycle.daily:
-        return start_at + timedelta(days=1)
-    if cycle == BillingCycle.weekly:
-        return start_at + timedelta(weeks=1)
-    if cycle == BillingCycle.quarterly:
-        return _add_months(start_at, 3)
-    if cycle == BillingCycle.annual:
-        return _add_months(start_at, 12)
-    # Default to monthly
-    return _add_months(start_at, 1)
+    return billing_cycle_end(start_at, cycle)
 
 
 def _compute_contract_end_at(start_at: datetime, term: ContractTerm) -> datetime | None:
@@ -482,18 +540,6 @@ def _validate_plan_change(
                 )
 
 
-def _billing_cycle_start(next_billing_at: datetime, cycle: BillingCycle) -> datetime:
-    if cycle == BillingCycle.daily:
-        return next_billing_at - timedelta(days=1)
-    if cycle == BillingCycle.weekly:
-        return next_billing_at - timedelta(weeks=1)
-    if cycle == BillingCycle.quarterly:
-        return _add_months(next_billing_at, -3)
-    if cycle == BillingCycle.annual:
-        return _add_months(next_billing_at, -12)
-    return _add_months(next_billing_at, -1)
-
-
 def contracted_amount_for_offer(
     db: Session, offer_id, *, offer_version_id=None
 ) -> Decimal | None:
@@ -661,7 +707,7 @@ def _calculate_proration(
         str(subscription.offer_id),
         str(subscription.offer_version_id) if subscription.offer_version_id else None,
     )
-    cycle_start = _billing_cycle_start(next_billing, cycle)
+    cycle_start = billing_cycle_start(next_billing, cycle)
     total_cycle_seconds = max(
         int((next_billing - cycle_start).total_seconds()),
         1,

@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.models.vendor_routes import (
     InstallationProject,
+    InstallationProjectStatus,
     ProjectQuote,
+    ProjectQuoteStatus,
     Vendor,
     VendorPurchaseInvoice,
     VendorPurchaseInvoiceLineItem,
@@ -25,6 +27,7 @@ from app.services.vendor_purchase_invoices import (
     CreateVendorPurchaseInvoiceCommand,
     DeleteVendorPurchaseInvoiceLineCommand,
     ReviewVendorPurchaseInvoiceCommand,
+    StageProjectCompletionPurchaseInvoice,
     StageVendorPurchaseInvoiceSubmission,
     UpdateVendorPurchaseInvoiceCommand,
     UpdateVendorPurchaseInvoiceLineCommand,
@@ -165,6 +168,150 @@ def stage_create(db: Session, command: CreateVendorPurchaseInvoiceCommand) -> di
     db.flush()
     _emit_change(db, command.context, action="created", invoice=invoice)
     return serialize(_get(db, str(invoice.id)))
+
+
+def _completion_invoice_number(project: InstallationProject) -> str:
+    po_ref = (project.procurement_order_reference or "").strip()
+    if po_ref:
+        return f"AUTO-{po_ref}"[:80]
+    return f"AUTO-{project.id}"[:80]
+
+
+def stage_project_completion_invoice(
+    db: Session, command: StageProjectCompletionPurchaseInvoice
+) -> dict:
+    """Stage a system-approved vendor invoice when project completion is the trigger."""
+
+    project = (
+        db.query(InstallationProject)
+        .filter(InstallationProject.id == coerce_uuid(command.project_id))
+        .with_for_update(of=InstallationProject)
+        .one_or_none()
+    )
+    if project is None or not project.is_active:
+        return {"outcome": "skipped_missing_project"}
+    if project.status != InstallationProjectStatus.completed.value:
+        return {
+            "outcome": "skipped_project_not_completed",
+            "project_id": str(project.id),
+        }
+    quote = project.approved_quote
+    if quote is None or quote.status != ProjectQuoteStatus.approved.value:
+        return {
+            "outcome": "skipped_missing_approved_quote",
+            "project_id": str(project.id),
+        }
+    vendor = quote.vendor
+    if vendor is None or not vendor.is_active:
+        return {
+            "outcome": "skipped_missing_vendor",
+            "project_id": str(project.id),
+        }
+    existing = (
+        _query(db)
+        .filter(VendorPurchaseInvoice.project_id == project.id)
+        .filter(VendorPurchaseInvoice.vendor_id == vendor.id)
+        .filter(VendorPurchaseInvoice.is_active.is_(True))
+        .one_or_none()
+    )
+    if existing is not None:
+        if existing.status == VendorPurchaseInvoiceStatus.approved.value:
+            return {
+                "outcome": "existing_approved",
+                "project_id": str(project.id),
+                "invoice_id": str(existing.id),
+            }
+        existing.payables_submission_error = (
+            "Project-completion ERP invoice skipped because an active vendor "
+            f"invoice already exists in {existing.status} status."
+        )[:500]
+        db.flush()
+        return {
+            "outcome": "skipped_existing_invoice_not_approved",
+            "project_id": str(project.id),
+            "invoice_id": str(existing.id),
+        }
+    lines = [
+        line
+        for line in quote.line_items
+        if line.is_active and line.quantity and line.quantity > 0
+    ]
+    if not lines:
+        return {
+            "outcome": "skipped_quote_has_no_lines",
+            "project_id": str(project.id),
+        }
+
+    now = _now()
+    invoice_number = _completion_invoice_number(project)
+    _assert_invoice_number_available(
+        db,
+        vendor_id=vendor.id,
+        invoice_number=invoice_number,
+    )
+    invoice = VendorPurchaseInvoice(
+        project_id=project.id,
+        vendor_id=vendor.id,
+        invoice_number=invoice_number,
+        status=VendorPurchaseInvoiceStatus.approved.value,
+        currency=quote.currency,
+        tax_rate_percent=quote.vat_rate_percent or Decimal("0.00"),
+        submitted_at=now,
+        reviewed_at=now,
+        procurement_order_reference=project.procurement_order_reference,
+        review_notes=(
+            "System approved from completed project for ERP purchase-order "
+            f"invoice creation; completion event {command.event_id}."
+        )[:2000],
+    )
+    db.add(invoice)
+    db.flush()
+    for line in lines:
+        description = (line.description or "").strip()
+        item_type = (line.item_type or "").strip() or None
+        invoice.line_items.append(
+            VendorPurchaseInvoiceLineItem(
+                invoice_id=invoice.id,
+                item_type=item_type,
+                description=(
+                    description
+                    or (item_type.replace("_", " ").title() if item_type else "Item")
+                ),
+                quantity=line.quantity,
+                unit_price=_money(line.unit_price),
+                amount=_money(line.amount),
+                notes=(line.notes or "").strip() or None,
+                is_active=True,
+            )
+        )
+    _recalculate(invoice)
+    db.flush()
+    emit_event(
+        db,
+        EventType.vendor_purchase_invoice_approved,
+        {
+            "schema_version": 1,
+            "invoice_id": str(invoice.id),
+            "project_id": str(invoice.project_id),
+            "vendor_id": str(invoice.vendor_id),
+            "invoice_number": invoice.invoice_number,
+            "procurement_order_reference": invoice.procurement_order_reference,
+            "source_event_type": "vendor_project.completed",
+            "source_event_id": command.event_id,
+        },
+        actor="operations.vendor_purchase_invoice_records",
+    )
+    _emit_change(
+        db,
+        command.context,
+        action="auto_approved_from_project_completion",
+        invoice=invoice,
+    )
+    return {
+        "outcome": "created_approved",
+        "project_id": str(project.id),
+        "invoice_id": str(invoice.id),
+    }
 
 
 def stage_update(db: Session, command: UpdateVendorPurchaseInvoiceCommand) -> dict:

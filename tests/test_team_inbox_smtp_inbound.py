@@ -263,6 +263,45 @@ def test_smtp_transient_processing_failure_remains_retryable(db_session, monkeyp
     assert response == "451 Temporary local processing error"
 
 
+def test_smtp_processing_failure_after_observation_is_acknowledged(
+    db_session, monkeypatch
+):
+    _team(db_session, "Support", ServiceTeamType.support.value)
+    db_session.commit()
+    call_count = 0
+
+    def fail_processing(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("processor unavailable")
+
+    monkeypatch.setattr(team_inbox_smtp_inbound, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        team_inbox_smtp_inbound.team_inbox_processing,
+        "process_provider_observation",
+        fail_processing,
+    )
+    handler = team_inbox_smtp_inbound.TeamInboxSMTPHandler(
+        allowed_recipients={"support@dotmac.io"}
+    )
+    envelope = _Envelope(
+        mail_from="customer@example.com",
+        rcpt_tos=["support@dotmac.io"],
+        content=_raw_email(message_id="deferred"),
+    )
+
+    first = _run_immediate_coroutine(handler.handle_DATA(None, None, envelope))
+    retry = _run_immediate_coroutine(handler.handle_DATA(None, None, envelope))
+    observation = db_session.query(InboxProviderObservation).one()
+
+    assert first == "250 OK"
+    assert retry == "250 OK"
+    assert call_count == 1
+    assert observation.processing_status == "rejected"
+    assert observation.error_code == team_inbox_smtp_inbound.SMTP_PROCESSING_ERROR_CODE
+    assert db_session.query(InboxMessage).count() == 0
+
+
 def test_smtp_runtime_configuration_is_normalized(monkeypatch):
     _configure_smtp(
         monkeypatch,

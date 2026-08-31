@@ -263,9 +263,15 @@ def test_admin_inbox_queue_renders_filtered_context(db_session, monkeypatch):
     )
     captured: dict[str, object] = {}
 
-    def _fake_template_response(template_name, context):
+    def _fake_template_response(
+        template_name: str,
+        context: dict[str, object],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         captured["template_name"] = template_name
         captured["context"] = context
+        captured["headers"] = headers
         return context
 
     monkeypatch.setattr(
@@ -297,6 +303,7 @@ def test_admin_inbox_queue_renders_filtered_context(db_session, monkeypatch):
     )
 
     assert captured["template_name"] == "admin/inbox/index.html"
+    assert captured["headers"] == admin_inbox.INBOX_HTML_RESPONSE_HEADERS
     assert context["rows"][0].id == str(conversation.id)
     assert context["search"] == "router"
     assert context["service_team_id"] == str(support.id)
@@ -315,9 +322,15 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
     )
     captured: dict[str, object] = {}
 
-    def _fake_template_response(template_name, context):
+    def _fake_template_response(
+        template_name: str,
+        context: dict[str, object],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         captured["template_name"] = template_name
         captured["context"] = context
+        captured["headers"] = headers
         captured["html"] = admin_inbox.templates.env.get_template(template_name).render(
             **context
         )
@@ -355,6 +368,7 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
 
     # HTMX list clicks render the thread+context partial into the workspace.
     assert captured["template_name"] == "admin/inbox/_conversation.html"
+    assert captured["headers"] == admin_inbox.INBOX_HTML_RESPONSE_HEADERS
     assert context["timeline"].id == str(conversation.id)
     assert context["timeline"].messages[0].body == "Down"
     assert context["request"].headers["hx-request"] == "true"

@@ -544,7 +544,7 @@ def _status_summary_cards(
         ("", "All"),
         ("open", "Open"),
         ("closed", "Closed"),
-        ("canceled", "Cancelled"),
+        (NOT_CLOSED_TICKET_STATUS_FILTER, "Not closed"),
     )
     return [
         {
@@ -1364,9 +1364,12 @@ def build_tickets_list_context(
 
     selected_status = list_query.filter_value("status")
     status_options = support_ticket_settings_service.list_status_options(db)
+    filter_status_options = [
+        value for value in status_options if value != TicketStatus.canceled.value
+    ]
     priority_options = support_ticket_settings_service.list_priority_options(db)
     unavailable_status_filter = _unavailable_status_presentation(
-        status_options, selected_status
+        filter_status_options, selected_status
     )
     assigned_to_audience = _assigned_to_me_audience(
         db, list_query=list_query, actor_id=actor_id
@@ -1458,7 +1461,7 @@ def build_tickets_list_context(
         "subscriber_id": effective_query.filter_value("subscriber_id") or "",
         "filters": effective_query.filter_value("filters") or "",
         "ticket_filter_schema": support_ticket_filters.serialize_ticket_filter_schema(
-            status_options=status_options,
+            status_options=filter_status_options,
             priority_options=priority_options,
             ticket_type_options=support_service.ticket_types(db),
             staff_options=staff,
@@ -1480,6 +1483,7 @@ def build_tickets_list_context(
         "visible_columns": visible_ticket_columns(visible_columns_cookie),
         "ticket_columns": TICKET_COLUMNS,
         "all_statuses": status_options,
+        "filter_statuses": filter_status_options,
         "unavailable_status_filter": unavailable_status_filter,
         "all_priorities": priority_options,
         "ticket_type_options": support_service.ticket_types(db),
@@ -1498,7 +1502,7 @@ def build_tickets_list_context(
             value: ticket_status_presentation(value)
             for value in {
                 *status_options,
-                *(ticket.status for ticket in rows),
+                *(ticket.display_status for ticket in rows),
             }
         },
     }
@@ -1764,6 +1768,11 @@ def build_ticket_detail_context(
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    merged_into_ticket = (
+        db.get(Ticket, ticket.merged_into_ticket_id)
+        if ticket.merged_into_ticket_id
+        else None
+    )
     linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
     if can_read_material_requests:
         from app.services.field.material_requests import (
@@ -1849,6 +1858,7 @@ def build_ticket_detail_context(
     )
     return {
         "ticket": ticket,
+        "merged_into_ticket": merged_into_ticket,
         "comments": comments,
         "sla_events": support_service.ticket_sla_events.list(
             db, str(ticket.id), limit=200, offset=0
@@ -1880,7 +1890,7 @@ def build_ticket_detail_context(
         ),
         "status_presentations": {
             value: ticket_status_presentation(value)
-            for value in {*status_options, ticket.status}
+            for value in {*status_options, ticket.display_status}
         },
         "is_merged_source": bool(
             ticket.merged_into_ticket_id

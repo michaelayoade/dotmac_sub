@@ -666,7 +666,11 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "DomainSOT authentication_mechanisms declarations, with "
-                            "local owned by authorization and radius by network access"
+                            "local and oidc owned by authorization and radius by "
+                            "network access; authentication_mechanism_registry also "
+                            "declares the one mechanism-to-AuthProvider storage "
+                            "mapping (local->local, radius->radius, oidc->sso) that "
+                            "the writer and the convergence report both consume"
                         ),
                     ),
                     AuthorityInput(
@@ -674,8 +678,9 @@ DOMAIN = DomainSOT(
                         owner="party.credential_authentication_projection",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "Migration 527 deterministic binding key, mechanism and "
-                            "operator-facing label; no credential material"
+                            "Migration 527 deterministic bootstrap bindings plus "
+                            "typed, audited install_authentication_binding command "
+                            "evidence; no credential material"
                         ),
                     ),
                     AuthorityInput(
@@ -703,7 +708,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "Active authentication_bindings row whose mechanism is "
-                            "declared by exactly one SOT domain and matches provider"
+                            "declared by exactly one SOT domain and whose declared "
+                            "storage provider equals the credential provider"
                         ),
                     ),
                     AuthorityInput(
@@ -725,27 +731,47 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "bind_credential_party owns one complete root transaction "
-                        "and returns only after the projection and audit commit."
+                        "install_authentication_binding and bind_credential_party "
+                        "each own one complete root transaction and return only "
+                        "after their state and audit evidence commit."
                     ),
                     locking=(
-                        "Lock the credential, Person Party and verifier binding; the "
-                        "Party lock serializes competing credentials for one person "
-                        "before the tuple uniqueness backstop."
+                        "Binding installation locks an existing binding key and uses "
+                        "uq_auth_bindings_binding_key as the concurrent-create "
+                        "arbiter inside an owner-authorized savepoint. Credential "
+                        "projection locks the credential, Person Party and verifier "
+                        "binding; the Party lock serializes competing credentials "
+                        "for one person before the tuple uniqueness backstop."
                     ),
                     idempotency=(
-                        "Only the exact same tenant, Party, binding, source and reason "
-                        "replays; changed evidence or a repoint fails closed."
+                        "An exact binding key, mechanism and reviewed metadata "
+                        "replays the installed row; changed installation evidence "
+                        "fails closed. Only the exact same tenant, Party, binding, "
+                        "source and reason replays a credential projection."
                     ),
                     retries=(
-                        "Retry the complete command with the same CommandContext; "
-                        "database uniqueness or changed source state is not repaired "
+                        "A concurrent binding-key loser preserves the outer command, "
+                        "re-reads the database winner and accepts only an exact "
+                        "replay. Retry other complete commands with the same "
+                        "CommandContext; changed source state is never repaired "
                         "inside a partial transaction."
                     ),
                 ),
                 errors=ErrorContract(
                     domain_codes=(
                         "party.credential_authentication_projection.invalid_command",
+                        (
+                            "party.credential_authentication_projection."
+                            "binding_configuration_conflict"
+                        ),
+                        (
+                            "party.credential_authentication_projection."
+                            "binding_identity_conflict"
+                        ),
+                        (
+                            "party.credential_authentication_projection."
+                            "binding_installation_conflict"
+                        ),
                         "party.credential_authentication_projection.credential_missing",
                         "party.credential_authentication_projection.party_missing",
                         "party.credential_authentication_projection.person_required",
@@ -781,6 +807,10 @@ DOMAIN = DomainSOT(
                         ),
                         "party.credential_authentication_projection.tenant_mismatch",
                         "party.credential_authentication_projection.mechanism_mismatch",
+                        (
+                            "party.credential_authentication_projection."
+                            "unmapped_mechanism_storage"
+                        ),
                         "party.credential_authentication_projection.partial_projection",
                         "party.credential_authentication_projection.repoint_refused",
                         "party.credential_authentication_projection.projection_collision",
@@ -789,28 +819,38 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     mapping_owner=(
+                        "scripts.authentication.install_authentication_binding and "
                         "scripts.migration.execute_staff_party_credential_adoption"
                     ),
                     fail_closed_on=(
+                        "binding-key reuse with changed mechanism or metadata",
+                        "an inactive binding-key replay",
+                        "a concurrent installation with no readable exact winner",
                         "organization Party",
                         "missing or mismatched legacy principal Party binding",
-                        "undeclared or mismatched verifier mechanism",
+                        "undeclared verifier mechanism",
+                        "verifier mechanism with no declared storage provider",
+                        "mechanism whose declared storage differs from the provider",
                         "partial or conflicting existing projection",
                         "duplicate tenant-Party-binding tuple",
                     ),
                 ),
                 events=EventContract(
-                    event_types=("credential.party_authentication_projected",),
+                    event_types=(
+                        "authentication_binding.installed",
+                        "credential.party_authentication_projected",
+                    ),
                     schema_version=1,
                     delivery_owner="observability.audit_log",
                     compatibility=(
                         "PII-free audit evidence carries only ids, immutable binding "
-                        "key, source and command correlation; never username, secret "
-                        "or display name."
+                        "identity, reviewed reason, source and command correlation; "
+                        "never username, secret or display name."
                     ),
                     replay=(
-                        "An exact command replay returns the original bound_at and "
-                        "does not append a second audit record."
+                        "An exact installation returns the original binding and an "
+                        "exact projection returns the original bound_at; neither "
+                        "appends a second audit record."
                     ),
                 ),
                 projections=(
@@ -866,6 +906,7 @@ DOMAIN = DomainSOT(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
+                    "tests/test_authentication_binding_installation.py",
                     "tests/test_credential_party_binding.py",
                     "tests/test_credential_party_binding_migration.py",
                     "tests/architecture/test_credential_party_binding_boundary.py",

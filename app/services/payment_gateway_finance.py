@@ -41,6 +41,40 @@ def _error(suffix: str, message: str) -> PaymentGatewayFinanceError:
     )
 
 
+def require_active_gateway_provider(
+    db: Session,
+    *,
+    provider_type: PaymentProviderType,
+    expected_provider_id: UUID | None = None,
+) -> PaymentProvider:
+    """Resolve the one active finance identity for a verified gateway operation."""
+
+    providers = tuple(
+        db.scalars(
+            select(PaymentProvider)
+            .where(PaymentProvider.provider_type == provider_type)
+            .order_by(PaymentProvider.created_at.asc(), PaymentProvider.id.asc())
+        ).all()
+    )
+    if len(providers) != 1:
+        raise _error(
+            "provider_identity_ambiguous",
+            f"{provider_type.value.title()} must have exactly one finance identity",
+        )
+    provider = providers[0]
+    if expected_provider_id is not None and provider.id != expected_provider_id:
+        raise _error(
+            "provider_identity_mismatch",
+            "Gateway finance identity does not match the recorded checkout",
+        )
+    if not provider.is_active:
+        raise _error(
+            "provider_inactive",
+            f"{provider_type.value.title()} finance identity is inactive",
+        )
+    return provider
+
+
 def ensure_gateway_identity(
     db: Session,
     *,
@@ -196,4 +230,5 @@ __all__ = [
     "PaymentGatewayFinanceError",
     "bind_integrator_installation",
     "ensure_gateway_identity",
+    "require_active_gateway_provider",
 ]

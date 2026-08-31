@@ -18,6 +18,7 @@ from app.models.network import (
     PollStatus,
 )
 from app.services.network.ont_status import apply_olt_status_observation
+from app.services.network.parsers.cli import canonical_fsp
 from app.services.network.serial_utils import canonical, parse_ont_id_on_olt
 from app.services.queue_adapter import QueueDispatchResult, enqueue_task
 
@@ -95,20 +96,42 @@ def _binary_run_state(run_state: str | None) -> OnuOnlineStatus:
     raise ValueError(f"Unsupported Huawei ONT run state: {run_state!r}")
 
 
-def _ont_fsp(db: Session, ont: OntUnit) -> str:
-    board = str(ont.board or "").strip()
-    port = str(ont.port or "").strip()
-    if board and port:
-        return f"{board}/{port}"
+def _canonical_huawei_fsp(value: str | None) -> str | None:
+    parts = canonical_fsp(value)
+    return parts.fsp if parts is not None else None
+
+
+def _pon_port_fsp(db: Session, ont: OntUnit) -> str | None:
     pon_port = getattr(ont, "pon_port", None)
     if pon_port is None and ont.pon_port_id is not None:
         from app.models.network import PonPort
 
         pon_port = db.get(PonPort, ont.pon_port_id)
-    fsp = str(getattr(pon_port, "name", "") or "").strip()
+    if pon_port is None:
+        return None
+
+    from app.services.network.pon_port_identity import (
+        PonPortIdentity,
+        derive_identity,
+    )
+
+    identity = derive_identity(db, pon_port)
+    if isinstance(identity, PonPortIdentity):
+        return identity.value
+    return _canonical_huawei_fsp(getattr(pon_port, "name", None))
+
+
+def _ont_fsp(db: Session, ont: OntUnit) -> str:
+    board = str(ont.board or "").strip()
+    port = str(ont.port or "").strip()
+    if board and port:
+        fsp = _canonical_huawei_fsp(f"{board}/{port}")
+        if fsp:
+            return fsp
+    fsp = _pon_port_fsp(db, ont)
     if fsp:
         return fsp
-    raise ValueError("ONT has no Huawei F/S/P location")
+    raise ValueError("ONT has no canonical Huawei F/S/P location")
 
 
 def refresh_single_ont_status(db: Session, ont: OntUnit) -> OnuOnlineStatus:
@@ -171,8 +194,23 @@ def refresh_huawei_olt_status(
             fsps.add(_ont_fsp(db, inventory_ont))
         except ValueError:
             invalid_locations += 1
+    observed_at = now or datetime.now(UTC)
     if onts and not fsps:
-        raise RuntimeError("Huawei ONT inventory has no pollable F/S/P locations")
+        olt.last_poll_at = observed_at
+        olt.last_poll_status = PollStatus.failed
+        olt.last_poll_error = (
+            "Huawei ONT inventory has no canonical pollable F/S/P locations"
+        )
+        olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
+        db.flush()
+        return OltStatusRefreshStats(
+            olt_id=str(olt.id),
+            observed=0,
+            online=0,
+            offline=0,
+            unmatched=0,
+            invalid=invalid_locations,
+        )
 
     ok, message, entries = get_registered_ont_serials(olt, sorted(fsps))
     if not ok:
@@ -184,7 +222,6 @@ def refresh_huawei_olt_status(
         for serial in (ont.serial_number, ont.vendor_serial_number)
         if canonical(serial)
     }
-    observed_at = now or datetime.now(UTC)
     online = offline = unmatched = 0
     invalid = invalid_locations
     matched_ids: set[object] = set()

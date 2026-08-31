@@ -1,11 +1,11 @@
 name: Release Freeze Gate
 
-# Required PR check for `dev`: while a release candidate, staging deployment,
+# Required PR check for `main`: while a release candidate, staging deployment,
 # production authorization, or production deployment is queued or running, do not
-# merge new work into dev. Branch pushes and PR updates remain allowed.
+# merge new work into main. Branch pushes and PR updates remain allowed.
 on:
   pull_request:
-    branches: [dev]
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
@@ -24,13 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Refuse dev merges while release deployment is active
+      - name: Refuse main merges while release deployment is active
         uses: actions/github-script@v7
         with:
           script: |
             const guarded = new Set([
               "Build release candidate once",
-              "Deploy dev to staging",
+              "Deploy main to staging",
               "Promote staged digest for production",
               "Deploy authorized digest to production",
             ]);
@@ -60,5 +60,5 @@ jobs:
               .map((run) => `${run.name}#${run.run_number} ${run.status} ${run.html_url}`)
               .join("\n");
             core.setFailed(
-              `Release freeze is active; do not merge into dev while deployment is in flight.\n${summary}`
+              `Release freeze is active; do not merge into main while deployment is in flight.\n${summary}`
             );

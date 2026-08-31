@@ -6,6 +6,8 @@ from decimal import Decimal
 
 from app.models.billing import TaxApplication, TaxRate
 from app.models.customer_tax_policy import CustomerTaxPolicy
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.services.billing_tax_resolution import (
     BillingTaxSource,
     resolve_subscription_tax,
@@ -64,3 +66,44 @@ def test_batch_resolution_returns_one_typed_result_per_subscription(
     assert tuple(resolved) == (subscription.id,)
     assert resolved[subscription.id].tax_rate_id == rate.id
     assert resolved[subscription.id].source == BillingTaxSource.account_tax_rate
+
+
+def test_configured_rate_identity_and_application_are_not_built_in(
+    db_session, subscription
+):
+    rate = TaxRate(
+        name="Configured tenant levy",
+        code="TENANT-LEVY",
+        rate=Decimal("3.1250"),
+        is_active=True,
+    )
+    db_session.add(rate)
+    db_session.flush()
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="default_tax_rate_id",
+                value_type=SettingValueType.string,
+                value_text=str(rate.id),
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="default_tax_application",
+                value_type=SettingValueType.string,
+                value_text=TaxApplication.inclusive.value,
+                is_active=True,
+            ),
+        ]
+    )
+    subscription.offer.with_vat = True
+    subscription.offer.vat_percent = Decimal("0.0000")
+    db_session.commit()
+
+    resolved = resolve_subscription_tax(db_session, subscription)
+
+    assert resolved.tax_rate_id == rate.id
+    assert resolved.tax_rate_percent == Decimal("3.1250")
+    assert resolved.tax_application == TaxApplication.inclusive
+    assert resolved.source == BillingTaxSource.catalog_taxable_default

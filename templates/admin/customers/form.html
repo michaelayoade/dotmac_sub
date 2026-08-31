@@ -20,6 +20,12 @@
         color: rgb(255 255 255);
     }
 </style>
+{# A billing day stored before the domain was enforced (29-31) must render
+   WITHOUT min/max. Chromium cannot focus a control inside a collapsed tab,
+   so an invalid one there silently blocks the whole form with no message to
+   the user and no request to the server. The value is preserved on save;
+   app/services/billing_day.py rejects any attempt to CHANGE it out of range. #}
+{% set bd_legacy = billing_form and billing_form.billing_day_is_legacy == 'true' %}
 <div id="customer-form-shell" x-data="customerForm()" class="space-y-6">
     <!-- Ambient Background -->
     <div class="fixed inset-0 pointer-events-none opacity-20 dark:opacity-10" aria-hidden="true">
@@ -59,7 +65,12 @@
     </div>
     {% endif %}
 
-    <form method="POST" class="space-y-6" @submit="$el.querySelector('button[type=submit]').disabled = true">
+    <form
+        id="customer-edit-form"
+        method="POST"
+        class="space-y-6"
+        @submit="$el.querySelector('button[type=submit]').disabled = true"
+    >
         {% if inbox_conversation_id %}<input type="hidden" name="inbox_conversation_id" value="{{ inbox_conversation_id }}">{% endif %}
         {% include "components/forms/csrf_input.html" %}
 
@@ -521,8 +532,9 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
                                 <label for="billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>
-                                <input type="number" min="1" max="28" name="billing_day" id="billing_day" :disabled="customerType !== 'person'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
+                                <input type="number" {% if not bd_legacy %}min="{{ billing_form.billing_day_min if billing_form else 1 }}" max="{{ billing_form.billing_day_max if billing_form else 28 }}" {% endif %}name="billing_day" id="billing_day" :disabled="customerType !== 'person'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                {% if bd_legacy %}<p class="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">Legacy value, kept from before billing days were limited to {{ billing_form.billing_day_min }}–{{ billing_form.billing_day_max }}. Saving other changes preserves it; changing the billing day itself requires a day in range.</p>{% endif %}
                             </div>
                             <div>
                                 <label for="payment_due_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Due Days</label>
@@ -697,8 +709,9 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
                                 <label for="org_billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>
-                                <input type="number" min="1" max="28" name="billing_day" id="org_billing_day" :disabled="customerType !== 'business'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
+                                <input type="number" {% if not bd_legacy %}min="{{ billing_form.billing_day_min if billing_form else 1 }}" max="{{ billing_form.billing_day_max if billing_form else 28 }}" {% endif %}name="billing_day" id="org_billing_day" :disabled="customerType !== 'business'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                {% if bd_legacy %}<p class="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">Legacy value, kept from before billing days were limited to {{ billing_form.billing_day_min }}–{{ billing_form.billing_day_max }}. Saving other changes preserves it; changing the billing day itself requires a day in range.</p>{% endif %}
                             </div>
                             <div>
                                 <label for="org_payment_due_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Due Days</label>

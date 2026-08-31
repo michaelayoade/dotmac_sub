@@ -41,7 +41,7 @@ _NON_ISSUABLE_STATUSES = frozenset(
     {
         TicketStatus.closed.value,
         TicketStatus.canceled.value,
-        TicketStatus.merged.value,
+        "merged",  # Rolling-deploy compatibility until the status backfill completes.
     }
 )
 WORK_ORDER_ISSUE_SCOPE = "support.ticket_work_order:issue"

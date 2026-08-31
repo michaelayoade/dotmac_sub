@@ -63,14 +63,23 @@ only ever sees conforming input passes even when it is broken.
 
 ## The honest state today
 
-**Every module in the cohort is `source_only` with `authority_mode = none`.**
+**Every module has `authority_mode = none`. Subscriptions, Billing and
+Collections are `released_uncomposed`; the other 22 members are
+`source_only`.**
 
 That is the accurate reading, not an unfinished draft:
 
-- No cohort package is published, so none has a digest-pinned release identity.
-- The shadow app runs the **pinned Sub baseline image**, which contains none of
-  the cohort packages, and the stack mounts no host paths — so there is no
-  mechanism by which a cohort module could be executing here.
+- `dotmac-subscriptions==0.1.0a3`, `dotmac-billing==0.1.0a1` and
+  `dotmac-collections==0.1.0a1` are published. Their `ReleaseIdentity` values
+  pin the exact wheel SHA256 values in Sub's checked-in Poetry lock, and their
+  source revisions are the peeled annotated Starter release tags recorded in
+  `docs/PLATFORM_ADOPTION_LEDGER.md`.
+- The Thin Shadow app still runs the **pinned Sub baseline image**, which
+  contains none of the cohort packages, and the stack mounts no host paths — so
+  none of the published wheels is installed or executing in this environment.
+- Publication is not composition. Calling these releases `source_only` would
+  erase real publication evidence; calling them `installed_shadow` would claim
+  a runtime the pinned image cannot contain.
 
 `ModuleEntry` refuses each step that runs ahead of its evidence, so these states
 can only move when the evidence does.
@@ -129,3 +138,52 @@ To roll back only the application while keeping the database for inspection:
 ```sh
 docker rm -f dotmac_sub_thin_shadow_app
 ```
+
+## The other cohort: `receivable-shadow-01`
+
+Two different things in this repository are called a cohort, and conflating them
+would misread both.
+
+**This document's cohort is a module-adoption cohort** — twenty-five packages
+and how far each has actually travelled. The three released commercial owners
+are `released_uncomposed`; the other 22 entries are `source_only`; every entry
+has `authority_mode = none`. `ModuleEntry` refuses each step that runs ahead of
+its evidence.
+
+**`receivable-shadow-01` is a data cohort** — which *rows* across
+Subscription → Billing → Collections are projected into
+`billing_receivable_projections` and compared by the seven-dimension parity
+report. It
+is declared in `app/services/billing/receivable_cohort.py` and designed in
+`docs/designs/RECEIVABLE_PROJECTION_SHADOW.md`.
+
+Neither implies the other:
+
+* the module cohort answers "could `dotmac-billing` one day own this?";
+* the data cohort answers "which facts would be compared if it ever could".
+
+Recording a data cohort **does not** advance a module one step along
+`ADOPTION_PROGRESSION`, and nothing in the projection package writes to the
+manifest in `app/shadow/`. Both declarations read the immutable Subscriptions
+release coordinates from `app/module_release_contracts.py`, so production code
+does not import the shadow package. The a3 treatment contract is composed but
+has no admitted runtime reader or mapping yet.
+`test_the_standing_blocker_carries_real_pin_coordinates` fails the build if the
+recorded blocker and adoption manifest ever disagree.
+
+The data cohort also has a distinct sealed read-only readiness verdict. Run the
+`readiness` subcommand from `scripts.billing.receivable_projection` with the
+same exact code revision, schema revision and observation window used for
+parity. It exits non-zero when the report seal or aggregate accounting does not
+reproduce, or on an empty comparison, unresolved classification, projection
+work still required, semantic divergence, any `not_expressible` result or a
+standing contract blocker. There is no `--apply` form. A zero exit makes the
+evidence eligible for a separately authorised authority review; it does not
+move a writer, select a commercial provider, retire a fallback or authorise
+deployment.
+
+The data cohort also runs against **live Sub**, not inside the shadow stack:
+it observes incumbent invoices and writes a rebuildable projection beside them.
+It moves no authority, creates no collections case, and every writing command
+defaults to dry run. That is a different kind of safety from this environment's
+egress denial, and neither substitutes for the other.

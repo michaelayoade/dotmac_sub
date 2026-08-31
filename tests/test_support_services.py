@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.admin_alert import AdminNotification
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
@@ -12,6 +13,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
+from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.subscription_engine import SettingValueType
 from app.models.support import (
@@ -199,7 +201,7 @@ def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscr
     support_ticket_settings_service.update_ticket_configuration(
         db_session,
         support_ticket_settings_service.TicketConfigurationUpdate(
-            statuses=("open", "closed", "merged"),
+            statuses=("open", "closed", "canceled"),
             priorities=("normal",),
             ticket_types=("incident",),
             regions=("north",),
@@ -371,7 +373,7 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
     support_ticket_settings_service.update_ticket_configuration(
         db_session,
         support_ticket_settings_service.TicketConfigurationUpdate(
-            statuses=("open", "closed", "merged"),
+            statuses=("open", "closed", "canceled"),
             priorities=("normal",),
             ticket_types=("incident",),
             auto_assign=True,
@@ -840,6 +842,60 @@ def test_field_visit_tag_is_descriptive_and_does_not_issue_work(db_session, subs
     assert db_session.query(WorkOrder).count() == 0
 
 
+def test_ticket_staff_and_team_tags_create_staff_inbox_notifications(
+    db_session, subscriber
+):
+    direct, _direct_person = add_bound_staff_user(
+        db_session, email=f"ticket-direct-tag-{uuid4()}@example.test"
+    )
+    team_member, team_person = add_bound_staff_user(
+        db_session, email=f"ticket-team-tag-{uuid4()}@example.test"
+    )
+    team = ServiceTeam(name=f"Ticket Tag Team {uuid4()}", is_active=True)
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=team_person.id))
+    db_session.commit()
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Tagged ticket",
+            description="Tag staff",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            tags=[f"person:{direct.id}", f"group:{team.id}", "field_visit"],
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    rows = (
+        db_session.query(AdminNotification)
+        .order_by(AdminNotification.title.asc())
+        .all()
+    )
+    assert {(row.system_user_id, row.title, row.target_url) for row in rows} == {
+        (
+            direct.id,
+            "You were tagged in this ticket",
+            f"/admin/support/tickets/{ticket.id}",
+        ),
+        (
+            team_member.id,
+            "Your team was tagged in this ticket",
+            f"/admin/support/tickets/{ticket.id}",
+        ),
+    }
+
+    support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(tags=[f"person:{direct.id}", f"group:{team.id}", "urgent"]),
+        actor_id=str(subscriber.id),
+    )
+    assert db_session.query(AdminNotification).count() == 2
+
+
 def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscriber):
     """Automation may tag triage; explicit assigned-team issuance is separate."""
     from app.models.support import AutomationActionType, AutomationTrigger
@@ -907,6 +963,25 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
         ),
         actor_id=str(subscriber.id),
     )
+    stored_attachment = StoredFile(
+        entity_type="support_ticket_attachment",
+        entity_id=str(source.id),
+        original_filename="source.txt",
+        storage_key_or_relative_path="tickets/source.txt",
+        file_size=4,
+        content_type="text/plain",
+        storage_provider="s3",
+    )
+    db_session.add(stored_attachment)
+    db_session.flush()
+    source.attachments = [
+        {
+            "file_name": "source.txt",
+            "storage_key": "tickets/source.txt",
+            "stored_file_id": str(stored_attachment.id),
+        }
+    ]
+    db_session.commit()
 
     merged = support_service.tickets.merge(
         db_session,
@@ -917,8 +992,19 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
 
     assert merged.id == target.id
     db_session.refresh(source)
-    assert source.status == "merged"
+    assert source.status == "canceled"
+    assert source.display_status == "merged"
     assert source.merged_into_ticket_id == target.id
+    assert source.attachments == []
+    assert target.attachments == [
+        {
+            "file_name": "source.txt",
+            "storage_key": "tickets/source.txt",
+            "stored_file_id": str(stored_attachment.id),
+        }
+    ]
+    db_session.refresh(stored_attachment)
+    assert stored_attachment.entity_id == str(target.id)
 
     target_comments = (
         db_session.query(TicketComment)
@@ -979,6 +1065,28 @@ def test_assignment_notifications_send_push_and_email_without_legacy_toggle(
         (NotificationChannel.push, str(manager.id)),
         (NotificationChannel.email, manager.email),
     }
+    inbox_items = db_session.query(AdminNotification).all()
+    assert len(inbox_items) == 2
+    assert {item.target_url for item in inbox_items} == {
+        f"/admin/support/tickets/{ticket.id}"
+    }
+
+    from app.web.admin.notifications import notification_inbox_open
+
+    selected = inbox_items[0]
+    selected.target_url = "/admin"
+    db_session.commit()
+    response = notification_inbox_open(
+        selected.id,
+        db_session,
+        {
+            "principal_id": str(selected.system_user_id),
+            "principal_type": "system_user",
+        },
+    )
+    assert response.headers["location"] == f"/admin/support/tickets/{ticket.id}"
+    db_session.refresh(selected)
+    assert selected.target_url == f"/admin/support/tickets/{ticket.id}"
 
 
 def test_ticket_assignments_accept_system_user_ids(db_session, subscriber):

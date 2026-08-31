@@ -1,4 +1,4 @@
-"""Shared UI projection contracts (State, KPI, Action)."""
+"""Shared UI projection contracts (State, KPI, Action, Chart)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,53 @@ from datetime import UTC, datetime
 import pytest
 
 from app.schemas.status_presentation import StatusIcon, StatusTone
-from app.services.ui_contracts import Action, Kpi, StateKind, StateValue
+from app.services.ui_contracts import (
+    Action,
+    ChartProjection,
+    ChartSeries,
+    ChartStateKind,
+    Kpi,
+    StateKind,
+    StateValue,
+)
+
+
+def test_chart_projection_keeps_present_empty_and_unavailable_distinct():
+    now = datetime(2026, 7, 18, tzinfo=UTC)
+    present = ChartProjection.present(
+        labels=("Jan", "Feb"),
+        series=(ChartSeries(label="Revenue", values=(10.0, 0.0)),),
+        as_of=now,
+    )
+    empty = ChartProjection.empty("No successful collections were recorded.")
+    unavailable = ChartProjection.unavailable("Revenue data is unavailable.")
+
+    assert present.state is ChartStateKind.present
+    assert present.is_present
+    assert present.as_of == now
+    assert empty.state is ChartStateKind.empty
+    assert empty.is_empty
+    assert unavailable.state is ChartStateKind.unavailable
+    assert unavailable.is_unavailable
+
+
+def test_chart_projection_rejects_contradictory_shapes():
+    with pytest.raises(ValueError, match="requires labels and series"):
+        ChartProjection(ChartStateKind.present)
+    with pytest.raises(ValueError, match="match the label count"):
+        ChartProjection.present(
+            labels=("Jan", "Feb"),
+            series=(ChartSeries(label="Revenue", values=(10.0,)),),
+        )
+    with pytest.raises(ValueError, match="cannot carry data"):
+        ChartProjection(
+            ChartStateKind.empty,
+            labels=("Jan",),
+            series=(ChartSeries(label="Revenue", values=(0.0,)),),
+            message="No revenue.",
+        )
+    with pytest.raises(ValueError, match="requires a presentation message"):
+        ChartProjection(ChartStateKind.unavailable)
 
 
 def test_state_value_present_and_stale_are_renderable():

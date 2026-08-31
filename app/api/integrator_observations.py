@@ -61,6 +61,7 @@ from app.schemas.integrator_observation import (
     IntegratorObservationEnvelope,
     IntegratorObservationReceipt,
     ProductPortDescriptorV1,
+    ProductPortDescriptorV3,
 )
 from app.schemas.integrator_settlement_observation import (
     IntegratorSettlementEnvelope,
@@ -68,6 +69,7 @@ from app.schemas.integrator_settlement_observation import (
     IntegratorSettlementMirrorReport,
     IntegratorSettlementReceipt,
     SettlementProductPortDescriptorV2,
+    SettlementProductPortDescriptorV3,
 )
 from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
@@ -89,6 +91,7 @@ from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_SETTLEMENT_CAPABILITY,
 )
 from app.services.integrations.runtime_execution import (
+    RuntimeExecutionContext,
     RuntimeExecutionError,
     build_execution_context,
 )
@@ -140,12 +143,26 @@ def _settlement_observation(
     )
 
 
-def _bind(db: Session, capability_binding_id: UUID, capability_id: str):
-    """Resolve an enabled binding, or refuse without saying which it was."""
+def _bind(
+    db: Session,
+    capability_binding_id: UUID,
+    capability_id: str,
+    *,
+    allow_disabled: bool = False,
+) -> RuntimeExecutionContext:
+    """Resolve one binding, optionally for the read-only mirror path only.
+
+    Live receipt intake keeps the default enabled-only execution contract.  A
+    mirror call may resolve a configured-but-disabled binding because it writes
+    no receipt or financial consequence and is the evidence gate that precedes
+    activation.
+    """
 
     try:
         execution = build_execution_context(
-            db, capability_binding_id=capability_binding_id
+            db,
+            capability_binding_id=capability_binding_id,
+            allow_disabled=allow_disabled,
         )
     except RuntimeExecutionError as exc:
         # A missing, disabled, quarantined or retired binding is reported as
@@ -195,6 +212,27 @@ def read_settlement_product_port_descriptor(
 
     try:
         return descriptors.settlement_product_port_descriptor(db, capability_binding_id)
+    except descriptors.ProductPortDescriptorError as exc:
+        raise HTTPException(
+            status_code=404, detail="Integrator settlement binding not found"
+        ) from exc
+
+
+@router.get(
+    "/payment-settlements/{capability_binding_id}/descriptor/v3",
+    response_model=SettlementProductPortDescriptorV3,
+)
+def read_settlement_product_port_descriptor_v3(
+    capability_binding_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> descriptors.ProductPortDescriptorV3:
+    """Publish finance's payload declaration beside its established wire."""
+
+    try:
+        return descriptors.settlement_product_port_descriptor_v3(
+            db, capability_binding_id
+        )
     except descriptors.ProductPortDescriptorError as exc:
         raise HTTPException(
             status_code=404, detail="Integrator settlement binding not found"
@@ -317,7 +355,12 @@ def mirror_integrator_settlement(
 ) -> IntegratorSettlementMirrorReport:
     """Compare against incumbent financial evidence without writing anything."""
 
-    _bind(db, capability_binding_id, INTEGRATOR_SETTLEMENT_CAPABILITY)
+    _bind(
+        db,
+        capability_binding_id,
+        INTEGRATOR_SETTLEMENT_CAPABILITY,
+        allow_disabled=True,
+    )
     result = settlement_commands.compare_integrator_settlement(
         db,
         settlement_commands.CompareIntegratorSettlementCommand(
@@ -357,6 +400,25 @@ def read_product_port_descriptor(
 
     try:
         return descriptors.product_port_descriptor(db, capability_binding_id)
+    except descriptors.ProductPortDescriptorError as exc:
+        raise HTTPException(
+            status_code=404, detail="Integrator observation binding not found"
+        ) from exc
+
+
+@router.get(
+    "/{capability_binding_id}/descriptor/v3",
+    response_model=ProductPortDescriptorV3,
+)
+def read_product_port_descriptor_v3(
+    capability_binding_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> descriptors.ProductPortDescriptorV3:
+    """Publish communications' payload declaration beside its established wire."""
+
+    try:
+        return descriptors.product_port_descriptor_v3(db, capability_binding_id)
     except descriptors.ProductPortDescriptorError as exc:
         raise HTTPException(
             status_code=404, detail="Integrator observation binding not found"

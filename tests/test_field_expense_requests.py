@@ -16,11 +16,16 @@ from app.models.field_expense import FieldExpenseRequest
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field import attachments as attachments_module
 from app.services.field.attachments import field_attachments
-from app.services.field.expense_requests import field_expense_requests
+from app.services.field.expense_requests import (
+    ListFieldExpenseVendors,
+    field_expense_requests,
+    list_expense_vendors,
+)
 from app.services.field.jobs import field_jobs
 
 
@@ -131,6 +136,13 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
         scheduled_start=overrides.pop("scheduled_start", datetime.now(UTC)),
         **overrides,
     )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _vendor(db_session, name: str, *, is_active: bool = True) -> Vendor:
+    row = Vendor(name=name, is_active=is_active)
     db_session.add(row)
     db_session.flush()
     return row
@@ -360,11 +372,30 @@ def test_expense_request_scope_and_receipt_attachment_validation(
     assert created["items"][0]["receipt_attachment_id"] == receipt["id"]
 
 
+def test_expense_vendor_picker_lists_active_vendors(db_session):
+    _vendor(db_session, "Zed Supplies")
+    alpha = _vendor(db_session, "Alpha Logistics")
+    _vendor(db_session, "Inactive Vendor", is_active=False)
+    db_session.commit()
+
+    items = list_expense_vendors(
+        db=db_session,
+        query=ListFieldExpenseVendors(search="alpha", limit=25),
+    )
+
+    assert [(item.id, item.label) for item in items] == [
+        (alpha.id, "Alpha Logistics"),
+    ]
+
+
 def test_expense_request_api(db_session, fake_uploads):
     user = _user(db_session)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     _work_order(db_session, subscriber, crm_work_order_id="wo-expense-api")
+    alpha = _vendor(db_session, "Alpha Logistics")
+    zed = _vendor(db_session, "Zed Supplies")
+    _vendor(db_session, "Inactive Vendor", is_active=False)
     db_session.commit()
 
     app = FastAPI()
@@ -372,6 +403,22 @@ def test_expense_request_api(db_session, fake_uploads):
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[require_user_auth] = lambda: _auth(user)
     client = TestClient(app)
+
+    vendors = client.get("/api/v1/field/expense-requests/vendors?limit=25")
+    assert vendors.status_code == 200
+    assert vendors.json()["items"] == [
+        {"id": str(alpha.id), "label": "Alpha Logistics"},
+        {"id": str(zed.id), "label": "Zed Supplies"},
+    ]
+
+    filtered_vendors = client.get("/api/v1/field/expense-requests/vendors?q=zed")
+    assert filtered_vendors.status_code == 200
+    assert filtered_vendors.json()["items"] == [
+        {"id": str(zed.id), "label": "Zed Supplies"},
+    ]
+
+    bad_id = client.get("/api/v1/field/expense-requests/not-a-uuid")
+    assert bad_id.status_code == 422
 
     receipt = client.post(
         "/api/v1/field/expense-requests/receipts",

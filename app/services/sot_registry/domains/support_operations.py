@@ -371,7 +371,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "closed TicketStatus enum values, canonical closed completion "
-                            "status, and terminal-state semantics"
+                            "status, canonical canceled terminal status, relation-backed "
+                            "merged presentation, and terminal-state semantics"
                         ),
                     ),
                 ),
@@ -428,6 +429,7 @@ DOMAIN = DomainSOT(
                 "ticket lifecycle timestamps and consequences",
                 "ticket team and person assignment",
                 "ticket assignment and mention staff notification consequence",
+                "ticket staff/team tag notification consequence",
                 "ticket comments mentions and attachments",
                 "ticket customer publication visibility",
                 "ticket links duplicates and merges",
@@ -517,6 +519,15 @@ DOMAIN = DomainSOT(
                             "staff notification delivery queue",
                         ),
                     ),
+                    ConcernContract(
+                        name="ticket staff/team tag notification consequence",
+                        role=OwnerRole.EVENT_POLICY,
+                        input_names=(
+                            "typed ticket command",
+                            "canonical ticket state",
+                            "staff notification delivery queue",
+                        ),
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
@@ -539,7 +550,8 @@ DOMAIN = DomainSOT(
                         source=(
                             "Ticket, TicketAssignee, TicketComment, "
                             "TicketCommentMention, TicketLink, TicketMerge, "
-                            "TicketAccessToken, and transactional audit/event rows"
+                            "relation-backed merged disposition, TicketAccessToken, and "
+                            "transactional audit/event rows"
                         ),
                     ),
                     AuthorityInput(
@@ -768,6 +780,8 @@ DOMAIN = DomainSOT(
             notes=(
                 "Configured status choices are constrained to the lifecycle "
                 "vocabulary, with legacy resolved input canonicalized to closed. "
+                "Merged is a relation-backed presentation over a canceled source, "
+                "not a configured or persisted lifecycle choice. "
                 "Admin selection uses the typed OperatorTicketStatusSelection "
                 "resolver and may preserve a current canonical status that was "
                 "later removed from the configured subset. "

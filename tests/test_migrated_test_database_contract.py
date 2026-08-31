@@ -107,3 +107,20 @@ def test_revision_state_requires_exact_repository_heads() -> None:
         engine.dispose()
 
     assert excinfo.value.code is DatabaseRefusal.schema_not_at_head
+
+
+def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
+    # The local provider revisions are used through ``depends_on`` by the
+    # composed module branches. Alembic applies them, then records only the
+    # effective branch heads in its version table.
+    assert repository_heads() == frozenset(
+        {
+            "569_retire_crm_chat_authority",
+            "bi_0001_billing",
+            "cl_0001_collections",
+            "ib_0001_conversations",
+            "pm_0001_payment_intents",
+            "so_0001_service_delivery_orders",
+            "su_0003_billing_treatments",
+        }
+    )

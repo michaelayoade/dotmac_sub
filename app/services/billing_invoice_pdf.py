@@ -29,7 +29,6 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import branding_storage as branding_storage_service
 from app.services import domain_settings as domain_settings_service
-from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import settings_spec
 from app.services import web_system_company_info as company_info_service
 from app.services.db_session_adapter import db_session_adapter
@@ -48,7 +47,7 @@ STALE_EXPORT_SECONDS = 20
 # fallback) includes the glyph; renderers without it use an "NGN " prefix.
 NAIRA_SIGN = "₦"
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
-INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 3, 18, 9, 0, tzinfo=UTC)
+INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 8, 25, 9, 0, tzinfo=UTC)
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
@@ -136,6 +135,14 @@ def _branded_company_info(
         "company_address_zip": address.get("postal_code", ""),
         "company_address_country": address.get("country", ""),
     }
+
+
+def _public_invoice_payment_url(brand: ResolvedBrand, invoice: Invoice) -> str | None:
+    """Return the stable application hand-off, never a cached provider URL."""
+    app_url = str(brand.app_url or "").strip().rstrip("/")
+    if not app_url.startswith("https://"):
+        return None
+    return f"{app_url}/pay/invoices/{invoice.id}"
 
 
 def _logo_src(db: Session, configured_logo: str | None = None) -> str | None:
@@ -263,34 +270,16 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         if logo_src
         else f'<div class="logo-fallback">{company_name[:1].upper()}</div>'
     )
-    bank_details = invoice_bank_details_service.get_invoice_bank_details(
-        db, currency=invoice.currency
+    payment_url = _public_invoice_payment_url(brand, invoice)
+    payment_markup = (
+        '<div class="payment-card">'
+        '<p class="card-title">Pay online</p>'
+        "<p>Use Paystack to pay this invoice securely.</p>"
+        f'<a class="pay-button" href="{html.escape(payment_url, quote=True)}">'
+        "Pay with Paystack</a></div>"
+        if payment_url
+        else ""
     )
-    bank_markup = ""
-    if bank_details:
-        bank_rows = [
-            ("Bank Name", bank_details.get("bank_name", "")),
-            ("Account Name", bank_details.get("account_name", "")),
-            ("Account Number", bank_details.get("account_number", "")),
-            ("Sort Code", bank_details.get("sort_code", "")),
-        ]
-        bank_markup = "".join(
-            (
-                '<div class="bank-row">'
-                f"<span>{html.escape(label)}</span>"
-                f"<strong>{html.escape(value)}</strong>"
-                "</div>"
-            )
-            for label, value in bank_rows
-            if value
-        )
-        if bank_markup:
-            bank_markup = (
-                '<div class="bank-card">'
-                '<p class="card-title">Bank Details</p>'
-                f'<div class="bank-grid">{bank_markup}</div>'
-                "</div>"
-            )
 
     return f"""
 <!doctype html>
@@ -363,12 +352,9 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   .totals-card {{ width: 320px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
   .totals-card table td {{ border: none; padding: 5px 0; }}
   .totals-card .grand-total td {{ color: var(--green-900); font-size: 15px; font-weight: 800; padding-top: 10px; border-top: 1px solid var(--slate-200); }}
-  .bank-card {{ margin-top: 16px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
-  .bank-grid {{ display: table; width: 100%; }}
-  .bank-row {{ display: table-row; }}
-  .bank-row span, .bank-row strong {{ display: table-cell; padding: 4px 0; line-height: 1.5; }}
-  .bank-row span {{ color: var(--slate-500); width: 34%; }}
-  .bank-row strong {{ color: var(--slate-900); font-weight: 700; }}
+  .payment-card {{ margin-top: 16px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
+  .payment-card p {{ margin: 0 0 10px; color: var(--slate-600); }}
+  .pay-button {{ display: inline-block; border-radius: 8px; background: var(--green-800); color: var(--white); padding: 10px 15px; font-weight: 700; text-decoration: none; }}
   .memo {{ margin-top: 18px; border-left: 4px solid var(--red-700); background: #fff8f8; border-radius: 0 14px 14px 0; padding: 14px 16px; }}
   .memo strong {{ color: var(--red-700); }}
   .footer {{ margin-top: 18px; color: var(--slate-500); font-size: 10px; display: flex; justify-content: space-between; }}
@@ -447,7 +433,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         </div>
       </div>
 
-      {bank_markup}
+      {payment_markup}
 
       <div class=\"memo\">
         <strong>Memo:</strong> {memo}
@@ -566,22 +552,12 @@ def _render_invoice_text_lines(
         ]
     )
     if db is not None:
-        bank_details = invoice_bank_details_service.get_invoice_bank_details(
-            db, currency=invoice.currency
-        )
-        if bank_details:
-            out.extend(
-                [
-                    "",
-                    "Bank Details:",
-                    f"Bank Name: {bank_details.get('bank_name', '')}",
-                    f"Account Name: {bank_details.get('account_name', '')}",
-                    f"Account Number: {bank_details.get('account_number', '')}",
-                ]
-            )
-            sort_code = (bank_details.get("sort_code") or "").strip()
-            if sort_code:
-                out.append(f"Sort Code: {sort_code}")
+        from app.services.brand_profiles import resolve_brand
+
+        brand = resolve_brand(db, subscriber_id=invoice.account_id)
+        payment_url = _public_invoice_payment_url(brand, invoice)
+        if payment_url:
+            out.extend(["", "Pay with Paystack:", payment_url])
     out.append(f"Memo: {(invoice.memo or '').strip() or '-'}")
     return out
 
@@ -862,36 +838,30 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             fill=green_900 if label == "Total" else slate_900,
         )
 
-    bank_details = invoice_bank_details_service.get_invoice_bank_details(
-        db, currency=invoice.currency
-    )
-    if bank_details:
-        bank_left = margin_x
-        bank_top = totals_top
-        bank_right = totals_left - 28
+    payment_url = _public_invoice_payment_url(brand, invoice)
+    if payment_url:
+        payment_left = margin_x
+        payment_top = totals_top
+        payment_right = totals_left - 28
         draw.rounded_rectangle(
-            (bank_left, bank_top, bank_right, bank_top + 172),
+            (payment_left, payment_top, payment_right, payment_top + 172),
             radius=20,
             fill="#ffffff",
             outline=slate_200,
         )
         draw.text(
-            (bank_left + 22, bank_top + 18),
-            "BANK DETAILS",
+            (payment_left + 22, payment_top + 18),
+            "PAY ONLINE",
             font=label_font,
             fill=green_900,
         )
-        bank_lines = [
-            f"Bank: {bank_details.get('bank_name', '')}",
-            f"Account Name: {bank_details.get('account_name', '')}",
-            f"Account Number: {bank_details.get('account_number', '')}",
+        payment_lines = [
+            "Pay securely with Paystack",
+            "Open the clickable link in this invoice.",
         ]
-        sort_code = (bank_details.get("sort_code") or "").strip()
-        if sort_code:
-            bank_lines.append(f"Sort Code: {sort_code}")
-        for index, line in enumerate(bank_lines[:4]):
+        for index, line in enumerate(payment_lines):
             draw.text(
-                (bank_left + 22, bank_top + 54 + (index * 28)),
+                (payment_left + 22, payment_top + 54 + (index * 28)),
                 line,
                 font=small_font,
                 fill=slate_700,

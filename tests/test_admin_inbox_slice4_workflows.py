@@ -20,9 +20,10 @@ from app.models.team_inbox import (
     InboxAgentPresence,
     InboxAgentPresenceStatus,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationStatus,
 )
-from app.services import team_inbox_commands, team_inbox_read
+from app.services import team_inbox_commands, team_inbox_projection, team_inbox_read
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
@@ -133,6 +134,44 @@ def test_escalate_to_teammate_is_a_real_form_not_a_demo_notice():
     assert "showDemoNotice('Teammate escalation')" not in CONVERSATION
     assert "/assign" in CONVERSATION
     assert "team_inbox_commands.assign_conversation" in ROUTES
+
+
+def test_teammate_picker_shows_capacity_and_disables_full_agents():
+    assert "agent.active_conversation_count" in CONVERSATION
+    assert "agent.max_concurrent_conversations" in CONVERSATION
+    assert "agent.assignment_eligible" in CONVERSATION
+    assert "Capacity full" in CONVERSATION
+    assert "Full or unavailable agents cannot be selected." in CONVERSATION
+
+
+def test_agent_options_project_the_routing_owners_exact_capacity(db_session):
+    agent = uuid.uuid4()
+    team_id = _team(db_session, member_id=agent)
+    presence = (
+        db_session.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == agent)
+        .one()
+    )
+    presence.max_concurrent_conversations = 1
+    assigned_conversation_id = _conversation(db_session, team_id=team_id)
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=assigned_conversation_id,
+            service_team_id=team_id,
+            person_id=agent,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    option = team_inbox_projection.list_agent_options(db_session)[0]
+
+    assert option.presence_status == InboxAgentPresenceStatus.online.value
+    assert option.active_conversation_count == 1
+    assert option.max_concurrent_conversations == 1
+    assert option.available_capacity == 0
+    assert option.assignment_eligible is False
+    assert option.unavailability_reason == "at_capacity"
 
 
 # --- macro execution ----------------------------------------------------

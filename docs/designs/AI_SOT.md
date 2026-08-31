@@ -177,11 +177,34 @@ The approved tool catalogue is backend-owned. Current tools are:
   state, live-session and equipment status where available. An unavailable
   result must not become a diagnosis.
 
-Policy versions may select which identifiers can be requested and which
-approved tools are enabled. The UI cannot create arbitrary tools or executable
-conditions. If a customer explicitly asks for a human, AI intake records
-`human_requested=true`, stops troubleshooting and requests handoff while
-preserving already collected facts.
+Policy versions may select which identifiers can be requested, and in which
+order. Customer identity prompts are asked one at a time, and the policy's
+declared `permitted_identifiers` order is authoritative: it is preserved
+exactly, de-duplicated by first occurrence, and unsupported values are dropped
+without reordering the remaining ones. The engine never imposes a canonical
+order over a declared one. When a policy declares no identifiers, the default
+order is registered phone, then registered email, then Portal/account ID. AI
+intake asks the next identifier only when the previous one is absent or did not
+identify the account, and identification lookup attempts identifiers in that
+same declared order, so prompting and lookup can never disagree. The UI cannot
+create arbitrary tools or executable conditions. If a customer explicitly asks
+for a human, AI intake records `human_requested=true`, stops troubleshooting and
+requests handoff while preserving already collected facts.
+
+Policy versions may define bounded first-line playbooks. A playbook matches an
+intent and optional category, then runs configured steps in order: request one
+missing field, provide configured guidance, invoke an approved read-only tool,
+mark resolved, or request handoff. Playbook wording, including empathy or
+acknowledgement text, is policy data curated from approved support patterns; the
+engine supplies only generic fallback field prompts and does not hardcode a
+category-specific conversation path.
+
+Policy versions may opt into immediate handoff after classification through
+`conversation_policy.handoff_after_classification`. The default is false for
+newly saved conversational policies. A classifier result that requires an
+approved follow-up question takes precedence over this option, so low-confidence
+or otherwise incomplete classifications remain in the clarification path instead
+of being escalated to Team Inbox routing immediately.
 
 Policy versions may select `conversation_engine_mode=custom_v1` or
 `conversation_engine_mode=langgraph_v1`. LangGraph is an orchestration layer
@@ -209,7 +232,8 @@ The contact-data cleaning flow is independent and disabled by default for
 production collection. AI may collect candidate values only when the
 conversation is reliably linked to a directly managed residential
 `user_type=customer` subscriber missing gender, date of birth, or both. AI never
-updates subscriber rows. `customer.profile_commands` validates and saves
+updates subscriber rows. `customer.profile_cleanup` owns the bounded typed
+eligibility projection and validates and saves
 through a typed command, rechecks eligibility under lock, refuses reseller or
 ambiguous identities, prevents overwriting existing values, and appends
 `subscriber_field_verifications` evidence without storing DOB in AI metadata.
@@ -261,6 +285,20 @@ default-off controls and never send automatically.
   enabled read-only tools.
 
 ## Open work
+
+### Support-safe conversational context
+
+`communications.team_inbox_contact_resolution` owns the bounded customer
+identity projection consumed by conversational AI. `network.radius_sessions`
+owns its bounded RADIUS observation projection; `network.ont_runtime_status`
+owns timestamped OLT observations and the ONT status owner derives effective
+state through its approved helper; it is not a separate authoritative owner.
+The support monitoring projection preserves RADIUS and effective-ONT
+provenance rather than diagnosing their combination. AI and future LangGraph are read-only consumers of these DTOs: they do
+not import customer, RADIUS, or ONT ORM models, choose support scope, or turn
+no-data/unavailable observations into an offline diagnosis. Exact identifier
+lookup remains restricted to the authoritative Inbox-linked Subscriber until a
+separate authenticated support-directory contract is approved.
 
 - **`ai_handling` projection repair.** `ai_intake_sessions` now owns the AI
   lifecycle. The conversation metadata flag is a rebuildable UI/filter

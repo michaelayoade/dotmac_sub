@@ -29,7 +29,7 @@ require_exact_env_line() {
 }
 
 usage() {
-  echo "usage: deploy_production.sh <sha256:digest> <authorization.json> [--hotfix-no-migrations --change-reference REF --reason TEXT]" >&2
+  echo "usage: deploy_production.sh <sha256:digest> <authorization.json> [--hotfix-no-migrations --change-reference REF --reason TEXT] [--resume-after-migration --failed-run-id RUN_ID --backup-path PATH] [--rollback-authorization PATH] [--bootstrap-authorization PATH]" >&2
   exit 2
 }
 
@@ -44,10 +44,21 @@ require_exact_env_line "APP_ENV=production"
 require_exact_env_line "SERVER_NAME=dotmac-sub-prod"
 
 HOTFIX=0
+ROLLBACK_AUTHORIZATION=""
+BOOTSTRAP_AUTHORIZATION=""
 CHANGE_REFERENCE=""
 REASON=""
+RESUME_AFTER_MIGRATION=0
+FAILED_RUN_ID=""
+BACKUP_PATH=""
 while (($#)); do
   case "$1" in
+    --rollback-authorization) ROLLBACK_AUTHORIZATION="${2:-}"; shift 2 ;;
+    --bootstrap-authorization)
+      (($# >= 2)) || usage
+      BOOTSTRAP_AUTHORIZATION="$2"
+      shift 2
+      ;;
     --hotfix-no-migrations) HOTFIX=1; shift ;;
     --change-reference)
       (($# >= 2)) || usage
@@ -59,15 +70,42 @@ while (($#)); do
       REASON="$2"
       shift 2
       ;;
+    --resume-after-migration) RESUME_AFTER_MIGRATION=1; shift ;;
+    --failed-run-id)
+      (($# >= 2)) || usage
+      FAILED_RUN_ID="$2"
+      shift 2
+      ;;
+    --backup-path)
+      (($# >= 2)) || usage
+      BACKUP_PATH="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
+
+if [[ -n "${ROLLBACK_AUTHORIZATION}" && -n "${BOOTSTRAP_AUTHORIZATION}" ]]; then
+  die "rollback and first-deployment bootstrap authorizations are mutually exclusive"
+fi
+if [[ -n "${BOOTSTRAP_AUTHORIZATION}" && ( "${HOTFIX}" == "1" || "${RESUME_AFTER_MIGRATION}" == "1" ) ]]; then
+  die "first-deployment bootstrap cannot be combined with hotfix or resume modes"
+fi
 
 if [[ "${HOTFIX}" != "1" && ( -n "${CHANGE_REFERENCE}" || -n "${REASON}" ) ]]; then
   die "hotfix attribution requires --hotfix-no-migrations"
 fi
 if [[ "${HOTFIX}" == "1" && ( -z "${CHANGE_REFERENCE}" || -z "${REASON}" ) ]]; then
   die "hotfix backup exception requires a change reference and reason"
+fi
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" && "${HOTFIX}" == "1" ]]; then
+  die "post-migration resume cannot be combined with a no-migration hotfix exception"
+fi
+if [[ "${RESUME_AFTER_MIGRATION}" != "1" && ( -n "${FAILED_RUN_ID}" || -n "${BACKUP_PATH}" ) ]]; then
+  die "resume evidence requires --resume-after-migration"
+fi
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" && ( -z "${FAILED_RUN_ID}" || -z "${BACKUP_PATH}" ) ]]; then
+  die "post-migration resume requires failed run ID and backup path"
 fi
 if [[ -n "${SKIP_BACKUP:-}" ]]; then
   die "SKIP_BACKUP is not accepted for production"
@@ -76,6 +114,124 @@ fi
 export PRODUCTION_RELEASE_EVIDENCE="${AUTHORIZATION_FILE}"
 unset SKIP_BACKUP
 unset PRODUCTION_BACKUP_DECISION_FILE
+if [[ "${RESUME_AFTER_MIGRATION}" == "1" ]]; then
+  [[ "${FAILED_RUN_ID}" =~ ^[0-9]+$ && "${FAILED_RUN_ID}" -gt 0 ]] || die "failed run ID must be a positive integer"
+  [[ -n "${AUTHORIZATION_RUN_ID:-}" ]] || die "AUTHORIZATION_RUN_ID is required for post-migration resume"
+  export PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION=1
+  export PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID="${FAILED_RUN_ID}"
+  export PRODUCTION_DEPLOY_RESUME_BACKUP_PATH="${BACKUP_PATH}"
+  export PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID="${AUTHORIZATION_RUN_ID}"
+else
+  unset PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION
+  unset PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID
+  unset PRODUCTION_DEPLOY_RESUME_BACKUP_PATH
+  unset PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID
+fi
+
+# --- Anti-rollback gate -------------------------------------------------------
+# Runs BEFORE anything that touches the host: before the hotfix migration
+# evidence collection (which pulls images and creates throwaway containers) and
+# before deploy.sh, which owns the database backup and `alembic upgrade`. A
+# refusal must leave production exactly as it found it, so the gate is the
+# first step after argument validation.
+# Deploying a revision that is not a descendant of the one already running
+# silently re-introduces every defect fixed in between, and once migrations
+# have been applied it puts older code against a newer schema. Forward
+# progress is proven from the running container's own OCI revision label --
+# what is actually running -- not from any file the deploy was handed.
+APP_CONTAINER="${APP_CONTAINER:-dotmac_sub_app}"
+TARGET_REVISION=""
+REVISION_OUTPUTS="$(mktemp)"
+if run_repo_module scripts.release_candidate_evidence verify-production \
+  --path "${AUTHORIZATION_FILE}" \
+  --github-output "${REVISION_OUTPUTS}" >/dev/null; then
+  TARGET_REVISION="$(sed -n 's/^release_revision=//p' "${REVISION_OUTPUTS}")"
+else
+  rm -f "${REVISION_OUTPUTS}"
+  die "could not verify the authorized release revision; refusing to deploy without proving forward progress"
+fi
+rm -f "${REVISION_OUTPUTS}"
+[[ "${TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] \
+  || die "authorized release revision is missing or malformed"
+
+# A failed `docker inspect` cannot distinguish an empty host from a denied or
+# unavailable Docker daemon. Prove daemon access first, then inventory the exact
+# production container. Only a confirmed absence may enter the separately
+# typed, exact-target first-deployment path.
+docker info >/dev/null 2>&1 \
+  || die "Docker runtime is unreadable; cannot prove the running production revision"
+if ! CONTAINER_NAMES="$(
+  docker container ls -a \
+    --filter "name=^/${APP_CONTAINER}$" \
+    --format '{{.Names}}'
+)"; then
+  die "production container inventory is unreadable; cannot prove first-deployment or running state"
+fi
+
+if [[ -z "${CONTAINER_NAMES}" ]]; then
+  [[ -n "${BOOTSTRAP_AUTHORIZATION}" ]] || die \
+    "${APP_CONTAINER} is confirmed absent; first deployment requires --bootstrap-authorization bound to this server and revision"
+  [[ -f "${BOOTSTRAP_AUTHORIZATION}" ]] \
+    || die "bootstrap authorization file not found"
+  run_repo_module scripts.release_candidate_evidence verify-bootstrap-authorization \
+    --path "${BOOTSTRAP_AUTHORIZATION}" \
+    --target-revision "${TARGET_REVISION}" \
+    --target-server "dotmac-sub-prod" \
+    || die "bootstrap authorization does not authorize first deployment of ${TARGET_REVISION} to dotmac-sub-prod"
+  echo "Authorized first deployment of ${TARGET_REVISION} to dotmac-sub-prod."
+else
+  [[ "${CONTAINER_NAMES}" == "${APP_CONTAINER}" ]] || die \
+    "production container inventory is ambiguous for ${APP_CONTAINER}"
+  [[ -z "${BOOTSTRAP_AUTHORIZATION}" ]] || die \
+    "bootstrap authorization is accepted only when ${APP_CONTAINER} is confirmed absent"
+  if ! RUNNING_REVISION="$(
+    docker inspect "${APP_CONTAINER}" \
+      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+  )"; then
+    die "could not inspect ${APP_CONTAINER}; refusing to deploy without its running revision"
+  fi
+  if [[ -z "${RUNNING_REVISION}" || "${RUNNING_REVISION}" == "<no value>" ]]; then
+    die "${APP_CONTAINER} has no org.opencontainers.image.revision label; running history is unprovable"
+  fi
+  [[ "${RUNNING_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die \
+    "${APP_CONTAINER} has a malformed org.opencontainers.image.revision label; running history is unprovable"
+
+  if [[ "${RUNNING_REVISION}" == "${TARGET_REVISION}" ]]; then
+    echo "Redeploying the running revision ${TARGET_REVISION}."
+  else
+    git -C "${REPO_DIR}" fetch --no-tags --quiet origin main || true
+    if ! git -C "${REPO_DIR}" cat-file -e "${RUNNING_REVISION}^{commit}" 2>/dev/null; then
+      DIRECTION="unknown"
+    elif git -C "${REPO_DIR}" merge-base --is-ancestor \
+      "${RUNNING_REVISION}" "${TARGET_REVISION}" 2>/dev/null; then
+      DIRECTION="forward"
+    elif git -C "${REPO_DIR}" merge-base --is-ancestor \
+      "${TARGET_REVISION}" "${RUNNING_REVISION}" 2>/dev/null; then
+      DIRECTION="backward"
+    else
+      DIRECTION="divergent"
+    fi
+
+    if [[ "${DIRECTION}" == "forward" ]]; then
+      echo "Forward deploy: ${RUNNING_REVISION} -> ${TARGET_REVISION}."
+    else
+      # Every non-forward case needs the SAME typed, transition-bound
+      # authorization. A divergent or unprovable history is not safer than a
+      # known rollback, so it must not be easier to push through.
+      [[ -n "${ROLLBACK_AUTHORIZATION}" ]] || die \
+        "refusing ${DIRECTION} production deploy ${RUNNING_REVISION} -> ${TARGET_REVISION}: supply --rollback-authorization with a typed authorization naming this exact transition"
+      [[ -f "${ROLLBACK_AUTHORIZATION}" ]] || die "rollback authorization file not found"
+      run_repo_module scripts.release_candidate_evidence verify-rollback-authorization \
+        --path "${ROLLBACK_AUTHORIZATION}" \
+        --running-revision "${RUNNING_REVISION}" \
+        --target-revision "${TARGET_REVISION}" \
+        || die "rollback authorization does not authorize ${RUNNING_REVISION} -> ${TARGET_REVISION}"
+      echo "Authorized ${DIRECTION} production deploy ${RUNNING_REVISION} -> ${TARGET_REVISION}."
+    fi
+  fi
+fi
+
+# --- End anti-rollback gate --------------------------------------------------
 
 if [[ "${HOTFIX}" == "1" ]]; then
   PREVIOUS_IMAGE="$(env_value APP_IMAGE)"

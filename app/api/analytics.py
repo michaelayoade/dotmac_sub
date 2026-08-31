@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -109,7 +109,7 @@ def _team_performance_read(
 ) -> InboxTeamPerformanceRead:
     metrics = row.metrics
     return InboxTeamPerformanceRead(
-        service_team_id=UUID(metrics.service_team_id),
+        service_team_id=metrics.service_team_id,
         service_team_name=row.service_team_name,
         service_team_capabilities=row.service_team_capabilities,
         response_sla_seconds=row.response_sla_seconds,
@@ -136,8 +136,8 @@ def _agent_performance_read(
 ) -> InboxAgentPerformanceRead:
     metrics = row.metrics
     return InboxAgentPerformanceRead(
-        person_id=UUID(metrics.person_id),
-        service_team_id=UUID(metrics.service_team_id),
+        person_id=metrics.person_id,
+        service_team_id=metrics.service_team_id,
         service_team_name=row.service_team_name,
         service_team_capabilities=row.service_team_capabilities,
         active_assignment_count=metrics.active_assignment_count,
@@ -152,8 +152,8 @@ def _escalation_candidate_read(
     row: team_inbox_metrics_service.InboxEscalationCandidate,
 ) -> InboxEscalationCandidateRead:
     return InboxEscalationCandidateRead(
-        conversation_id=UUID(row.conversation_id),
-        service_team_id=UUID(row.service_team_id),
+        conversation_id=row.conversation_id,
+        service_team_id=row.service_team_id,
         service_team_name=row.service_team_name,
         service_team_capabilities=row.service_team_capabilities,
         subject=row.subject,
@@ -164,9 +164,7 @@ def _escalation_candidate_read(
         queue_sla_seconds=row.queue_sla_seconds,
         pending_response_seconds=row.pending_response_seconds,
         queue_wait_seconds=row.queue_wait_seconds,
-        assigned_person_id=(
-            UUID(row.assigned_person_id) if row.assigned_person_id else None
-        ),
+        assigned_person_id=(row.assigned_person_id if row.assigned_person_id else None),
         available_agent_count=row.available_agent_count,
     )
 
@@ -182,12 +180,16 @@ def list_inbox_team_performance(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    rows = team_inbox_metrics_service.team_performance_report(
+    page = team_inbox_metrics_service.team_performance_page(
         db,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            include_inactive_teams=include_inactive,
+            limit=limit,
+            offset=offset,
+        ),
         response_sla_seconds=response_sla_seconds,
-        include_inactive=include_inactive,
     )
-    items = [_team_performance_read(row) for row in rows[offset : offset + limit]]
+    items = [_team_performance_read(row) for row in page.rows]
     return list_response(items, limit, offset)
 
 
@@ -202,12 +204,23 @@ def list_inbox_agent_performance(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    rows = team_inbox_metrics_service.agent_performance_report(
+    try:
+        team_id = UUID(service_team_id) if service_team_id is not None else None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="service_team_id must be a UUID",
+        ) from exc
+    page = team_inbox_metrics_service.agent_performance_page(
         db,
-        service_team_id=service_team_id,
-        include_inactive_members=include_inactive_members,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            service_team_id=team_id,
+            include_inactive_members=include_inactive_members,
+            limit=limit,
+            offset=offset,
+        ),
     )
-    items = [_agent_performance_read(row) for row in rows[offset : offset + limit]]
+    items = [_agent_performance_read(row) for row in page.rows]
     return list_response(items, limit, offset)
 
 
@@ -223,11 +236,15 @@ def list_inbox_escalation_candidates(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    rows = team_inbox_metrics_service.escalation_candidates(
+    page = team_inbox_metrics_service.escalation_page(
         db,
-        response_sla_seconds=response_sla_seconds,
-        queue_sla_seconds=queue_sla_seconds,
-        include_inactive=include_inactive,
+        query=team_inbox_metrics_service.InboxEscalationQuery(
+            response_sla_seconds=response_sla_seconds,
+            queue_sla_seconds=queue_sla_seconds,
+            include_inactive_teams=include_inactive,
+            limit=limit,
+            offset=offset,
+        ),
     )
-    items = [_escalation_candidate_read(row) for row in rows[offset : offset + limit]]
+    items = [_escalation_candidate_read(row) for row in page.rows]
     return list_response(items, limit, offset)

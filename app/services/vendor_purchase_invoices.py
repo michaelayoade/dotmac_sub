@@ -149,6 +149,13 @@ class StageVendorPurchaseInvoiceSubmission:
     vendor_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class StageProjectCompletionPurchaseInvoice:
+    context: CommandContext
+    project_id: str
+    event_id: str
+
+
 def _money(value: Decimal | int | str | None) -> Decimal:
     return Decimal(str(value or "0")).quantize(_MONEY, rounding=ROUND_HALF_UP)
 
@@ -655,6 +662,61 @@ def consume_invoice_approved(
             event_id=event_id,
             event_type="vendor_purchase_invoice.approved",
             producer_owner="operations.vendor_purchase_invoice_records",
+            context=context,
+            operation=_effect,
+        )[0],
+    )
+
+
+def consume_project_completed(
+    db,
+    *,
+    project_id,
+    event_id,
+    context,
+) -> str | None:
+    """Receipt project completion into the PO-backed payables export path."""
+    from app.models.vendor_routes import VendorPurchaseInvoice
+    from app.services.common import coerce_uuid
+    from app.services.events.owner_outputs import consume_owner_output
+
+    def _effect() -> str:
+        from app.services import vendor_purchase_invoice_records
+        from app.services.backoffice import enqueue_purchase_invoice_outbox
+
+        result = vendor_purchase_invoice_records.stage_project_completion_invoice(
+            db,
+            StageProjectCompletionPurchaseInvoice(
+                context=context,
+                project_id=str(project_id),
+                event_id=str(event_id),
+            ),
+        )
+        invoice_id = result.get("invoice_id")
+        if not invoice_id:
+            return str(result.get("outcome") or "skipped")
+        invoice = db.get(VendorPurchaseInvoice, coerce_uuid(str(invoice_id)))
+        if invoice is None:
+            return "skipped_missing_invoice"
+        if invoice.payables_document_reference:
+            return "skipped_already_linked"
+        event = enqueue_purchase_invoice_outbox(db, invoice)
+        if event is not None:
+            return "enqueued"
+        if invoice.payables_submission_error:
+            return "skipped_ineligible"
+        return "skipped_not_owned"
+
+    return _execute(
+        db,
+        context=context,
+        name="consume_project_completed",
+        operation=lambda: consume_owner_output(
+            db,
+            consumer="operations.vendor_purchase_invoices",
+            event_id=event_id,
+            event_type="vendor_project.completed",
+            producer_owner="operations.vendor_project_lifecycle",
             context=context,
             operation=_effect,
         )[0],

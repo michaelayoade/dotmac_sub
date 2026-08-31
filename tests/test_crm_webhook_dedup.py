@@ -1,4 +1,13 @@
-"""CRM inbound identity, replay, and consequence guarantees."""
+"""CRM inbound identity, replay, and consequence guarantees.
+
+These properties belong to the shared inbound envelope
+(`integration_inbox.receive_and_claim_verified` / `complete_consequence`), not
+to any one receiver. They were originally driven through the chat receiver,
+which was removed on 2026-08-30 with ADR 0006, so they now drive the surviving
+`POST /webhooks/crm` receiver instead. An event outside `TICKET_EVENTS` is used
+deliberately: it exercises the claim/store/replay path with a consequence that
+depends on nothing else, which is the property under test.
+"""
 
 from __future__ import annotations
 
@@ -8,17 +17,20 @@ import hmac
 import json
 import threading
 import uuid
-from unittest.mock import patch
 
 import pytest
 
-from app.api.crm_webhooks import receive_crm_chat_event
+from app.api.crm_webhooks import receive_crm_event
 from app.models.integration_platform import IntegrationInbox
-from app.models.subscriber import Subscriber
 from app.services.integrations.inbox import InboxError
 from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
+
+#: Valid, signed, and deliberately outside `TICKET_EVENTS`, so the receiver
+#: stores an `ignored` consequence and the replay assertions are about the
+#: envelope rather than a domain consequence.
+INERT_EVENT = "ticket.commented"
 
 
 @pytest.fixture(autouse=True)
@@ -75,40 +87,24 @@ def _request(body: dict, event: str, *, delivery_id: str | None = None):
     return _FakeRequest(raw, headers)
 
 
-def _linked_subscriber(db_session) -> Subscriber:
-    subscriber = Subscriber(
-        first_name="CRM",
-        last_name="Inbound",
-        email=f"crm-inbox-{uuid.uuid4().hex[:8]}@example.com",
-    )
-    db_session.add(subscriber)
-    db_session.commit()
-    return subscriber
-
-
-def test_chat_redelivery_returns_stored_consequence_without_double_push(db_session):
+def test_redelivery_returns_the_stored_consequence_exactly_once(db_session):
     delivery_id = str(uuid.uuid4())
-    body = {
-        "subscriber_id": str(uuid.uuid4()),
-        "preview": "hi",
-        "conversation_id": "c1",
-    }
-    with patch("app.services.push.send_push") as send_push:
-        first = _run(
-            receive_crm_chat_event(
-                _request(body, "message.outbound", delivery_id=delivery_id),
-                db_session,
-            )
-        )
-        replay = _run(
-            receive_crm_chat_event(
-                _request(body, "message.outbound", delivery_id=delivery_id),
-                db_session,
-            )
-        )
+    body = {"ticket_id": str(uuid.uuid4())}
 
-    assert first == replay == {"status": "ok", "event": "message.outbound"}
-    assert send_push.call_count == 1
+    first = _run(
+        receive_crm_event(
+            _request(body, INERT_EVENT, delivery_id=delivery_id),
+            db_session,
+        )
+    )
+    replay = _run(
+        receive_crm_event(
+            _request(body, INERT_EVENT, delivery_id=delivery_id),
+            db_session,
+        )
+    )
+
+    assert first == replay == {"status": "ignored", "event": INERT_EVENT}
     assert db_session.query(IntegrationInbox).count() == 1
 
 
@@ -117,20 +113,12 @@ def test_provider_identity_collision_quarantines_installation(
     _crm_inbound_installation,
 ):
     delivery_id = str(uuid.uuid4())
-    first = _request(
-        {"subscriber_id": str(uuid.uuid4()), "preview": "first"},
-        "message.outbound",
-        delivery_id=delivery_id,
-    )
-    second = _request(
-        {"subscriber_id": str(uuid.uuid4()), "preview": "changed"},
-        "message.outbound",
-        delivery_id=delivery_id,
-    )
-    with patch("app.services.push.send_push"):
-        _run(receive_crm_chat_event(first, db_session))
-        with pytest.raises(InboxError, match="identity collision"):
-            _run(receive_crm_chat_event(second, db_session))
+    first = _request({"ticket_id": "first"}, INERT_EVENT, delivery_id=delivery_id)
+    second = _request({"ticket_id": "changed"}, INERT_EVENT, delivery_id=delivery_id)
+
+    _run(receive_crm_event(first, db_session))
+    with pytest.raises(InboxError, match="identity collision"):
+        _run(receive_crm_event(second, db_session))
 
     db_session.refresh(_crm_inbound_installation.installation)
     assert _crm_inbound_installation.installation.state == "quarantined"

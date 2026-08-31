@@ -18,8 +18,17 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import and_, func, not_, or_
 from sqlalchemy import select as db_select
 from sqlalchemy.orm import Query, Session, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    OfferPrice,
+    OfferVersionPrice,
+    PriceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import (
     CPEDevice,
     FdhCabinet,
@@ -43,6 +52,8 @@ from app.models.subscriber import (
     SubscriberStatus,
     UserType,
 )
+from app.services.billing_profile import effective_billing_mode_clause
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.customer_account_visibility import splynx_deleted_import_clause
 from app.services.list_query import (
     ListDefinition,
@@ -52,6 +63,9 @@ from app.services.list_query import (
     SortDirection,
 )
 from app.services.status_presentation import account_status_presentation
+from app.services.subscription_billing_treatments import (
+    effective_customer_billing_treatment_clause,
+)
 
 _SUBSCRIBER_CATEGORY_COL: Any = Subscriber.metadata_["subscriber_category"].as_string()
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -80,6 +94,7 @@ CUSTOMER_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("pppoe_login", "PPPoE login", searchable=True),
         ListFieldDefinition("ipv4", "IPv4 address", searchable=True),
         ListFieldDefinition("customer_type", "Customer type", filterable=True),
+        ListFieldDefinition("billing_mode", "Billing", filterable=True),
         ListFieldDefinition("status", "Status", filterable=True, sortable=True),
         ListFieldDefinition("nas_id", "NAS device", filterable=True),
         ListFieldDefinition("pop_site_id", "Location", filterable=True),
@@ -97,6 +112,7 @@ _LEGACY_CUSTOMER_TABLE_PARAMS = frozenset(
     {
         "_ts",
         "activation_state",
+        "billing_mode",
         "customer_type",
         "limit",
         "nas_id",
@@ -124,6 +140,14 @@ class CustomerInfrastructureType(StrEnum):
     olt = "olt"
     pon_port = "pon_port"
     cabinet = "cabinet"
+
+
+class CustomerBillingFilter(StrEnum):
+    """Mutually exclusive customer billing cohorts exposed by the admin list."""
+
+    prepaid = "prepaid"
+    postpaid = "postpaid"
+    non_billable = "non_billable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +372,18 @@ def normalize_customer_infrastructure_type(
         ) from exc
 
 
+def normalize_customer_billing_filter(
+    value: str | None,
+) -> CustomerBillingFilter | None:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return None
+    try:
+        return CustomerBillingFilter(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported billing_mode filter: {normalized}") from exc
+
+
 def search_customer_infrastructure_options(
     db: Session,
     *,
@@ -558,6 +594,7 @@ def build_customer_list_query(
     pop_site_id: str | None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    billing_mode: str | None = None,
     sort_by: CustomerListSort = "created_at",
     sort_dir: SortDirection = "desc",
     page: int = 1,
@@ -573,6 +610,8 @@ def build_customer_list_query(
     normalized_status = str(status or "").strip().lower() or None
     if normalized_status and normalized_status not in _CUSTOMER_STATUS_FILTERS:
         raise ValueError(f"Unsupported status filter: {normalized_status}")
+
+    normalized_billing_mode = normalize_customer_billing_filter(billing_mode)
 
     def _uuid_filter(value: str | None, name: str) -> str | None:
         normalized = str(value or "").strip()
@@ -597,6 +636,11 @@ def build_customer_list_query(
         filters={
             "status": normalized_status,
             "customer_type": normalized_customer_type,
+            "billing_mode": (
+                normalized_billing_mode.value
+                if normalized_billing_mode is not None
+                else None
+            ),
             "nas_id": _uuid_filter(nas_id, "nas_id"),
             "pop_site_id": _uuid_filter(pop_site_id, "pop_site_id"),
             "infrastructure_type": (
@@ -669,6 +713,7 @@ def build_customer_list_query_from_legacy_params(
         ).strip(),
         status=status or activation_state,
         customer_type=str(request_params.get("customer_type") or "").strip(),
+        billing_mode=str(request_params.get("billing_mode") or "").strip(),
         nas_id=str(request_params.get("nas_id") or "").strip(),
         pop_site_id=str(request_params.get("pop_site_id") or "").strip(),
         infrastructure_type=str(
@@ -898,12 +943,99 @@ def _status_filter_clause(status: str | None) -> Any:
     return None
 
 
+def _genuinely_free_catalog_product_clause() -> ColumnElement[bool]:
+    """Identify an explicit zero-priced recurring product, never a missing price."""
+
+    version_price_amount = (
+        db_select(OfferVersionPrice.amount)
+        .where(
+            OfferVersionPrice.offer_version_id == Subscription.offer_version_id,
+            OfferVersionPrice.price_type == PriceType.recurring,
+            OfferVersionPrice.is_active.is_(True),
+        )
+        .order_by(
+            OfferVersionPrice.created_at.desc(),
+            OfferVersionPrice.id.desc(),
+        )
+        .limit(1)
+        .correlate(Subscription)
+        .scalar_subquery()
+    )
+    offer_price_amount = (
+        db_select(OfferPrice.amount)
+        .where(
+            OfferPrice.offer_id == Subscription.offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .order_by(OfferPrice.created_at.desc(), OfferPrice.id.desc())
+        .limit(1)
+        .correlate(Subscription)
+        .scalar_subquery()
+    )
+    catalog_amount = func.coalesce(version_price_amount, offer_price_amount)
+    return and_(
+        catalog_amount.is_not(None),
+        catalog_amount == 0,
+        or_(Subscription.unit_price.is_(None), Subscription.unit_price <= 0),
+    )
+
+
+def _fully_non_billable_customer_clause() -> ColumnElement[bool]:
+    """Identify accounts whose complete collectible service scope is free."""
+
+    suppressed_service = or_(
+        effective_customer_billing_treatment_clause(),
+        _genuinely_free_catalog_product_clause(),
+    )
+    has_suppressed_service = (
+        db_select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            suppressed_service,
+        )
+        .correlate(Subscriber)
+        .exists()
+    )
+    has_chargeable_service = (
+        db_select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            not_(
+                or_(
+                    effective_customer_billing_treatment_clause(),
+                    _genuinely_free_catalog_product_clause(),
+                )
+            ),
+        )
+        .correlate(Subscriber)
+        .exists()
+    )
+    return and_(has_suppressed_service, not_(has_chargeable_service))
+
+
+def _billing_filter_clause(
+    billing_mode: str | None,
+) -> ColumnElement[bool] | None:
+    normalized = normalize_customer_billing_filter(billing_mode)
+    if normalized is None:
+        return None
+    non_billable = _fully_non_billable_customer_clause()
+    if normalized is CustomerBillingFilter.non_billable:
+        return non_billable
+    effective_mode = BillingMode(normalized.value)
+    return and_(effective_billing_mode_clause(effective_mode), not_(non_billable))
+
+
 def _apply_customer_filters(
     query,
     *,
     search: str | None,
     status: str | None,
     customer_type: str | None,
+    billing_mode: str | None,
     nas_id: str | None,
     pop_site_id: str | None,
     infrastructure_type: str | None,
@@ -911,6 +1043,7 @@ def _apply_customer_filters(
 ):
     normalized_customer_type = _normalize_customer_type(customer_type)
     status_filter = _status_filter_clause(status)
+    billing_filter = _billing_filter_clause(billing_mode)
 
     if normalized_customer_type == "business":
         query = query.filter(_business_customer_clause())
@@ -919,6 +1052,8 @@ def _apply_customer_filters(
 
     if status_filter is not None:
         query = query.filter(status_filter)
+    if billing_filter is not None:
+        query = query.filter(billing_filter)
     normalized_search = _normalize_search(search)
     if normalized_search:
         exact_ipv4 = _parse_ipv4_search(normalized_search)
@@ -1087,6 +1222,7 @@ def customer_scope_query(
     pop_site_id: str | None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    billing_mode: str | None = None,
     include_related: bool = True,
 ):
     query = db.query(Subscriber)
@@ -1112,6 +1248,7 @@ def customer_scope_query(
         search=search,
         status=status,
         customer_type=customer_type,
+        billing_mode=billing_mode,
         nas_id=nas_id,
         pop_site_id=pop_site_id,
         infrastructure_type=infrastructure_type,
@@ -1133,6 +1270,7 @@ def build_customer_list_page(
     search = list_query.search
     status = list_query.filter_value("status")
     customer_type = list_query.filter_value("customer_type")
+    billing_mode = list_query.filter_value("billing_mode")
     nas_id = list_query.filter_value("nas_id")
     pop_site_id = list_query.filter_value("pop_site_id")
     infrastructure_type = list_query.filter_value("infrastructure_type")
@@ -1142,6 +1280,7 @@ def build_customer_list_page(
         search=search,
         status=status,
         customer_type=customer_type,
+        billing_mode=billing_mode,
         nas_id=nas_id,
         pop_site_id=pop_site_id,
         infrastructure_type=infrastructure_type,
@@ -1154,6 +1293,7 @@ def build_customer_list_page(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
@@ -1187,6 +1327,7 @@ def list_customers_for_scope(
     pop_site_id: str | None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    billing_mode: str | None = None,
 ) -> list[Subscriber]:
     return (
         customer_scope_query(
@@ -1194,6 +1335,7 @@ def list_customers_for_scope(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
@@ -1217,6 +1359,7 @@ def build_customer_export_query(
     infrastructure_id: str | None,
     sort_by: CustomerListSort,
     sort_dir: SortDirection,
+    billing_mode: str | None = None,
 ) -> CustomerExportQuery:
     """Normalize the export request onto the canonical customer-list scope."""
 
@@ -1225,6 +1368,7 @@ def build_customer_export_query(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
@@ -1411,6 +1555,7 @@ def build_customer_csv_export(
         search=list_query.search,
         status=list_query.filter_value("status"),
         customer_type=list_query.filter_value("customer_type"),
+        billing_mode=list_query.filter_value("billing_mode"),
         nas_id=list_query.filter_value("nas_id"),
         pop_site_id=list_query.filter_value("pop_site_id"),
         infrastructure_type=list_query.filter_value("infrastructure_type"),
@@ -1481,6 +1626,7 @@ def active_customer_filter_count(
     pop_site_id: str | None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    billing_mode: str | None = None,
 ) -> int:
     return sum(
         1
@@ -1488,6 +1634,7 @@ def active_customer_filter_count(
             search,
             status,
             customer_type,
+            billing_mode,
             nas_id,
             pop_site_id,
             infrastructure_type and infrastructure_id,
@@ -1513,6 +1660,7 @@ def build_customers_index_context(
     search = list_query.search
     status = list_query.filter_value("status")
     customer_type = list_query.filter_value("customer_type")
+    billing_mode = list_query.filter_value("billing_mode")
     nas_id = list_query.filter_value("nas_id")
     pop_site_id = list_query.filter_value("pop_site_id")
     infrastructure_type = list_query.filter_value("infrastructure_type")
@@ -1558,6 +1706,7 @@ def build_customers_index_context(
         "search": search,
         "status": status or "",
         "customer_type": customer_type,
+        "billing_mode": billing_mode or "",
         "nas_id": nas_id or "",
         "pop_site_id": pop_site_id or "",
         "infrastructure_type": infrastructure_type or "",
@@ -1575,6 +1724,7 @@ def build_customers_index_context(
             search=search,
             status=status,
             customer_type=customer_type,
+            billing_mode=billing_mode,
             nas_id=nas_id,
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,

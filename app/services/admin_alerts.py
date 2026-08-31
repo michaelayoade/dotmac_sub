@@ -328,57 +328,6 @@ def dashboard_alert_summary(db: Session) -> dict[str, object]:
     return {"by_category": by_category, "recent": recent}
 
 
-def notification_menu_context(
-    db: Session,
-    *,
-    system_user_id: str | None,
-    limit: int = 10,
-) -> dict[str, object]:
-    notifications: list[AdminNotification] = []
-    if system_user_id:
-        notifications = (
-            db.query(AdminNotification)
-            .filter(AdminNotification.system_user_id == system_user_id)
-            .order_by(AdminNotification.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-    unread_count = 0
-    if system_user_id:
-        unread_count = (
-            db.query(func.count(AdminNotification.id))
-            .filter(AdminNotification.system_user_id == system_user_id)
-            .filter(AdminNotification.read_at.is_(None))
-            .scalar()
-            or 0
-        )
-    return {
-        "admin_notifications": notifications,
-        "admin_unread_count": unread_count,
-    }
-
-
-def mark_notification_read(
-    db: Session,
-    notification_id: str,
-    *,
-    system_user_id: str,
-) -> AdminNotification | None:
-    notification = (
-        db.query(AdminNotification)
-        .filter(AdminNotification.id == notification_id)
-        .filter(AdminNotification.system_user_id == system_user_id)
-        .one_or_none()
-    )
-    if notification is None:
-        return None
-    if notification.read_at is None:
-        notification.read_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(notification)
-    return notification
-
-
 def acknowledge_alert(db: Session, alert_id: str) -> AdminAlert | None:
     alert = db.get(AdminAlert, alert_id)
     if alert is None:

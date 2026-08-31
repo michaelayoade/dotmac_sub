@@ -240,6 +240,16 @@ class OltProtocolAdapterContract(Protocol):
         priority: int = 0,
     ) -> OltOperationResult: ...
 
+    def bind_policy_route(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        policy_profile_id: int = 0,
+        eth_ports: tuple[int, ...] = (1, 2, 3, 4),
+        ssid1: bool = True,
+    ) -> OltOperationResult: ...
+
     def clear_iphost_config(
         self,
         fsp: str,
@@ -896,6 +906,46 @@ class OltProtocolAdapter:
             return OltOperationResult(
                 success=False,
                 message=f"SSH port native VLAN configuration failed: {exc}",
+            )
+
+    def bind_policy_route(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        policy_profile_id: int = 0,
+        eth_ports: tuple[int, ...] = (1, 2, 3, 4),
+        ssid1: bool = True,
+    ) -> OltOperationResult:
+        """Bind Huawei policy-route profile to LAN/WLAN customer interfaces."""
+        from app.services.network.olt_ssh_ont.policy_route import (
+            bind_ont_policy_route,
+        )
+
+        try:
+            ok, message, binding = bind_ont_policy_route(
+                self._olt,
+                fsp,
+                ont_id,
+                policy_profile_id=policy_profile_id,
+                eth_ports=eth_ports,
+                ssid1=ssid1,
+            )
+            data = None
+            if binding is not None:
+                data = {
+                    "policy_profile_id": binding.policy_profile_id,
+                    "eth_ports": list(binding.eth_ports),
+                    "ssid1": binding.ssid1,
+                    "readback": binding.readback,
+                    "port_route_readback": binding.port_route_readback,
+                }
+            return OltOperationResult(success=ok, message=message, data=data)
+        except Exception as exc:
+            logger.exception("SSH bind_policy_route failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH policy-route bind failed: {exc}",
             )
 
     # ========== Cleanup Operations ==========

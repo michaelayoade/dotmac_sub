@@ -1,6 +1,8 @@
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -30,6 +32,53 @@ from app.services.auth_flow import (
 )
 
 logger = logging.getLogger(__name__)
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+# Attribute the permission-guard factories below stamp onto the dependency they
+# return, so a static consumer can read WHICH permission a guard demands
+# instead of only its callable name. Without it, ``require_permission`` is
+# indistinguishable from ``require_permission`` no matter what key it closes
+# over — which is exactly how a ``:read`` permission ended up guarding
+# ``POST /admin/network/routers/new`` unnoticed. Read it through
+# ``permission_requirement()``; never poke the attribute directly.
+_PERMISSION_REQUIREMENT_ATTR = "__dotmac_permission_requirement__"
+
+
+@dataclass(frozen=True)
+class PermissionRequirement:
+    """The permission keys a guard ACCEPTS, split by HTTP method class.
+
+    ``read_any_of``/``write_any_of`` are *any-of* sets: holding any ONE key in
+    the applicable set satisfies the guard. They are therefore the guard's
+    authorization FLOOR — a guard is only as strong as its weakest accepted
+    key, which is why ``require_any_permission("system:read", ..., "monitoring:read")``
+    on a mutating route is a read-tier guard even though it names three domains.
+
+    ``read_methods`` is empty for guards that demand the same thing regardless
+    of method; only ``require_method_permission`` populates it.
+    """
+
+    read_any_of: tuple[str, ...]
+    write_any_of: tuple[str, ...]
+    read_methods: frozenset[str] = frozenset()
+
+    def any_of_for(self, method: str) -> tuple[str, ...]:
+        """The keys that satisfy this guard for an ``method`` request."""
+        if method.upper() in self.read_methods:
+            return self.read_any_of
+        return self.write_any_of
+
+
+def _declare_permissions(dependency: _F, requirement: PermissionRequirement) -> _F:
+    setattr(dependency, _PERMISSION_REQUIREMENT_ATTR, requirement)
+    return dependency
+
+
+def permission_requirement(dependency: object) -> PermissionRequirement | None:
+    """What ``dependency`` demands, or ``None`` if it is not a permission guard."""
+    requirement = getattr(dependency, _PERMISSION_REQUIREMENT_ATTR, None)
+    return requirement if isinstance(requirement, PermissionRequirement) else None
 
 
 def _claims_from_payload_or_db(
@@ -213,6 +262,75 @@ def require_audit_auth(
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _machine_principal(
+    db: Session, raw_key: str, request: Request | None
+) -> dict | None:
+    """Authenticate against the kernel's `machine_credentials`, or return None.
+
+    Tried BEFORE the local `api_keys` table so a reissued credential wins while
+    both exist. This is a bounded dual-READ, not two writers: nothing here
+    writes, and the legacy branch below is deleted once both live credentials
+    have been reissued and revoked.
+
+    Machine auth is attempted ONLY when the HMAC key is held. A first version
+    let `MachineKeyUnavailableError` propagate, on the reasoning that a missing
+    key is a deployment fault and must not be disguised as an invalid
+    credential. That reasoning is right about production and wrong here: it
+    coupled the LEGACY path's availability to the NEW scheme's configuration,
+    so every deployment without the key — including the whole test suite — lost
+    the ability to authenticate credentials that never needed it. Thirty-six
+    tests across three files failed on exactly that.
+
+    So during the window the key's absence means "machine auth is not
+    configured yet", which is a true statement about a migration in progress.
+    The property that a missing key must not read as a bad credential is not
+    lost, only deferred: when the legacy branch is deleted with the last
+    reissued credential, `authenticate_machine` is reached unconditionally and
+    the kernel's own error surfaces, which is the right moment for it.
+    """
+    from dotmac_kernel.machine_auth import (
+        MACHINE_KEY_SECRET_NAME,
+        UnauthorizedError,
+        authenticate_machine,
+    )
+    from dotmac_kernel.secret_sources import get_secret
+
+    if not get_secret(MACHINE_KEY_SECRET_NAME):
+        return None
+
+    try:
+        principal = authenticate_machine(db, raw_key)
+    except UnauthorizedError:
+        # Not a machine credential — or revoked, expired, inactive, or minted
+        # for another tenant. The kernel returns ONE message for all of those
+        # on purpose, because distinguishing them tells a caller which half of
+        # a guess was right. Fall through to the legacy table; if it is not
+        # there either, the caller gets the same 401 it always did.
+        return None
+    actor_id = str(principal.credential_id)
+    auth = {
+        # A machine principal is not a person. The legacy branch falls back to
+        # the key's own id for `subscriber_id`/`person_id`, which meant two
+        # different things depending on how the row was made; here both are
+        # None and callers that need a human must look elsewhere.
+        "subscriber_id": None,
+        "person_id": None,
+        "principal_id": actor_id,
+        "principal_type": "api_key",
+        "session_id": None,
+        "roles": [],
+        "scopes": sorted(principal.scopes),
+        "impersonated_by": None,
+        "api_key_id": actor_id,
+    }
+    if request is not None:
+        request.state.actor_id = actor_id
+        request.state.actor_type = "api_key"
+        request.state.auth = auth
+    finish_read_transaction(db)
+    return auth
+
+
 def _api_key_principal(
     db: Session, raw_key: str, request: Request | None
 ) -> dict | None:
@@ -221,7 +339,15 @@ def _api_key_principal(
     The key's access is exactly its ``scopes`` (wildcard-aware via
     ``require_permission``); it carries no roles, so there is no admin shortcut.
     Returns the auth dict, or ``None`` if the key is missing/invalid.
+
+    Kernel `machine_credentials` are consulted first; this local `api_keys`
+    branch is the legacy half of a bounded migration and goes away with the
+    last unreissued credential.
     """
+    machine = _machine_principal(db, raw_key, request)
+    if machine is not None:
+        return machine
+
     now = datetime.now(UTC)
     api_key = (
         db.query(ApiKey)
@@ -674,7 +800,12 @@ def require_permission(permission_key: str):
         finish_read_transaction(db)
         return auth
 
-    return _require_permission
+    return _declare_permissions(
+        _require_permission,
+        PermissionRequirement(
+            read_any_of=(permission_key,), write_any_of=(permission_key,)
+        ),
+    )
 
 
 def require_any_permission(*permission_keys: str):
@@ -759,7 +890,12 @@ def require_any_permission(*permission_keys: str):
         finish_read_transaction(db)
         return auth
 
-    return _require_any_permission
+    return _declare_permissions(
+        _require_any_permission,
+        PermissionRequirement(
+            read_any_of=tuple(permission_keys), write_any_of=tuple(permission_keys)
+        ),
+    )
 
 
 def require_method_permission(
@@ -781,7 +917,14 @@ def require_method_permission(
             return require_read(auth=auth, db=db)
         return require_write(auth=auth, db=db)
 
-    return _require_method_permission
+    return _declare_permissions(
+        _require_method_permission,
+        PermissionRequirement(
+            read_any_of=(read_permission_key,),
+            write_any_of=(write_permission_key,),
+            read_methods=frozenset(normalized_read_methods),
+        ),
+    )
 
 
 def grant_scopes_for_permission(auth: dict, db: Session, permission_key: str):
@@ -880,4 +1023,9 @@ def require_scoped_permission(permission_key: str, scope_extractor):
             status_code=403, detail="Forbidden for this region/reseller"
         )
 
-    return _require_scoped_permission
+    return _declare_permissions(
+        _require_scoped_permission,
+        PermissionRequirement(
+            read_any_of=(permission_key,), write_any_of=(permission_key,)
+        ),
+    )

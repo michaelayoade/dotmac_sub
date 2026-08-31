@@ -3,7 +3,6 @@ name: Version Tag
 on:
   push:
     branches:
-      - dev
       - main
 
 permissions:

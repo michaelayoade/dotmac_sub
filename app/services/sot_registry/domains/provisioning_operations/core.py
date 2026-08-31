@@ -493,9 +493,11 @@ SERVICES: tuple[SOTService, ...] = (
             "work-order as-built evidence requirement",
             "work-order assignment decisions and projection",
             "work-order assignment-queue transitions",
+            "work-order staff/team tag notification consequence",
         ),
         depends_on=(
             "customer.identity_scope",
+            "communications.staff_notifications",
             "operations.work_order_status",
             "observability.audit_log",
         ),
@@ -508,7 +510,10 @@ SERVICES: tuple[SOTService, ...] = (
             "provenance only; field execution statuses remain "
             "owned by operations.field_completion. Native project-binding "
             "and evidence-policy rejections are transport-neutral "
-            "WorkOrderCommandError values mapped only by the app boundary."
+            "WorkOrderCommandError values mapped only by the app boundary. "
+            "Staff/team tag tokens stage in-app notifications through "
+            "communications.staff_notifications; ordinary descriptive tags "
+            "remain local work-order metadata."
         ),
     ),
     SOTService(
@@ -700,12 +705,16 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="operations.expense_requests",
         module="app.services.field.expense_requests",
-        owns=("field expense request submission",),
+        owns=(
+            "field expense request submission",
+            "field expense vendor picker",
+        ),
         depends_on=("operations.work_orders",),
         notes=(
             "One typed command creates and submits a technician expense request "
             "atomically. The client reference and normalized fingerprint make "
-            "network retries safe."
+            "network retries safe. The vendor picker is read-only and only "
+            "projects active vendor labels for field expense entry."
         ),
         contract=ServiceContract(
             concerns=(
@@ -714,6 +723,11 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=("canonical service work-order state",),
                     canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense vendor picker",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("legacy active vendor identity observation",),
                 ),
             ),
             authoritative_inputs=(
@@ -726,12 +740,22 @@ SERVICES: tuple[SOTService, ...] = (
                         "validated receipt attachment evidence"
                     ),
                 ),
+                AuthorityInput(
+                    name="legacy active vendor identity observation",
+                    owner="external:legacy_vendor_registry",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Active native Vendor rows carrying CRM-UUID-keyed vendor "
+                        "identity and display names"
+                    ),
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Create, submit, work-order activity marking, and optional ERP "
-                    "delivery staging complete in one owner transaction."
+                    "delivery staging complete in one owner transaction. The "
+                    "vendor picker performs a read-only session-scoped query."
                 ),
                 locking="The command locks the scoped active work order.",
                 idempotency=(
@@ -1158,6 +1182,7 @@ SERVICES: tuple[SOTService, ...] = (
             "project and task assignment and scheduling",
             "project manager assistant manager service-team and task-assignee changes",
             "project and task staff assignment notification consequence",
+            "project and task staff/team tag notification consequence",
             "Project-to-ProjectTask and project/task-to-work-order relationships",
             "project audit records and transactional domain events",
             "project derived-state reconciliation",
@@ -1259,6 +1284,14 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical project aggregate",
                         "active project assignment audience",
+                        "staff notification delivery queue",
+                    ),
+                ),
+                ConcernContract(
+                    name="project and task staff/team tag notification consequence",
+                    role=OwnerRole.EVENT_POLICY,
+                    input_names=(
+                        "canonical project aggregate",
                         "staff notification delivery queue",
                     ),
                 ),

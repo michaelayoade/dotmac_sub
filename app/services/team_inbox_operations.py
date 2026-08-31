@@ -1149,6 +1149,7 @@ def auto_resolve_stale_conversations(
         .filter(InboxConversation.last_message_at <= cutoff)
         .order_by(InboxConversation.last_message_at.asc())
         .limit(max(1, int(limit)))
+        .with_for_update(skip_locked=True)
         .all()
     )
     if not rows:
@@ -1163,6 +1164,16 @@ def auto_resolve_stale_conversations(
     }
     resolved = 0
     for conversation in rows:
+        active_assignment = (
+            db.query(InboxConversationAssignment.id)
+            .filter(
+                InboxConversationAssignment.conversation_id == conversation.id,
+                InboxConversationAssignment.is_active.is_(True),
+            )
+            .first()
+        )
+        if active_assignment is not None:
+            continue
         latest = latest_messages.get(conversation.id)
         if not _has_human_agent_sender(latest):
             continue

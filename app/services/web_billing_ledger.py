@@ -14,11 +14,12 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
+    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -27,6 +28,7 @@ from app.models.subscriber import Reseller, Subscriber
 from app.schemas.status_presentation import StatusTone
 from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.billing import ledger as billing_ledger_service
 from app.services.common import validate_enum
 from app.services.ui_contracts import Kpi, StateValue
 
@@ -56,6 +58,7 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
 # cutover are already represented by migrated ledger rows — including them would
 # double-count, so only issued_at strictly after this is merged.
 _LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
+CUSTOMER_LEDGER_PAGE_SIZE = 10
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,82 @@ class LedgerDateRange:
     end: datetime | None
     start_date: date | None
     end_date: date | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLedgerQuery:
+    """Typed customer scope for the embedded admin ledger projection."""
+
+    account_id: UUID
+    page: int = 1
+
+    def __post_init__(self) -> None:
+        if self.page < 1:
+            raise ValueError("Customer ledger page must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLedgerEntryView:
+    id: UUID
+    entry_type: LedgerEntryType
+    source: LedgerSource
+    amount: Decimal
+    currency: str
+    description: str
+    occurred_at: datetime | None
+    detail_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLedgerSummary:
+    credit_count: int
+    debit_count: int
+    credit_display: str
+    debit_display: str
+    net_display: str
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLedgerView:
+    account_id: UUID
+    entries: tuple[CustomerLedgerEntryView, ...]
+    summary: CustomerLedgerSummary
+    full_ledger_url: str
+    export_url: str
+    page: int
+    per_page: int
+    total_entries: int
+    total_pages: int
+    page_start: int
+    page_end: int
+    previous_page_url: str | None
+    next_page_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerEntryDetailQuery:
+    entry_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerEntryDetailView:
+    id: UUID
+    account_id: UUID
+    account_label: str
+    entry_type: LedgerEntryType
+    source: LedgerSource
+    category: LedgerCategory | None
+    amount: Decimal
+    currency: str
+    description: str
+    occurred_at: datetime | None
+    created_at: datetime
+    is_active: bool
+    affects_customer_position: bool
+    invoice_id: UUID | None
+    payment_id: UUID | None
+    reversal_of_entry_id: UUID | None
+    reversed_by_entry_id: UUID | None
 
 
 def _parse_date_range(
@@ -261,7 +340,11 @@ def build_ledger_entries_data(
         row_query = ledger_query.options(joinedload(LedgerEntry.account))
         if want_type is not None:
             row_query = row_query.filter(LedgerEntry.entry_type == want_type)
-        ledger_rows = row_query.order_by(ledger_date.desc()).limit(limit).all()
+        ledger_rows = (
+            row_query.order_by(ledger_date.desc(), LedgerEntry.id.desc())
+            .limit(limit)
+            .all()
+        )
 
         # Merge post-cutover invoices as synthetic debit rows so the ledger view
         # reflects ongoing billing (native invoices don't post to ledger_entries).
@@ -312,14 +395,14 @@ def build_ledger_entries_data(
                 invoice_rows = [
                     _invoice_as_ledger_row(invoice)
                     for invoice in inv_q.options(joinedload(Invoice.account))
-                    .order_by(Invoice.issued_at.desc())
+                    .order_by(Invoice.issued_at.desc(), Invoice.id.desc())
                     .limit(limit)
                     .all()
                 ]
 
         entries = sorted(
             [*ledger_rows, *invoice_rows],
-            key=_display_date,
+            key=lambda entry: (_display_date(entry), str(entry.id)),
             reverse=True,
         )[:limit]
 
@@ -407,6 +490,127 @@ def build_ledger_entries_data(
         "selected_partner_id": selected_partner_id,
         "partner_options": partner_options,
     }
+
+
+def build_customer_ledger_view(
+    db: Session,
+    *,
+    query: CustomerLedgerQuery,
+) -> CustomerLedgerView:
+    """Return the general ledger projection, fixed to one customer account.
+
+    The embedded customer workspace deliberately delegates all money and row
+    interpretation to ``build_ledger_entries_data``. It only adapts that shared
+    projection into a stable typed view contract for the customer UI.
+    """
+
+    requested_limit = query.page * CUSTOMER_LEDGER_PAGE_SIZE
+    customer_ref = str(query.account_id)
+    state = build_ledger_entries_data(
+        db,
+        customer_ref=customer_ref,
+        entry_type=None,
+        limit=requested_limit,
+    )
+    totals = state["ledger_totals"]
+    if not isinstance(totals, dict):
+        raise TypeError("Ledger projection returned invalid totals")
+
+    raw_entries = state["entries"]
+    if not isinstance(raw_entries, list):
+        raise TypeError("Ledger projection returned invalid entries")
+    total_entries = int(totals["credit_count"]) + int(totals["debit_count"])
+    total_pages = max(
+        1,
+        (total_entries + CUSTOMER_LEDGER_PAGE_SIZE - 1) // CUSTOMER_LEDGER_PAGE_SIZE,
+    )
+    page = min(query.page, total_pages)
+    offset = (page - 1) * CUSTOMER_LEDGER_PAGE_SIZE
+    page_entries = raw_entries[offset : offset + CUSTOMER_LEDGER_PAGE_SIZE]
+
+    entries: list[CustomerLedgerEntryView] = []
+    for entry in page_entries:
+        raw_entry_type = getattr(getattr(entry, "entry_type", None), "value", None)
+        raw_source = getattr(getattr(entry, "source", None), "value", None)
+        entries.append(
+            CustomerLedgerEntryView(
+                id=UUID(str(entry.id)),
+                entry_type=LedgerEntryType(str(raw_entry_type)),
+                source=LedgerSource(str(raw_source)),
+                amount=Decimal(str(entry.amount or 0)),
+                currency=display_format.currency_code(entry.currency),
+                description=str(entry.memo or ""),
+                occurred_at=getattr(entry, "effective_date", None)
+                or getattr(entry, "created_at", None),
+                detail_url=(
+                    f"/admin/billing/ledger/{entry.id}"
+                    if isinstance(entry, LedgerEntry)
+                    else f"/admin/billing/invoices/{entry.id}"
+                ),
+            )
+        )
+
+    summary = CustomerLedgerSummary(
+        credit_count=int(totals["credit_count"]),
+        debit_count=int(totals["debit_count"]),
+        credit_display=str(totals["credit_display"]),
+        debit_display=str(totals["debit_display"]),
+        net_display=str(totals["net_display"]),
+    )
+    query_string = urlencode({"customer_ref": customer_ref})
+    page_url = f"/admin/customers/person/{query.account_id}/billing/ledger"
+    page_start = offset + 1 if entries else 0
+    page_end = offset + len(entries)
+    return CustomerLedgerView(
+        account_id=query.account_id,
+        entries=tuple(entries),
+        summary=summary,
+        full_ledger_url=f"/admin/billing/ledger?{query_string}",
+        export_url=f"/admin/billing/ledger/export.csv?{query_string}",
+        page=page,
+        per_page=CUSTOMER_LEDGER_PAGE_SIZE,
+        total_entries=total_entries,
+        total_pages=total_pages,
+        page_start=page_start,
+        page_end=page_end,
+        previous_page_url=(f"{page_url}?page={page - 1}" if page > 1 else None),
+        next_page_url=(f"{page_url}?page={page + 1}" if page < total_pages else None),
+    )
+
+
+def build_ledger_entry_detail(
+    db: Session,
+    *,
+    query: LedgerEntryDetailQuery,
+) -> LedgerEntryDetailView | None:
+    """Resolve one immutable ledger event and its direct source references."""
+
+    ledger_detail = billing_ledger_service.get_ledger_entry_detail(
+        db,
+        entry_id=query.entry_id,
+    )
+    if ledger_detail is None:
+        return None
+    entry = ledger_detail.entry
+    return LedgerEntryDetailView(
+        id=entry.id,
+        account_id=entry.account_id,
+        account_label=web_billing_customers_service.account_label(entry.account),
+        entry_type=entry.entry_type,
+        source=entry.source,
+        category=entry.category,
+        amount=Decimal(str(entry.amount or 0)),
+        currency=display_format.currency_code(entry.currency),
+        description=str(entry.memo or ""),
+        occurred_at=entry.effective_date or entry.created_at,
+        created_at=entry.created_at,
+        is_active=bool(entry.is_active),
+        affects_customer_position=bool(entry.affects_customer_position),
+        invoice_id=entry.invoice_id,
+        payment_id=entry.payment_id,
+        reversal_of_entry_id=entry.reversal_of_entry_id,
+        reversed_by_entry_id=ledger_detail.reversed_by_entry_id,
+    )
 
 
 def _entry_customer_name(entry: LedgerEntry) -> str:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.services.sot_relationships import service_relationship
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +23,27 @@ def test_billing_tax_resolution_has_one_typed_read_only_owner() -> None:
     assert owner.contract.transaction.mode.value == "read_only"
     assert "financial.customer_tax_policies" in owner.depends_on
     assert "financial.tax_configuration" in owner.depends_on
+
+
+def test_billing_tax_resolution_has_no_built_in_rate_or_tax_code() -> None:
+    source = _source("app/services/billing_tax_resolution.py")
+
+    assert "settings_spec.resolve_value" in source
+    assert "select(TaxRate)" in source
+    assert "TaxRate.code" not in source
+    assert "rate.code" not in source
+    assert 'Decimal("7.5' not in source
+    assert 'Decimal("0.075' not in source
+
+
+def test_unapproved_historical_tax_credit_surface_is_absent() -> None:
+    routes = _source("app/web/admin/billing_credits.py")
+
+    assert "/tax-reconciliation" not in routes
+    assert not (ROOT / "app/services/billing_tax_reconciliation.py").exists()
+    assert not (ROOT / "app/services/web_billing_tax_reconciliation.py").exists()
+    with pytest.raises(KeyError):
+        service_relationship("financial.billing_tax_reconciliation")
 
 
 def test_recurring_and_prepaid_paths_delegate_tax_selection() -> None:

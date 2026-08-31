@@ -1368,8 +1368,371 @@ DOMAIN = DomainSOT(
                 "staff review inbox materialization",
             ),
             depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
                 "communications.notification_service",
                 "operations.sla_escalation",
+            ),
+            notes=(
+                "Business owners supply typed direct, assignment, or review requests "
+                "with authorized staff recipients. This participant validates exact "
+                "targets, stages canonical channel rows, and materializes the personal "
+                "admin inbox without completing transactions."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="admin/staff notification creation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "validated staff notification request",
+                            "validated staff assignment notification command",
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "permission-targeted staff notification audience resolution"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "validated staff notification request",
+                            "validated staff assignment notification command",
+                            "canonical staff account identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="staff review inbox materialization",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        canonical_writer="communications.staff_notifications",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="validated staff notification request",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed recipient, event identity, safe staff-only copy, "
+                            "and target URL supplied by an authorized business owner."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="validated staff assignment notification command",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed source event, entity, staff recipients, safe copy, "
+                            "and exact internal target supplied by an authorized business "
+                            "owner and validated at the notification boundary."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active SystemUser identity and current staff email address.",
+                    ),
+                    AuthorityInput(
+                        name="canonical internal notification row",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Channel-scoped Notification identity, delivery state, "
+                            "metadata, and deterministic dedupe key."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Authorized business command owners call typed staging helpers; "
+                        "this service flushes and never commits or rolls back."
+                    ),
+                    locking=(
+                        "Channel and deterministic source-event dedupe identity prevent "
+                        "duplicate delivery rows; source-notification uniqueness prevents "
+                        "duplicate personal inbox rows."
+                    ),
+                    idempotency=(
+                        "Source event, event type, staff recipient, and channel form the "
+                        "durable direct or assignment notification identity."
+                    ),
+                    retries=(
+                        "Owner-command replay converges on the same staged rows; delivery "
+                        "workers retain channel-specific retry responsibility and in-app "
+                        "projection materialization remains transaction-local."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communications.staff_notifications.invalid_request",
+                        "communications.staff_notifications.invalid_recipient",
+                        "communications.staff_notifications.invalid_assignment_request",
+                        "communications.staff_notifications.invalid_assignment_target",
+                        "communications.staff_notifications.assignment_replay_conflict",
+                    ),
+                    mapping_owner="calling business command owner",
+                    fail_closed_on=(
+                        "inactive or missing staff recipient",
+                        "ambiguous source-event identity",
+                        "missing assignment notification content",
+                        "dashboard-only, external, or ambiguous navigation target",
+                        "idempotency-key replay with different notification data",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "team_inbox.private_note_mention",
+                        "ticket.assignment",
+                        "project.assignment",
+                    ),
+                    schema_version=1,
+                    delivery_owner="communications.notification_service",
+                    compatibility=(
+                        "Version 1 identifies the source event or command, optional entity, "
+                        "staff recipient, channel, and safe exact internal target without "
+                        "private note text."
+                    ),
+                    replay=(
+                        "Deterministic per-source-event, recipient, event-type, and channel "
+                        "keys reproduce the same Notification and AdminNotification rows."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="staff review inbox materialization",
+                        input_names=(
+                            "canonical staff account identity",
+                            "canonical internal notification row",
+                        ),
+                        writer="communications.staff_notifications",
+                        freshness="Transaction-current with the source notification row.",
+                        stale_behavior=(
+                            "Missing inbox rows are never inferred from email, external "
+                            "chat, or external delivery state."
+                        ),
+                        drift_signal=(
+                            "A personal push Notification without its source-linked "
+                            "AdminNotification row."
+                        ),
+                        rebuild_operation=(
+                            "Replay typed source-event staging requests by deterministic "
+                            "identity; legacy dashboard-only assignment rows use the "
+                            "bounded exact-reference repair command."
+                        ),
+                        repair_owner="communications.staff_notifications",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "untyped direct and assignment staff notification helper arguments"
+                    ),
+                    new_owner="communications.staff_notifications",
+                    verification=(
+                        "Typed direct and assignment staging, exact-target behavior, replay, "
+                        "and manifest contract tests."
+                    ),
+                    cutover_gate=(
+                        "Materially changed direct staff events plus ticket and project "
+                        "assignment owners use the typed staging boundary and exact target."
+                    ),
+                    fallback_retirement=(
+                        "No private-note route, Team Inbox command, or assignment caller "
+                        "writes notification rows directly or relies on /admin defaults."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/NOTIFICATION_CHANNEL_POLICY.md",
+                    "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                ),
+                test_refs=(
+                    "tests/test_team_inbox_readiness_gate.py",
+                    "tests/test_staff_assignment_notifications.py",
+                    "tests/test_support_services.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.staff_notification_read_state",
+            module="app.services.staff_notification_read_state",
+            owns=(
+                "personal staff notification menu and unread count",
+                "personal staff notification open and legacy target repair",
+            ),
+            depends_on=(
+                "auth.staff_provisioning",
+                "communications.staff_notifications",
+                "events.dispatcher",
+                "operations.project_lifecycle",
+                "support.ticket_lifecycle",
+            ),
+            notes=(
+                "The query is scoped to one authenticated SystemUser. The typed open "
+                "command owns the atomic read-state transition. Dashboard-only legacy "
+                "assignment rows are repaired once from an unambiguous canonical ticket "
+                "or project reference before navigation."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="personal staff notification menu and unread count",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "current personal staff inbox identity and target",
+                            "current personal staff notification read state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name=(
+                            "personal staff notification open and legacy target repair"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "typed personal notification open command",
+                            "canonical staff account identity",
+                            "current personal staff inbox identity and target",
+                            "current personal staff notification read state",
+                            "canonical ticket assignment reference",
+                            "canonical project assignment reference",
+                        ),
+                        canonical_writer=(
+                            "communications.staff_notification_read_state"
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed personal notification open command",
+                        owner="communications.staff_notification_read_state",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Authenticated SystemUser, exact AdminNotification UUID, "
+                            "and CommandContext supplied by the user-scoped web adapter."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Authenticated active SystemUser identity.",
+                    ),
+                    AuthorityInput(
+                        name="current personal staff inbox identity and target",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "User-scoped AdminNotification identity, stored target, "
+                            "copy, and creation time."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current personal staff notification read state",
+                        owner="communications.staff_notification_read_state",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The nullable read_at transition for each user-scoped "
+                            "AdminNotification."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical ticket assignment reference",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Ticket UUID or unique ticket number.",
+                    ),
+                    AuthorityInput(
+                        name="canonical project assignment reference",
+                        owner="operations.project_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Project UUID or unambiguous project number.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "The open command enters execute_owner_command once on a "
+                        "transaction-free adapter session; menu queries are read-only."
+                    ),
+                    locking=(
+                        "Exact notification and SystemUser identity scope the update; "
+                        "repeated read transitions write the same read state."
+                    ),
+                    idempotency=(
+                        "Opening an already-read notification returns its existing target "
+                        "without changing read_at; a legacy target is rewritten once to "
+                        "the same canonical detail URL."
+                    ),
+                    retries=(
+                        "Safe command retries converge on the existing read_at value; "
+                        "query refreshes are side-effect free."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "communications.staff_notification_read_state"
+                    ),
+                    mapping_owner="admin notifications and alerts web adapters",
+                    fail_closed_on=(
+                        "notification assigned to another user",
+                        "missing or malformed authenticated staff identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("staff_notification.opened",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 contains only notification and SystemUser UUIDs; "
+                        "notification copy and navigation targets remain private."
+                    ),
+                    replay=(
+                        "The event is staged only on the first unread-to-read transition; "
+                        "reopening an already-read row emits nothing."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "app.services.admin_alerts menu query and helper-level commit"
+                    ),
+                    new_owner="communications.staff_notification_read_state",
+                    verification=(
+                        "User-scoped menu, unread badge refresh, new exact-target, legacy "
+                        "target repair, and owner command tests."
+                    ),
+                    cutover_gate=(
+                        "Both notification-open routes and the bell menu use the typed "
+                        "read-state owner."
+                    ),
+                    fallback_retirement=(
+                        "The legacy admin_alerts menu and mark-read helpers are removed. "
+                        "Remove the bounded title-reference repair after a backfill audit "
+                        "finds no dashboard-only ticket or project assignment rows."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_web_admin_notifications_service.py",
+                    "tests/test_payment_proof_reviewer_notifications.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                ),
             ),
         ),
         SOTService(
@@ -1922,9 +2285,10 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Read-only product-owned declaration of destination identity, "
-                "capability meaning, endpoint paths, activation state, and "
-                "opaque local stream scope. The Integrator reconciles an "
-                "immutable digest snapshot; it never authors these facts."
+                "capability meaning, payload schema or dated grace, product "
+                "wire, endpoint paths, activation state, and opaque local "
+                "stream scope. The Integrator reconciles an immutable digest "
+                "snapshot; it never authors these facts."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -2144,6 +2508,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "contact subscriber reseller and ticket association resolution",
                 "reviewed contact association and projection repair",
+                "bounded trusted support customer-identity projection",
             ),
             depends_on=(
                 "party.registry",
@@ -2160,6 +2525,10 @@ DOMAIN = DomainSOT(
                     (
                         "reviewed contact association and projection repair",
                         OwnerRole.PROJECTION_WRITER,
+                    ),
+                    (
+                        "bounded trusted support customer-identity projection",
+                        OwnerRole.RESOLVER,
                     ),
                 ),
                 inputs=(
@@ -2208,9 +2577,14 @@ DOMAIN = DomainSOT(
                 "durable FIFO queue admission and promotion",
                 "durable per-team round-robin cursor",
                 "customer-visible FIFO queue notification evidence",
+                "current agent presence state and freshness",
+                "agent presence transitions",
+                "immutable agent presence transition evidence",
             ),
             depends_on=(
                 "ai.intake",
+                "app_sessions.auth",
+                "auth.staff_provisioning",
                 "communications.team_inbox_threads",
                 "operations.sla_escalation",
                 "auth.permission_gate",
@@ -2239,6 +2613,15 @@ DOMAIN = DomainSOT(
                         "customer-visible FIFO queue notification evidence",
                         OwnerRole.COMMAND_WRITER,
                     ),
+                    (
+                        "current agent presence state and freshness",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    ("agent presence transitions", OwnerRole.COMMAND_WRITER),
+                    (
+                        "immutable agent presence transition evidence",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
@@ -2265,6 +2648,25 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Approved intent, category, confidence, department, and fallback policy.",
                     ),
+                    AuthorityInput(
+                        name="successful staff session issuance",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The exact active AuthSession UUID and bound active "
+                            "SystemUser UUID after successful credential and MFA "
+                            "verification."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="active staff principal",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The active SystemUser accepted by staff authentication; "
+                            "subscriber and reseller principals are excluded."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -2274,6 +2676,9 @@ DOMAIN = DomainSOT(
                 ),
                 projections=("FIFO queue position and notification due state",),
                 test_refs=(
+                    "tests/test_admin_inbox_slice4_workflows.py",
+                    "tests/test_auth_flow.py",
+                    "tests/test_team_inbox_assignment.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
                 ),
@@ -2634,7 +3039,11 @@ DOMAIN = DomainSOT(
                         name="conversation reply target",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active unresolved conversation, channel, participant, subject, and team sender context.",
+                        source=(
+                            "Active unresolved conversation, channel, participant, "
+                            "subject, team sender context, and exact prior email "
+                            "Message-ID chronology."
+                        ),
                     ),
                     AuthorityInput(
                         name="communication intent lifecycle",
@@ -2658,7 +3067,9 @@ DOMAIN = DomainSOT(
                 "to the web transport, which schedules an after-response task on the "
                 "dedicated notifications_immediate queue. The periodic delivery runner "
                 "stays on notifications as the durable recovery sweep; each worker locks "
-                "and claims the exact eligible row before provider delivery."
+                "and claims the exact eligible row before provider delivery. Email "
+                "intents persist the thread-owner-derived Message-ID, In-Reply-To and "
+                "bounded References values; every retry serializes the same identity."
             ),
         ),
         SOTService(
@@ -2702,6 +3113,8 @@ DOMAIN = DomainSOT(
             owns=("operator conversation and collaboration commands",),
             depends_on=(
                 "auth.permission_gate",
+                "communications.nextcloud_talk_staff",
+                "communications.staff_notifications",
                 "communications.team_inbox_threads",
                 "communications.team_inbox_contact_resolution",
                 "communications.team_inbox_routing",
@@ -2758,6 +3171,24 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Per-person read cursor and unread cohort.",
                     ),
+                    AuthorityInput(
+                        name="staff notification staging outcome",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Idempotent in-app and email Notification rows plus the "
+                            "source-linked per-user AdminNotification row."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="optional staff Talk admission outcome",
+                        owner="communications.nextcloud_talk_staff",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Feature-gated Nextcloud Talk notification staging result "
+                            "isolated by the command owner's approved savepoint."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                 domain_error_codes=(
@@ -2780,16 +3211,17 @@ DOMAIN = DomainSOT(
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "party.registry",
-                "control.settings_spec",
             ),
             notes=(
-                "ADR 0006 temporarily assigns portal live-chat authority to CRM "
-                "when comms.chat_session_authority=crm. This native command owner "
-                "then fails closed for both new and previously issued widget tokens; "
-                "it never mirrors or falls back to a local write. Anonymous fiber-site "
-                "sessions are exact-origin and rate controlled by the adapter, use "
-                "Party-first prospect capture only for unmatched identity, and retain "
-                "ambiguous identity for human review."
+                "The SOLE live-chat authority for every portal and public "
+                "surface. ADR 0006 temporarily assigned that authority to an "
+                "external CRM behind a comms.chat_session_authority selector; "
+                "the selector, the external transport and the setting were "
+                "removed on 2026-08-30 and there is no second chat writer to "
+                "arbitrate between. Anonymous fiber-site sessions are "
+                "exact-origin and rate controlled by the adapter, use "
+                "Party-first prospect capture only for unmatched identity, and "
+                "retain ambiguous identity for human review."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_widget",
@@ -2839,16 +3271,6 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Native chat-widget conversation and message chronology.",
                     ),
-                    AuthorityInput(
-                        name="live-chat authority selection",
-                        owner="control.settings_spec",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "Database-authoritative "
-                            "comms.chat_session_authority control; native commands "
-                            "are accepted only when the value resolves to selfcare."
-                        ),
-                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -2858,13 +3280,14 @@ DOMAIN = DomainSOT(
                 design_refs=(
                     "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
                     "docs/adr/0006-temporary-crm-chat-authority.md",
-                    "docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md",
+                    "docs/CHAT_LIVE_SETUP.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                 ),
                 test_refs=(
                     "tests/test_chat_session.py",
                     "tests/test_team_inbox_widget_native.py",
+                    "tests/architecture/test_single_chat_authority.py",
                     "tests/architecture/test_team_inbox_boundaries.py",
                     "tests/architecture/test_team_inbox_sot_contracts.py",
                 ),
@@ -3303,6 +3726,101 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.team_inbox_metrics",
+            module="app.services.team_inbox_metrics",
+            owns=(
+                "bounded Inbox team performance report projection",
+                "bounded Inbox agent performance report projection",
+                "current Inbox escalation candidate projection",
+            ),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "communications.team_inbox_routing",
+                "operations.service_team_lifecycle",
+                "operations.service_team_composition",
+                "auth.staff_provisioning",
+            ),
+            notes=(
+                "Performance cohorts default to 30 days and reject ranges over "
+                "366 days. "
+                "Escalations are current unresolved facts and are paginated in SQL."
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_metrics",
+                concerns=(
+                    (
+                        "bounded Inbox team performance report projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "bounded Inbox agent performance report projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "current Inbox escalation candidate projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="conversation and message chronology",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Conversation lifecycle and message direction, timestamp, "
+                            "and recorded sender provenance within the typed cohort."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="assignment routing and presence state",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Current and historical assignments, team links, and "
+                            "effective agent availability at the report "
+                            "observation time."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="service-team identity and lifecycle",
+                        owner="operations.service_team_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Canonical team identifiers, names, lifecycle, "
+                            "and SLA policy."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="service-team capability projection",
+                        owner="operations.service_team_composition",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Canonical capability composition for each report team.",
+                    ),
+                    AuthorityInput(
+                        name="staff identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Canonical active staff and person identity for agent rows."
+                        ),
+                    ),
+                ),
+                transaction_mode=TransactionMode.READ_ONLY,
+                domain_error_codes=("communications.team_inbox_metrics.invalid_query",),
+                projections=(
+                    "Thirty-day default bounded team response and queue cohort",
+                    "Thirty-day default bounded agent assignment and response cohort",
+                    "Current unresolved escalation reasons and aggregate counts",
+                ),
+                mapping_owner="Inbox report web and analytics API adapters",
+                test_refs=(
+                    "tests/test_team_inbox_metrics.py",
+                    "tests/test_crm_reporting.py",
+                    "tests/architecture/test_team_inbox_sot_contracts.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_ai_polish",
             module="app.services.team_inbox_ai_polish",
             owns=("context-aware Inbox composer polish advisory coordination",),
@@ -3394,7 +3912,11 @@ DOMAIN = DomainSOT(
                         name="current Inbox projection",
                         owner="communications.team_inbox_projection",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Failed outbound, stale conversation, and unmaterialized media worklists.",
+                        source=(
+                            "Failed outbound and unmaterialized media worklists, plus "
+                            "locked stale-conversation candidates whose authoritative "
+                            "routing state has no active assignment."
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical conversation identity",
@@ -3479,7 +4001,11 @@ DOMAIN = DomainSOT(
                         name="SMTP envelope and RFC822 bytes",
                         owner="external:customer_mail_server",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                        source="Allowed recipient envelope and RFC822 bytes normalized before observation admission.",
+                        source=(
+                            "Allowed recipient envelope and RFC822 bytes normalized; "
+                            "validated attachment objects are stored privately before "
+                            "observation admission."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.NOT_APPLICABLE,

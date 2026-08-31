@@ -44,6 +44,39 @@ def test_new_templates_parse_as_jinja() -> None:
         environment.parse(_read(path))
 
 
+def test_help_center_uses_docs_layout_without_new_article_content() -> None:
+    route = _read("app/web/admin/help_center.py")
+    template = _read("templates/admin/help/index.html")
+
+    assert 'article: str = Query("")' in route
+    assert "selected_article" in route
+    assert "grouped_articles" in route
+    assert "Help articles" in template
+    assert "On this page" in template
+    assert "help-current-section" in template
+    assert 'data-help-section="Overview"' in template
+    assert 'data-help-section="Steps"' in template
+    assert "lg:hidden" in template
+    assert "xl:block" in template
+
+
+def test_help_center_layout_classes_are_in_shipped_css() -> None:
+    template = _read("templates/admin/help/index.html")
+    stylesheet = _read("static/css/main.css")
+
+    required_markers = (
+        ("max-w-[1600px]", "1600px"),
+        ("lg:grid-cols-[17rem_minmax(0,1fr)]", "17rem"),
+        ("xl:grid-cols-[18rem_minmax(0,56rem)_16rem]", "18rem"),
+        ("max-h-[calc(100vh-8rem)]", "100vh - 8rem"),
+        ("!max-w-none", "!important"),
+    )
+
+    for template_class, css_marker in required_markers:
+        assert template_class in template
+        assert css_marker in stylesheet
+
+
 def test_add_question_button_uses_shipped_dark_theme_contrast_classes() -> None:
     template = _read("templates/admin/surveys/form.html")
     stylesheet = _read("static/css/main.css")

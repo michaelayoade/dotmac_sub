@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../config/env.dart';
+import '../core/data_scope.dart';
 import '../core/messenger.dart';
 import '../router/app_router.dart';
 import 'auth_controller.dart';
@@ -27,10 +29,25 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
   @override
   ImpersonationState? build() => null;
 
+  /// The reseller's own cache partition, parked while a "view as" session is
+  /// running so [stop] can put it back without an async storage read.
+  MobileDataScope? _ownScope;
+
   Future<ImpersonationState> start(String accountId) async {
     final grant =
         await ref.read(resellerRepositoryProvider).impersonate(accountId);
     ref.read(apiClientProvider).impersonationToken = grant.accessToken;
+    // A view-as session reads a DIFFERENT principal's data over the same
+    // transport. Invalidating the in-memory providers (below) is not enough —
+    // the on-disk cache would otherwise hand the customer's bodies back to the
+    // reseller after the grant lapses, or vice versa. Give it its own scope,
+    // so the two partitions cannot address each other at all.
+    final cache = ref.read(responseCacheProvider);
+    _ownScope = cache.scope;
+    cache.useScope(MobileDataScope(
+      tenant: Env.apiBaseUrl,
+      principal: 'view-as:${grant.accountId}',
+    ));
     final s = ImpersonationState(
       customerName: grant.customerName,
       accountId: grant.accountId,
@@ -43,6 +60,11 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
 
   void stop() {
     ref.read(apiClientProvider).impersonationToken = null;
+    final restore = _ownScope;
+    if (restore != null) {
+      ref.read(responseCacheProvider).useScope(restore);
+      _ownScope = null;
+    }
     state = null;
     _refreshCustomerData();
   }

@@ -22,7 +22,7 @@ def _cycle_bounds(start: datetime, cycle: BillingCycle) -> tuple[datetime, datet
     that contains ``start``.
 
     This mirrors the cycle geometry used by real invoicing
-    (``catalog.subscriptions._billing_cycle_start`` /
+    (``catalog.subscriptions.billing_cycle_start`` /
     ``billing_automation._prorated_amount``) so the calculator's first-bill
     proration lines up with what would actually be charged for a mid-cycle
     activation.

@@ -272,6 +272,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "service-team lifecycle",
                 "service-team membership lifecycle",
+                "ERP department service-team membership synchronization",
                 "set-valued staff service-team membership resolution",
                 "active service-team selector projection",
                 "service-team administration projection",
@@ -300,9 +301,23 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.AUTHORITATIVE_RECORD,
                         input_names=(
                             "typed service-team command",
+                            "ERP department membership sync request",
                             "active staff authentication principal",
                             "canonical Person Party identity",
                             "current native service-team state",
+                            "current service-team composition",
+                        ),
+                        canonical_writer="operations.service_team_lifecycle",
+                    ),
+                    ConcernContract(
+                        name="ERP department service-team membership synchronization",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "ERP department membership sync request",
+                            "active staff authentication principal",
+                            "canonical Person Party identity",
+                            "current native service-team state",
+                            "current service-team composition",
                         ),
                         canonical_writer="operations.service_team_lifecycle",
                     ),
@@ -342,6 +357,16 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
+                        name="ERP department membership sync request",
+                        owner="operations.service_team_lifecycle",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "approved staff-sync API request carrying ERP employee "
+                            "identity, ERP account scope, observed department state, "
+                            "and CommandContext"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="active staff authentication principal",
                         owner="auth.staff_provisioning",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -378,19 +403,24 @@ DOMAIN = DomainSOT(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
                         "Each public mutation enters execute_owner_command once on a "
-                        "transaction-free session; audit, outbox, team, and membership changes "
-                        "flush inside that root transaction."
+                        "transaction-free session; audit, outbox, team, membership, "
+                        "and ERP department-membership source changes flush inside "
+                        "that root transaction."
                     ),
                     locking=(
                         "Teams are selected by UUID, followed by staff-principal and Person "
-                        "Party identity then membership locks; case-insensitive team-name "
-                        "and team/person constraints arbitrate concurrent writes."
+                        "Party identity then membership locks; ERP sync locks the "
+                        "provider/scope/employee source row before changing the "
+                        "tracked membership; case-insensitive team-name, team/person, "
+                        "and provider/scope/employee constraints arbitrate concurrent writes."
                     ),
                     idempotency=(
                         "Create binds a caller-supplied team UUID; equivalent desired-state "
                         "updates, activation changes, and membership commands replay while a "
                         "deactivated row or changed evidence under one create identity fails "
-                        "closed."
+                        "closed. ERP department sync keeps one tracked source row per "
+                        "provider, account scope, and ERP employee; exact assignment "
+                        "or removal replays without touching manually managed memberships."
                     ),
                     retries=(
                         "Adapters retry the complete owner command only after full rollback "
@@ -412,6 +442,8 @@ DOMAIN = DomainSOT(
                         "service_team_has_active_members",
                         "service_team_member_not_found",
                         "service_team_member_inactive",
+                        "service_team_erp_department_unmapped",
+                        "service_team_erp_employee_identity_conflict",
                         *owner_command_boundary_error_codes(
                             "operations.service_team_lifecycle"
                         ),
@@ -422,6 +454,8 @@ DOMAIN = DomainSOT(
                         "membership reactivation with retired staff identity",
                         "stale lifecycle evidence",
                         "team identity collision",
+                        "unmapped ERP department",
+                        "ERP employee identifier reuse for a different staff account",
                         "deactivation with active members",
                         "unavailable Party identity during set-valued resolution",
                     ),
@@ -439,7 +473,8 @@ DOMAIN = DomainSOT(
                     ),
                     replay=(
                         "Native team/member rows plus transactional event and audit evidence "
-                        "reconstruct the lifecycle without workflow-setting mirrors."
+                        "and ERP department-membership source rows reconstruct the "
+                        "lifecycle without workflow-setting mirrors."
                     ),
                 ),
                 projections=(
@@ -539,6 +574,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_service_team_lifecycle.py",
+                    "tests/test_api_staff_sync.py",
                     "tests/test_service_team_web.py",
                     "tests/architecture/test_service_team_lifecycle_boundary.py",
                 ),

@@ -185,6 +185,17 @@ def test_mark_read_posts_with_csrf_header():
     assert 'this.refreshSidebar("read_state")' not in body
 
 
+def test_inbox_csrf_token_prefers_the_live_cookie_to_stale_page_metadata():
+    marker = JAVASCRIPT.index("const csrfToken = () =>")
+    body = JAVASCRIPT[marker : marker + 450]
+    cookie_lookup = body.index("document.cookie.match")
+    meta_lookup = body.index("document.querySelector")
+
+    assert cookie_lookup < meta_lookup
+    assert "decodeURIComponent(cookie[1])" in body
+    assert 'meta[name="csrf-token"]' in body
+
+
 def test_whatsapp_reopen_uses_the_exported_timeout_fetcher():
     """The reopen loader lives outside the closure that defines the helper."""
     assert "window.inboxFetchWithTimeout = fetchWithTimeout;" in JAVASCRIPT
@@ -238,7 +249,9 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' not in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260820a" in INDEX
+    assert "admin-inbox.js?v=20260830a" in INDEX
+    assert "admin-inbox.js?v=20260827a" not in INDEX
+    assert "admin-inbox.js?v=20260820a" not in INDEX
     assert "admin-inbox.js?v=20260817b" not in INDEX
 
 
@@ -1128,3 +1141,16 @@ def test_saved_views_have_active_state_and_save_all_live_filter_fields():
     ):
         assert f'{field_name}: "{field_name}"' in JAVASCRIPT
         assert f"{field_name}: " in ROUTES
+
+
+def test_private_note_mentions_are_viewport_safe_and_deep_linkable():
+    assert "data-mention-selected" in CONVERSATION
+    assert 'aria-autocomplete="list"' in CONVERSATION
+    assert "document.body.appendChild(menu)" in JAVASCRIPT
+    assert "window.visualViewport" in JAVASCRIPT
+    assert 'event.key === "Tab"' in JAVASCRIPT
+    assert "reconcileSelected" in JAVASCRIPT
+    assert 'get("message_id")' in JAVASCRIPT
+    assert "inbox-message-target" in JAVASCRIPT
+    assert ".inbox-mention-menu" in REPLICA_CSS
+    assert ".inbox-message-target" in REPLICA_CSS

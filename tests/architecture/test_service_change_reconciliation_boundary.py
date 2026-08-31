@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.services import sot_relationships
+from app.services.sot_manifest import OwnerRole, TransactionMode
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -79,8 +80,15 @@ def test_execution_owner_registry_covers_reconciliation() -> None:
         "service_intent.subscription_change_execution"
     )
     assert service is not None
+    assert service.contract is not None
     assert "interrupted execution-chain reconciliation" in service.owns
     assert "remote provisioning price confirmation and failure recovery" in service.owns
+    concerns = {concern.name: concern for concern in service.contract.concerns}
+    assert (
+        concerns["pending service-change cancellation"].role
+        is OwnerRole.APPLICATION_COORDINATOR
+    )
+    assert service.contract.transaction.mode is TransactionMode.COORDINATOR_MANAGED
 
 
 def test_reconciliation_evidence_migration_extends_current_head() -> None:

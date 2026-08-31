@@ -26,11 +26,13 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.prepaid_funding import (
     PrepaidDraftReconciliationException,
     PrepaidOpeningFundingConsumption,
 )
+from app.models.subscriber import SubscriberStatus
 from app.services import prepaid_draft_reconciliation as reconciliation_service
 from app.services.customer_financial_position import prepaid_available_balance
 from app.services.domain_errors import DomainError
@@ -38,9 +40,12 @@ from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
     AdoptFundedPrepaidProformaCommand,
+    AutoRepairPaidPrepaidInvoiceAfterSettlementCommand,
     CreateReviewedPaidPrepaidInvoiceCommand,
     MissingPaidPrepaidInvoiceRepairDisposition,
     MissingPaidPrepaidInvoiceRepairQuery,
+    PaidPrepaidInvoiceAutoRepairDisposition,
+    PaidPrepaidInvoiceRepairCohortQuery,
     PaidPrepaidInvoiceRepairDisposition,
     PaidPrepaidInvoiceRepairQuery,
     PrepaidDraftAction,
@@ -54,10 +59,12 @@ from app.services.prepaid_draft_reconciliation import (
     create_reviewed_paid_prepaid_invoice,
     preview_funded_prepaid_proforma_adoption,
     preview_historical_paid_prepaid_invoice_repair,
+    preview_historical_paid_prepaid_invoice_repair_cohort,
     preview_missing_paid_prepaid_invoice_repair,
     preview_prepaid_draft_cohort,
     preview_prepaid_draft_reconciliation,
     reconcile_prepaid_draft_invoice,
+    repair_exact_paid_prepaid_invoice_after_settlement_for_owner,
     repair_historical_paid_prepaid_invoice,
 )
 from app.services.prepaid_funding_reconstruction import (
@@ -271,6 +278,35 @@ def _historical_paid_unlinked_invoice(db, account, subscription):
     return invoice, payment, allocation
 
 
+def _stage_stale_prepaid_lock(db, account, subscription) -> None:
+    account.status = SubscriberStatus.suspended
+    subscription.status = SubscriptionStatus.suspended
+    subscription.access_state = "suspended"
+    subscription.next_billing_at = datetime(2026, 8, 2, tzinfo=UTC)
+    db.add(
+        ServiceEntitlement(
+            account_id=account.id,
+            subscription_id=subscription.id,
+            starts_at=datetime(2026, 7, 2, 23, tzinfo=UTC),
+            ends_at=datetime(2026, 8, 2, 23, tzinfo=UTC),
+            amount_funded=Decimal("17500.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+            metadata_={"source": "previous_paid_period"},
+        )
+    )
+    db.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=account.id,
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            notes="pytest stale prepaid lock",
+        )
+    )
+    db.commit()
+
+
 def test_historical_paid_unlinked_invoice_repairs_coverage_and_requests_access(
     db_session,
     subscriber,
@@ -373,6 +409,110 @@ def test_historical_paid_invoice_repair_rejects_allocation_ambiguity(
         "repair requires one exact active allocation from successful "
         "unreturned settlement evidence"
     )
+
+
+def test_historical_paid_invoice_repair_accepts_stale_anchor_and_old_entitlement(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, payment, allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    _stage_stale_prepaid_lock(db_session, subscriber, subscription)
+
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+
+    assert preview.disposition is (
+        PaidPrepaidInvoiceRepairDisposition.exact_paid_unlinked_invoice
+    )
+    assert preview.actionable is True
+    assert preview.allocation_id == allocation.id
+    assert preview.payment_id == payment.id
+    assert preview.billing_period_start == datetime(2026, 8, 2, 23, tzinfo=UTC)
+    assert preview.billing_period_end == datetime(2026, 9, 2, 23, tzinfo=UTC)
+
+
+def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, _payment, _allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    _stage_stale_prepaid_lock(db_session, subscriber, subscription)
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+
+    result = repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
+        db_session,
+        AutoRepairPaidPrepaidInvoiceAfterSettlementCommand(
+            invoice_id=invoice.id,
+            actor="pytest:financial.payments",
+            evidence_ref=f"pytest-paid-finalization:{invoice.id}",
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscriber)
+    db_session.refresh(subscription)
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    entitlements = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .all()
+    )
+    locks = (
+        db_session.query(EnforcementLock)
+        .filter_by(subscription_id=subscription.id)
+        .all()
+    )
+    assert result.disposition is PaidPrepaidInvoiceAutoRepairDisposition.exact_repaired
+    assert result.subscriptions_restored == 1
+    assert invoice.billing_period_start == datetime(2026, 8, 2, 23)
+    assert invoice.billing_period_end == datetime(2026, 9, 2, 23)
+    assert line.subscription_id == subscription.id
+    assert len(entitlements) == 1
+    assert subscription.next_billing_at == datetime(2026, 9, 2, 23)
+    assert subscription.status is SubscriptionStatus.active
+    assert subscriber.status is SubscriberStatus.active
+    assert all(not lock.is_active for lock in locks)
+
+
+def test_paid_invoice_repair_cohort_lists_exact_stale_anchor_candidate(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, _payment, _allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    _stage_stale_prepaid_lock(db_session, subscriber, subscription)
+
+    previews = preview_historical_paid_prepaid_invoice_repair_cohort(
+        db_session,
+        PaidPrepaidInvoiceRepairCohortQuery(account_id=subscriber.id, limit=10),
+    )
+
+    assert [item.invoice_id for item in previews] == [invoice.id]
+    assert previews[0].subscription_id == subscription.id
+    assert previews[0].actionable is True
 
 
 def test_exact_funded_onboarding_proforma_adopts_then_reconciles(

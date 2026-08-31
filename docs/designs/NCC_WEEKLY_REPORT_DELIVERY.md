@@ -32,8 +32,10 @@ arrival time, so a delayed poll or retry rebuilds the same bounded window.
 
 ## Configuration and provenance
 
-The admin page at `/admin/reports/ncc-complaints` displays and, with
-`notification:write`, updates the complete effective configuration: enabled,
+The admin page at `/admin/reports/ncc-complaints` requires `reports:ncc:read`.
+On-demand workbook exports and preserved scheduled artifact downloads require
+`reports:ncc:export`. The same page displays and, with `notification:write`,
+updates the complete effective configuration: enabled,
 To/CC/BCC, SMTP sender key, subject, body template, weekday, local time,
 timezone and lookback. Every field is backed by the registered notification
 setting specification. Defaults remain disabled and Tuesday-based.
@@ -42,6 +44,12 @@ The on-screen complaints table uses the canonical typed list contract and shows
 20 rows by default, with 50- and 100-row options. Pagination applies only to the
 screen: workbook exports and weekly delivery continue to use the complete
 bounded report snapshot.
+
+The XLSX artifact follows the NCC validated Excel workbook template: hidden
+`Lookups` sheet, visible `Data Entry` sheet, official required-field headers,
+named lookup ranges, and row-4-to-end validation ranges. The screen keeps the
+internal readable column labels, then projects rows to the template headers for
+on-demand export and weekly email attachment generation.
 
 The complaints resolver excludes tickets carrying a source approved by the
 support owner as internal operational work. It does not use missing customer or

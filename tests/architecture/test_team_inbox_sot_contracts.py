@@ -21,6 +21,7 @@ OWNERS = {
     "communications.team_inbox_commands": TransactionMode.COORDINATOR_MANAGED,
     "communications.team_inbox_widget": TransactionMode.OWNER_MANAGED,
     "communications.team_inbox_projection": TransactionMode.READ_ONLY,
+    "communications.team_inbox_metrics": TransactionMode.READ_ONLY,
     "communications.team_inbox_maintenance": TransactionMode.OWNER_MANAGED,
     "communications.team_inbox_realtime": TransactionMode.NOT_APPLICABLE,
     "communications.team_inbox_smtp_transport": TransactionMode.NOT_APPLICABLE,
@@ -63,6 +64,30 @@ def test_observation_owner_contracts_collision_quarantine() -> None:
     assert "class InboxProviderObservationCollision" in model
     assert "SEMANTIC_FINGERPRINT_VERSION = 2" in owner
     assert "ObservationCollisionPolicy.quarantine" in smtp
+
+
+def test_routing_owner_contracts_signed_in_agent_presence() -> None:
+    service = service_relationship("communications.team_inbox_routing")
+    assert service.contract is not None
+    assert {
+        "current agent presence state and freshness",
+        "agent presence transitions",
+        "immutable agent presence transition evidence",
+    } <= set(service.owns)
+    input_owners = {
+        item.name: item.owner for item in service.contract.authoritative_inputs
+    }
+    assert input_owners["successful staff session issuance"] == "app_sessions.auth"
+    assert input_owners["active staff principal"] == "auth.staff_provisioning"
+
+    auth_flow = (ROOT / "app/services/auth_flow.py").read_text(encoding="utf-8")
+    projection = (ROOT / "app/services/team_inbox_projection.py").read_text(
+        encoding="utf-8"
+    )
+    assert "AgentSignedInPresenceCommand(" in auth_flow
+    assert "record_agent_signed_in_presence(" in auth_flow
+    assert "InboxAgentPresence(" not in auth_flow
+    assert "agent_availability_snapshots(" in projection
 
 
 def test_legacy_catch_all_is_retired() -> None:
@@ -118,6 +143,31 @@ def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
     assert "class InboxResponseCohort" in projection
     assert "def response_cohort" in projection
     assert "bcc_addresses" in projection
+
+
+def test_metrics_owner_is_bounded_set_based_and_registered() -> None:
+    service = service_relationship("communications.team_inbox_metrics")
+    assert service.contract is not None
+    assert {
+        "bounded Inbox team performance report projection",
+        "bounded Inbox agent performance report projection",
+        "current Inbox escalation candidate projection",
+    } == set(service.owns)
+    assert {item.owner for item in service.contract.authoritative_inputs} >= {
+        "communications.team_inbox_threads",
+        "communications.team_inbox_routing",
+        "operations.service_team_lifecycle",
+        "operations.service_team_composition",
+        "auth.staff_provisioning",
+    }
+
+    owner = (ROOT / "app/services/team_inbox_metrics.py").read_text(encoding="utf-8")
+    assert "DEFAULT_PERFORMANCE_WINDOW_DAYS = 30" in owner
+    assert "MAX_PERFORMANCE_WINDOW_DAYS = 366" in owner
+    assert "def team_performance_page(" in owner
+    assert "def escalation_page(" in owner
+    assert "team_capacity_snapshots(" in owner
+    assert "db.query(InboxMessage)" not in owner
 
 
 def test_operator_unread_projection_is_set_based_and_indexed() -> None:

@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TypedDict
@@ -36,6 +37,9 @@ from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import invoice_discounts, invoice_draft_authoring
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import (
+    web_prepaid_coverage_reconciliation as web_prepaid_coverage_reconciliation_service,
+)
+from app.services import (
     web_prepaid_draft_reconciliation as web_prepaid_draft_reconciliation_service,
 )
 from app.services.audit_helpers import (
@@ -64,8 +68,26 @@ class InvoiceIssueFromDetailError(DomainError):
     """Safe invoice-detail issue rejection for the admin route adapter."""
 
 
+@dataclass(frozen=True, slots=True)
+class SendInvoiceFromDetailCommand:
+    """Typed request to issue when necessary and queue one invoice email."""
+
+    invoice_id: UUID
+    issue_draft: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SendInvoiceFromDetailResult:
+    """Stable invoice-detail send outcome for the web adapter."""
+
+    invoice_id: UUID
+    status: InvoiceStatus
+    issued_now: bool
+
+
 class InvoiceLineItem(TypedDict):
     line_id: UUID | None
+    subscription_id: UUID | None
     description: str
     quantity: Decimal
     unit_price: Decimal
@@ -204,9 +226,17 @@ def parse_create_line_items(
                 raw_line_id = (
                     item.get("id") or item.get("lineId") or item.get("line_id")
                 )
+                raw_subscription_id = item.get("subscriptionId") or item.get(
+                    "subscription_id"
+                )
                 line_items.append(
                     {
                         "line_id": UUID(str(raw_line_id)) if raw_line_id else None,
+                        "subscription_id": (
+                            UUID(str(raw_subscription_id))
+                            if raw_subscription_id
+                            else None
+                        ),
                         "description": description,
                         "quantity": Decimal(str(item.get("quantity", 1))),
                         "unit_price": Decimal(str(item.get("unitPrice", 0))),
@@ -232,6 +262,7 @@ def parse_create_line_items(
         line_items.append(
             {
                 "line_id": None,
+                "subscription_id": None,
                 "description": description.strip(),
                 "quantity": parse_decimal(quantity_raw, "quantity", Decimal("1")),
                 "unit_price": parse_decimal(
@@ -257,6 +288,7 @@ def create_invoice_lines(
                 description=item["description"],
                 quantity=item["quantity"],
                 unit_price=item["unit_price"],
+                subscription_id=item["subscription_id"],
                 tax_rate_id=item["tax_rate_id"],
             ),
         )
@@ -285,7 +317,12 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
     return transition.invoice
 
 
-def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
+def issue_invoice_from_detail(
+    db: Session,
+    *,
+    invoice_id: UUID,
+    announce: bool = False,
+) -> Invoice:
     """Issue a draft invoice from the admin detail page."""
     invoice_id_text = str(invoice_id)
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id_text)
@@ -317,12 +354,49 @@ def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
             issued_at=datetime.now(UTC),
             reason="admin_invoice_detail_issue",
         ),
-        announce=False,
+        announce=announce,
         apply_available_credit=True,
         require_full_available_credit=True,
         commit=True,
     )
     return transition.invoice
+
+
+def send_invoice_from_detail(
+    db: Session,
+    command: SendInvoiceFromDetailCommand,
+) -> SendInvoiceFromDetailResult:
+    """Queue the canonical PDF email, issuing a draft in the same transition."""
+
+    invoice = billing_service.invoices.get(
+        db=db,
+        invoice_id=str(command.invoice_id),
+    )
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if invoice.status == InvoiceStatus.draft and command.issue_draft:
+        sent_invoice = issue_invoice_from_detail(
+            db,
+            invoice_id=command.invoice_id,
+            announce=True,
+        )
+        return SendInvoiceFromDetailResult(
+            invoice_id=sent_invoice.id,
+            status=sent_invoice.status,
+            issued_now=True,
+        )
+
+    maybe_send_invoice_notification(
+        db,
+        invoice=invoice,
+        send_notification="1",
+    )
+    return SendInvoiceFromDetailResult(
+        invoice_id=invoice.id,
+        status=invoice.status,
+        issued_now=False,
+    )
 
 
 def maybe_send_invoice_notification(
@@ -437,6 +511,7 @@ def create_invoice_from_form(
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
                     tax_rate_id=item["tax_rate_id"],
+                    subscription_id=item["subscription_id"],
                 )
                 for item in line_items
             ),
@@ -519,6 +594,7 @@ def update_invoice_from_form(
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
                     tax_rate_id=item["tax_rate_id"],
+                    subscription_id=item["subscription_id"],
                 )
                 for item in lines
             ),
@@ -917,6 +993,11 @@ def load_invoice_detail_data(
             db, invoice_id=UUID(invoice_id)
         )
     )
+    prepaid_coverage_reconciliation_state = (
+        web_prepaid_coverage_reconciliation_service.preview_for_invoice_detail(
+            db, invoice_id=UUID(invoice_id)
+        )
+    )
     return {
         "invoice": invoice,
         "invoice_financial_summary": billing_service.invoices.financial_summary(
@@ -953,6 +1034,7 @@ def load_invoice_detail_data(
             if prepaid_draft_reconciliation_preview is not None
             else None
         ),
+        "prepaid_coverage_reconciliation_state": prepaid_coverage_reconciliation_state,
     }
 
 
@@ -1011,10 +1093,15 @@ def send_invoice_web(
     request,
     actor_id: str | None,
     invoice_id: str,
-) -> Invoice | None:
-    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if invoice:
-        maybe_send_invoice_notification(db, invoice=invoice, send_notification="1")
+    issue_draft: bool = False,
+) -> SendInvoiceFromDetailResult:
+    result = send_invoice_from_detail(
+        db,
+        SendInvoiceFromDetailCommand(
+            invoice_id=UUID(invoice_id),
+            issue_draft=issue_draft,
+        ),
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1023,7 +1110,7 @@ def send_invoice_web(
         entity_id=invoice_id,
         actor_id=actor_id,
     )
-    return invoice
+    return result
 
 
 def void_invoice_web(

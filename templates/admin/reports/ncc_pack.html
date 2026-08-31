@@ -15,10 +15,12 @@
   ) %}{% endcall %}
 
   <div class="flex flex-wrap gap-2">
+    {% if can(request, "reports:ncc:export") %}
     <a href="/admin/reports/ncc-regulatory-pack?date_from={{ date_from }}&date_to={{ date_to }}"
        class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">View JSON</a>
     <a href="/admin/reports/ncc-regulatory-pack.pdf?date_from={{ date_from }}&date_to={{ date_to }}"
        class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">Download PDF</a>
+    {% endif %}
   </div>
 
   {% set meta = pack.meta %}
@@ -34,7 +36,7 @@
       </thead>
       <tbody>
         {% for label, section in [
-            ("① Quarterly complaints", pack.complaints),
+            ("① Weekly complaints", pack.complaints),
             ("② Quarterly subscribers", pack.subscribers),
             ("③ Annual financials", pack.financials),
             ("③ Annual staff", pack.staff)] %}

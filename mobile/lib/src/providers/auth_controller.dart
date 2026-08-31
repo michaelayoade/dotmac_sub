@@ -8,10 +8,14 @@ import '../config/env.dart';
 import '../core/api_client.dart';
 import '../core/api_exception.dart';
 import '../core/biometric_service.dart';
+import '../core/cache_crypto.dart';
+import '../core/data_scope.dart';
 import '../core/messenger.dart';
 import '../core/observability.dart';
 import '../core/push_service.dart';
 import '../core/response_cache.dart';
+import '../core/session_fence.dart';
+import '../core/session_wipe.dart';
 import '../core/token_storage.dart';
 import '../models/auth.dart';
 import '../repositories/auth_repository.dart';
@@ -47,6 +51,30 @@ class AuthState {
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 
+/// The live session generation. One instance for the whole app: the API client
+/// stamps outgoing work with it and the wipe closes it, which is what makes a
+/// sign-out that races an in-flight refresh safe. See [SessionFence].
+final sessionFenceProvider = Provider<SessionFence>((ref) => SessionFence());
+
+/// Holder of the per-install key that seals the on-disk response cache.
+final cacheCipherProvider = Provider<CacheCipher>((ref) => CacheCipher());
+
+/// The one place a session is torn down. Participants are registered here in
+/// the order they must run: in-memory state first (so the UI leaves the
+/// authenticated shell immediately), then the durable stores. Every teardown
+/// path — explicit sign-out, session expiry, authoritative revocation — calls
+/// [SessionWipe.wipe]; no caller clears a subset directly.
+final sessionWipeProvider = Provider<SessionWipe>((ref) {
+  final wipe = SessionWipe(ref.watch(sessionFenceProvider))
+    ..register('session-state', (reason) async {
+      ref.read(authControllerProvider.notifier).onSessionWiped(reason);
+    })
+    ..register('credentials', (_) => ref.read(tokenStorageProvider).clear())
+    ..register(
+        'response-cache', (_) => ref.read(responseCacheProvider).clear());
+  return wipe;
+});
+
 final biometricServiceProvider =
     Provider<BiometricService>((ref) => BiometricService());
 
@@ -57,18 +85,22 @@ final pushRepositoryProvider = Provider<PushRepository>((ref) {
   return PushRepository(ref.watch(apiClientProvider).dio);
 });
 
-/// On-disk stale-while-revalidate cache for GET responses. Single instance so
-/// the auth controller can clear it on logout / session expiry.
-final responseCacheProvider = Provider<ResponseCache>((ref) => ResponseCache());
+/// On-disk stale-while-revalidate cache for GET responses. Single instance: it
+/// carries the current data scope, and it is a registered wipe participant.
+final responseCacheProvider = Provider<ResponseCache>(
+    (ref) => ResponseCache(cipher: ref.watch(cacheCipherProvider)));
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final client = ApiClient(
     storage: ref.watch(tokenStorageProvider),
+    fence: ref.watch(sessionFenceProvider),
     cache: ref.watch(responseCacheProvider),
     onSessionExpired: () {
-      // Refresh failed irrecoverably: drop to the signed-out state so the
-      // router redirects to /login.
-      ref.read(authControllerProvider.notifier).onSessionExpired();
+      // The server AUTHORITATIVELY ended this session (it refused the refresh,
+      // or rejected a freshly-issued token). A transport failure never reaches
+      // here — see _RefreshOutcome.unavailable — so a signal blip or a 5xx
+      // cannot sign anyone out.
+      unawaited(ref.read(authControllerProvider.notifier).onSessionExpired());
     },
     onImpersonationExpired: () {
       // A "view as" request 401'd: the short-lived grant lapsed. Clear it,
@@ -110,6 +142,9 @@ class AuthController extends StateNotifier<AuthState> {
 
   AuthRepository get _repo => _ref.read(authRepositoryProvider);
   TokenStorage get _storage => _ref.read(tokenStorageProvider);
+  SessionFence get _fence => _ref.read(sessionFenceProvider);
+  SessionWipe get _wipe => _ref.read(sessionWipeProvider);
+  ResponseCache get _cache => _ref.read(responseCacheProvider);
   BiometricService get _biometric => _ref.read(biometricServiceProvider);
   PushService get _push => _ref.read(pushServiceProvider);
   PushRepository get _pushRepo => _ref.read(pushRepositoryProvider);
@@ -142,11 +177,18 @@ class AuthController extends StateNotifier<AuthState> {
   /// transient network failure keeps the cached session rather than logging a
   /// connected user out because their signal dropped.
   Future<void> bootstrap() async {
-    final token = await _storage.readAccessToken();
-    if (token == null) {
+    final bundle = await _storage.readBundle();
+    if (bundle == null) {
       state = AuthState.signedOut;
       return;
     }
+    // Resume the persisted session under its own generation (it is monotonic
+    // across restarts, so work left over from before a crash still fences out)
+    // and point the cache at the identity the record says these tokens belong
+    // to — before a single request goes out.
+    final generation = bundle.generation;
+    _fence.open(generation);
+    _cache.useScope(bundle.scope);
 
     final locked = await _shouldLockOnLaunch();
     final cached = await _readCachedProfile();
@@ -160,12 +202,13 @@ class AuthController extends StateNotifier<AuthState> {
 
     try {
       final me = await _repo.me();
-      if (state.status == AuthStatus.unauthenticated) {
-        // The user signed out (e.g. from the lock screen) while /auth/me was
-        // in flight — don't resurrect the session from a stale response.
+      if (!_fence.holds(generation)) {
+        // The session ended while /auth/me was in flight — the user signed out
+        // from the lock screen, or a 401 elsewhere revoked it. Don't resurrect
+        // it from a stale response, and don't write its profile back.
         return;
       }
-      await _persistProfile(me);
+      await _adoptIdentity(me, generation);
       state = AuthState(
         status: AuthStatus.authenticated,
         me: me,
@@ -176,20 +219,32 @@ class AuthController extends StateNotifier<AuthState> {
         locked: cached != null ? state.locked : locked,
       );
     } on ApiException catch (e) {
-      final rejected = e.statusCode == 401 || e.statusCode == 403;
-      if (rejected || cached == null) {
-        // Either the session is genuinely invalid, or we have no cached
-        // identity to fall back on — send the user to login.
-        await _storage.clear();
-        state = AuthState.signedOut;
+      if (e.statusCode == 401 || e.statusCode == 403) {
+        // The server actively rejected the session. That is authoritative:
+        // tear the whole thing down through the one coordinator.
+        await _wipe.wipe(SessionWipeReason.credentialsRevoked);
+        return;
       }
-      // Otherwise: keep the optimistic cached session (offline / server down).
+      // Anything else is "we could not ask" — a timeout, no signal, a 5xx from
+      // an overloaded gateway. NEVER discard credentials for that. With a
+      // cached profile we keep rendering optimistically; without one there is
+      // nothing to render, so the user lands on /login — but their session is
+      // still on the device and the next successful bootstrap restores it.
+      if (cached == null) state = AuthState.signedOut;
     } catch (_) {
-      if (cached == null) {
-        await _storage.clear();
-        state = AuthState.signedOut;
-      }
+      if (cached == null) state = AuthState.signedOut;
     }
+  }
+
+  /// Stamp the resolved identity onto the session: onto the credential record
+  /// (so a cold start knows whose tokens these are before `/auth/me` answers)
+  /// and onto the response cache (so this account's bodies land in their own
+  /// partition). Fenced — a late `/auth/me` from a dead session writes nothing.
+  Future<void> _adoptIdentity(Me me, int generation) async {
+    final scope = MobileDataScope(tenant: Env.apiBaseUrl, principal: me.id);
+    await _storage.adoptScope(generation: generation, scope: scope);
+    _cache.useScope(scope);
+    await _persistProfile(me, generation: generation);
   }
 
   Future<Me?> _readCachedProfile() async {
@@ -202,9 +257,10 @@ class AuthController extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> _persistProfile(Me me) async {
+  Future<void> _persistProfile(Me me, {int? generation}) async {
     try {
-      await _storage.saveProfile(jsonEncode(me.toJson()));
+      await _storage.saveProfile(jsonEncode(me.toJson()),
+          generation: generation);
     } catch (_) {
       // Caching the profile is best-effort; never fail bootstrap over it.
     }
@@ -335,8 +391,12 @@ class AuthController extends StateNotifier<AuthState> {
       }
       return result;
     } catch (e) {
+      // Summarised, never interpolated: a DioException stringifies the request
+      // URL and the whole response body, and this is the login path.
       Log.breadcrumb('login failed',
-          category: 'auth', level: SentryLevel.warning, data: {'error': '$e'});
+          category: 'auth',
+          level: SentryLevel.warning,
+          data: {'error': Log.describeError(e)});
       rethrow;
     }
   }
@@ -349,8 +409,17 @@ class AuthController extends StateNotifier<AuthState> {
   }
 
   Future<void> _loadMe() async {
+    // The repository has just written a fresh credential record (login / MFA
+    // verify). Adopt its generation before any request goes out, so everything
+    // from here on is fenced to THIS session.
+    final generation = (await _storage.readBundle())?.generation;
+    if (generation != null) _fence.open(generation);
+
     final me = await _repo.me();
-    await _persistProfile(me);
+    if (generation != null) {
+      if (!_fence.holds(generation)) return;
+      await _adoptIdentity(me, generation);
+    }
     // Re-sync the cached opt-in: it survives a session-expiry token wipe, so a
     // fresh password login must re-arm the resume lock without a cold start.
     _biometricArmed = await _storage.isBiometricEnabled();
@@ -379,7 +448,9 @@ class AuthController extends StateNotifier<AuthState> {
       Log.breadcrumb('push: device registered', category: 'push');
     } catch (e) {
       Log.breadcrumb('push: registration skipped',
-          category: 'push', level: SentryLevel.warning, data: {'error': '$e'});
+          category: 'push',
+          level: SentryLevel.warning,
+          data: {'error': Log.describeError(e)});
     }
   }
 
@@ -394,7 +465,7 @@ class AuthController extends StateNotifier<AuthState> {
       await _push.deleteToken();
     } catch (e) {
       Log.breadcrumb('push: unregister skipped',
-          category: 'push', data: {'error': '$e'});
+          category: 'push', data: {'error': Log.describeError(e)});
     }
   }
 
@@ -407,18 +478,18 @@ class AuthController extends StateNotifier<AuthState> {
 
   Future<void> logout() async {
     Log.breadcrumb('logout', category: 'auth');
-    // De-register the device for push before the session is torn down.
+    // De-register the device for push, and revoke the server-side session,
+    // while the credentials are still valid — both calls need auth.
     await _unregisterPush();
     await _repo.logout();
     // Explicit sign-out is a full reset: drop the biometric opt-in so the next
-    // user starts from a clean password login.
-    _biometricArmed = false;
-    _lockReturnLocation = null;
+    // user starts from a clean password login. A DEVICE preference, not
+    // session state — which is why it lives here and not in the wipe (a
+    // session expiry deliberately leaves the opt-in armed).
     await _storage.setBiometricEnabled(false);
-    // Drop cached responses so the next account never sees this one's data.
-    await _ref.read(responseCacheProvider).clear();
-    state = AuthState.signedOut;
-    await Sentry.configureScope((scope) => scope.setUser(null));
+    // Everything else — credentials, cached profile, response cache, in-memory
+    // session — goes through the one coordinator.
+    await _wipe.wipe(SessionWipeReason.userSignedOut);
   }
 
   /// Soft-delete (cancel) the account, then sign out. The server cancels the
@@ -430,10 +501,28 @@ class AuthController extends StateNotifier<AuthState> {
     await logout();
   }
 
-  void onSessionExpired() {
-    // Fire-and-forget: clearing the disk cache must not block the redirect.
-    _ref.read(responseCacheProvider).clear();
+  /// The server ended this session out from under us — the refresh was refused,
+  /// or a freshly-issued token was rejected on first use. Authoritative, so the
+  /// whole session goes.
+  Future<void> onSessionExpired() =>
+      _wipe.wipe(SessionWipeReason.sessionExpired);
+
+  /// Registered with [SessionWipe] as the `session-state` participant, and the
+  /// FIRST one to run: this is the synchronous part of a teardown, so the
+  /// router has already left the authenticated shell before the (asynchronous,
+  /// best-effort) disk clearing starts. Never call it directly — a session is
+  /// torn down through the coordinator or not at all.
+  void onSessionWiped(SessionWipeReason reason) {
+    Log.breadcrumb('session wiped (${reason.name})', category: 'auth');
+    _biometricArmed = false;
     _lockReturnLocation = null;
+    // Repoint the cache away from the signed-out identity, so nothing that is
+    // still unwinding can read or write that account's partition.
+    _cache.useScope(MobileDataScope.anonymous);
     state = AuthState.signedOut;
+    // Fire-and-forget: configureScope returns a FutureOr, so it has to be
+    // lifted into a real Future before it can be left unawaited. The teardown
+    // must not block on the crash-reporter's scope update.
+    unawaited(Future.sync(() => Sentry.configureScope((s) => s.setUser(null))));
   }
 }

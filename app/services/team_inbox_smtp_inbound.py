@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models.team_inbox import InboxChannelType, InboxObservationKind
+from app.models.team_inbox import (
+    InboxChannelType,
+    InboxObservationKind,
+    InboxObservationStatus,
+)
 from app.services import (
     team_inbox_observations,
     team_inbox_processing,
@@ -20,6 +24,7 @@ from app.services import (
     team_inbox_routing,
 )
 from app.services.common import coerce_uuid
+from app.services.file_storage import FileValidationError, file_uploads
 from app.services.owner_commands import (
     CommandContext,
 )
@@ -27,6 +32,7 @@ from app.services.owner_commands import (
 logger = logging.getLogger(__name__)
 
 SMTP_PROBE_HEADER_VALUE = "team_inbox_smtp_e2e"
+SMTP_PROCESSING_ERROR_CODE = "smtp_processing_failed"
 
 SMTPController: Any = None
 try:
@@ -38,6 +44,7 @@ except ModuleNotFoundError:
 class SmtpInboundKind(StrEnum):
     received = "received"
     duplicate = "duplicate"
+    deferred = "deferred"
     skipped = "skipped"
     quarantined = "quarantined"
     failed = "failed"
@@ -120,6 +127,55 @@ def handle_smtp_message(
         # still captures when Sub admitted the observation.
         observed_at = payload.received_at or datetime.fromtimestamp(0, tz=UTC)
         account_scope = ",".join(sorted(payload.to_addresses))[:160] or "default"
+        storage_entity_id = hashlib.sha256(external_message_id.encode()).hexdigest()
+        attachment_observations: list[
+            team_inbox_observations.InboundAttachmentObservation
+        ] = []
+        for item in parsed.attachments:
+            prepared_observation = None
+            download_status = "rejected"
+            try:
+                prepared = file_uploads.prepare_upload(
+                    domain="attachments",
+                    entity_type="inbox_smtp_message",
+                    entity_id=storage_entity_id,
+                    original_filename=item.file_name or "attachment",
+                    content_type=(
+                        None
+                        if item.mime_type == "application/octet-stream"
+                        else item.mime_type
+                    ),
+                    data=item.content,
+                    uploaded_by=None,
+                )
+                prepared_observation = (
+                    team_inbox_observations.InboundPreparedFileObservation(
+                        entity_type=prepared.entity_type,
+                        entity_id=prepared.entity_id,
+                        original_filename=prepared.original_filename,
+                        storage_key=prepared.storage_key,
+                        file_size=prepared.file_size,
+                        content_type=prepared.content_type,
+                        checksum=prepared.checksum,
+                    )
+                )
+                download_status = "prepared"
+            except FileValidationError:
+                logger.warning(
+                    "team_inbox_smtp_attachment_rejected filename=%s mime_type=%s",
+                    item.file_name,
+                    item.mime_type,
+                )
+            attachment_observations.append(
+                team_inbox_observations.InboundAttachmentObservation(
+                    asset_type="file",
+                    file_name=item.file_name,
+                    mime_type=item.mime_type,
+                    file_size=len(item.content),
+                    download_status=download_status,
+                    prepared_file=prepared_observation,
+                )
+            )
         recorded = team_inbox_observations.record_provider_observation(
             db,
             team_inbox_observations.RecordProviderObservationCommand(
@@ -160,21 +216,7 @@ def handle_smtp_message(
                     fallback_service_team_id=coerce_uuid(
                         payload.fallback_service_team_id
                     ),
-                    attachments=tuple(
-                        team_inbox_observations.InboundAttachmentObservation(
-                            asset_type=str(item.get("type") or "file"),
-                            file_name=str(item["file_name"])
-                            if item.get("file_name")
-                            else None,
-                            mime_type=str(item["mime_type"])
-                            if item.get("mime_type")
-                            else None,
-                            file_size=int(item["file_size"])
-                            if item.get("file_size") is not None
-                            else None,
-                        )
-                        for item in parsed.attachments
-                    ),
+                    attachments=tuple(attachment_observations),
                 ),
                 collision_policy=(
                     team_inbox_observations.ObservationCollisionPolicy.quarantine
@@ -194,16 +236,64 @@ def handle_smtp_message(
                 kind=SmtpInboundKind.quarantined,
                 reason=SmtpInboundReason.provider_identity_collision,
             )
-        result = team_inbox_processing.process_provider_observation(
-            db,
-            observation_id=recorded.observation_id,
-            context=CommandContext.system(
-                actor="system:team-inbox-observation-processor",
-                scope="team-inbox:provider-consequence",
-                reason="resolve committed SMTP observation",
-                idempotency_key=str(recorded.observation_id),
-            ),
-        )
+        if recorded.processing_status is InboxObservationStatus.processed:
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.duplicate,
+                conversation_id=str(recorded.conversation_id)
+                if recorded.conversation_id
+                else None,
+                message_id=str(recorded.message_id) if recorded.message_id else None,
+            )
+        if recorded.processing_status is InboxObservationStatus.rejected:
+            logger.warning(
+                "team_inbox_smtp_message_processing_already_deferred observation_id=%s",
+                recorded.observation_id,
+            )
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.deferred,
+                reason=SmtpInboundReason.processing_error,
+            )
+        try:
+            result = team_inbox_processing.process_provider_observation(
+                db,
+                observation_id=recorded.observation_id,
+                context=CommandContext.system(
+                    actor="system:team-inbox-observation-processor",
+                    scope="team-inbox:provider-consequence",
+                    reason="resolve committed SMTP observation",
+                    idempotency_key=str(recorded.observation_id),
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "team_inbox_smtp_observation_processing_failed observation_id=%s",
+                recorded.observation_id,
+            )
+            try:
+                team_inbox_processing.mark_provider_observation_processing_failed(
+                    db,
+                    observation_id=recorded.observation_id,
+                    context=CommandContext.system(
+                        actor="system:team-inbox-observation-processor",
+                        scope="team-inbox:provider-consequence",
+                        reason="defer committed SMTP observation for internal replay",
+                        idempotency_key=f"defer:{recorded.observation_id}",
+                    ),
+                    error_code=SMTP_PROCESSING_ERROR_CODE,
+                )
+            except Exception:
+                logger.exception(
+                    "team_inbox_smtp_processing_failure_mark_failed observation_id=%s",
+                    recorded.observation_id,
+                )
+                return SmtpInboundResult(
+                    kind=SmtpInboundKind.failed,
+                    reason=SmtpInboundReason.processing_error,
+                )
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.deferred,
+                reason=SmtpInboundReason.processing_error,
+            )
         return SmtpInboundResult(
             kind=(
                 SmtpInboundKind.received

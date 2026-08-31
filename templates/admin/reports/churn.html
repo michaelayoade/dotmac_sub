@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    status_badge, animation_styles
+    status_badge, report_chart_card, animation_styles
 %}
 
 {% block title %}Churn Analysis Report - Admin{% endblock %}
@@ -74,22 +74,17 @@
     </div>
 
     {# ── Churn Trend Chart ── #}
-    {% set has_churn_chart = churn_data and ((churn_data.rate|sum) > 0 or (churn_data.count|sum) > 0) %}
-    {% if has_churn_chart %}
-    {% call card("Churn Trend", icon='<svg class="h-4 w-4 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>', color="teal") %}
-        <div class="chart-container" style="min-height: 280px;">
-            <canvas id="churn-trend-chart"></canvas>
-        </div>
+    {% call report_chart_card("Churn Trend", churn_chart, "churn-trend-chart", icon='<svg class="h-4 w-4 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>', color="teal", min_height=280) %}
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             const ctx = document.getElementById('churn-trend-chart');
             if (!ctx) return;
             const chartData = {
-                labels: {{ churn_data["labels"] | tojson | safe }},
+                labels: {{ churn_chart.labels | tojson | safe }},
                 datasets: [
                     {
                         label: 'Churn Rate %',
-                        data: {{ churn_data["rate"] | tojson | safe }},
+                        data: {{ churn_chart.series[0].values | tojson | safe }},
                         borderColor: '#ef4444',
                         backgroundColor: 'rgba(239, 68, 68, 0.1)',
                         fill: true,
@@ -98,7 +93,7 @@
                     },
                     {
                         label: 'Cancellations',
-                        data: {{ churn_data["count"] | tojson | safe }},
+                        data: {{ churn_chart.series[1].values | tojson | safe }},
                         borderColor: '#f59e0b',
                         backgroundColor: 'transparent',
                         borderDash: [5, 5],
@@ -119,7 +114,6 @@
         });
         </script>
     {% endcall %}
-    {% endif %}
 
     {# ── Churn Reasons and Recent Cancellations ── #}
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">

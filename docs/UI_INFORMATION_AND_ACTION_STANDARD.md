@@ -234,6 +234,13 @@ domain rules; they must not silently become zero.
   progress without claiming an optimistic final state.
 - Audit administrative mutations through the canonical audit/event owner.
 
+The admin subscription detail page presents an outstanding pending plan-change
+request with its target plan, effective date, execution state, request identity,
+and submission time. Operators with `catalog:write` may cancel that pending
+request only after entering a reason and confirming that the subscription stays
+on its current plan. The action is absent after approval or application and does
+not offer a revoke path.
+
 For prepaid recovery, the service page consumes the recovery eligibility
 owner's typed next action. An unresolved service invoice disables Bill Now,
 explains the block, and links to that exact invoice. The invoice page keeps
@@ -318,6 +325,27 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
+## Personal Staff Notification Bell Contract
+
+- Audience and task: authenticated staff need to see pending personal work and
+  open the exact assigned entity without first opening the bell menu.
+- Authority: `communications.staff_notification_read_state` owns the typed
+  personal menu, unread count, and mark-read transition.
+  `communications.staff_notifications` owns source-linked inbox materialization;
+  the assigning business owner supplies the exact internal detail target.
+- Initial and fresh state: every admin page loads the personal unread projection
+  immediately and refreshes it at most 30 seconds later while the page remains
+  open. Global delivery-queue totals never drive the personal red dot.
+- Navigation: opening an item is scoped to the authenticated `SystemUser`, marks
+  only that row read, and follows its stored target. A legacy ticket/project
+  assignment whose stored target is only `/admin` is repaired once from an
+  unambiguous canonical entity reference before navigation. Missing,
+  ambiguous, or cross-user items fail closed without exposing another target.
+- States and accessibility: zero unread removes the red dot; non-zero unread
+  supplies an accessible count. Empty, loading, unread, read, and unauthorized
+  states remain distinct, and notification identity is never communicated by
+  color alone inside the menu.
+
 ## Inbox Lead Intake And Catalogue Action Contract
 
 - Audience and task: a prospect who is neither a customer nor a customer contact
@@ -400,6 +428,9 @@ implementation.
   attempt, and `communications.team_inbox_projection` owns the staff recipient
   presentation. The route and templates are adapters.
 - The reply composer exposes optional CC and BCC only for email conversations.
+  The control uses a native disclosure so its visibility and operation do not
+  depend on a particular browser JavaScript cache. Authenticated Inbox workspace
+  and conversation HTML is private and non-cacheable.
   Invalid, ambiguous, or over-limit recipient input blocks the send; non-email
   channels reject copy recipients.
 - Each email message in the permission-scoped staff thread renders all
@@ -409,6 +440,63 @@ implementation.
   never in MIME headers or customer-facing projections.
 - Mobile layouts wrap long addresses without hiding recipients or displacing
   the message body and primary Send action.
+
+## Agent Performance Analytics Page Contract
+
+- Audience and task: CX/support leaders compare agent workload, resolution, and
+  responsiveness; the personal variant gives the signed-in agent the same
+  evidence restricted to their identity.
+- Authority: `ui.crm_operational_reports` owns the typed report projection;
+  Team Inbox assignment, message, status-transition, team, and staff-identity
+  owners retain their underlying facts. Routes and templates are adapters.
+- First viewport: current Africa/Lagos month by default, Today/Current
+  week/Custom controls, active service-team filter, agent search on the
+  administrative view, page size, export, and stable lazy-loading placeholders.
+- Metrics and table: Active member agents, agents with activity, Assigned chats,
+  Resolved chats, Active now, Avg first response, and nullable SLA adherence
+  precede a compact Agent, Team, Assigned, Resolved, Active now, Avg first
+  response, and Status/score table. Without configured SLA, existing workload
+  and timing metrics remain visible and SLA is explicitly not scored.
+- Agent names link to an admin detail report that preserves the originating
+  period and team filter. The detail and signed-in-only My Performance views
+  add average resolution, SLA met/breached evidence, needs-attention indicators,
+  multi-team breakdown, and a bounded conversation evidence table.
+- The dedicated Inbox Performance page's Agent Load table uses the same staff
+  display-name fallback. Its internal person UUID is never rendered as the
+  Agent value.
+- Cohort semantics: inclusive local dates become UTC half-open bounds.
+  Assignment, resolution, and first-response facts use their authoritative
+  event times. Active now includes only current valid active service-team-member
+  assignments; legacy unmatched rows are excluded without mutation. Filters,
+  summary, pagination, personal scope, detail links, and CSV use one typed query
+  contract.
+- States: loading, empty, timing unavailable, read failure with retry,
+  unauthorized, and missing personal identity are distinct. Read failure never
+  displays cached or estimated values.
+- Responsive behavior: the filter rail wraps, KPI cards stack, and the
+  seven-column table remains horizontally accessible without hiding agent
+  identity or metric meaning.
+## Inbox Private Note Mention Contract
+
+- Authority: `communications.team_inbox_commands` validates the active
+  conversation, exact staff identifiers, and team visibility, then writes the
+  private note. `communications.staff_notifications` stages the personal Inbox
+  and email notices. `communications.nextcloud_talk_staff` owns optional Talk
+  admission and delivery. Routes, templates, and browser code are adapters.
+- Typing `@` exposes active colleagues who can access the conversation, including
+  the initial unfiltered list. The list is appended to the document viewport,
+  opens above or below the composer based on available space, and remains usable
+  by keyboard, pointer, touch, zoom, and the mobile visual viewport.
+- A selected mention retains its stable system-user ID. Removing its visible
+  token or its chip removes the submitted recipient; the server revalidates every
+  ID and rejects stale or inaccessible recipients.
+- Saving a note stages one idempotent Inbox notice and one email for each
+  mentioned colleague other than the author. When enabled, Talk staging runs as
+  an optional owner savepoint and cannot roll back the note or other notices.
+- Notification copy never includes the private note or customer data. Its link
+  marks the personal Inbox item read, opens the exact conversation, scrolls to
+  the note, and provides a temporary accessible highlight. Mentioning never
+  assigns, transfers, or changes conversation status.
 
 ## ONT Configure Page Contract
 

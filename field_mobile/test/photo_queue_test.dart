@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -10,12 +11,13 @@ import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
 import 'package:dotmac_field/core/photos/photo_queue.dart';
-import 'package:drift/native.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 Uint8List _testImage({int width = 2400, int height = 600}) {
   final image = img.Image(width: width, height: height);
@@ -31,26 +33,21 @@ void main() {
     );
   }
 
+  late SecureFieldStore store;
   late AppDatabase db;
-  late Directory tempDir;
   late FakeImageSource source;
   late PhotoQueue queue;
 
-  setUp(() {
-    db = AppDatabase(NativeDatabase.memory());
-    tempDir = Directory.systemTemp.createTempSync('photo-queue-test');
+  setUp(() async {
+    store = await openTestStore();
+    db = store.database;
     source = FakeImageSource(_testImage());
     queue = PhotoQueue(
       db: db,
       source: source,
       location: FakeLocation((latitude: 6.43, longitude: 3.42)),
-      storageDir: tempDir,
+      evidence: store.evidence,
     );
-  });
-
-  tearDown(() async {
-    await db.close();
-    tempDir.deleteSync(recursive: true);
   });
 
   test('processPhoto downscales the long edge to 1600', () {
@@ -97,8 +94,12 @@ void main() {
     () async {
       // Simulate Android killing the first queue after it durably records the
       // capture target but before image_picker returns to Dart.
-      final marker = File('${tempDir.path}/.pending_completion_capture');
-      await marker.writeAsString('wo-recovered', flush: true);
+      await store.evidence.write(
+        'pending_completion_capture.evidence',
+        utf8.encode('wo-recovered'),
+        purpose: 'capture-marker',
+        reference: 'pending',
+      );
       source.lostBytes = _testImage(width: 800, height: 400);
 
       expect(await queue.recoverForJob(workOrderId: 'wo-recovered'), isTrue);
@@ -119,8 +120,8 @@ void main() {
     setUp(() async {
       adapter = FakeHttpAdapter();
       connectivity = FakeConnectivity();
-      final store = InMemoryTokenStore();
-      await store.save(
+      final tokens = InMemoryTokenStore();
+      await tokens.save(
         accessToken: fakeJwt(
           expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
         ),
@@ -133,10 +134,11 @@ void main() {
         db: db,
         api: ApiClient(
           baseUrl: 'https://test.local',
-          tokenStore: store,
+          tokenStore: tokens,
           dio: dio,
         ),
         connectivity: connectivity,
+        evidence: store.evidence,
         delay: (_) async {},
       );
     });
@@ -155,6 +157,8 @@ void main() {
       });
 
       expect(await sync.flushPhotos(), 1);
+      // The upload carries the decrypted JPEG, never the envelope on disk.
+      expect(sent.files.single.value.length, greaterThan(0));
       final fields = {for (final f in sent.fields) f.key: f.value};
       expect(fields['kind'], 'photo');
       expect(fields['work_order_id'], 'wo-1');

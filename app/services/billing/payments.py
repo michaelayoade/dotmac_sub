@@ -1258,6 +1258,7 @@ def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
     db.flush()
 
     if invoice.status == InvoiceStatus.paid:
+        _repair_paid_prepaid_invoice_identity_after_settlement(db, invoice)
         _reanchor_paid_prepaid_invoice_if_lapsed(db, invoice)
         ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
 
@@ -1291,6 +1292,7 @@ def finalize_invoice_application_for_owner(
     _recalculate_invoice_totals(db, invoice)
     db.flush()
     if invoice.status == InvoiceStatus.paid:
+        _repair_paid_prepaid_invoice_identity_after_settlement(db, invoice)
         _reanchor_paid_prepaid_invoice_if_lapsed(
             db,
             invoice,
@@ -1314,6 +1316,43 @@ def finalize_invoice_application_for_owner(
 
     compute_account_status(db, str(invoice.account_id))
     db.flush()
+
+
+def _repair_paid_prepaid_invoice_identity_after_settlement(
+    db: Session,
+    invoice: Invoice,
+) -> None:
+    """Let the prepaid reconciler adopt exact paid-but-unlinked invoices."""
+
+    from app.services.prepaid_draft_reconciliation import (
+        AutoRepairPaidPrepaidInvoiceAfterSettlementCommand,
+        PaidPrepaidInvoiceAutoRepairDisposition,
+        repair_exact_paid_prepaid_invoice_after_settlement_for_owner,
+    )
+
+    result = repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
+        db,
+        AutoRepairPaidPrepaidInvoiceAfterSettlementCommand(
+            invoice_id=invoice.id,
+            actor="financial.payments",
+            evidence_ref=f"financial.payments:paid-finalization:{invoice.id}",
+        ),
+    )
+    if result.disposition is PaidPrepaidInvoiceAutoRepairDisposition.exact_repaired:
+        logger.info(
+            "paid_prepaid_invoice_identity_repaired_after_settlement",
+            extra={
+                "event": "paid_prepaid_invoice_identity_repaired_after_settlement",
+                "invoice_id": str(result.invoice_id),
+                "subscription_id": (
+                    str(result.subscription_id) if result.subscription_id else None
+                ),
+                "entitlement_id": (
+                    str(result.entitlement_id) if result.entitlement_id else None
+                ),
+                "subscriptions_restored": result.subscriptions_restored,
+            },
+        )
 
 
 def _primary_allocation_invoice_id(payment: Payment) -> str | None:

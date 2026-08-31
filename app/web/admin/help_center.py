@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from re import sub
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
@@ -21,6 +22,31 @@ class HelpArticle:
     title: str
     summary: str
     steps: tuple[str, ...]
+
+    @property
+    def slug(self) -> str:
+        value = sub(r"[^a-z0-9]+", "-", self.title.casefold()).strip("-")
+        return value or "article"
+
+
+def _article_matches(article: HelpArticle, *, query: str, category: str) -> bool:
+    return (not category or article.category == category) and (
+        not query
+        or query in article.title.casefold()
+        or query in article.summary.casefold()
+        or any(query in step.casefold() for step in article.steps)
+    )
+
+
+def _group_articles(articles: list[HelpArticle]) -> list[dict[str, object]]:
+    categories: list[dict[str, object]] = []
+    for category in sorted({article.category for article in ARTICLES}):
+        category_articles = [
+            article for article in articles if article.category == category
+        ]
+        if category_articles:
+            categories.append({"category": category, "articles": category_articles})
+    return categories
 
 
 ARTICLES = (
@@ -116,6 +142,7 @@ def help_center(
     request: Request,
     q: str = Query(""),
     category: str = Query(""),
+    article: str = Query(""),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -125,25 +152,26 @@ def help_center(
     articles = [
         article
         for article in ARTICLES
-        if (not selected or article.category == selected)
-        and (
-            not query
-            or query in article.title.casefold()
-            or query in article.summary.casefold()
-            or any(query in step.casefold() for step in article.steps)
-        )
+        if _article_matches(article, query=query, category=selected)
     ]
+    selected_article = next(
+        (item for item in articles if item.slug == article.strip()),
+        articles[0] if articles else None,
+    )
+    context: dict[str, object] = {
+        "request": request,
+        "active_page": "help-center",
+        "active_menu": "help",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "articles": articles,
+        "grouped_articles": _group_articles(articles),
+        "selected_article": selected_article,
+        "categories": sorted({article.category for article in ARTICLES}),
+        "query": q,
+        "selected_category": selected,
+    }
     return templates.TemplateResponse(
         "admin/help/index.html",
-        {
-            "request": request,
-            "active_page": "help-center",
-            "active_menu": "help",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "articles": articles,
-            "categories": sorted({article.category for article in ARTICLES}),
-            "query": q,
-            "selected_category": selected,
-        },
+        context,
     )

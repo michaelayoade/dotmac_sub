@@ -24,7 +24,11 @@ from app.models.provisioning import (
 )
 from app.models.sales import QuoteStatus, SalesOrderStatus
 from app.models.subscriber import SubscriberStatus
-from app.models.support import TicketStatus, canonical_ticket_status_value
+from app.models.support import (
+    MERGED_TICKET_PRESENTATION_STATUS,
+    TicketStatus,
+    canonical_ticket_status_value,
+)
 from app.models.vendor_routes import (
     AsBuiltRouteStatus,
     InstallationProjectStatus,
@@ -187,7 +191,7 @@ _TICKET_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
         StatusTone.negative,
         StatusIcon.x,
     ),
-    TicketStatus.merged.value: (
+    MERGED_TICKET_PRESENTATION_STATUS: (
         "Merged",
         StatusTone.neutral,
         StatusIcon.archive,

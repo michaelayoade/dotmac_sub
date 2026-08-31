@@ -26,6 +26,7 @@ def test_positive_admission_is_the_single_linear_head():
     module = _module()
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
 
     assert module.revision == "490_ont_reconcile_positive_admission"

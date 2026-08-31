@@ -31,6 +31,38 @@ ALEMBIC_CONFIG_PATH = REPOSITORY_ROOT / "alembic.ini"
 _DISPOSABLE_DATABASE_TOKEN = re.compile(
     r"(?:^|_)(?:test|pytest|ci|e2e|migration)(?:_|$)", re.IGNORECASE
 )
+_MIGRATION_GRAPH_ENVIRONMENT = {
+    "DOTMAC_MIGRATION_BINDINGS": (
+        "app.migration_bindings:ASSEMBLY_PREREQUISITE_BINDINGS"
+    ),
+    "DOTMAC_MODULE_PLANE_SELECTIONS": ("app.migration_bindings:ASSEMBLY_MODULE_PLANES"),
+}
+
+
+def install_migration_graph_environment() -> None:
+    """Make graph-only Alembic loads use Sub's typed assembly declarations.
+
+    ``alembic/env.py`` installs these declarations during an upgrade, but
+    ``ScriptDirectory`` graph inspection does not execute that file.  The
+    pointers contain no values or credentials; they only name the checked-in
+    binding and plane-selection objects.
+    """
+
+    os.environ.update(_MIGRATION_GRAPH_ENVIRONMENT)
+
+
+def effective_heads(script: ScriptDirectory) -> frozenset[str]:
+    """Return the heads Alembic records after resolving ``depends_on`` edges.
+
+    ``ScriptDirectory.get_heads()`` returns versioned-lineage heads.  A host
+    provider revision can remain in that set even when a composed module names
+    it through ``depends_on``.  Alembic removes such dependency ancestors from
+    its internal ``_real_heads`` set, and those effective heads are the rows it
+    actually keeps in ``alembic_version``.  There is no public accessor for
+    this distinction in the pinned Alembic API.
+    """
+
+    return frozenset(script.revision_map._real_heads)  # noqa: SLF001
 
 
 class DatabaseRefusal(StrEnum):
@@ -116,9 +148,10 @@ def parse_test_database_target(raw_url: str | None) -> DatabaseTarget:
 def repository_heads() -> frozenset[str]:
     """Return the exact checked-in Alembic heads."""
 
+    install_migration_graph_environment()
     config = Config(str(ALEMBIC_CONFIG_PATH))
     config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
-    return frozenset(ScriptDirectory.from_config(config).get_heads())
+    return effective_heads(ScriptDirectory.from_config(config))
 
 
 def migrated_schema_state(engine: Engine) -> MigratedSchemaState:

@@ -357,6 +357,16 @@ def _values_from_assignment(
 
     values = {
         "config_method": None,
+        "standard_pack_key": config_pack.standard_pack_key if config_pack else None,
+        "standard_pack_family": (
+            config_pack.standard_pack_family if config_pack else None
+        ),
+        "command_profile_name": config_pack.command_profile_name
+        if config_pack
+        else None,
+        "firmware_standardized": (
+            config_pack.firmware_standardized if config_pack else None
+        ),
         "onu_mode": asn_wan_mode,
         # Missing protocol intent stays unknown. The reconciler carries its
         # provenance separately so absence cannot be turned into an IPv4

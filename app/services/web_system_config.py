@@ -205,6 +205,10 @@ BILLING_KEYS = [
     "use_creation_date",
     "payment_due_days",
     "expiry_reminder_days",
+    "upcoming_charges_postpaid_lead_days",
+    "upcoming_charges_prepaid_lead_days",
+    "upcoming_charges_prepaid_amount_bands",
+    "upcoming_charges_include_funded_prepaid_default",
     "renewal_invoice_notice_enabled",
     "renewal_invoice_notice_days",
     "invoice_reminder_days",
@@ -241,6 +245,10 @@ def get_billing_config_context(db: Session) -> dict:
         billing["payment_due_days"] = str(resolve_payment_due_days(db))
     defaults = {
         "expiry_reminder_days": "7",
+        "upcoming_charges_postpaid_lead_days": "14",
+        "upcoming_charges_prepaid_lead_days": "7",
+        "upcoming_charges_prepaid_amount_bands": "50000-100000,100000-500000,500000-",
+        "upcoming_charges_include_funded_prepaid_default": "false",
         "invoice_reminder_days": "7,1",
         "minimum_balance": "0",
     }
@@ -347,6 +355,10 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
             "renewal_invoice_notice_enabled",
             "Enable Advance Renewal Invoice Notifications",
         ),
+        (
+            "upcoming_charges_include_funded_prepaid_default",
+            "Show Already-Funded Prepaid Customers by Default",
+        ),
     ):
         _normalize_bool_setting(normalized, key, label)
 
@@ -374,6 +386,8 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         ("payment_due_days", "Payment Due Days"),
         ("expiry_reminder_days", "Expiry Reminder Days"),
         ("renewal_invoice_notice_days", "Advance Renewal Invoice Notice Days"),
+        ("upcoming_charges_postpaid_lead_days", "Upcoming Charges Postpaid Window"),
+        ("upcoming_charges_prepaid_lead_days", "Upcoming Charges Prepaid Window"),
         ("proforma_generation_day", "Proforma Generation Day"),
         ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
         ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
@@ -390,6 +404,11 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
 
     _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
+    from app.services.billing import reporting as billing_reporting
+
+    billing_reporting.parse_upcoming_charge_amount_bands(
+        str(normalized.get("upcoming_charges_prepaid_amount_bands") or "")
+    )
     enabled = normalized.get("renewal_invoice_notice_enabled") == "true"
     days = str(normalized.get("renewal_invoice_notice_days") or "").strip()
     if enabled and not days:

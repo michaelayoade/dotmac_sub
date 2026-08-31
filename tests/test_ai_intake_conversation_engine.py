@@ -25,6 +25,7 @@ from app.services import (
 from app.services import (
     ai_intake_conversation_engine as engine,
 )
+from app.services.network import support_monitoring
 from app.services.owner_commands import CommandContext
 
 
@@ -127,23 +128,36 @@ def _session(db_session, conversation, version, *, metadata=None, expires_at=Non
 
 
 def _classification(
-    intent="technical_support", category="no_internet", confidence=0.95
+    intent="technical_support",
+    category="no_internet",
+    confidence=0.95,
+    *,
+    requires_follow_up: bool = False,
+    follow_up_question: str | None = None,
 ):
     return AiIntakeClassification(
         intent=AiIntakeIntent(intent),
         category=AiIntakeCategory(category),
         confidence=confidence,
         department=None,
-        requires_follow_up=False,
+        requires_follow_up=requires_follow_up,
+        follow_up_question=follow_up_question,
         summary="Customer needs support.",
     )
 
 
-def test_identified_subscriber_does_not_request_portal_id(db_session):
+def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatch):
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session, subscriber_id=subscriber.id)
     version = _version(db_session)
     session = _session(db_session, conversation, version)
+    monkeypatch.setattr(
+        engine.support_monitoring,
+        "project_support_monitoring",
+        lambda *_args: support_monitoring.SupportMonitoringProjection(
+            support_monitoring.SupportMonitoringStatus.no_data
+        ),
+    )
 
     decision = engine.run_conversational_turn(
         db_session,
@@ -154,10 +168,14 @@ def test_identified_subscriber_does_not_request_portal_id(db_session):
         classification=_classification(),
     )
 
-    assert decision.action == "respond"
+    assert decision.action == "continue_classifier"
     assert "Portal ID" not in (decision.response_text or "")
     assert decision.state.subscriber_id == str(subscriber.id)
-    assert decision.state.monitoring_results[-1]["service_state"] == "offline"
+    assert decision.state.monitoring_results == []
+    assert any(
+        item["tool"] == "subscriber_monitoring" and item["status"] == "no_data"
+        for item in decision.state.tool_executions
+    )
 
 
 def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
@@ -192,7 +210,86 @@ def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
     assert second.action == "handoff"
 
 
-def test_unknown_customer_can_supply_portal_id_on_second_turn(db_session):
+def test_billing_issue_requests_account_identifier_before_handoff(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "permitted_identifiers": ["portal_id"],
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "handoff_after_classification": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Why are you suspending my office account again?",
+        classification=_classification(
+            intent=AiIntakeIntent.billing_issue,
+            category=AiIntakeCategory.other_billing_issue,
+        ),
+    )
+
+    assert decision.action == "respond"
+    assert "Portal ID" in (decision.response_text or "")
+    assert decision.metadata["reason"] == "missing_customer_identifier"
+    assert decision.state.collected_facts["account_status_problem"] is True
+    assert decision.state.collected_facts["organization_account"] is True
+    assert decision.state.handoff_status == "not_requested"
+
+
+def test_identifier_prompt_retries_when_customer_replies_without_identifier(
+    db_session,
+):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 1,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Please can you check our internet is very poor.",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="\U0001f446",
+        classification=_classification(category=AiIntakeCategory.slow_internet),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "missing_customer_identifier"
+    assert second.action == "respond"
+    assert second.metadata["reason"] == "identifier_reply_missing_value"
+    # The fixture policy declares phone -> email -> portal, a NON-CANONICAL
+    # order: the retry must name the first DECLARED identifier, not a fixed one.
+    assert "registered phone number" in (second.response_text or "")
+    assert second.state.handoff_status == "not_requested"
+    assert second.state.collected_facts["missing_identifier_retry_count"] == 1
+
+
+def test_unlinked_customer_portal_id_does_not_trigger_directory_search(db_session):
     subscriber = _subscriber(db_session)
     subscriber.account_number = "12345"
     conversation = _conversation(db_session)
@@ -223,15 +320,175 @@ def test_unknown_customer_can_supply_portal_id_on_second_turn(db_session):
     assert first.action == "respond"
     assert "Portal ID" in (first.response_text or "")
     assert second.state.portal_id == "12345"
-    assert second.state.subscriber_id == str(subscriber.id)
+    assert second.action == "handoff"
+    assert second.state.subscriber_id is None
     assert "portal_id" in second.state.already_requested_fields
-    assert second.response_text is None or "Portal ID" not in second.response_text
+    assert any(
+        item["tool"] == "customer_lookup" and item["status"] == "not_found"
+        for item in second.state.tool_executions
+    )
 
 
-def test_registered_email_lookup_identifies_customer(db_session):
+def test_registered_email_lookup_only_verifies_linked_customer(db_session):
     subscriber = _subscriber(db_session, email="lookup@example.test")
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    result = engine.execute_tool(
+        db_session,
+        "customer_lookup",
+        {
+            "identifier_type": "registered_email",
+            "identifier_value": "lookup@example.test",
+        },
+        policy={"tools": {"customer_lookup": {"enabled": True}}},
+        conversation=conversation,
+    )
+
+    assert result["status"] == "found"
+    assert result["subscriber_id"] == str(subscriber.id)
+    assert set(result) == {
+        "status",
+        "subscriber_id",
+        "display_name",
+        "account_number",
+        "subscriber_status",
+    }
+
+
+def test_phone_email_and_portal_id_only_verify_linked_customer(db_session):
+    subscriber = _subscriber(
+        db_session,
+        email="verified@example.test",
+        phone="2348012345678",
+    )
+    subscriber.account_number = "PORTAL-123"
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    policy = {"tools": {"customer_lookup": {"enabled": True}}}
+
+    for identifier_type, identifier_value in (
+        ("registered_phone", "2348012345678"),
+        ("registered_email", "VERIFIED@example.test"),
+        ("portal_id", "PORTAL-123"),
+    ):
+        result = engine.execute_tool(
+            db_session,
+            "customer_lookup",
+            {
+                "identifier_type": identifier_type,
+                "identifier_value": identifier_value,
+            },
+            policy=policy,
+            conversation=conversation,
+        )
+        assert result["status"] == "found"
+        assert result["subscriber_id"] == str(subscriber.id)
+
+
+def test_monitoring_projection_preserves_owner_provenance(db_session, monkeypatch):
+    subscriber = _subscriber(db_session)
+    observed_at = datetime.now(UTC)
+
+    def _projection(_db, query):
+        assert query.subscriber_id == subscriber.id
+        assert query.authorized is True
+        return support_monitoring.SupportMonitoringProjection(
+            support_monitoring.SupportMonitoringStatus.available,
+            radius=support_monitoring.RadiusObservation(
+                state="online",
+                active_session_count=2,
+                framed_ip_addresses=("10.0.0.2",),
+                observed_at=observed_at,
+            ),
+            onts=(
+                support_monitoring.OntObservation(
+                    reference="ont-1",
+                    serial_number="SERIAL-1",
+                    effective_state="offline",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        engine.support_monitoring, "project_support_monitoring", _projection
+    )
+    result = engine.execute_tool(
+        db_session,
+        "subscriber_monitoring",
+        {"subscriber_id": str(subscriber.id)},
+        policy={"tools": {"subscriber_monitoring": {"enabled": True}}},
+    )
+
+    assert result["status"] == "available"
+    assert result["radius_observation"] == {
+        "source": "network.radius_sessions",
+        "state": "online",
+        "active_session_count": 2,
+        "framed_ip_addresses": ["10.0.0.2"],
+        "observed_at": observed_at.isoformat(),
+    }
+    assert result["ont_observations"] == [
+        {
+            "source": "network.ont_runtime_status",
+            "reference": "ont-1",
+            "serial_number": "SERIAL-1",
+            "effective_state": "offline",
+        }
+    ]
+    assert not {"los", "outage", "cpe_diagnostics", "sla"} & set(result)
+
+
+def test_monitoring_no_data_and_unavailable_are_not_offline(db_session, monkeypatch):
+    subscriber = _subscriber(db_session)
+    policy = {"tools": {"subscriber_monitoring": {"enabled": True}}}
+
+    for status in (
+        support_monitoring.SupportMonitoringStatus.no_data,
+        support_monitoring.SupportMonitoringStatus.unavailable,
+    ):
+        monkeypatch.setattr(
+            engine.support_monitoring,
+            "project_support_monitoring",
+            lambda *_args, status=status: (
+                support_monitoring.SupportMonitoringProjection(status)
+            ),
+        )
+        result = engine.execute_tool(
+            db_session,
+            "subscriber_monitoring",
+            {"subscriber_id": str(subscriber.id)},
+            policy=policy,
+        )
+        state = engine.ConversationalState(
+            conversation_id=str(uuid4()),
+            session_id=str(uuid4()),
+            policy_version_id=None,
+            channel="whatsapp",
+            monitoring_results=[result] if result["status"] == "available" else [],
+        )
+        assert result == {"status": status.value}
+        assert engine._monitoring_offline(state) is False
+
+
+def test_first_turn_handoff_rule_is_ignored_at_runtime(db_session):
     conversation = _conversation(db_session)
-    version = _version(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {
+                            "type": "turn_count",
+                            "operator": ">=",
+                            "value": 0,
+                        },
+                        "action": "handoff",
+                        "reason": "bad_immediate_handoff",
+                    }
+                ],
+            }
+        },
+    )
     session = _session(db_session, conversation, version)
 
     decision = engine.run_conversational_turn(
@@ -239,16 +496,16 @@ def test_registered_email_lookup_identifies_customer(db_session):
         conversation=conversation,
         session=session,
         version=version,
-        latest_body="My registered email is lookup@example.test and internet is down.",
-        classification=_classification(),
+        latest_body="I need to ask a general support question.",
+        classification=_classification(
+            intent=AiIntakeIntent.general_enquiry,
+            category=AiIntakeCategory.general_enquiry,
+        ),
     )
 
-    assert decision.state.subscriber_id == str(subscriber.id)
-    assert conversation.subscriber_id == subscriber.id
-    assert any(
-        item["tool"] == "customer_lookup" and item["status"] == "found"
-        for item in decision.state.tool_executions
-    )
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.state.escalation_reason is None
 
 
 def test_rich_first_message_extracts_existing_facts(db_session):
@@ -275,6 +532,112 @@ def test_rich_first_message_extracts_existing_facts(db_session):
     assert decision.state.collected_facts["router_restarted"] is True
     assert "portal_id" not in decision.state.already_requested_fields
     assert "router_restarted" not in decision.state.already_requested_fields
+
+
+def test_configured_no_internet_playbook_asks_first_line_steps(db_session):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "first_line_playbooks": [
+                    {
+                        "key": "technical_support_no_internet",
+                        "intent": "technical_support",
+                        "category": "no_internet",
+                        "acknowledgement": "Sorry about the downtime.",
+                        "steps": [
+                            {
+                                "action": "request_field",
+                                "field": "router_powered",
+                                "response": "Is your router or ONU powered on right now?",
+                            },
+                            {
+                                "condition": {
+                                    "type": "field_value",
+                                    "field": "router_powered",
+                                    "value": True,
+                                },
+                                "action": "request_field",
+                                "field": "los_status",
+                                "response": "Are you seeing any red LOS warning light?",
+                            },
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    first = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet for the past one month.",
+        classification=_classification(),
+    )
+    engine.persist_state(session, first.state)
+    second = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="The router is powered on.",
+        classification=_classification(),
+    )
+
+    assert first.action == "respond"
+    assert first.metadata["reason"] == "playbook_required_field"
+    assert "Sorry about the downtime." in (first.response_text or "")
+    assert "router or ONU powered" in (first.response_text or "")
+    assert "router_powered" in first.state.already_requested_fields
+    assert second.action == "respond"
+    assert "red LOS" in (second.response_text or "")
+    assert "Sorry about the downtime." not in (second.response_text or "")
+    assert "los_status" in second.state.already_requested_fields
+
+
+def test_no_internet_without_playbook_does_not_auto_handoff_after_classification(
+    db_session,
+):
+    subscriber = _subscriber(db_session)
+    conversation = _conversation(db_session, subscriber_id=subscriber.id)
+    version = _version(
+        db_session,
+        metadata={
+            "tools": {
+                "customer_lookup": {"enabled": True},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            "conversation_policy": {
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+            },
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="No internet.",
+        classification=_classification(),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.metadata["reason"] == "legacy_classifier_path"
+    assert decision.response_text is None
 
 
 def test_monitoring_troubleshooting_then_red_los_handoff_retains_state(db_session):
@@ -321,7 +684,11 @@ def test_monitoring_unavailable_escalates_without_diagnosis(db_session, monkeypa
     def _raise(*_args, **_kwargs):
         raise RuntimeError("monitoring down")
 
-    monkeypatch.setattr(engine, "get_customer_network_context", _raise)
+    monkeypatch.setattr(
+        engine.support_monitoring,
+        "project_support_monitoring",
+        _raise,
+    )
     decision = engine.run_conversational_turn(
         db_session,
         conversation=conversation,
@@ -336,28 +703,22 @@ def test_monitoring_unavailable_escalates_without_diagnosis(db_session, monkeypa
     assert "could not complete" in (decision.response_text or "")
 
 
-def test_ambiguous_lookup_records_tool_result(db_session):
+def test_duplicate_customer_identifiers_are_not_a_directory_search(db_session):
     _subscriber(db_session, email="shared@example.test")
     _subscriber(db_session, email="shared@example.test")
     conversation = _conversation(db_session)
-    version = _version(
-        db_session, metadata={"permitted_identifiers": ["registered_email"]}
-    )
-    session = _session(db_session, conversation, version)
-
-    decision = engine.run_conversational_turn(
+    result = engine.execute_tool(
         db_session,
+        "customer_lookup",
+        {
+            "identifier_type": "registered_email",
+            "identifier_value": "shared@example.test",
+        },
+        policy={"tools": {"customer_lookup": {"enabled": True}}},
         conversation=conversation,
-        session=session,
-        version=version,
-        latest_body="My email is shared@example.test and internet is down.",
-        classification=_classification(),
     )
 
-    assert any(
-        item["tool"] == "customer_lookup" and item["status"] == "ambiguous"
-        for item in decision.state.tool_executions
-    )
+    assert result == {"status": "not_found"}
 
 
 def test_red_los_escalates(db_session):
@@ -460,6 +821,41 @@ def test_explicit_human_request_escalates(db_session):
     assert decision.action == "handoff"
     assert decision.state.human_requested is True
     assert decision.state.escalation_reason == "human_requested"
+
+
+def test_follow_up_classification_is_not_handed_off_by_engine(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            }
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Hello",
+        classification=_classification(
+            intent="general_enquiry",
+            category="general_enquiry",
+            confidence=0.2,
+            requires_follow_up=True,
+            follow_up_question="Please tell me what you need help with today.",
+        ),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.state.classification_requires_follow_up is True
+    assert decision.state.classification_follow_up_question == (
+        "Please tell me what you need help with today."
+    )
 
 
 def test_turn_limit_and_timeout_escalate(db_session):

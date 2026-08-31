@@ -36,6 +36,7 @@ from app.models.team_inbox import (
 from app.services import (
     ai_conversation_intake,
     ai_intake,
+    ai_intake_conversation_engine,
     team_inbox_channel_receive,
     team_inbox_maintenance,
 )
@@ -97,6 +98,239 @@ class _Gateway:
             ),
             {"endpoint": "primary", "fallback_used": False},
         )
+
+
+def _identifier_state():
+    return ai_intake_conversation_engine.ConversationalState(
+        conversation_id=str(uuid4()),
+        session_id=str(uuid4()),
+        policy_version_id=str(uuid4()),
+        channel=InboxChannelType.whatsapp.value,
+    )
+
+
+def test_identifier_prompt_follows_declared_phone_first_order():
+    """A phone-first policy is asked phone first.
+
+    This fixture is deliberately NON-CANONICAL relative to the
+    portal -> email -> phone order the engine used to impose: if the
+    implementation ever reverts to imposing a canonical order, the very first
+    assertion here fails.
+    """
+    state = _identifier_state()
+    policy = {
+        "permitted_identifiers": (
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        )
+    }
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+
+    assert requested == "registered_phone"
+    assert ai_intake_conversation_engine._identifier_question(requested) == (
+        "Please send the registered phone number on the account."
+    )
+
+    state.already_requested_fields = ("registered_phone",)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "registered_email"
+    )
+
+    state.already_requested_fields = ("registered_phone", "registered_email")
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "portal_id"
+    )
+
+    state.already_requested_fields = (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
+    )
+
+    state.registered_email = "customer@example.test"
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
+    )
+
+
+def test_identifier_prompt_follows_a_second_non_default_declared_order():
+    """A second non-canonical, non-default order is also obeyed verbatim.
+
+    email -> portal -> phone is neither the historical default nor the
+    canonical constant, so no fixed ordering can satisfy both this test and
+    the phone-first one above.
+    """
+    state = _identifier_state()
+    policy = {
+        "permitted_identifiers": (
+            "registered_email",
+            "portal_id",
+            "registered_phone",
+        )
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_email",
+        "portal_id",
+        "registered_phone",
+    )
+
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "registered_email"
+    )
+    state.already_requested_fields = ("registered_email",)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        == "portal_id"
+    )
+
+
+def test_identifier_order_de_duplicates_by_first_occurrence():
+    policy = {
+        "permitted_identifiers": [
+            "registered_phone",
+            "portal_id",
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        ]
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "portal_id",
+        "registered_email",
+    )
+
+
+def test_identifier_order_drops_invalid_values_without_reordering():
+    policy = {
+        "permitted_identifiers": [
+            "nin",
+            "registered_email",
+            "",
+            "portal_id",
+            "meter_number",
+            "registered_phone",
+        ]
+    }
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_email",
+        "portal_id",
+        "registered_phone",
+    )
+
+
+def test_identifier_order_defaults_to_the_historical_order_when_absent():
+    assert ai_intake_conversation_engine._permitted_identifiers({}) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+    assert (
+        ai_intake_conversation_engine._permitted_identifiers({})
+        == ai_intake_conversation_engine.DEFAULT_IDENTIFIER_REQUEST_ORDER
+    )
+
+
+@pytest.mark.parametrize("configured", [(), [], None, "", ["nin"], "nin"])
+def test_identifier_order_defaults_to_the_historical_order_when_empty(configured):
+    policy = {"permitted_identifiers": configured}
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+
+
+def test_policy_default_identifier_order_is_the_historical_order():
+    policy = ai_intake_conversation_engine._policy(None)
+
+    assert ai_intake_conversation_engine._permitted_identifiers(policy) == (
+        "registered_phone",
+        "registered_email",
+        "portal_id",
+    )
+
+
+def test_identifier_lookup_tries_identifiers_in_the_declared_order(monkeypatch):
+    """Identification lookup shares the prompting order, not a fixed one.
+
+    The state carries every identifier, so only the declared order decides
+    which one `customer_lookup` is called with first. The fixture order is
+    phone-first: an implementation that imposes a canonical portal-first order
+    fails here even though every prompt-order test still passed.
+    """
+    attempted: list[str] = []
+
+    def _fake_execute_tool(db, key, inputs, **kwargs):
+        assert key == "customer_lookup"
+        attempted.append(str(inputs["identifier_type"]))
+        return {"status": "not_found"}
+
+    monkeypatch.setattr(
+        ai_intake_conversation_engine, "execute_tool", _fake_execute_tool
+    )
+
+    state = _identifier_state()
+    state.portal_id = "12345"
+    state.registered_email = "customer@example.test"
+    state.registered_phone = "08030000000"
+    conversation = InboxConversation(
+        id=uuid4(),
+        channel_type=InboxChannelType.whatsapp.value,
+    )
+
+    ai_intake_conversation_engine._identify_customer(
+        None,
+        state=state,
+        conversation=conversation,
+        policy={
+            "permitted_identifiers": (
+                "registered_phone",
+                "registered_email",
+                "portal_id",
+            )
+        },
+        tool_mode="live",
+    )
+
+    assert attempted == ["registered_phone", "registered_email", "portal_id"]
+
+    attempted.clear()
+    state.subscriber_id = None
+    ai_intake_conversation_engine._identify_customer(
+        None,
+        state=state,
+        conversation=conversation,
+        policy={"permitted_identifiers": ("portal_id", "registered_phone")},
+        tool_mode="live",
+    )
+
+    assert attempted == ["portal_id", "registered_phone"]
+
+
+def test_identifier_prompt_preserves_single_identifier_policy():
+    state = _identifier_state()
+    policy = {"permitted_identifiers": ("portal_id",)}
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+
+    assert requested == "portal_id"
+    assert (
+        ai_intake_conversation_engine._identifier_question(requested)
+        == "Please send your Portal ID or account number so I can identify the service."
+    )
 
 
 def _team(db_session, name: str) -> ServiceTeam:
@@ -304,7 +538,10 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
         .all()
     )
     assert outbound[0].metadata_["sender_type"] == "ai"
-    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Virtual Assistant"
+    assert (
+        outbound[0].metadata_["ai_display_name"]
+        == ai_conversation_intake.DEFAULT_DISPLAY_NAME
+    )
     reasons = [
         event.reason_code
         for event in db_session.query(InboxStatusTransitionEvent)
@@ -312,6 +549,34 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
         .order_by(InboxStatusTransitionEvent.recorded_at.asc())
     ]
     assert reasons == ["ai_intake_started", "ai_handoff_accepted"]
+
+
+def test_active_ai_session_keeps_following_inbound_in_ai_intake(db_session):
+    technical = _team(db_session, "Active AI Session Technical Team")
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
+
+    first = _receive(
+        db_session,
+        message_id="wamid-active-session-1",
+        body="Hello",
+    )
+    second = _receive(
+        db_session,
+        message_id="wamid-active-session-2",
+        body="Why are you suspending my office account again?",
+    )
+
+    first_message = db_session.get(InboxMessage, first.message_id)
+    second_message = db_session.get(InboxMessage, second.message_id)
+    conversation = db_session.get(InboxConversation, first.conversation_id)
+
+    assert conversation.metadata_["ai_handling"] is True
+    assert first_message.metadata_["ai_intake_status"] == "classifying"
+    assert second_message.metadata_["ai_intake_status"] == "classifying"
+    assert second_message.metadata_["ai_intake_reason"] == "classified"
 
 
 def test_receive_persists_ai_work_without_synchronous_ai_response(
@@ -602,7 +867,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         db_session,
         fallback_team_id=fallback_id,
         threshold=0.8,
-        welcome_message="Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
+        welcome_message="Welcome to Dotmac Support. How can we help?",
         mappings=[_mapping("technical_support", technical, "technical")],
     )
     gateway = _Gateway(confidence=0.3)
@@ -624,7 +889,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         .all()
     )
     assert [message.body for message in outbound] == [
-        "Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
+        "Welcome to Dotmac Support. How can we help?",
         ai_intake.GENERIC_FOLLOW_UP_QUESTION,
     ]
     assert outbound[0].metadata_["ai_message_purpose"] == "welcome"
@@ -651,6 +916,123 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
     assert second_message.metadata_["ai_intake_status"] == "classified"
     assert conversation.assignments == []
     assert _non_queue_outbound_count(db_session) == 2
+
+
+def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkeypatch):
+    account_scope = f"phone-clarify-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Composable Clarification Fallback")
+    help_desk = _team(db_session, "Composable Clarification Help Desk")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test composable clarification before handoff",
+    )
+    fallback_id = fallback.id
+    help_desk_id = help_desk.id
+    db_session.commit()
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback_id,
+            welcome_message="Hello from AI intake.",
+            intent_definitions=(
+                {
+                    "key": "general_enquiry",
+                    "display_name": "General enquiry",
+                    "category": "general_enquiry",
+                    "enabled": True,
+                    "priority": 1,
+                },
+            ),
+            intent_team_mappings=(
+                {
+                    "intent": "general_enquiry",
+                    "service_team_id": str(help_desk_id),
+                    "enabled": True,
+                },
+            ),
+            escalation_rules={
+                "confidence_threshold": 0.8,
+                "allow_followup_questions": True,
+                "max_clarification_turns": 1,
+                "escalate_after_minutes": 5,
+                "exclude_campaign_attribution": True,
+            },
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={
+                "customer_lookup": {"enabled": False},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            conversation_policy={
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            },
+        ),
+    )
+    ai_conversation_intake.activate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+    gateway = _Gateway(
+        confidence=0.3,
+        intent="general_enquiry",
+        category="general_enquiry",
+    )
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+    db_session_adapter.release_read_transaction(db_session)
+
+    received = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type=InboxChannelType.whatsapp.value,
+            contact_address="2348012345678",
+            body="Hello",
+            external_message_id="wamid-composable-clarify",
+            external_thread_id=f"thread-{uuid4()}",
+            metadata={
+                "provider": WHATSAPP_PROVIDER_META,
+                "provider_account_scope": account_scope,
+            },
+        ),
+    )
+    _process_ai(db_session)
+
+    conversation = db_session.get(InboxConversation, received.conversation_id)
+    first_message = db_session.get(InboxMessage, received.message_id)
+    outbound = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "outbound")
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    )
+
+    assert conversation.primary_service_team_id is None
+    assert first_message.metadata_["ai_intake_status"] == "awaiting_follow_up"
+    assert first_message.metadata_["ai_intake_engine_action"] == "continue_classifier"
+    assert (
+        first_message.metadata_["ai_intake_engine_reason"] == "legacy_classifier_path"
+    )
+    assert first_message.metadata_["ai_intake_requires_follow_up"] is True
+    assert [message.body for message in outbound] == [
+        "Hello from AI intake.",
+        ai_intake.GENERIC_FOLLOW_UP_QUESTION,
+    ]
+    assert (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .count()
+        == 0
+    )
 
 
 def test_second_uncertain_reply_falls_back_without_another_question(
@@ -1539,13 +1921,13 @@ def test_whatsapp_facebook_and_instagram_use_the_same_classifier(
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-fb",
+        scope_key="meta.social:page-fb",
         channel_type=InboxChannelType.facebook_messenger.value,
     )
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-ig",
+        scope_key="meta.social:page-ig",
         channel_type=InboxChannelType.instagram_dm.value,
     )
     gateway = _Gateway()
@@ -1656,7 +2038,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
         scope="ai:intake-policy-draft",
         reason="test composable human handoff",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1781,7 +2163,7 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
         scope="ai:intake-policy-draft",
         reason="test preview safety",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1832,6 +2214,66 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
     assert preview.next_action in {"respond", "handoff", "continue_classifier"}
 
 
+def test_activation_rejects_first_turn_handoff_rule(db_session):
+    account_scope = f"phone-first-turn-handoff-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "First Turn Handoff Fallback")
+    technical = _team(db_session, "First Turn Handoff Technical")
+    fallback_id = fallback.id
+    technical_id = technical.id
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test first turn handoff rejection",
+    )
+    db_session.commit()
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback_id,
+            welcome_message="Hello.",
+            intent_team_mappings=(
+                {
+                    "intent": "technical_support",
+                    "service_team_id": str(technical_id),
+                    "enabled": True,
+                },
+            ),
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={"customer_lookup": {"enabled": True}},
+            conversation_policy={
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {
+                            "type": "turn_count",
+                            "operator": ">=",
+                            "value": 0,
+                        },
+                        "action": "handoff",
+                    }
+                ],
+            },
+        ),
+    )
+
+    outcome = ai_conversation_intake.validate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+
+    assert outcome.valid is False
+    assert "must not match the first turn" in outcome.errors[0]
+
+
 def test_activation_rejects_invalid_composable_rule_action(db_session):
     account_scope = f"phone-invalid-rule-{uuid4().hex}"
     _install_whatsapp_scope(db_session, account_scope=account_scope)
@@ -1844,7 +2286,7 @@ def test_activation_rejects_invalid_composable_rule_action(db_session):
         scope="ai:intake-policy-draft",
         reason="test invalid composable rule",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1899,7 +2341,7 @@ def test_draft_policy_persists_langgraph_engine_mode(db_session):
         reason="test langgraph mode persistence",
     )
 
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(

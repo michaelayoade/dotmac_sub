@@ -4,6 +4,7 @@ Provides services for Offers, OfferPrices, OfferVersions, and OfferVersionPrices
 """
 
 import logging
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -433,12 +434,36 @@ class OfferPrices(CRUDManager[OfferPrice]):
         data = payload.model_dump(exclude_unset=True)
         changes = billing_governance.billing_field_changes(price, data)
         billing_governance.assert_offer_price_update_safe(db, price, changes)
+        previous_amount = Decimal(str(price.amount))
         for key, value in data.items():
             setattr(price, key, value)
+        renewal_outcome = None
+        if (
+            "amount" in changes
+            and price.price_type == PriceType.recurring
+            and price.is_active
+        ):
+            renewal_outcome = billing_governance.apply_offer_price_at_renewal(
+                db,
+                billing_governance.ApplyOfferPriceAtRenewal(
+                    offer_price_id=price.id,
+                    offer_id=price.offer_id,
+                    previous_amount=previous_amount,
+                    next_amount=Decimal(str(price.amount)),
+                ),
+            )
         critical_changes = billing_governance.billing_critical_changes(
             "offer_price", changes
         )
         if critical_changes:
+            if renewal_outcome is not None:
+                critical_changes = {
+                    **critical_changes,
+                    "previous_amount": previous_amount,
+                    "renewal_subscription_count": (
+                        renewal_outcome.affected_subscription_count
+                    ),
+                }
             billing_governance.stage_billing_catalog_change(
                 db,
                 action="price_updated",

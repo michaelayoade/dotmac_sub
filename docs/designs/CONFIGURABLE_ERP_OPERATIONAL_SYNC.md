@@ -10,6 +10,8 @@ allowlist of enabled domains (`projects`, `project_tasks`, `tickets`, and
 `work_orders`); its policy fixes the destination to
 `/api/v1/sync/sub/bulk` and bounds batch size. Administrators configure all
 profiles from `/admin/integrations/erp`. They cannot enter arbitrary URLs.
+The configured ERP service credential must carry ERP scope `sub:domain:write`;
+otherwise ERP answers 403 and Sub refuses to enable the operational binding.
 
 Each domain advances an independent `(updated_at, id)` watermark only after ERP
 accepts the complete bulk request without errors. Replays are safe because ERP
@@ -18,10 +20,9 @@ require the project profile and are sent after projects and tickets.
 
 ERP responds with `contract_version: 2` plus separate project, ticket,
 project-task, and work-order counts. The typed client rejects a missing or older
-response before any watermark advances. Item errors use ERP's compatibility
-field `crm_id` for the Self-Care source UUID; the typed client converts it to
-`source_id` internally. Deploy ERP and its migration first, then enable the
-Self-Care capability.
+response before any watermark advances. Item errors return the neutral
+`source_reference` for the Sub source UUID. No predecessor-system alias is
+accepted. Deploy ERP and its migration first, then enable the Sub capability.
 
 The dedicated scheduler is enabled only while the capability binding is
 enabled. The same page provides a manual run action. Disabling every profile

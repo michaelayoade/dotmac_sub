@@ -1,4 +1,4 @@
-<div class="relative inline-flex" @keydown.escape.stop="exportMenuOpen = false">
+<div class="static inline-flex sm:relative" @keydown.escape.stop="exportMenuOpen = false">
     <button type="button"
             @click="exportMenuOpen = !exportMenuOpen; exportError = ''"
             :aria-expanded="exportMenuOpen.toString()"
@@ -15,7 +15,7 @@
          x-cloak
          x-transition
          @click.outside="exportMenuOpen = false"
-         class="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+         class="absolute inset-x-0 top-full z-50 mt-2 w-auto overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900 sm:left-auto sm:right-0 sm:w-80"
          role="dialog"
          aria-labelledby="customer-export-title"
          :aria-busy="exportLoading ? 'true' : 'false'">

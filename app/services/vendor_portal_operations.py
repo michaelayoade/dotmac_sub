@@ -1358,7 +1358,13 @@ class VendorPortalOperations:
 
     @staticmethod
     def list_projects(
-        db: Session, vendor_id: str, *, available: bool, limit: int, offset: int
+        db: Session,
+        vendor_id: str,
+        *,
+        available: bool,
+        limit: int,
+        offset: int,
+        search: str | None = None,
     ) -> list[dict]:
         query = db.query(InstallationProject).options(
             joinedload(InstallationProject.project),
@@ -1385,6 +1391,16 @@ class VendorPortalOperations:
                 or_(
                     InstallationProject.assigned_vendor_id == vendor_uuid,
                     vendor_quote_exists,
+                )
+            )
+        search_pattern = _queue_search_pattern(search)
+        if search_pattern:
+            query = query.filter(
+                InstallationProject.project.has(
+                    or_(
+                        Project.name.ilike(search_pattern),
+                        Project.code.ilike(search_pattern),
+                    )
                 )
             )
         rows = (

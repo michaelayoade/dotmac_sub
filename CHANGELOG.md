@@ -2,6 +2,98 @@
 
 All notable changes to DotMac Sub are tracked here.
 
+## 8.27.0 - 2026-08-31
+
+- Version bump.
+
+## 8.26.0 - 2026-08-30
+
+- Version bump.
+
+## 8.22.2 - 2026-08-30
+
+- Version bump.
+
+## 8.22.1 - 2026-08-29
+
+- Version bump.
+
+## 8.22.0 - 2026-08-29
+
+- Version bump.
+
+## 8.21.3 - 2026-08-29
+
+- Version bump.
+
+## 8.21.2 - 2026-08-29
+
+- Version bump.
+
+## 8.21.0 - 2026-08-28
+
+- Version bump.
+
+## 8.20.5 - 2026-08-28
+
+- Version bump.
+
+## 8.20.4 - 2026-08-28
+
+- Version bump.
+
+## 8.20.3 - 2026-08-28
+
+- Version bump.
+
+## 8.20.2 - 2026-08-27
+
+- Version bump.
+
+## 8.17.1 - 2026-08-26
+
+- Version bump.
+
+## 8.16.0 - 2026-08-26
+
+- Version bump.
+
+## 8.15.1 - 2026-08-26
+
+- Version bump.
+
+## 8.15.0 - 2026-08-25
+
+- Version bump.
+
+## 8.14.0 - 2026-08-25
+
+- Version bump.
+
+## 8.13.4 - 2026-08-25
+
+- Version bump.
+
+## 8.13.3 - 2026-08-25
+
+- Version bump.
+
+## 8.13.2 - 2026-08-25
+
+- Version bump.
+
+## 8.13.1 - 2026-08-24
+
+- Version bump.
+
+## 8.13.0 - 2026-08-24
+
+- Version bump.
+
+## 8.11.3 - 2026-08-24
+
+- Version bump.
+
 ## 8.11.1 - 2026-08-23
 
 - Version bump.

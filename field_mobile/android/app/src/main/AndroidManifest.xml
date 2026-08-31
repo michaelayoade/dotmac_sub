@@ -32,9 +32,43 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Flutter's own deep-link handler routes an incoming VIEW
+                 intent's path+query into the app's GoRouter, which hands the
+                 exact callback path to OidcCallbackCoordinator. Without this
+                 flag the intent filter below verifies but the link never
+                 reaches Dart. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- The VERIFIED redirect boundary for the OIDC ceremony (Android
+                 App Links). android:autoVerify makes Android fetch
+                 https://links.dotmac.io/.well-known/assetlinks.json at install
+                 time and open this link in the app ONLY if that document names
+                 this package and the certificate this build was actually signed
+                 with. An unverified or wrongly-signed build gets the browser,
+                 which is the point.
+
+                 android:path is an EXACT match, deliberately not pathPrefix and
+                 deliberately not pathPattern: a prefix would make every path
+                 under /oidc/field/callback a legal place to deliver an
+                 authorization code.
+
+                 There is NO custom-scheme filter here and there must never be
+                 one. A custom scheme is claimable by any app on the device, so
+                 it delivers the code to whoever registered it first. See
+                 lib/core/deeplink/oidc_redirect.dart. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="links.dotmac.io"
+                    android:path="/oidc/field/callback"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

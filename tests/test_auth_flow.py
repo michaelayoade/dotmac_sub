@@ -19,11 +19,17 @@ from app.models.auth import (
     UserCredential,
 )
 from app.models.auth import Session as AuthSession
+from app.models.catalog import AccessCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import CommunicationIntentRecord, Notification
-from app.models.subscriber import UserType
+from app.models.subscriber import SubscriberStatus, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
+from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceEvent,
+    InboxAgentPresenceStatus,
+)
 from app.services import auth_flow as auth_flow_service
 from app.services import credential_recovery, staff_provisioning
 from app.services import web_system_user_mutations as web_system_user_mutations_service
@@ -179,6 +185,94 @@ def test_login_radius_uses_username_not_subscriber_email(
             AuthProvider.radius,
         )
     assert exc.value.status_code == 401
+
+
+def test_login_accepts_access_credential_password_for_customer_mobile(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-customer-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session,
+        "pppoe-customer-001",
+        "pppoe-secret",
+        _make_request(),
+        None,
+    )
+
+    assert result.get("access_token")
+    assert result.get("refresh_token")
+    session = db_session.query(AuthSession).one()
+    assert session.subscriber_id == person.id
+
+
+@pytest.mark.parametrize(
+    "subscriber_status",
+    [SubscriberStatus.disabled, SubscriberStatus.canceled],
+)
+def test_access_credential_login_blocks_disabled_or_canceled_customers(
+    db_session, person, subscriber_status, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.status = subscriber_status
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username=f"pppoe-{subscriber_status.value}",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session,
+            f"pppoe-{subscriber_status.value}",
+            "pppoe-secret",
+            _make_request(),
+            None,
+        )
+
+    assert exc.value.status_code == 403
+    assert db_session.query(AuthSession).count() == 0
+
+
+def test_access_credential_login_returns_mfa_token_when_enabled(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-mfa-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    code = pyotp.TOTP(setup["secret"]).now()
+    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+
+    result = AuthFlow.login(
+        db_session,
+        "pppoe-mfa-001",
+        "pppoe-secret",
+        _make_request(),
+        None,
+    )
+
+    assert result["mfa_required"] is True
+    assert result["mfa_token"]
 
 
 def test_mfa_setup_confirm(db_session, person, monkeypatch):
@@ -848,6 +942,69 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
         request,
     )
     assert verified["access_token"]
+    presence = db_session.query(InboxAgentPresence).one()
+    assert presence.person_id == system_user.id
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+
+
+def test_successful_staff_login_defaults_agent_presence_online(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    system_user, _credential = _system_user_with_credential(
+        db_session, "admin-online-by-default@example.com"
+    )
+    prior_seen_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user.id,
+            status=InboxAgentPresenceStatus.offline.value,
+            manual_override_status=InboxAgentPresenceStatus.offline.value,
+            last_seen_at=prior_seen_at,
+        )
+    )
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+
+    assert result["access_token"]
+    session = db_session.query(AuthSession).one()
+    presence = db_session.query(InboxAgentPresence).one()
+    event = db_session.query(InboxAgentPresenceEvent).one()
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+    assert presence.last_seen_at == session.created_at
+    assert event.reason_code == "staff_sign_in"
+    assert event.source_id == f"auth-session:{session.id}"
+
+
+def test_successful_subscriber_login_does_not_create_agent_presence(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add(
+        UserCredential(
+            person_id=person.id,
+            provider=AuthProvider.local,
+            username="subscriber-no-agent-presence@example.com",
+            password_hash=hash_password("secret"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session,
+        "subscriber-no-agent-presence@example.com",
+        "secret",
+        _make_request(),
+        None,
+    )
+
+    assert result["access_token"]
+    assert db_session.query(InboxAgentPresence).count() == 0
+    assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
 def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkeypatch):

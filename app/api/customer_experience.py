@@ -10,6 +10,7 @@ from app.schemas.customer_experience import (
     CustomerExperienceAcceptRequest,
     CustomerExperienceAttentionRequest,
     CustomerExperienceHandoffRead,
+    CustomerExperienceResolveAttentionRequest,
 )
 from app.services import customer_experience_handoffs
 
@@ -36,7 +37,7 @@ def _translate(exc: customer_experience_handoffs.CustomerExperienceHandoffError)
 @router.get(
     "",
     response_model=list[CustomerExperienceHandoffRead],
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("customer_experience:handoff:read"))],
 )
 def list_handoffs(
     handoff_status: str | None = Query(default=None, alias="status"),
@@ -45,7 +46,7 @@ def list_handoffs(
     db: Session = Depends(get_db),
 ):
     try:
-        return customer_experience_handoffs.list_handoffs(
+        return customer_experience_handoffs.list_handoff_queue(
             db, status=handoff_status, limit=limit, offset=offset
         )
     except customer_experience_handoffs.CustomerExperienceHandoffError as exc:
@@ -55,7 +56,7 @@ def list_handoffs(
 @router.post(
     "/{handoff_id}/accept",
     response_model=CustomerExperienceHandoffRead,
-    dependencies=[Depends(require_permission("provisioning:write"))],
+    dependencies=[Depends(require_permission("customer_experience:handoff:accept"))],
 )
 def accept_handoff(
     handoff_id: UUID,
@@ -78,7 +79,7 @@ def accept_handoff(
 @router.post(
     "/{handoff_id}/needs-attention",
     response_model=CustomerExperienceHandoffRead,
-    dependencies=[Depends(require_permission("provisioning:write"))],
+    dependencies=[Depends(require_permission("customer_experience:handoff:attention"))],
 )
 def mark_needs_attention(
     handoff_id: UUID,
@@ -88,6 +89,29 @@ def mark_needs_attention(
 ):
     try:
         return customer_experience_handoffs.mark_needs_attention(
+            db,
+            handoff_id=handoff_id,
+            actor_type="staff_user",
+            actor_id=_actor(principal),
+            reason=payload.reason,
+        )
+    except customer_experience_handoffs.CustomerExperienceHandoffError as exc:
+        _translate(exc)
+
+
+@router.post(
+    "/{handoff_id}/resolve-attention",
+    response_model=CustomerExperienceHandoffRead,
+    dependencies=[Depends(require_permission("customer_experience:handoff:attention"))],
+)
+def resolve_attention(
+    handoff_id: UUID,
+    payload: CustomerExperienceResolveAttentionRequest,
+    principal: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return customer_experience_handoffs.resolve_attention(
             db,
             handoff_id=handoff_id,
             actor_type="staff_user",

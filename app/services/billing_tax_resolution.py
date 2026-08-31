@@ -73,12 +73,7 @@ def resolve_default_tax_application(db: Session) -> TaxApplication:
         SettingDomain.billing,
         "default_tax_application",
     )
-    value = str(raw or "").strip().lower()
-    if value == "inclusive":
-        return TaxApplication.inclusive
-    if value == "exempt":
-        return TaxApplication.exempt
-    return TaxApplication.exclusive
+    return TaxApplication(str(raw).strip().lower())
 
 
 def _matching_catalog_tax_rate_id(

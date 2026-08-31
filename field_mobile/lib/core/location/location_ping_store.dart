@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../features/location/location_cadence.dart';
+import '../secure/evidence_cipher.dart';
+import '../secure/evidence_files.dart';
 
 class LocationPingPayload {
   const LocationPingPayload({
@@ -65,18 +67,34 @@ class MemoryLocationPingStore implements LocationPingStore {
   }
 }
 
+/// The queue of pings the device has recorded but not yet delivered. Each ping
+/// is a customer premises the technician stood at, so the file on disk is an
+/// AES-GCM envelope bound to the scope, never readable JSON. There is no
+/// plaintext fallback: [cipher] is required, because a queue we cannot encrypt
+/// is a queue we must not write.
 class FileLocationPingStore implements LocationPingStore {
-  FileLocationPingStore(this.file, {DateTime Function()? clock})
-    : _clock = clock ?? (() => DateTime.now().toUtc());
+  FileLocationPingStore(
+    this.file, {
+    required this.cipher,
+    required this.scopeKey,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? (() => DateTime.now().toUtc());
 
   final File file;
+  final EvidenceCipher cipher;
+  final String scopeKey;
   final DateTime Function() _clock;
+
+  String get _context => evidenceContext(scopeKey, 'location', 'queue');
 
   @override
   Future<List<LocationPingPayload>> load() async {
     if (!await file.exists()) return const [];
     try {
-      final decoded = jsonDecode(await file.readAsString());
+      final envelope = await file.readAsBytes();
+      final decoded = jsonDecode(
+        utf8.decode(cipher.open(envelope, context: _context)),
+      );
       if (decoded is! List) {
         throw const FormatException('Persisted location queue is not a list');
       }
@@ -86,6 +104,8 @@ class FileLocationPingStore implements LocationPingStore {
             LocationPingPayload.fromJson(item.cast<String, dynamic>()),
       ];
     } on Object {
+      // Includes an envelope belonging to a key we no longer hold: unreadable
+      // is treated exactly like corrupt, and neither is ever surfaced.
       await _quarantineCorruptQueue();
       return const [];
     }
@@ -108,8 +128,11 @@ class FileLocationPingStore implements LocationPingStore {
       return;
     }
     final temporary = File('${file.path}.tmp');
-    await temporary.writeAsString(
-      jsonEncode(pings.map((ping) => ping.toJson()).toList()),
+    await temporary.writeAsBytes(
+      cipher.seal(
+        utf8.encode(jsonEncode(pings.map((ping) => ping.toJson()).toList())),
+        context: _context,
+      ),
       flush: true,
     );
     if (await file.exists()) await file.delete();

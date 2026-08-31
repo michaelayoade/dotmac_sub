@@ -108,7 +108,11 @@ function _container(ctx) {
         const div = document.createElement('div');
         div.className = 'echarts-holder';
         const parent = el.parentElement;
-        const h = el.clientHeight || (parent && parent.clientHeight) || 260;
+        const h = Math.max(
+            el.clientHeight || 0,
+            (parent && parent.clientHeight) || 0,
+            260,
+        );
         div.style.width = '100%';
         div.style.height = (h > 40 ? h : 260) + 'px';
         el.style.display = 'none';
@@ -137,9 +141,15 @@ function _bindResize() {
 // .canvas/.ctx (isChartUsable checks these), .update(), .applyTheme(), .setData().
 function _makeChart(container, buildOption) {
     if (!container || typeof echarts === 'undefined') return null;
-    const existing = echarts.getInstanceByDom(container);
-    if (existing) existing.dispose();
-    const instance = echarts.init(container);
+    let instance;
+    try {
+        const existing = echarts.getInstanceByDom(container);
+        if (existing) existing.dispose();
+        instance = echarts.init(container);
+    } catch (error) {
+        console.error('Could not initialize report chart.', error);
+        return null;
+    }
     const wrapper = {
         _echarts: instance,
         _destroyed: false,
@@ -166,7 +176,13 @@ function _makeChart(container, buildOption) {
             }
         },
     };
-    instance.setOption(buildOption(getThemeColors()));
+    try {
+        instance.setOption(buildOption(getThemeColors()));
+    } catch (error) {
+        console.error('Could not render report chart.', error);
+        try { instance.dispose(); } catch (_e) { /* initialization already failed */ }
+        return null;
+    }
     container._dotmacChart = wrapper;
     _bindResize();
     return wrapper;
@@ -312,6 +328,18 @@ function registerChart(id, chart) {
     if (existing && existing !== chart) {
         try { if (!existing._destroyed) existing.destroy(); } catch (_e) { /* stale */ }
     }
+    const errorState = document.getElementById(`${id}-error`);
+    const canvas = document.getElementById(id);
+    const stateContainer = canvas && canvas.closest('[data-report-chart-state]');
+    if (!isChartUsable(chart)) {
+        if (canvas && canvas._echartsDiv) canvas._echartsDiv.style.display = 'none';
+        if (errorState) errorState.hidden = false;
+        if (stateContainer) stateContainer.dataset.reportChartState = 'unavailable';
+        chartRegistry.delete(id);
+        return;
+    }
+    if (errorState) errorState.hidden = true;
+    if (stateContainer) stateContainer.dataset.reportChartState = 'present';
     chartRegistry.set(id, chart);
 }
 

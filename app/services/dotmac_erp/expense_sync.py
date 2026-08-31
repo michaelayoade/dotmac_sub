@@ -83,14 +83,15 @@ def _requester_email(request: FieldExpenseRequest) -> str | None:
 
 
 def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
-    """Map a ``FieldExpenseRequest`` to ERP's ``CRMExpenseClaimPayload`` shape.
+    """Map a ``FieldExpenseRequest`` to ERP's ``SubExpenseClaimPayload`` shape.
 
-    Mirrors CRM's ``_map_expense_request``: ``omni_id`` is sub's request UUID,
+    Ports the historical mapper into a neutral contract: ``source_claim_id`` is
+    Sub's request UUID,
     amounts stringified, dates ISO-formatted, and each line carries
     ``category_code`` / ``claimed_amount`` / ``expense_date``. Fidelity notes vs
     CRM are documented in the ERP ownership contract — chiefly that ticket/project ids come from the
-    work-order mirror and ``reference_number`` from ``crm_expense_request_id``
-    (sub has no native expense number).
+    work-order provenance and ``reference_number`` from the retained imported
+    expense-request reference (Sub has no native expense number).
     """
     item_rows: list[dict[str, object]] = []
     for item in request.items:
@@ -118,12 +119,12 @@ def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
     reference_number = request.crm_expense_request_id or None
 
     return {
-        "omni_id": str(request.id),
+        "source_claim_id": str(request.id),
         "purpose": request.purpose,
         "claim_date": claim_date,
         "requested_by_email": _requester_email(request),
-        "ticket_crm_id": getattr(mirror, "crm_ticket_id", None),
-        "project_crm_id": getattr(mirror, "crm_project_id", None),
+        "ticket_source_reference": getattr(mirror, "crm_ticket_id", None),
+        "project_source_reference": getattr(mirror, "crm_project_id", None),
         "currency_code": request.currency,
         "remarks": request.notes or "",
         "reference_number": reference_number[:50] if reference_number else None,

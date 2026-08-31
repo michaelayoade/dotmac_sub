@@ -19,6 +19,116 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="collections.module_shadow_parity",
+        module="app.services.collections_module_shadow",
+        owns=("postpaid Collections module eligibility parity evidence",),
+        depends_on=("financial.invoices", "financial.dunning"),
+        notes=(
+            "Read-only aggregate comparison of Sub's incumbent postpaid "
+            "invoice candidate rule with the public Collections receivable "
+            "blocker. It preserves blocker pairs at an explicit evaluation "
+            "instant and later observation instant so temporal divergence is "
+            "visible. It writes no case or module row and moves no authority."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="postpaid Collections module eligibility parity evidence",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical Sub invoice facts",
+                        "incumbent Sub postpaid candidate rule",
+                        "public Collections receivable blocker contract",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical Sub invoice facts",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active invoice, settlement, due-date provenance, and "
+                        "invoice-line subscription facts"
+                    ),
+                ),
+                AuthorityInput(
+                    name="incumbent Sub postpaid candidate rule",
+                    owner="financial.dunning",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="current overdue-receivable admission predicate",
+                ),
+                AuthorityInput(
+                    name="public Collections receivable blocker contract",
+                    owner="collections.module_shadow_parity",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "dotmac_collections.ReceivableObservationV1 pure "
+                        "automated_collection_blocker"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "The migration CLI owns one repeatable-read, read-only "
+                    "snapshot and rolls it back after aggregate classification."
+                ),
+                locking="No row locks and no module service invocation.",
+                idempotency=(
+                    "Deterministic for one snapshot, evaluation instant, and "
+                    "observation instant; no idempotency ledger entry is written."
+                ),
+                retries="The report may be rerun without side effects.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "collections.module_shadow_parity.module_blocked_legacy_actionable",
+                    "collections.module_shadow_parity.module_actionable_legacy_blocked",
+                    "collections.module_shadow_parity.latent_temporal_mismatch",
+                ),
+                mapping_owner="collections module shadow report CLI",
+                fail_closed_on=(
+                    "a naive evaluation instant",
+                    "a naive observation instant",
+                    "an observation instant before the evaluation instant",
+                    "any unclassified invoice",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.SHADOWING,
+                old_owner="no Collections module comparison reader",
+                new_owner="collections.module_shadow_parity",
+                verification=(
+                    "Total aggregate blocker-pair classification at both "
+                    "instants, parity transitions, and unit and PostgreSQL "
+                    "read-only sensitivity proofs."
+                ),
+                cutover_gate=(
+                    "Zero current or temporal mismatches across an approved "
+                    "horizon on a sealed representative cohort, exact Billing-"
+                    "input parity, and a separate approved Collections authority "
+                    "switch."
+                ),
+                fallback_retirement=(
+                    "Retire this report-local adapter when a durable monotonic "
+                    "receivables reader becomes the approved runtime seam."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/PLATFORM_ADOPTION_LEDGER.md",
+                "docs/adr/0011-module-lineage-composition.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_collections_module_shadow.py",
+                "tests/integration/test_collections_module_shadow_parity.py",
+                "tests/architecture/test_commercial_module_composition.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="collections.postpaid_policy",
         module="app.services.collections.postpaid_policy",
         owns=("typed overdue-receivable decision",),

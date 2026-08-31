@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class _OperationalContract(BaseModel):
@@ -25,7 +25,7 @@ class ErpProjectProjection(_OperationalContract):
     start_at: datetime | None = None
     due_at: datetime | None = None
     customer_name: str | None = Field(default=None, max_length=200)
-    customer_crm_id: UUID | None = None
+    customer_source_reference: UUID | None = None
     metadata: dict[str, JsonValue] | None = None
     service_team_name: str | None = Field(default=None, max_length=200)
 
@@ -38,7 +38,7 @@ class ErpTicketProjection(_OperationalContract):
     status: str
     priority: str | None = Field(default=None, max_length=40)
     description: str | None = None
-    customer_crm_id: UUID | None = None
+    customer_source_reference: UUID | None = None
     metadata: dict[str, JsonValue] | None = None
     comments: tuple[dict[str, JsonValue], ...] = ()
     activity_log: tuple[dict[str, JsonValue], ...] = ()
@@ -67,8 +67,8 @@ class ErpWorkOrderProjection(_OperationalContract):
     work_type: str | None = Field(default=None, max_length=80)
     status: str
     priority: str | None = Field(default=None, max_length=40)
-    project_crm_id: str | None = None
-    ticket_crm_id: str | None = None
+    project_source_reference: str | None = None
+    ticket_source_reference: str | None = None
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     metadata: dict[str, JsonValue] | None = None
@@ -90,7 +90,7 @@ OperationalEntityType = Literal[
 
 class ErpOperationalSyncError(_OperationalContract):
     entity_type: OperationalEntityType
-    source_id: UUID = Field(validation_alias=AliasChoices("crm_id", "source_id"))
+    source_reference: UUID
     error: str
 
 

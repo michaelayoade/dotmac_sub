@@ -151,6 +151,13 @@ On the OLT detail page:
 3. Confirm the imported equipment mappings point to imported line/service profile IDs.
 4. Run `python scripts/report_missing_olt_mappings.py --all --fail-on-missing` after fleet imports; it must report `0 missing mapping(s)`.
 
+The runtime config pack is selected automatically from the OLT identity. Huawei
+MA5608T devices resolve to `huawei-ma5608t-standard`; Huawei MA5800-X2 devices
+resolve to `huawei-ma5800-x2-standard`. Operators do not choose this pack in the
+ONT UI. VLANs, TR-069 profile IDs, WCD indices, credentials, and imported
+line/service mappings remain OLT-local values that must still be configured and
+validated before ONT authorization.
+
 ### Step 7: Sync Inventory and Topology
 
 1. Click **"Sync ONTs"** — triggers OLT ONT discovery

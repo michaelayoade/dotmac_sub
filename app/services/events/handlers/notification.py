@@ -260,11 +260,14 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.invoice_sent: EventNotificationSpec(
         template_code="invoice_sent",
         category="billing",
-        subject="Invoice #{invoice_number} — payment due {due_date}",
+        subject="Invoice #{invoice_number} for your review",
         body=(
-            "Dear {subscriber_name},\n\n"
-            "Invoice #{invoice_number} for {amount} is due on {due_date}. "
-            "Please pay before the due date to avoid disruption."
+            "Hello {subscriber_name},\n\n"
+            "Please find attached invoice #{invoice_number}, created for your "
+            "review regarding your service.\n\n"
+            "Amount: {amount}\n"
+            "Due date: {due_date}\n\n"
+            "Thank you."
         ),
     ),
     EventType.invoice_paid: EventNotificationSpec(

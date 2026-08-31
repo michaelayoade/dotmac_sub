@@ -53,6 +53,54 @@ def test_subscriber_growth_export_uses_the_owned_chart_projection(monkeypatch) -
     ]
 
 
+def test_upcoming_charges_export_preserves_the_redesigned_report_filters(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_page(_db, **kwargs):
+        captured.update(kwargs)
+        return {
+            "charges": [
+                {
+                    "customer_name": "Ada Customer",
+                    "plan_name": "Business 100",
+                    "reference": "INV-100",
+                    "mode": "prepaid",
+                    "due_at": "2026-09-01",
+                    "days_remaining": 1,
+                    "amount_display": "NGN 25,000.00",
+                    "funding_display": "NGN 5,000.00",
+                    "needed_display": "NGN 20,000.00",
+                    "status_label": "Upcoming",
+                }
+            ],
+            "has_next": False,
+        }
+
+    monkeypatch.setattr(web_reports_extended, "get_upcoming_charges_data", fake_page)
+    export = web_reports_extended.build_extended_report_export(
+        object(),
+        web_reports_extended.ExtendedReportExportQuery(
+            kind=web_reports_extended.ExtendedReportExportKind.upcoming_charges,
+            mode="prepaid",
+            state="upcoming",
+            band="high",
+            include_funded=True,
+        ),
+    )
+
+    assert captured == {
+        "mode": "prepaid",
+        "state": "upcoming",
+        "band": "high",
+        "include_funded": True,
+        "page": 1,
+        "per_page": 50,
+    }
+    assert "Ada Customer,Business 100,INV-100,prepaid" in export.content
+
+
 def test_ticket_sla_export_preserves_the_filter_and_columns(monkeypatch) -> None:
     captured = {}
 

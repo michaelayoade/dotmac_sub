@@ -26,6 +26,24 @@ ApiClient _client(
   );
 }
 
+/// A token store whose persistence step fails with the one exception class
+/// the repository's error path knows how to convert. `_handleTokens` awaits
+/// `save`, so the throw only lands inside `login`/`verifyMfa`'s `try` frame
+/// when those methods await `_handleTokens` in turn.
+class _FailingSaveTokenStore extends InMemoryTokenStore {
+  @override
+  Future<void> save({
+    required String accessToken,
+    String? refreshToken,
+    LoginMode? loginMode,
+  }) async {
+    throw DioException(
+      requestOptions: RequestOptions(path: '/token-store/save'),
+      message: 'token storage unavailable',
+    );
+  }
+}
+
 void main() {
   late FakeHttpAdapter adapter;
   late InMemoryTokenStore store;
@@ -180,6 +198,50 @@ void main() {
     expect(result, isA<LoginFailure>());
     expect((result as LoginFailure).message, 'Invalid credentials');
   });
+
+  // Regression (ported from dotmac_crm 50beb0cb): `return _handleTokens(...)`
+  // without `await` hands the future back after the `try` frame has already
+  // been left, so a failure while persisting tokens escapes `on DioException`
+  // instead of coming back through the repository's normal failure path.
+  test('login reports a token-persistence failure as a LoginFailure', () async {
+    adapter.on(
+      'POST',
+      '/api/v1/auth/login',
+      (_) => (200, {'access_token': freshToken, 'refresh_token': 'refresh-1'}),
+    );
+    final failing = AuthRepository(_client(adapter, _FailingSaveTokenStore()));
+
+    final result = await failing.login(
+      username: 'tech@dotmac.io',
+      password: 'pw',
+      mode: LoginMode.staff,
+    );
+
+    expect(result, isA<LoginFailure>());
+  });
+
+  test(
+    'mfa verification reports a token-persistence failure as a LoginFailure',
+    () async {
+      adapter.on(
+        'POST',
+        '/api/v1/auth/mfa/verify',
+        (_) =>
+            (200, {'access_token': freshToken, 'refresh_token': 'refresh-2'}),
+      );
+      final failing = AuthRepository(
+        _client(adapter, _FailingSaveTokenStore()),
+      );
+
+      final result = await failing.verifyMfa(
+        mfaToken: 'mfa-1',
+        code: '123456',
+        mode: LoginMode.staff,
+      );
+
+      expect(result, isA<LoginFailure>());
+    },
+  );
 
   test('401 triggers refresh and retries once with the new token', () async {
     // Token looks healthy (proactive refresh skips it) but the server has

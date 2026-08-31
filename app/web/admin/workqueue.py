@@ -29,6 +29,10 @@ router = APIRouter(prefix="/workqueue", tags=["web-admin-workqueue"])
 templates = Jinja2Templates(directory="templates")
 
 READ_PERMISSION = "support:ticket:read"
+# Every route that reaches ``execute_action`` — claim, complete, snooze, clear
+# snooze — is a persisted owner command and carries ACT_PERMISSION. Snoozing
+# used to ride READ_PERMISSION, which let a read-only support role hide items
+# from other agents' queues.
 ACT_PERMISSION = "support:ticket:update"
 
 
@@ -307,7 +311,7 @@ def workqueue_snooze(
     service_team_id: UUID | None = Form(default=None),
     include_snoozed: bool = Form(default=False),
     db: Session = Depends(get_db),
-    auth: dict = Depends(require_permission(READ_PERMISSION)),
+    auth: dict = Depends(require_permission(ACT_PERMISSION)),
 ):
     return _execute(
         request,
@@ -335,7 +339,7 @@ def workqueue_clear_snooze(
     service_team_id: UUID | None = Form(default=None),
     include_snoozed: bool = Form(default=False),
     db: Session = Depends(get_db),
-    auth: dict = Depends(require_permission(READ_PERMISSION)),
+    auth: dict = Depends(require_permission(ACT_PERMISSION)),
 ):
     return _execute(
         request,

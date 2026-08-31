@@ -15,6 +15,7 @@ from app.models.catalog import OfferStatus, SubscriptionStatus
 from app.schemas.status_presentation import StatusTone
 from app.services import web_catalog_offers
 from app.services.ui_contracts import Kpi, StateValue
+from app.web.admin.catalog import templates
 
 _SAMPLE_STATS: dict[str, object] = {
     "total_count": 12,
@@ -90,3 +91,51 @@ def test_catalog_index_template_renders_kpi_cohort_links():
     # The old bare-count references are gone.
     assert "catalog_stats.active_count" not in source
     assert "catalog_stats.archived_count" not in source
+
+
+def test_catalog_grid_uses_linked_tariff_identity_without_duplicate_actions_column():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/admin/catalog/_grid.html"
+    ).read_text(encoding="utf-8")
+
+    assert '"key": "name",     "label": "Tariff"' in source
+    assert '"key": "actions"' not in source
+    assert "cell_actions" not in source
+    assert '"/admin/catalog/offers/" ~ row.id' in source
+    assert "compact=true" in source
+
+
+def test_catalog_grid_composes_without_a_duplicate_actions_header():
+    html = templates.env.get_template("admin/catalog/_grid.html").render(
+        offers=(),
+        plan_category="",
+        status="",
+        plan_kind="",
+        plan_family="",
+        offer_statuses=(),
+        plan_families=(),
+        search="",
+        total=0,
+        page=1,
+        total_pages=1,
+        per_page=25,
+        offer_plan_metadata={},
+        offer_active_subscription_counts={},
+    )
+
+    assert "Tariff" in html
+    assert "Bandwidth" in html
+    assert ">Actions<" not in html
+    assert "px-3 py-3" in html
+
+
+def test_catalog_detail_retains_edit_archive_and_restore_actions():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "templates/admin/catalog/offer_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'href="/admin/catalog/offers/{{ offer.id }}/edit"' in source
+    assert 'action="/admin/catalog/offers/{{ offer.id }}/archive"' in source
+    assert 'action="/admin/catalog/offers/{{ offer.id }}/restore"' in source
+    assert "components/forms/csrf_input.html" in source

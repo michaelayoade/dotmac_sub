@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from app.models.admin_alert import AdminNotification
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.durable_timer import DurableTimer
 from app.models.notification import Notification, NotificationChannel
@@ -31,6 +32,7 @@ from app.models.project import (
     ProjectType,
 )
 from app.models.sequence import DocumentSequence
+from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.subscription_engine import SettingValueType
 from app.models.support import Ticket
 from app.models.ticket_workflow import SlaClock, SlaClockStatus, WorkflowEntityType
@@ -1040,6 +1042,73 @@ class TestTaskStateMachine:
             )
             .count()
             == 1
+        )
+
+    def test_project_and_task_staff_tags_create_staff_inbox_notifications(
+        self, db_session, subscriber
+    ):
+        direct, _direct_person = add_bound_staff_user(
+            db_session, email=f"project-direct-tag-{uuid.uuid4()}@example.test"
+        )
+        team_member, team_person = add_bound_staff_user(
+            db_session, email=f"project-team-tag-{uuid.uuid4()}@example.test"
+        )
+        team = ServiceTeam(name=f"Project Tag Team {uuid.uuid4()}", is_active=True)
+        db_session.add(team)
+        db_session.flush()
+        db_session.add(ServiceTeamMember(team_id=team.id, person_id=team_person.id))
+        db_session.commit()
+
+        project = projects.create(
+            db_session,
+            ProjectCreate(
+                name="Tagged project",
+                subscriber_id=subscriber.id,
+                tags=[f"person:{direct.id}", f"team:{team.id}", "installation"],
+            ),
+        )
+        project_url = f"/admin/projects/{project.number or project.id}"
+
+        project_rows = (
+            db_session.query(AdminNotification)
+            .filter(AdminNotification.target_url == project_url)
+            .all()
+        )
+        assert {(row.system_user_id, row.title) for row in project_rows} == {
+            (direct.id, "You were tagged in this project"),
+            (team_member.id, "Your team was tagged in this project"),
+        }
+
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(
+                project_id=project.id,
+                title="Tagged task",
+                tags=[f"person:{direct.id}", f"group:{team.id}"],
+            ),
+        )
+        task_url = f"/admin/projects/tasks/{task.number or task.id}"
+
+        task_rows = (
+            db_session.query(AdminNotification)
+            .filter(AdminNotification.target_url == task_url)
+            .all()
+        )
+        assert {(row.system_user_id, row.title) for row in task_rows} == {
+            (direct.id, "You were tagged in this project task"),
+            (team_member.id, "Your team was tagged in this project task"),
+        }
+
+        project_tasks.update(
+            db_session,
+            str(task.id),
+            ProjectTaskUpdate(tags=[f"person:{direct.id}", f"group:{team.id}"]),
+        )
+        assert (
+            db_session.query(AdminNotification)
+            .filter(AdminNotification.target_url == task_url)
+            .count()
+            == 2
         )
 
     def test_ticket_link_requires_existing_support_ticket(self, db_session, subscriber):

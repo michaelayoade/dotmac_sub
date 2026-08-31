@@ -2,6 +2,7 @@
 
 from typing import Any, cast
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -437,4 +438,39 @@ def billing_ledger_export_csv(
         iter([content]),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="ledger_export.csv"'},
+    )
+
+
+@router.get(
+    "/ledger/{entry_id:uuid}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def billing_ledger_entry_detail(
+    request: Request,
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+):
+    detail = web_billing_ledger_service.build_ledger_entry_detail(
+        db,
+        query=web_billing_ledger_service.LedgerEntryDetailQuery(entry_id=entry_id),
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = {
+        "request": request,
+        "active_page": "ledger",
+        "active_menu": "billing",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    if detail is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {**context, "message": "Ledger entry not found"},
+            status_code=404,
+        )
+    return templates.TemplateResponse(
+        "admin/billing/ledger_detail.html",
+        {**context, "entry": detail},
     )

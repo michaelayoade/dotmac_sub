@@ -45,6 +45,7 @@ combined Inbox/Support workspace.
 | Composer AI polish | `communications.team_inbox_ai_polish` | Coordinates review-only, context-aware polishing of unsent staff drafts through the existing Team Inbox projection and AI generation owner |
 | Visitor chat mutations | `communications.team_inbox_widget` | Owns authenticated portal and anonymous fiber-site widget session, message, read, and satisfaction commands; anonymous identity is exact-match or Party-backed prospect with ambiguity held for review |
 | List/detail/metrics/actions, media, and location presentation | `communications.team_inbox_projection` | Normalizes filters, sort and pagination, computes KPIs, unread and action eligibility, resolves safe inline-image versus download-only media presentation, and maps validated structured coordinates to Google Maps links |
+| Performance and escalation reports | `communications.team_inbox_metrics` | Owns typed, bounded team and agent cohorts plus the current unresolved escalation projection; aggregates and paginates in the database |
 | Manager AI analysis input | `communications.team_inbox_analysis_projection` | Recomputes scope-authorized selected-conversation, recent-queue, and period facts plus bounded evidence; it never writes Inbox state or lets AI query Inbox rows |
 | Repair jobs | `communications.team_inbox_maintenance` | Rebuilds media worklists, retries failed intents, and applies stale-conversation policy |
 | Realtime | `communications.team_inbox_realtime` | Publishes best-effort projections only after commit; clients refetch on gaps |
@@ -59,6 +60,13 @@ The Inbox default queue is the operational active cohort and excludes resolved
 conversations. The explicit **All** view (`view=all`) includes every lifecycle
 status, including resolved conversations, for history review. Explicit status
 filters still narrow the queue to one status.
+
+The stale-conversation policy may resolve an unassigned conversation only when
+its latest non-internal message is a human agent reply older than the configured
+threshold. An active assignment is authoritative unfinished-work evidence and
+always excludes the conversation. The maintenance owner locks each candidate
+conversation and rechecks assignment and message evidence in the owner
+transaction before applying the audited status transition.
 
 ## Inbound flow and idempotency
 
@@ -80,8 +88,11 @@ filters still narrow the queue to one status.
    candidate evidence, candidate fingerprints, bounded changed-field names,
    and retry count. It never overwrites or processes the admitted observation.
    SMTP returns success only after that quarantine transaction commits, ending
-   deterministic redelivery; transient parsing, database, and processing
-   failures remain retryable. Other provider adapters retain fail-closed
+   deterministic redelivery. Pre-admission parsing and database failures remain
+   SMTP-retryable because Sub has not saved the message. Once the observation
+   is committed, processing failures are marked for internal replay/repair and
+   SMTP returns success so the customer mail server does not resend the same
+   saved message indefinitely. Other provider adapters retain fail-closed
    rejection until they deliberately adopt a transport disposition.
 4. A separate processing owner locks the observation. It resolves threading,
    contact and routing, then stores the consequence identity on the observation.
@@ -172,6 +183,16 @@ overrides it. Capacity counts active human assignments on `open`, human-owned
 `pending`, and `snoozed` conversations while ownership remains active. It
 excludes resolved conversations and unassigned AI-pending conversations.
 
+Successful staff session issuance submits one typed, flush-only sign-in command
+to the routing owner in the same transaction. That command sets the signed-in
+SystemUser's presence to `online`, clears any availability override left by the
+prior session, refreshes `last_seen_at`, and records native transition evidence
+when the effective state changes. The owner locks the active SystemUser row to
+serialize concurrent first-presence creation for the same agent. Subscriber and
+reseller sessions do not write agent presence. Operators may still select
+another availability after sign-in; the existing 30-minute freshness and
+assignment-capacity rules are unchanged.
+
 Queue communication is also owned by Team Inbox routing. `inbox_queue_notifications`
 records initial position notices, movement updates, fifteen-minute unchanged
 heartbeats, handoff notices, dedupe keys, delivery outcome and outbound message
@@ -197,6 +218,14 @@ error, never to an HTTP 500. Dispatch occurs after commit through the canonical
 notification delivery point. SMTP, WhatsApp, and social integrations translate
 the intent and later return normalized receipt observations; they cannot change
 conversation or ticket lifecycle state.
+
+For email, the thread owner derives one stable RFC `Message-ID` from the local
+outbound Inbox message UUID before the intent is staged. It also derives
+`In-Reply-To` and a bounded `References` chain from the newest exact inbound or
+provider-accepted outbound message identity on that conversation. The outbound
+intent persists those typed headers and SMTP serializes them unchanged; retries
+reuse the same identity. A relay-generated identifier is never required for
+local threading, and sender/subject similarity is never used as a fallback.
 
 AI Polish is outside outbound delivery. It reads the bounded Team Inbox reply
 projection, labels customer and agent excerpts as untrusted quoted content,
@@ -279,7 +308,12 @@ The admin CRM-replication controls use these existing owners:
   internal intent metadata. SMTP places CC in the MIME header, never emits a BCC
   header, and sends the primary, CC and BCC addresses in the envelope. The
   permission-scoped staff projection shows From, To, CC and BCC for each email
-  message; customer-facing rendering never exposes BCC.
+  message; customer-facing rendering never exposes BCC. The staff reply control
+  is a native browser disclosure, and the workspace and conversation fragment
+  responses are private and non-cacheable so an older browser response or script
+  cannot selectively remove the current action. Conversation-fragment request
+  URLs carry the deployed presentation revision so browsers with a pre-fix
+  cached fragment must request the current markup after deployment.
 - Fiber-website inquiries are inbound-only. The projection and outbound owner
   explicitly reject replies until a reviewed reply transport and prospect
   destination policy are approved.
@@ -317,6 +351,8 @@ queue interval, or assignment ending timestamp. See
 | Contact link | Conversation route plus reviewed Party/customer facts | contact-resolution owner | Revalidate/reapply a reviewed link, which repairs active unlinked threads on that exact normalized route; use the digest-bound `repair_team_inbox_subscriber_links` operator workflow for existing uniquely resolved routes; ambiguity remains explicit |
 | Operator unread | Message chronology plus per-person read cursor | operator-state owner | Set-based grouped queries recompute the projection; `rebuild_operator_read_state` removes impossible cross-conversation cursors |
 | Queue metrics and response cohorts | Conversation lifecycle, ordered message chronology, agent reply provenance/delivery, ticket handoff, assignment, and read state | projection query owner | Recompute on every query; no independent flag or counter is authoritative |
+| Performance report cohorts | Conversation lifecycle, ordered message chronology, recorded sender provenance, assignments, team composition, and staff identity in the selected half-open UTC period | `communications.team_inbox_metrics` | Recompute in set-based queries on every request; defaults to the latest 30 days, rejects ranges over 366 days, and exposes the effective period in the typed outcome |
+| Escalation report projection | Current unresolved conversation lifecycle, ordered scoped messages, active assignment, effective agent availability, and team SLA policy at the observation time | `communications.team_inbox_metrics` | Recompute on every request; SQL pagination and owner-supplied aggregate totals share the same candidate scope, so no stored escalation flag can drift |
 | Manager AI period analysis | Authorized Workqueue scope, Inbox message chronology, immutable status transitions, and immutable routing events | analysis-projection owner | Recompute on each request; the cohort is conversations with a message, status transition, or routing event in the selected half-open UTC period; evidence is bounded and never becomes Inbox truth |
 | Customer context drawer | Exact Party/Subscriber/Lead links plus permission-scoped owner queries | contact-context query owner | Recompute on drawer load; per-section failures remain explicit and retryable |
 | Meta free-form reply-window eligibility | Conversation channel plus ordered qualifying inbound customer messages | reply-window policy owner | Recompute on every send attempt and detail projection; a new qualifying inbound customer message reopens the free-form path |
@@ -329,6 +365,26 @@ Database reads remain authoritative when Redis realtime is unavailable or
 stale. Realtime has no replay authority.
 
 ## Page contract
+
+### Inbox report pages
+
+- Screens: `/admin/reports/inbox-performance`,
+  `/admin/reports/inbox-escalations`, and
+  `/admin/reports/operational/crm-performance`.
+- `communications.team_inbox_metrics` accepts typed date, scope, SLA, limit,
+  offset, and observation-time inputs. Routes do not derive report facts.
+- Performance pages and exports use the same explicit cohort. The default is
+  the latest 30 inclusive calendar days, represented internally as a half-open
+  UTC period; a range greater than 366 days fails closed.
+- Escalations are current unresolved work rather than an all-history cohort.
+  The owner applies candidate filtering, totals, and pagination in SQL before
+  the adapter renders rows. Message bodies and attachment payloads are never
+  loaded for these aggregates.
+- Agent personal scope is applied in the owner query before any report rows are
+  read. A missing signed-in person identity returns no personal rows.
+- CSV export reuses the same typed owner and effective filters. It may request
+  all aggregate rows, but it never materializes raw conversation or message
+  history in Python.
 
 - Screen: `/admin/inbox` and `/admin/inbox/{conversation_id}`.
 - The conversation HTMX response is a thread-only partial. The loaded workspace
@@ -344,9 +400,16 @@ stale. Realtime has no replay authority.
   render countdown and expired-state actions from that projection only; browser
   timers are presentation helpers and do not authorize a send.
 - Private notes are internal messages written by the operator command owner.
-  Mention metadata stores stable system-user identifiers, and internal mention
-  notifications use the existing notification owner with deterministic dedupe
-  keys. Private notes and mentions never create provider delivery intents.
+  Mention metadata stores stable system-user identifiers after the command owner
+  revalidates active conversation-team visibility. The same transaction stages
+  deterministic per-recipient in-app and email rows through
+  `communications.staff_notifications`. Optional Nextcloud Talk staging uses
+  `execute_owner_savepoint`; a staging failure is recorded on note metadata and
+  cannot roll back the private note. Notification copy excludes note and customer
+  content. Its personal Inbox-open link marks the notice read, then targets the
+  exact conversation and message for browser scroll and highlight. The author is
+  not notified. Mentions never assign, transfer, change status, or create a
+  customer/provider delivery intent.
 - Lifecycle activity appears as subtle inline system timeline entries ordered by
   occurrence time with messages. The template must distinguish system entries
   from customer, agent, and private-note messages and must not delete or rewrite
@@ -454,7 +517,11 @@ stale. Realtime has no replay authority.
   owner-provided eligibility and never reconstruct lifecycle rules. Operators
   may set their own availability to `online`, `away`, or `offline`; automatic
   conversation assignment selects only effectively-online agents and queues work
-  at the team when no eligible agent is available.
+  at the team when no eligible agent is available. The teammate picker renders
+  the routing owner's typed active-count, capacity-limit, remaining-capacity,
+  eligibility, and refusal reason. An online agent at capacity remains visible
+  with the exact `active / maximum` load and is disabled rather than being
+  offered as an assignable target.
 - States: empty, no-results, permission/error redirect, best-effort realtime
   stale state, and normal loading follow
   `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`.

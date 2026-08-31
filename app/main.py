@@ -101,7 +101,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web.vendor_auth", "router", "web", "none"),
     ("app.web.vendor_portal", "router", "web", "none"),
     ("app.web.public", "router", "web", "none"),
-    ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
     ("app.websocket.workqueue_router", "router", "ws", "none"),
     ("app.api.notifications", "router", "api", "perm:monitoring"),
@@ -112,6 +111,10 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
+    # Pre-authentication continuation, same class as `POST /auth/login`, so the
+    # router-level mode is "none". The gate is the `auth.oidc_mobile_federation`
+    # control, which the owning service reads first and which fails closed.
+    ("app.api.oidc_mobile", "router", "api", "none"),
     ("app.api.ticket_confirm", "router", "api", "none"),
     # Customer self-care: self-scoped reads, auth-only (no staff permission).
     ("app.api.me", "router", "api", "user"),
@@ -136,9 +139,24 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.sales_orders", "router", "api", "user"),
     # Native projects vertical.
     ("app.api.projects", "router", "api", "user"),
-    ("app.api.dispatch", "router", "api", "perm:operations:dispatch:read"),
+    # Read FLOOR for the whole router; every mutating route declares its own
+    # operations:dispatch:write / :assign guard (app/api/dispatch.py). This is
+    # deliberately "readperm:" and NOT "perm:operations:dispatch": the perm:
+    # mode appends :read/:write to the DOMAIN, so "perm:operations:dispatch:read"
+    # asked for the unseeded operations:dispatch:read:read / :read:write and
+    # 403'd the entire surface for every non-admin principal.
+    ("app.api.dispatch", "router", "api", "readperm:operations:dispatch:read"),
     ("app.api.field.config", "router", "api", "none"),
     ("app.api.field", "router", "api", "user"),
+    # Pre-auth by definition: these four routes ARE the vendor authentication
+    # (login, MFA verification, refresh, logout), so they mount with no
+    # dependency, exactly like ("app.api.auth_flow", ..., "none"). Their
+    # authorization is the vendor-admission decision inside the adapter, and
+    # /api/v1/vendor is the self-scoped allowlist entry in
+    # tests/architecture/test_route_permission_guards.py. Mounted BEFORE
+    # app.api.vendor_portal so the authenticated /vendor surface can never
+    # shadow the unauthenticated /vendor/auth one.
+    ("app.api.vendor_auth", "router", "api", "none"),
     ("app.api.vendor_portal", "router", "api", "user"),
     ("app.api.tables", "router", "api", "user"),
     ("app.api.domains_provisioning", "router", "api", "user"),
@@ -219,7 +237,11 @@ def _router_dependencies(mode: str):
 
         domain = mode[len("perm:") :]
         return [Depends(require_method_permission(f"{domain}:read", f"{domain}:write"))]
-    # "readperm:<key>" guards a read-only router with a single permission.
+    # "readperm:<key>" applies ONE permission key, verbatim, to every method of
+    # the router — a floor. Read-only routers use it as their whole guard; a
+    # router whose mutations declare their own stronger per-route permission
+    # uses it for the floor (see app.api.dispatch). Unlike "perm:" it appends
+    # nothing, so the key is exactly the seeded key.
     if mode.startswith("readperm:"):
         from app.services.auth_dependencies import require_permission
 
@@ -348,6 +370,31 @@ def _assert_required_schema() -> None:
                 "Run `alembic upgrade heads` before starting the app."
             )
     finally:
+        db.close()
+
+
+def _assert_oidc_federation_configured() -> None:
+    """A deployment that has ENABLED federated field sign-in must have
+    configured it.
+
+    Off is the shipped state and this is then a no-op, so no deployment is made
+    to configure an issuer it will never use. On, the check is fatal: a ceremony
+    built from a missing redirect URI or a missing issuer would send technicians
+    to an endpoint that does not exist, and would do it silently at the first
+    request instead of loudly at the boot the operator is watching.
+
+    The refusal names EVERY missing key at once — an operator bringing this up
+    should see the whole list in one pass rather than rediscover it one restart
+    at a time.
+    """
+
+    from app.services.oidc_mobile_config import verify_startup_configuration
+
+    db = SessionLocal()
+    try:
+        verify_startup_configuration(db)
+    finally:
+        db.rollback()
         db.close()
 
 
@@ -542,6 +589,8 @@ def _startup_preflight() -> None:
             extra={"event": "credential_encryption_enforced"},
         )
     _assert_required_schema()
+    # AFTER the schema assertion, because the control and its settings are rows.
+    _assert_oidc_federation_configured()
 
 
 def _prewarm_admin_dashboard() -> None:
@@ -555,6 +604,25 @@ def _prewarm_admin_dashboard() -> None:
         raise RuntimeError("dashboard cache prewarm failed")
 
 
+def _hydrate_payment_webhook_ingress_policies() -> None:
+    from app.services.integrations.payment_capability import (
+        hydrate_webhook_ingress_policies,
+    )
+
+    db = SessionLocal()
+    try:
+        published = hydrate_webhook_ingress_policies(db)
+        logger.info(
+            "payment_webhook_ingress_policies_hydrated",
+            extra={
+                "event": "payment_webhook_ingress_policies_hydrated",
+                "published": published,
+            },
+        )
+    finally:
+        db.close()
+
+
 async def _run_deferred_startup() -> None:
     """Run slow, idempotent, non-fatal startup work in worker threads so it
     never blocks the event loop (single-worker safe) or delays serving.
@@ -563,6 +631,7 @@ async def _run_deferred_startup() -> None:
     inline kept the app dead to health checks for minutes after every restart.
     The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
     for fn, step in (
+        (_hydrate_payment_webhook_ingress_policies, "payment_webhook_ingress_policy"),
         (_prewarm_admin_dashboard, "dashboard_prewarm"),
         (_seed_startup_settings, "seed"),
         (_warn_on_scheduler_registry_drift, "scheduler_drift"),
@@ -1227,6 +1296,10 @@ _LOGIN_RATE_LIMIT_PATHS = frozenset(
         "/portal/auth/login",
         "/reseller/auth/login",
         "/api/v1/auth/login",
+        # The field app's vendor login. Same credential-stuffing exposure as
+        # the staff login above: the per-account lockout never trips for a
+        # spray of one attempt across many usernames.
+        "/api/v1/vendor/auth/login",
     }
 )
 
@@ -1238,10 +1311,20 @@ def _client_ip(request: Request) -> str:
 _API_SYNC_PRESSURE_DEFAULT_PREFIXES = ("/api/v1/",)
 _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
+    # Exempt for the same reason as the staff login: the login throttle above
+    # is the right brake for a credential endpoint, and a crew behind one
+    # site NAT must not be pushed into the generic per-IP burst bucket.
+    "/api/v1/vendor/auth/login",
     "/api/v1/alerts/",
     "/api/v1/webhooks/",
 )
 _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_PAYMENT_PROVIDER_WEBHOOK_PATHS = {
+    "/api/v1/payment-events/paystack": "paystack",
+    "/payment-events/paystack": "paystack",
+    "/api/v1/payment-events/flutterwave": "flutterwave",
+    "/payment-events/flutterwave": "flutterwave",
+}
 _API_SYNC_FEED_PATHS = frozenset(
     {
         "/api/v1/billing-accounts/sync",
@@ -1366,8 +1449,52 @@ async def login_rate_limit_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
+async def payment_provider_webhook_rate_limit_middleware(request: Request, call_next):
+    """Give signed provider ingress a bounded lane independent of API sync traffic."""
+
+    provider = _PAYMENT_PROVIDER_WEBHOOK_PATHS.get(request.url.path)
+    if request.method != "POST" or provider is None:
+        return await call_next(request)
+
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    from app.services.integrations.payment_capability import (
+        effective_webhook_ingress_policy,
+    )
+    from app.services.rate_limiter_adapter import allow_operation
+
+    policy = effective_webhook_ingress_policy(provider)
+    if not policy.enabled:
+        return await call_next(request)
+    ip_address = _client_ip(request)
+    decision = allow_operation(
+        f"payment-provider-webhook:{provider}:{ip_address}",
+        limit=policy.requests_per_window,
+        window_seconds=policy.window_seconds,
+    )
+    outcome = "admitted" if decision.allowed else "limited"
+    try:
+        from app.metrics import PAYMENT_PROVIDER_WEBHOOK_INGRESS
+
+        PAYMENT_PROVIDER_WEBHOOK_INGRESS.labels(provider, outcome).inc()
+    except Exception:
+        logger.debug("payment_provider_webhook_metric_failed", exc_info=True)
+    if decision.allowed:
+        return await call_next(request)
+
+    retry_after = decision.retry_after_seconds or policy.window_seconds
+    return _JSONResponse(
+        {"detail": "Payment webhook ingress limit reached. Please retry shortly."},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+@app.middleware("http")
 async def api_sync_pressure_guard_middleware(request: Request, call_next):
     """Throttle API sync bursts before downstream handlers can acquire DB sessions."""
+    if request.url.path in _PAYMENT_PROVIDER_WEBHOOK_PATHS:
+        return await call_next(request)
     if not _env_bool("API_SYNC_PRESSURE_GUARD_ENABLED", True):
         return await call_next(request)
 

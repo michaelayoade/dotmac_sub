@@ -6,13 +6,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.party import Party
 from app.models.sales import Lead
+from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber
 from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationLeadLink,
     InboxConversationStatus,
     InboxMessage,
@@ -91,38 +92,6 @@ def test_widget_token_lists_and_sends_messages(db_session):
     assert sent["direction"] == InboxMessageDirection.inbound.value
     assert messages["messages"][0]["body"] == "My router is down"
     assert messages["messages"][0]["sender_type"] == "visitor"
-
-
-def test_existing_native_token_cannot_write_after_crm_authority_cutover(db_session):
-    from app.services.settings_cache import SettingsCache
-
-    sub = _subscriber(db_session)
-    with _chat_enabled():
-        session = team_inbox_widget.broker_customer_session(db_session, str(sub.id))
-        principal = team_inbox_widget.decode_widget_token(
-            db_session,
-            str(session["visitor_token"]),
-        )
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.comms,
-                key="chat_session_authority",
-                value_text="crm",
-                is_active=True,
-            )
-        )
-        db_session.commit()
-        SettingsCache.invalidate(SettingDomain.comms.value, "chat_session_authority")
-
-        with pytest.raises(team_inbox_widget.TeamInboxWidgetError) as exc:
-            team_inbox_widget.add_visitor_message(
-                db_session,
-                principal=principal,
-                body="Must not be stored locally",
-            )
-
-    assert exc.value.code == "communications.team_inbox_widget.authority_external"
-    assert db_session.query(InboxMessage).count() == 0
 
 
 def test_widget_satisfaction_requires_resolved_conversation(db_session):
@@ -216,6 +185,48 @@ def test_auto_resolve_skips_conversations_needing_response(db_session):
     assert stale_agent_reply.status == InboxConversationStatus.resolved.value
     assert stale_customer_reply.status == InboxConversationStatus.open.value
     assert stale_system_reply.status == InboxConversationStatus.open.value
+
+
+def test_auto_resolve_skips_stale_conversation_with_active_assignment(db_session):
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    conversation = InboxConversation(
+        channel_type=InboxChannelType.email.value,
+        status=InboxConversationStatus.pending.value,
+        subject="Agent is still working",
+        last_message_at=now - timedelta(hours=80),
+    )
+    team = ServiceTeam(name="Assigned Support", team_type=ServiceTeamType.support.value)
+    db_session.add_all([conversation, team])
+    db_session.flush()
+    db_session.add_all(
+        [
+            InboxConversationAssignment(
+                conversation_id=conversation.id,
+                service_team_id=team.id,
+                person_id=uuid4(),
+                assigned_at=now - timedelta(hours=81),
+                is_active=True,
+            ),
+            InboxMessage(
+                conversation_id=conversation.id,
+                channel_type=InboxChannelType.email.value,
+                direction=InboxMessageDirection.outbound.value,
+                body="I am still investigating this.",
+                metadata_={"sent_by_person_id": str(uuid4())},
+            ),
+        ]
+    )
+    db_session.flush()
+
+    count = team_inbox_operations.auto_resolve_stale_conversations(
+        db_session,
+        stale_hours=72,
+        now=now,
+    )
+
+    assert count == 0
+    assert conversation.status == InboxConversationStatus.pending.value
+    assert "auto_resolved_at" not in (conversation.metadata_ or {})
 
 
 def test_chat_disabled_returns_503(db_session):

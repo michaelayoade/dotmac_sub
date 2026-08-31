@@ -45,6 +45,10 @@ def _effective_value_snapshot(values: dict[str, Any]) -> dict[str, Any]:
         "authorization_service_profile_id",
         "profile_bundle_id",
         "primary_wan_service",
+        "standard_pack_key",
+        "standard_pack_family",
+        "command_profile_name",
+        "firmware_standardized",
     )
     return {key: values.get(key) for key in keys}
 
@@ -167,7 +171,7 @@ def resolve_effective_config_pack_stage(
     if not isinstance(values, dict):
         values = {}
 
-    if not raw_config_pack or config_pack is None:
+    if config_pack is None:
         duration_ms = int((time.monotonic() - t0) * 1000)
         result = StepResult(
             _STEP_NAME,

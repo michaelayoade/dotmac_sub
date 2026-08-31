@@ -416,8 +416,8 @@ def test_record_round_trips_into_the_filed_workbook(db_session):
     built = report.build_report(db_session, start=start, end=end)
     assert built["columns"] == list(ncc_workbook.COLUMNS)
 
-    rows = ncc_workbook.export_rows(built["records"])
-    workbook = ncc_workbook.build_workbook(rows, list(ncc_workbook.COLUMNS))
+    rows = ncc_workbook.template_export_rows(built["records"])
+    workbook = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
     assert workbook[:2] == b"PK"  # a real xlsx package
     assert all("VALIDATION STATUS" in row for row in rows)
 
@@ -526,10 +526,10 @@ def test_captured_lga_round_trips_through_the_workbook(db_session):
     record = _record_for(db_session, ticket)
     assert record is not None
     content = ncc_workbook.build_workbook(
-        ncc_workbook.export_rows([record]), ncc_workbook.COLUMNS
+        ncc_workbook.template_export_rows([record]), ncc_workbook.TEMPLATE_COLUMNS
     )
     # The workbook is a zip: the value is deflated, so it never appears
     # literally in the archive bytes — read the sheet out and look there.
     with zipfile.ZipFile(io.BytesIO(content)) as parts:
-        sheet1 = parts.read("xl/worksheets/sheet1.xml").decode()
-    assert "Eti-Osa" in sheet1
+        sheet2 = parts.read("xl/worksheets/sheet2.xml").decode()
+    assert "Eti-Osa" in sheet2

@@ -73,6 +73,7 @@ class StaffTalkEventType(StrEnum):
     ticket_comment_mention = "ticket.comment_mention"
     project_comment_mention = "project.comment_mention"
     project_task_comment_mention = "project_task.comment_mention"
+    team_inbox_private_note_mention = "team_inbox.private_note_mention"
 
 
 @dataclass(frozen=True, slots=True)

@@ -851,13 +851,13 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "invoice_sent",
             "name": "Invoice Sent",
             "channel": NotificationChannel.email,
-            "subject": "Invoice #{invoice_number} — payment due {due_date}",
+            "subject": "Invoice #{invoice_number} for your review",
             "body": (
-                "Dear {subscriber_name},\n\n"
-                "Invoice #{invoice_number} for {amount} is due on {due_date}.\n\n"
-                "Please make your payment before the due date to avoid "
-                "service interruption.\n\n"
-                "Pay online: {portal_url}/billing\n\n"
+                "Hello {subscriber_name},\n\n"
+                "Please find attached invoice #{invoice_number}, created for your "
+                "review regarding your service.\n\n"
+                "Amount: {amount}\n"
+                "Due date: {due_date}\n\n"
                 "Thank you."
             ),
         },
@@ -1581,6 +1581,12 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="vendor_purchase_invoice_erp_tax_profile",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("VENDOR_PURCHASE_INVOICE_ERP_TAX_PROFILE", ""),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="default_payment_method_type",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
@@ -1730,6 +1736,10 @@ def seed_billing_settings(db: Session) -> None:
         "topup_reconciliation_stale_minutes",
         "topup_reconciliation_max_age_days",
         "topup_reconciliation_batch_size",
+        "topup_reconciliation_pending_retry_minutes",
+        "topup_reconciliation_terminal_retry_hours",
+        "topup_reconciliation_processing_retry_minutes",
+        "topup_reconciliation_unavailable_retry_minutes",
     ):
         reconciliation_spec = get_spec(SettingDomain.billing, reconciliation_key)
         if reconciliation_spec is None or reconciliation_spec.env_var is None:

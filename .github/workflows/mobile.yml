@@ -8,12 +8,12 @@ name: Mobile CI
 on:
   # `integration/**` and `consolidate/**` carry multi-PR batches. Without these
   # targets, a PR INTO a batch branch runs no tests at all, and the whole batch
-  # meets CI for the first time at its merge to dev — exactly the risk these
+  # meets CI for the first time at its merge to main — exactly the risk these
   # branch families exist to contain.
   push:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   pull_request:
-    branches: [main, dev, 'integration/**', 'consolidate/**']
+    branches: [main, 'integration/**', 'consolidate/**']
   merge_group:
   workflow_dispatch:
 
@@ -44,6 +44,8 @@ jobs:
               - '.github/workflows/mobile.yml'
             field_mobile:
               - 'field_mobile/**'
+              - 'deploy/links.dotmac.io/**'
+              - 'scripts/check_field_applinks.py'
               - '.github/workflows/mobile.yml'
 
   flutter:
@@ -123,6 +125,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # The field app commits drift's generated code, so a schema change that
+      # nobody regenerates passes analyze and test while the committed .g.dart
+      # describes the OLD schema. Regenerate here and fail on drift: the diff
+      # this prints IS the change that should have been committed. Deliberately
+      # only on this job -- the customer app has no code generators, so running
+      # build_runner there would buy nothing and cost a minute.
+      - name: Regenerate committed code and fail on drift
+        run: |
+          dart run build_runner build --delete-conflicting-outputs
+          git diff --exit-code -- .
+
       - name: Verify formatting (changed files)
         run: |
           if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
@@ -140,6 +153,16 @@ jobs:
 
       - name: Analyze
         run: flutter analyze
+
+      # The verified redirect boundary (App Links / Universal Links) spans the
+      # Dart defaults, brand.json, the Android intent filter, the iOS
+      # entitlement and both association documents under deploy/. None of them
+      # can see the others at build time and drift between them fails SILENTLY
+      # on device, so it is checked here on every field_mobile change.
+      # Structural mode: the two unresolved identity placeholders are allowed on
+      # a PR and rejected by the release pipeline.
+      - name: Validate the verified redirect boundary
+        run: python3 ../scripts/check_field_applinks.py
 
       - name: Unit tests
         run: flutter test

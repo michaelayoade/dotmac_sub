@@ -47,6 +47,19 @@ Migration 517 repairs matching Ticket rows plus exact status fields in operator
 configuration and automation JSON; it does not rewrite Ticket timestamps,
 timeline records, tags, comments, attachments, metadata, or audit history.
 
+Merge is not a Ticket lifecycle status. Merging source A into target B stores A
+as canonical `canceled` and records B in A's `merged_into_ticket_id`; that
+relation makes A immutable and projects the user-facing `Merged` label and
+target link. An ordinary canceled Ticket has no merge relation and continues to
+display `Canceled`. The merge command moves the existing merge-owned timeline,
+assignment, attachment, and link information to B and records system timeline
+evidence on both sides. Migration 551 backfills exact legacy `merged` rows to
+`canceled`, repairs a missing relation from existing `TicketMerge` evidence
+where possible, rebinds already-moved private attachments to the target and
+clears their source metadata, removes the retired configured choice, and
+disables automation rules that would otherwise reinterpret merge as ordinary
+cancellation.
+
 `support.ticket_configuration` owns operator-managed status choices,
 priorities, types, routing inputs, service-team membership configuration, and
 priority/type SLA targets. It may only expose statuses from the ticket
@@ -67,6 +80,10 @@ and may preserve that unchanged value while another field is edited; the UI
 presents it as a non-selectable current value. Canceled tickets are returned
 only by the exact `canceled` list filter. Default and `not_closed` list scopes
 exclude canonical `canceled`; `not_closed` also excludes canonical `closed`.
+The admin ticket-list quick statuses are All, Open, Closed, and Not closed; the
+basic status select also omits Canceled. Exact `canceled` URLs remain supported
+for audit and reconciliation, so relation-backed merged sources remain in that
+scope and never reappear as active work.
 
 Regional routing configuration is replaced through the typed
 `TicketConfigurationUpdate` command. Region keys are normalized to lowercase.
@@ -163,11 +180,23 @@ reply.
 Ticket assignment consequences are independent of the legacy customer-support
 notification toggle. Newly assigned direct users and active members of an
 assigned Service Team receive an in-app notification and, when an email address
-exists, a queued email. Explicit comment mentions use the same individual and
-Service Team group semantics and the same two channels. The retired Site
+exists, a queued email. The typed assignment request carries the owner command
+identity, Ticket UUID, and exact `/admin/support/tickets/{ticket_id}` target;
+the staff-notification participant rejects a dashboard-only or external target.
+Opening the personal inbox item marks only that user's row read before following
+the stored Ticket target. A pre-cutover dashboard-only assignment target is
+repaired once from its unambiguous stored ticket reference. Explicit comment
+mentions use the same individual and Service Team group semantics and the same
+two channels. The retired Site
 Project Coordinator column remains readable and filterable on historical
 Tickets, but new-ticket input and assignment configuration no longer populate
 it.
+
+Staff/team tag tokens on `Ticket.tags` also stage in-app staff notifications
+for newly added targets. `person:`, `user:`, and `staff:` tokens address an
+individual staff user; `team:` and `group:` tokens address active Service Team
+members. The notification links back to the ticket detail page. Ordinary
+descriptive tags remain Ticket metadata and do not notify anyone.
 
 Explicit mention identity is stored in `support_ticket_comment_mentions`, not
 in display text. Each row names exactly one `SystemUser` or `ServiceTeam`, with
@@ -283,6 +312,11 @@ procedure is `docs/runbooks/SUPPORT_TICKET_COMMENT_ATTACHMENT_RECONCILIATION.md`
 Migration 517 is also the idempotent drift repair for the retired `resolved`
 status: rerunning it updates only exact legacy status values that reappeared and
 leaves canonical `closed` rows untouched.
+
+Migration 551 is the idempotent drift repair for the retired stored `merged`
+status. Rerunning it repairs only exact legacy rows, their attachment ownership,
+and configuration references; it never changes ordinary canceled Tickets or
+invents a merge target without existing `TicketMerge` evidence.
 
 ## Staff Talk consequences
 

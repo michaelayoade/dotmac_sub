@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.notification import (
@@ -413,3 +413,46 @@ class PushTokenRead(BaseModel):
     id: UUID
     platform: str | None = None
     is_active: bool
+
+
+# Push intent codes are product vocabulary, so they remain registered strings
+# rather than an enum. The value is the only subject kind that code may carry.
+PUSH_INTENT_REGISTRY: dict[str, str] = {
+    "chat.message": "conversation",
+    "notification.open": "notification",
+    "operational.escalation": "operational_escalation",
+    "quote.accepted": "quote",
+    "ticket.closed": "ticket",
+}
+
+
+class PushIntent(BaseModel):
+    """Product-owned navigation hint before recipient/transport enrichment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    intent_code: str = Field(min_length=1, max_length=120)
+    subject_kind: str = Field(min_length=1, max_length=80)
+    subject_id: str = Field(min_length=1, max_length=255)
+    session_generation: int | None = Field(default=None, ge=0)
+    collapse_key: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def declared_intent_and_subject(self) -> PushIntent:
+        declared_kind = PUSH_INTENT_REGISTRY.get(self.intent_code)
+        if declared_kind is None:
+            raise ValueError(f"undeclared push intent code: {self.intent_code}")
+        if self.subject_kind != declared_kind:
+            raise ValueError(
+                f"push intent {self.intent_code} requires subject kind {declared_kind}"
+            )
+        return self
+
+
+class PushIntentV1(PushIntent):
+    """The complete, content-free FCM data contract from ADR-0065 section 6."""
+
+    contract_version: Literal["PushIntentV1"] = "PushIntentV1"
+    tenant_id: str = Field(min_length=1, max_length=255)
+    principal_id: str = Field(min_length=1, max_length=255)
+    issued_at: datetime

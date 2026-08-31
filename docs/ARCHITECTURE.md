@@ -520,7 +520,11 @@ AccessCredential (Subscriber's network credentials)
 ```
 UserCredential (Login credentials)
 ├── subscriber_id | system_user_id | reseller_user_id (legacy R1 login authority)
-├── provider (legacy persisted enum; sso is compatibility-only/unimplemented)
+├── provider (persisted STORAGE vocabulary: local | radius | sso)
+│   └── sso is how a federated credential is stored; the MECHANISM is the one
+│       its authentication_binding declares (oidc today). The registry-owned
+│       mapping in app/services/authentication_mechanism_registry.py is the
+│       single statement of the relationship, and it fails closed.
 ├── username, password_hash
 ├── radius_server_id (when provider='radius')
 ├── party_id → Person Party (nullable additive projection; migration 527)
@@ -533,8 +537,9 @@ UserCredential (Login credentials)
 
 AuthenticationBinding (installed verifier configuration)
 ├── binding_key + mechanism_code (immutable deployment-global identity)
-├── mechanism_code vocabulary is open and owner-declared: local, radius
+├── mechanism_code vocabulary is open and owner-declared: local, radius, oidc
 ├── name (operator-facing label), is_active
+├── install_authentication_binding is the typed, audited runtime writer
 └── no credential material and no radius_server_id coupling
 
 Staff Party credential adoption (R1 operator adapter)
@@ -1173,7 +1178,17 @@ serialization behavior.
 
 - **Email**: SMTP with Jinja2 templates
 - **SMS**: Twilio API
-- **Push**: FCM/APNs
+- **Push**: FCM/APNs through `app.services.push`. Rich subject/body content is
+  retained only in Sub's authenticated notification record. The FCM boundary
+  emits generic display text plus the closed `PushIntentV1` data contract
+  (`contract_version`, a registered `intent_code`/`subject_kind` pair,
+  `subject_id`, `tenant_id`, `principal_id`, `issued_at`, and the two optional
+  fencing/coalescing fields). It accepts no arbitrary data bag and emits no
+  route, URL, deep link, preview, title, body, comment, or work-order prose in
+  `message.data`. Both mobile clients derive navigation from their own closed
+  intent maps; malformed or unknown contract versions fail to the authenticated
+  inbox (self-care) or no navigation (field), and display prose is never parsed
+  as a route.
 
 ### Webhook Delivery
 
