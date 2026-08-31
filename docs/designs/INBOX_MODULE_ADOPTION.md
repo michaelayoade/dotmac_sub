@@ -463,11 +463,15 @@ The rules:
   moves** — but only once the module is a writer. Until then it is inert.
   During shadow it will produce differences that MUST be pre-classified, or the
   zero-drift gate becomes a judgement call.
-- **`mod_inbox` is created at the next deploy.** `scripts/deploy.sh` verifies
-  the module schema contract with the restricted migration connection BEFORE
-  Alembic, so composing the lineage requires the elevated
-  `BOOTSTRAP_DATABASE_URL` bootstrap to have created `mod_inbox` once. This is
-  the same step the five existing composed modules took; it is not automatic.
+- **`mod_inbox` is created by the deploy's own repair leg.** `scripts/deploy.sh`
+  verifies the module schema contract with the restricted migration connection
+  BEFORE Alembic. Composing the lineage adds `mod_inbox` to the derived
+  contract, so the first deploy after composition must repair it. Superseded
+  2026-08-31: this used to say an elevated `BOOTSTRAP_DATABASE_URL` bootstrap
+  had to be supplied once, which is now refused. The deploy repairs with the
+  least-privilege `dotmac_schema_bootstrap` credential and reports
+  `already_satisfied`, `repaired` or `blocked` — and a `blocked` deploy stops
+  rather than continuing to a verification it cannot pass.
 - **Two packages, one domain.** Adopting `dotmac-inbox` without
   `dotmac-inbox-operations` leaves assignment and queueing in Sub. That is a
   coherent boundary — the operations package holds only an opaque
