@@ -83,23 +83,27 @@ def _a_table_in(conn: psycopg.Connection, schema: str) -> str | None:
 
 def _attempt_access(conn: psycopg.Connection, role: str, schema: str) -> None:
     """Really touch the schema as ``role``. Raises on denial."""
-    conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
     try:
-        table = _a_table_in(conn, schema)
-        if table is not None:
-            conn.execute(
-                sql.SQL("SELECT 1 FROM {}.{} LIMIT 0").format(
-                    sql.Identifier(schema), sql.Identifier(table)
+        # The expected permission error aborts PostgreSQL's current transaction.
+        # Isolate the role probe in a savepoint so cleanup can run without
+        # discarding drift deliberately planted by the calling test.
+        with conn.transaction():
+            conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+            table = _a_table_in(conn, schema)
+            if table is not None:
+                conn.execute(
+                    sql.SQL("SELECT 1 FROM {}.{} LIMIT 0").format(
+                        sql.Identifier(schema), sql.Identifier(table)
+                    )
                 )
-            )
-        else:
-            # No table to read: creating one needs CREATE on the schema, which
-            # PUBLIC must also not hold.
-            conn.execute(
-                sql.SQL("CREATE TABLE {}.probe_canary (id int)").format(
-                    sql.Identifier(schema)
+            else:
+                # No table to read: creating one needs CREATE on the schema,
+                # which PUBLIC must also not hold.
+                conn.execute(
+                    sql.SQL("CREATE TABLE {}.probe_canary (id int)").format(
+                        sql.Identifier(schema)
+                    )
                 )
-            )
     finally:
         conn.execute("RESET ROLE")
 
