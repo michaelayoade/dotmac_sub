@@ -122,7 +122,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
 | `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb` |
 | `tests/test_team_inbox_smtp_runtime.py` | `test_readiness_uses_smtp_noop` | `outbound_transport` | `4e19294b80d017343f252be4e1284480dc628225f164bb616e894b80a5c9f9c4` |
-| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `4c2d111b3d7cf8106ad94a8250c80cb921adaeea0cc82159b3670f49d3ec6991` |
+| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `6b5ec793e3c6236cda3fd4a2acac14846cc9c8970a068551ed3b3bb8bfb2c3fc` |
 
 ## Review rule
 
