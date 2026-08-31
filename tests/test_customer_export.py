@@ -6,17 +6,21 @@ import io
 import pytest
 
 from app.models.catalog import NasDevice, SubscriptionStatus
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.services import web_customer_lists
 
 
 def _export_query(
-    *, ids: str = "all", billing_mode: str | None = None
+    *,
+    ids: str = "all",
+    search: str | None = None,
+    status: str | None = None,
+    billing_mode: str | None = None,
 ) -> web_customer_lists.CustomerExportQuery:
     return web_customer_lists.build_customer_export_query(
         ids=ids,
-        search=None,
-        status=None,
+        search=search,
+        status=status,
         customer_type=None,
         nas_id=None,
         pop_site_id=None,
@@ -32,6 +36,36 @@ def test_customer_export_preserves_billing_filter_in_canonical_scope():
     export_query = _export_query(billing_mode="non_billable")
 
     assert export_query.list_query.filter_value("billing_mode") == "non_billable"
+
+
+def test_customer_csv_export_uses_current_filtered_scope(db_session):
+    token = "export-filtered-scope"
+    active_customer = Subscriber(
+        first_name="Active",
+        last_name="Filtered",
+        email=f"active-{token}@example.com",
+        user_type=UserType.customer,
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    suspended_customer = Subscriber(
+        first_name="Suspended",
+        last_name="Filtered",
+        email=f"suspended-{token}@example.com",
+        user_type=UserType.customer,
+        status=SubscriberStatus.suspended,
+        is_active=False,
+    )
+    db_session.add_all([active_customer, suspended_customer])
+    db_session.commit()
+
+    exported = web_customer_lists.build_customer_csv_export(
+        db_session,
+        export_query=_export_query(search=token, status="active"),
+    )
+    rows = list(csv.DictReader(io.StringIO(exported.content)))
+
+    assert [row["id"] for row in rows] == [str(active_customer.id)]
 
 
 def test_complete_customer_csv_projects_advanced_analytical_fields(
