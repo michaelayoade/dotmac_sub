@@ -414,7 +414,9 @@ class FieldMaterialRequestItemRead(BaseModel):
 
 class FieldMaterialRequestRead(BaseModel):
     id: UUID
-    work_order_id: str
+    # Material needs can originate from a ticket, project, project task, or
+    # work order. Only the last of those has a work-order public identifier.
+    work_order_id: str | None = None
     crm_material_request_id: str | None = None
     requested_by_person_id: UUID
     requested_by_system_user_id: UUID | None = None
