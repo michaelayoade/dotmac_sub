@@ -860,10 +860,18 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 
-`dotmac_kernel.namespaces` is narrowed to `module_schema`. The commercial
-schema prerequisite owner uses that pure mapping to derive the contract from
-the composed lineage declarations; every other namespace helper remains
-outside the admitted application surface.
+`dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
+with the derived module schema contract. The commercial schema prerequisite
+owner uses that pure mapping to derive the contract from the composed lineage
+declarations; every other namespace helper remains outside the admitted
+application surface.
+
+The mapping belongs to the kernel rather than to Sub: `module_schema()`
+validates the short code and the resulting name, and its docstring calls the
+`mod_` form structural rather than a convention a caller may opt out of.
+Reimplementing it as an f-string here would create a second, silently
+divergent naming authority — the same defect class as the prose schema lists
+this change removed.
 
 `dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
 the effect names `TENANT_SCOPE_CATALOG_V1`, `MODULE_DATABASE_ROLES_V1`,

@@ -228,6 +228,21 @@ def test_deploy_preflights_prerequisites_before_backup_and_alembic() -> None:
     )
 
 
+def _executable_lines(text: str) -> str:
+    """Drop whole-line comments.
+
+    These guards forbid a construct while the file deliberately DOCUMENTS that
+    construct — the workflow explains the `/proc` path that failed, and the
+    deploy leg quotes the `.env` fallback it replaced. Matching raw text would
+    make the explanation itself the violation, and the cure for that would be
+    deleting the explanation, which is worse code. A leading `#` is the only
+    comment form here; `#` inside an expression (`${VAR#*://}`) is untouched.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def test_the_prerequisite_leg_reports_a_typed_outcome() -> None:
     """`already_satisfied`, `repaired` and `blocked` must all be reachable words.
 
@@ -307,11 +322,18 @@ def test_the_repair_workflow_no_longer_uses_the_unproved_socket_path() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "temporary-module-prereq-repair.yml"
     ).read_text(encoding="utf-8")
-    assert "/proc/$database_pid/root" not in workflow
-    assert "s.PGSQL" not in workflow
-    assert "dotmac_pg_local" not in workflow
+    executable = _executable_lines(workflow)
+    # `/proc/` broadly, not just the one path that failed: a different
+    # `/proc/<pid>/root` route into the container would be the same mistake.
+    assert "/proc/" not in executable
+    assert "s.PGSQL" not in executable
+    assert "dotmac_pg_local" not in executable
     # And it must not be usable against production at all.
-    assert "REFUSED" in workflow
+    assert "REFUSED" in executable
+
+    # Sensitivity: the file must still EXPLAIN the measured root cause, and the
+    # comment stripper must be what allows that to coexist with the assertions.
+    assert "/proc/" in workflow, "the measured root cause is no longer recorded"
 
 
 def test_the_bootstrap_separates_the_two_credentials() -> None:
@@ -341,17 +363,19 @@ def test_an_elevated_dsn_may_not_be_persisted_in_the_deploy_env() -> None:
             "verify_database_prerequisites() {"
         )
     ]
-    active_leg = "\n".join(
-        line for line in leg.splitlines() if not line.lstrip().startswith("#")
-    )
+    executable = _executable_lines(leg)
+    fallback = "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
 
-    assert (
-        "${BOOTSTRAP_DATABASE_URL:-$(env_value BOOTSTRAP_DATABASE_URL)}"
-        not in active_leg
-    ), "a .env-persisted elevated DSN would arm auto-repair on every deploy"
-    assert 'persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"' in leg
-    refusal_at = leg.index('persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"')
-    assert "DEPLOY REFUSED" in leg[refusal_at:]
-    assert "exit 1" in leg[refusal_at:]
+    assert fallback not in executable, (
+        "a .env-persisted elevated DSN would arm auto-repair on every deploy"
+    )
+    assert 'persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"' in executable
+    refusal_at = executable.index('persisted_url="$(env_value BOOTSTRAP_DATABASE_URL)"')
+    assert "DEPLOY REFUSED" in executable[refusal_at:]
+    assert "exit 1" in executable[refusal_at:]
     # The operator path survives, from the process environment only.
-    assert 'bootstrap_url="${BOOTSTRAP_DATABASE_URL:-}"' in leg
+    assert 'bootstrap_url="${BOOTSTRAP_DATABASE_URL:-}"' in executable
+
+    # Sensitivity: the leg must still describe the trap it closed, and the
+    # stripper must be why that description is not itself a violation.
+    assert fallback in leg, "the trap this guard closes is no longer described"
