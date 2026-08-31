@@ -163,9 +163,15 @@ its result may change the derivation rules rather than merely satisfy them.
 
 **Operational.** One new schema and one new migration head now; a scheduled
 reconciler later. `scripts/deploy.sh` verifies the module schema contract with
-the restricted migration connection before Alembic, so the next deploy needs
-the elevated `BOOTSTRAP_DATABASE_URL` bootstrap to create `mod_inbox` once —
-the same step the five existing composed modules took.
+the restricted migration connection before Alembic, so `mod_inbox` must exist
+before the next deploy can proceed.
+
+> **Corrected 2026-08-31.** This paragraph previously said the next deploy
+> needed an elevated `BOOTSTRAP_DATABASE_URL` bootstrap supplied once. That
+> instruction is now refused: a persisted elevated DSN would arm auto-repair on
+> every deployment. The deploy owns the repair, using the least-privilege
+> `dotmac_schema_bootstrap` credential, and reports `already_satisfied`,
+> `repaired` or `blocked`. See the 2026-08-31 amendment to ADR-0011.
 
 **Behaviour.** Nothing changes in this slice. At the writer switch, account-
 scoped message identity begins admitting provider ids that the global index

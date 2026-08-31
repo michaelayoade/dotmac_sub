@@ -133,14 +133,23 @@ pass.
 **2026-08-28 — production prerequisite bootstrap for composed commercial
 modules.** The commercial module shadow composition requires privileged
 database prerequisites that the restricted production migration role must not
-own: the module database roles, outbox dispatcher roles, and the `mod_payments`,
-`mod_billing`, `mod_coll`, `mod_serviceorders`, and `mod_subscriptions`
-schemas. `scripts/bootstrap_commercial_module_prereqs.py` now owns the module
-role/schema repair path, while `scripts/bootstrap_outbox_dispatcher_roles.py`
-continues to own dispatcher identities. `scripts/deploy.sh` verifies both
-contracts with the restricted migration connection before backup and before
-Alembic, and only runs repair when an elevated `BOOTSTRAP_DATABASE_URL` is
-explicitly supplied.
+own: the module database roles, the outbox dispatcher roles, and one `mod_*`
+schema per composed lineage — a set this ledger does not enumerate, because it
+is derived into `docs/generated/MODULE_SCHEMA_CONTRACT.md` by
+`make schema-contract`. `scripts/bootstrap_commercial_module_prereqs.py` owns
+the module role/schema repair path, while
+`scripts/bootstrap_outbox_dispatcher_roles.py` continues to own dispatcher
+identities. `scripts/deploy.sh` verifies both contracts with the restricted
+migration connection before backup and before Alembic, and only runs repair
+when an elevated `BOOTSTRAP_DATABASE_URL` is explicitly supplied.
+
+**This entry's enumeration and its repair condition are superseded by the
+2026-08-31 amendment to ADR-0011.** The prose list here was one of the three
+copies that had drifted and had never gained `mod_inbox`; the schema set is now
+derived, and nothing may list it again. The deploy no longer treats an absent
+elevated credential as nothing to do: it probes the contract and reports
+`already_satisfied`, `repaired` by the dedicated `dotmac_schema_bootstrap`
+credential, or `blocked`, and a `blocked` deploy refuses before migrations.
 
 The two provider revisions intentionally add four kernel-identical names to
 Sub's lineage-head collision inventory: `idempotency_records`,
