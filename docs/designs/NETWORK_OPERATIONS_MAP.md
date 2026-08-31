@@ -15,7 +15,8 @@ topology, device-health, customer-service, or session-lifecycle decision.
   reasons, and semantic presentation.
 - `network.radius_sessions` owns subscription-scoped connected, stale, offline,
   and inactive session observations, their exact binding, and `observed_at`.
-- `customer.accounts` owns customer identity and mapped service addresses.
+- `customer.accounts` owns customer identity, account lifecycle status, and
+  mapped service addresses.
 - `access.subscription_lifecycle` owns the customer subscription cohort.
 - `ui.status_presentation` owns access-session labels, tones, and icons.
 - `auth.permission_gate` owns `network:map:read` and `customer:read` capability
@@ -66,8 +67,9 @@ staff-only QA, OLT, device-health, or mutation controls from Network Admin.
 
 `GET /admin/network/map-v2` is a read-only parity preview with its own template,
 frontend entry point, and focused tests. It uses the same `network:map:read`
-permission and composes `NetworkMapProjection` with `NetworkMapPlantProjection`;
-the established `/admin/network/map` route and template are unchanged.
+permission and composes `NetworkMapProjection` with `NetworkMapPlantProjection`.
+Its isolation prevents V2-only write and topology behavior from entering the
+established `/admin/network/map` route.
 
 V2 adds approved OLT and service-building overlays, loaded/visible counts,
 layer presets, measurement, nearest-loaded-FDH inspection, segment deep links,
@@ -148,6 +150,24 @@ The two customer layers are presentation cohorts owned by
 `ui.network_map_projection`; they do not write customer or session state.
 Geographic proximity never proves customer-to-infrastructure connectivity.
 Location and cabinet cohort links consume the canonical customer-list filters.
+
+## Local inspection and filtering
+
+The projection supplies device and ONT operational-reason breakdowns and
+customer account-lifecycle breakdowns for each existing health cohort. The
+page may expand those immutable facts and locally filter already-projected
+features. Compact filters cover customer account status, device verdict and
+type, ONT verdict and signal quality, support-structure lifecycle and
+inspection, and fiber segment type. Direct filters are multi-select local view
+state; they never recalculate a verdict, lifecycle, signal classification, or
+relationship.
+
+Customer marker outlines and detail-panel accents use the projected canonical
+account status. A customer without a connected access-session observation may
+be presented locally as offline, while the detail panel continues to show the
+canonical customer status separately from the Online/Offline session label.
+Layer All/None, search, Fit All, profile dimming, and panel transitions are
+local presentation controls and make no authoritative state change.
 
 ## Availability, freshness, and failure behavior
 

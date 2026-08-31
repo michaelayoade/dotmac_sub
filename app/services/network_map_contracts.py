@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.models.network import FiberCableType, FiberSegmentType
 from app.models.network_monitoring import DeviceRole, DeviceType
+from app.models.subscriber import SubscriberStatus
 from app.schemas.status_presentation import StatusIcon, StatusPresentation, StatusTone
 from app.services.device_operational_status import DeviceOperationalState
 from app.services.network.radius_sessions import (
@@ -203,6 +204,7 @@ class NetworkMapFeatureProperties:
     onu_rx_dbm: float | None = None
     address: str | None = None
     subscriber_id: UUID | None = None
+    customer_status: SubscriberStatus | None = None
     customer_route_kind: NetworkMapCustomerRouteKind | None = None
     connectivity: NetworkMapCustomerConnectivity | None = None
     customer_detail_link: NetworkMapLink | None = None
@@ -255,6 +257,9 @@ class NetworkMapFeatureProperties:
             "onu_rx_dbm": self.onu_rx_dbm,
             "address": self.address,
             "subscriber_id": str(self.subscriber_id) if self.subscriber_id else None,
+            "customer_status": (
+                self.customer_status.value if self.customer_status else None
+            ),
             "customer_type": (
                 self.customer_route_kind.value if self.customer_route_kind else None
             ),
@@ -289,6 +294,16 @@ class NetworkMapFeature:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkMapBreakdownItem:
+    key: str
+    label: str
+    count: int
+
+    def to_transport(self) -> dict[str, object]:
+        return {"key": self.key, "label": self.label, "count": self.count}
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkMapStats:
     pop_sites: int
     fdh_cabinets: int
@@ -306,8 +321,14 @@ class NetworkMapStats:
     onts_working: int
     onts_not_working: int
     onts_warning: int
+    network_devices_working_breakdown: tuple[NetworkMapBreakdownItem, ...]
+    network_devices_not_working_breakdown: tuple[NetworkMapBreakdownItem, ...]
+    onts_working_breakdown: tuple[NetworkMapBreakdownItem, ...]
+    onts_not_working_breakdown: tuple[NetworkMapBreakdownItem, ...]
+    customers_connected_breakdown: tuple[NetworkMapBreakdownItem, ...]
+    customers_not_connected_breakdown: tuple[NetworkMapBreakdownItem, ...]
 
-    def to_transport(self) -> dict[str, int]:
+    def to_transport(self) -> dict[str, object]:
         return {
             "pop_sites": self.pop_sites,
             "fdh_cabinets": self.fdh_cabinets,
@@ -325,6 +346,25 @@ class NetworkMapStats:
             "onts_working": self.onts_working,
             "onts_not_working": self.onts_not_working,
             "onts_warning": self.onts_warning,
+            "network_devices_working_breakdown": [
+                item.to_transport() for item in self.network_devices_working_breakdown
+            ],
+            "network_devices_not_working_breakdown": [
+                item.to_transport()
+                for item in self.network_devices_not_working_breakdown
+            ],
+            "onts_working_breakdown": [
+                item.to_transport() for item in self.onts_working_breakdown
+            ],
+            "onts_not_working_breakdown": [
+                item.to_transport() for item in self.onts_not_working_breakdown
+            ],
+            "customers_connected_breakdown": [
+                item.to_transport() for item in self.customers_connected_breakdown
+            ],
+            "customers_not_connected_breakdown": [
+                item.to_transport() for item in self.customers_not_connected_breakdown
+            ],
         }
 
 
