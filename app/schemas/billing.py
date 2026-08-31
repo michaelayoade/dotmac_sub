@@ -35,6 +35,7 @@ from app.models.billing import (
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
+from app.models.subscriber import SubscriberCategory, SubscriberStatus
 from app.schemas.status_presentation import StatusPresentation
 
 
@@ -208,6 +209,36 @@ class InvoiceSyncLineRead(BaseModel):
     tax_application: TaxApplication = TaxApplication.exclusive
 
 
+class InvoiceSyncAccountRead(BaseModel):
+    """Subscriber identity embedded in the ERP invoice sync feed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    first_name: str
+    last_name: str
+    display_name: str | None = None
+    company_name: str | None = None
+    legal_name: str | None = None
+    email: str
+    phone: str | None = None
+    status: SubscriberStatus
+    category: SubscriberCategory
+    is_active: bool
+    reseller_id: UUID | None = None
+    tax_id: str | None = None
+    subscriber_number: str | None = None
+    account_number: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class InvoiceSyncRead(BaseModel):
     """Accounting fields required to mirror an invoice into DotMac ERP.
 
@@ -220,6 +251,7 @@ class InvoiceSyncRead(BaseModel):
 
     id: UUID
     account_id: UUID
+    account: InvoiceSyncAccountRead
     invoice_number: str | None = None
     status: InvoiceStatus
     currency: str
