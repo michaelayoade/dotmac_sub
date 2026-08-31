@@ -1223,7 +1223,7 @@ def _seed_missing_notification_templates(db: Session) -> int:
         changed += 1
         logger.warning(
             "Restored active payment receipt template for channel %s",
-            tmpl_data["channel"].value,
+            existing.channel.value,
         )
 
     db.flush()
