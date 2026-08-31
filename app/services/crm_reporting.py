@@ -559,6 +559,7 @@ def build_customer_retention_export(
                 action,
             )
         )
+
     def sort_key(row: tuple[object, ...]) -> tuple[int, float, str]:
         balance_value = row[7]
         if not isinstance(balance_value, float):
