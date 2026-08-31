@@ -264,9 +264,7 @@ class TestSubscriberEdit:
         form.fill_notes("E2E test note update")
         form.submit()
         # Should redirect back to detail
-        admin_page.wait_for_url(
-            f"**/customers/person/{subscriber_id}**", timeout=30_000
-        )
+        admin_page.wait_for_url(f"**/customers/person/{subscriber_id}**")
 
 
 class TestSubscriberAPI:

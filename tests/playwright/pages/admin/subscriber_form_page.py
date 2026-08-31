@@ -82,7 +82,7 @@ class SubscriberFormPage(BasePage):
     def submit(self) -> None:
         """Submit the main create/edit form (the edit page carries a second
         convert-to-business form with its own submit button)."""
-        self.page.locator("form").first.locator("button[type='submit']").click()
+        self.page.locator("form").first.evaluate("form => form.submit()")
 
     def cancel(self) -> None:
         """Cancel and go back."""
