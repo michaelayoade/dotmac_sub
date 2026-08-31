@@ -559,13 +559,17 @@ def build_customer_retention_export(
                 action,
             )
         )
-    rows.sort(
-        key=lambda row: (
+    def sort_key(row: tuple[object, ...]) -> tuple[int, float, str]:
+        balance_value = row[7]
+        if not isinstance(balance_value, float):
+            raise TypeError("Customer retention export balance must be a float.")
+        return (
             0 if row[11] == "Suspended" else 1,
-            -float(row[7]),
+            -balance_value,
             str(row[1]).casefold(),
         )
-    )
+
+    rows.sort(key=sort_key)
     writer.writerows(rows)
     return CustomerRetentionExport("customer-retention.csv", output.getvalue())
 
