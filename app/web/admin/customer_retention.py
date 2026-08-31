@@ -7,11 +7,11 @@ from collections import Counter
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import crm_api
+from app.services import crm_api, crm_reporting
 from app.services.auth_dependencies import require_permission
 from app.web.templates import templates
 
@@ -173,6 +173,24 @@ def customer_retention_tracker(
     )
     return templates.TemplateResponse(
         "admin/reports/customer_retention_tracker.html", context
+    )
+
+
+@router.get(
+    "/customer-retention/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def customer_retention_export(
+    search: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> Response:
+    export = crm_reporting.build_customer_retention_export(
+        db=db, query=crm_reporting.CustomerRetentionExportQuery(search=search)
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
     )
 
 

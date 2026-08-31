@@ -12,55 +12,62 @@
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-8">
     {% call page_header(title="Revenue by Category", subtitle="Invoice revenue grouped by service type", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
+    {% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/reports/extended-export/revenue-categories" %}{% include "admin/reports/_csv_export_button.html" %}
 
     <div class="grid gap-4 sm:grid-cols-2">
         {{ stats_card("Categories", (category_count.value if category_count.is_present else category_count.placeholder), icon_chart_bar(), color="teal", color2="emerald") }}
         {{ stats_card("Total Revenue", ("{:,.2f}".format(total_revenue.value|float) if total_revenue.is_present else total_revenue.placeholder), icon_chart_bar(), color="emerald", color2="teal") }}
     </div>
 
-    {% call report_chart_card("Revenue Mix", revenue_mix_chart, "revenue-category-chart", color="teal", color2="emerald", min_height=300) %}
-    <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const ctx = document.getElementById('revenue-category-chart');
-        if (!ctx) return;
-        const chart = DotmacCharts.createDoughnutChart(ctx, {
-            labels: {{ revenue_mix_chart.labels | tojson | safe }},
-            values: {{ revenue_mix_chart.series[0].values | tojson | safe }},
-            colors: ['#0f766e', '#059669', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#ea580c']
-        }, { legendPosition: 'bottom' });
-        DotmacCharts.registerChart('revenue-category-chart', chart);
-    });
-    </script>
-    {% endcall %}
+    <div data-revenue-category-detail-grid class="grid items-stretch gap-4 lg:grid-cols-5">
+        <div class="min-w-0 lg:col-span-2">
+        {% call report_chart_card("Revenue Mix", revenue_mix_chart, "revenue-category-chart", color="teal", color2="emerald", min_height=250) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const ctx = document.getElementById('revenue-category-chart');
+            if (!ctx) return;
+            const chart = DotmacCharts.createDoughnutChart(ctx, {
+                labels: {{ revenue_mix_chart.labels | tojson | safe }},
+                values: {{ revenue_mix_chart.series[0].values | tojson | safe }},
+                colors: ['#0f766e', '#059669', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#ea580c']
+            }, { legendPosition: 'bottom' });
+            DotmacCharts.registerChart('revenue-category-chart', chart);
+        });
+        </script>
+        {% endcall %}
+        </div>
 
-    {% call card("Revenue Categories", color="teal") %}
-    {% if categories %}
-    <div class="overflow-x-auto">
+        <div class="min-w-0 lg:col-span-3">
+        {% call card("Revenue Categories", color="teal") %}
+        {% if categories %}
+        <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead>
                 <tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500">
-                    <th class="px-4 py-3">Category</th>
-                    <th class="px-4 py-3 text-right">Invoices</th>
-                    <th class="px-4 py-3 text-right">Revenue</th>
+                    <th class="px-2 py-3">Category</th>
+                    <th class="px-2 py-3 text-right">Invoices</th>
+                    <th class="px-2 py-3 text-right">Revenue</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                 {% for category in categories %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ category.name }}</td>
-                    <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ category.invoice_count }}</td>
-                    <td class="px-4 py-3 text-right text-sm font-mono tabular-nums text-slate-900 dark:text-white">{{ "{:,.2f}".format(category.revenue|float) }}</td>
+                    <td class="px-2 py-3 text-xs font-medium text-slate-900 dark:text-white">{{ category.name }}</td>
+                    <td class="px-2 py-3 text-right text-xs tabular-nums text-slate-600 dark:text-slate-300">{{ category.invoice_count }}</td>
+                    <td class="px-2 py-3 text-right text-xs font-mono tabular-nums text-slate-900 dark:text-white">{{ "{:,.2f}".format(category.revenue|float) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+        </div>
+        {% elif revenue_mix_chart.is_unavailable %}
+        <div role="alert" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">Revenue categories could not be loaded. Refresh the page to try again.</div>
+        {% else %}
+        {{ empty_state("No categorized revenue", "Invoice revenue with linked service categories will appear here.") }}
+        {% endif %}
+        {% endcall %}
+        </div>
     </div>
-    {% elif revenue_mix_chart.is_unavailable %}
-    <div role="alert" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">Revenue categories could not be loaded. Refresh the page to try again.</div>
-    {% else %}
-    {{ empty_state("No categorized revenue", "Invoice revenue with linked service categories will appear here.") }}
-    {% endif %}
-    {% endcall %}
 </div>
 
 {{ animation_styles() }}

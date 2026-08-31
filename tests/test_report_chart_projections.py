@@ -16,7 +16,7 @@ from app.services import (
     web_reports_extended,
 )
 from app.services.billing import reporting as billing_reporting
-from app.services.ui_contracts import ChartProjection, ChartSeries
+from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
 from app.web.admin import reports as report_routes
 
 
@@ -202,6 +202,45 @@ def test_revenue_category_projection_is_empty_or_present_from_owner_rows(
     assert present.revenue_mix_chart.is_present
     assert present.revenue_mix_chart.labels == (ServiceType.residential.value,)
     assert present.total_revenue.value == 1250.0
+
+
+def test_revenue_category_template_composes_chart_and_table_side_by_side() -> None:
+    template = report_routes.templates.env.get_template(
+        "admin/reports/revenue_categories.html"
+    )
+    chart = ChartProjection.present(
+        labels=("residential", "business", "Uncategorized"),
+        series=(ChartSeries(label="Revenue", values=(100.0, 50.0, 25.0)),),
+    )
+
+    html = template.render(
+        request=SimpleNamespace(
+            url=SimpleNamespace(path="/admin/reports/revenue-categories"),
+            state=SimpleNamespace(csrf_token=""),
+        ),
+        categories=(
+            web_reports_extended.RevenueCategoryReportRow(
+                name="residential", invoice_count=3, revenue=100.0
+            ),
+        ),
+        category_count=StateValue.present(1),
+        total_revenue=StateValue.present(100.0),
+        revenue_mix_chart=chart,
+        current_user=SimpleNamespace(name="Admin", email="admin@example.com"),
+        sidebar_stats=SimpleNamespace(app_name="DotMac Subs"),
+        unread_notifications=0,
+        active_page="reports-revenue-categories",
+        active_menu="reports",
+        page_title="Revenue by Category",
+    )
+
+    assert "data-revenue-category-detail-grid" in html
+    assert "lg:grid-cols-5" in html
+    assert "lg:col-span-2" in html
+    assert "lg:col-span-3" in html
+    assert 'style="min-height: 250px;"' in html
+    assert "Revenue Categories" in html
+    assert "100.00" in html
 
 
 def test_report_chart_macro_always_renders_a_visible_state() -> None:

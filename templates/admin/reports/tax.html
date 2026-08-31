@@ -5,6 +5,7 @@
 {{ ambient_background("brand", "teal") }}
 <div class="relative space-y-8">
     {% call page_header(title="Tax Accounting Report", subtitle="Net output-tax liability and withholding-tax receivables", icon=icon_chart_bar(), color="brand", color2="teal") %}{% endcall %}
+    {% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/reports/extended-export/tax" %}{% include "admin/reports/_csv_export_button.html" %}
 
     <div class="status-panel status-panel-info status-foreground status-tone-info rounded-xl border p-4 text-sm" role="note">
         Output tax is recognized from issued invoice documents and reduced by issued credit-note tax adjustments in the same recognition period. It is not labelled as cash collected. WHT shows the receivable raised when a reseller settles gross billing value with net cash plus tax withheld at source.

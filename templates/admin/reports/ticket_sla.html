@@ -10,6 +10,7 @@
 {{ ambient_background("teal", "cyan") }}
 
 <div class="relative space-y-8">
+    {% set export_permission = "reports:support:read" %}{% set export_url = "/admin/reports/ticket-sla/export" %}{% include "admin/reports/_csv_export_button.html" %}
     {% call page_header(
         title="Ticket SLA",
         subtitle="Track support ticket SLA clocks, breaches, and cleanup queues",

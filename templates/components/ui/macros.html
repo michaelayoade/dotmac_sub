@@ -205,16 +205,16 @@
    STATS CARD
    Metric card with hover glow effect
    ============================================ #}
-{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="") %}
+{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="", compact_value=False) %}
 {% set c2 = color2 or color %}
 {% set is_link = href != "" %}
 <{% if is_link %}a href="{{ href }}"{% else %}div{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 {% if tone %}status-tone-{{ tone }} status-metric{% else %}hover:border-{{ color }}-200 dark:hover:border-{{ color }}-700/40{% endif %}">
     <div class="absolute inset-x-5 top-0 h-px {% if tone %}status-metric-accent{% else %}bg-gradient-to-r from-transparent via-{{ color }}-400/40 to-transparent{% endif %}"></div>
     <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full blur-2xl transition-all group-hover:scale-150 {% if tone %}status-metric-glow{% else %}bg-gradient-to-br from-{{ color }}-500/10 to-{{ c2 }}-500/10{% endif %}"></div>
-    <div class="relative flex items-center justify-between">
-        <div>
+    <div class="relative flex items-center justify-between gap-3">
+        <div class="min-w-0 flex-1">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
-            <p class="mt-2.5 text-[clamp(1.25rem,2.2vw,1.8rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
+            <p class="mt-2.5 {% if compact_value %}break-words text-[clamp(0.95rem,1.15vw,1.1rem)] leading-tight tracking-tight{% else %}text-[clamp(1.25rem,2.2vw,1.8rem)] leading-none{% endif %} font-bold tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
             {% if change is not none %}
             {% set change_num = change %}
             {% if change is string %}
@@ -227,7 +227,7 @@
             {% endif %}
         </div>
         {% if icon %}
-        <div class="flex h-11 w-11 items-center justify-center rounded-2xl {% if tone %}status-metric-icon{% else %}bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25 ring-1 ring-white/70 dark:ring-white/10{% endif %}">
+        <div class="relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl {% if tone %}status-metric-icon{% else %}bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25 ring-1 ring-white/70 dark:ring-white/10{% endif %}">
             {{ icon|safe }}
         </div>
         {% endif %}

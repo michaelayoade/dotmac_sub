@@ -5,6 +5,7 @@
 {% block title %}Discounts Report - Admin{% endblock %}
 
 {% block content %}
+{% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/reports/discounts/export" %}{% include "admin/reports/_csv_export_button.html" %}
 <div class="space-y-4">
     {% call page_header(
         title="Discounts",

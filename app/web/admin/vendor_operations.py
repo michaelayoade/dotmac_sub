@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.vendor_routes import ProjectQuoteStatus
+from app.services import (
+    billing as billing_service,
+)
 from app.services import (
     vendor_as_built_review_proposals,
     vendor_project_review_proposals,
@@ -35,6 +39,7 @@ from app.services.vendor_as_built_review_proposals import (
 from app.services.vendor_portal_operations import (
     ConfigureVendorProcurementCommand,
     ReviewVendorQuoteCommand,
+    SetVendorQuoteTaxCommand,
     vendor_portal_operations,
 )
 from app.services.vendor_project_review_proposals import (
@@ -163,14 +168,19 @@ def _material_issue_input(request: Request) -> MaterialIssueInput:
     )
 
 
-def _review_context(request: Request, *, quote_id: str) -> CommandContext:
+def _review_context(
+    request: Request,
+    *,
+    quote_id: str,
+    reason: str = "vendor_quote_review",
+) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
         command_id=command_id,
         correlation_id=command_id,
         actor=_actor(request),
         scope=quote_id,
-        reason="vendor_quote_review",
+        reason=reason,
     )
 
 
@@ -533,6 +543,14 @@ def vendor_quote_review_detail(
     context.update(
         {
             "quote": quote,
+            "tax_rates": billing_service.tax_rates.list(
+                db,
+                is_active=True,
+                order_by="name",
+                order_dir="asc",
+                limit=100,
+                offset=0,
+            ),
             "message": message,
             "can_review_operations": can(request, "inventory:write")
             or can(request, "finance:ap:write"),
@@ -541,6 +559,37 @@ def vendor_quote_review_detail(
     return templates.TemplateResponse(
         "admin/vendors/quote_review_detail.html",
         context,
+    )
+
+
+@router.post("/quotes/{quote_id}/tax")
+def set_vendor_quote_tax(
+    request: Request,
+    quote_id: str,
+    vat_rate_percent: Decimal = Form(...),
+    _auth: dict = Depends(_write),
+    db: Session = Depends(get_db),
+):
+    context = _review_context(
+        request,
+        quote_id=quote_id,
+        reason="vendor_quote_tax_update",
+    )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.set_quote_tax(
+            db,
+            SetVendorQuoteTaxCommand(
+                context=context,
+                quote_id=quote_id,
+                vat_rate_percent=vat_rate_percent,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
+    return RedirectResponse(
+        f"/admin/vendors/operations/quotes/{quote_id}?message=Quote+tax+updated",
+        status_code=303,
     )
 
 

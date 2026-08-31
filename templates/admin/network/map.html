@@ -109,6 +109,9 @@
         justify-content: center;
     }
     .asset-title {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
         font-weight: 600;
         font-size: 1.1rem;
     }
@@ -319,6 +322,7 @@
             "map"
             "health"
             "layers"
+            "filters"
             "inventory"
             "legend"
             "wireless"
@@ -332,6 +336,7 @@
     .network-map-canvas { grid-area: map; min-width: 0; }
     .network-map-health { grid-area: health; }
     .network-map-layers { grid-area: layers; }
+    .network-map-filters { grid-area: filters; }
     .network-map-inventory { grid-area: inventory; }
     .network-map-legend { grid-area: legend; }
     .network-map-wireless { grid-area: wireless; }
@@ -372,6 +377,7 @@
             grid-template-areas:
                 "map health"
                 "map layers"
+                "filters filters"
                 "inventory inventory"
                 "legend legend"
                 "wireless actions"
@@ -382,6 +388,35 @@
             grid-template-columns: repeat(6, minmax(0, 1fr));
         }
     }
+    .map-dim-overlay { position:absolute; inset:0; z-index:900; background:rgba(2,6,23,.18); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .24s ease,visibility 0s linear .24s; }
+    .map-dim-overlay.open { opacity:1; visibility:visible; pointer-events:auto; transition-delay:0s; }
+    .asset-detail-panel { opacity:1; transition:opacity .22s ease,transform .22s ease,border-color .18s ease; }
+    .asset-detail-panel.hidden { display:block; opacity:0; visibility:hidden; pointer-events:none; transform:translateY(4px); }
+    .customer-status-panel { border-top:4px solid var(--customer-status-color); border-left:4px solid var(--customer-status-color); }
+    .customer-status-dot { width:.65rem; height:.65rem; flex:none; border-radius:999px; background:var(--customer-status-color); }
+    .health-drilldown { transition:background-color .24s ease,border-color .24s ease,box-shadow .24s ease; }
+    .health-drilldown:not(.expanded):hover { background:var(--surface-secondary); border-color:var(--border-strong); }
+    .health-drilldown.direct-filter-mode { border-color:#6ee7b7; box-shadow:0 0 5px rgba(110,231,183,.7),0 0 14px rgba(110,231,183,.26); }
+    .health-drilldown-toggle { cursor:pointer; outline:none; }
+    .health-drilldown-chevron { display:inline-block; margin-left:.35rem; color:var(--text-tertiary); transition:transform .24s ease; }
+    .health-drilldown.expanded .health-drilldown-chevron { transform:rotate(180deg); }
+    .health-drilldown-content { max-height:0; opacity:0; overflow:hidden; transition:max-height .34s ease,opacity .24s ease; }
+    .health-drilldown.expanded .health-drilldown-content { max-height:36rem; opacity:1; }
+    .health-breakdown-grid { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-default); }
+    .health-breakdown-title { margin-bottom:.3rem; color:var(--text-tertiary); font-size:.68rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    .health-breakdown-row { display:flex; justify-content:space-between; gap:.5rem; padding:.3rem; border:1px solid transparent; border-radius:.4rem; font-size:.7rem; transition:background-color .18s ease,border-color .18s ease; }
+    .direct-filter-mode .health-breakdown-row { cursor:pointer; }
+    .direct-filter-mode .health-breakdown-row:hover { border-color:#4f6f73; background:rgba(51,65,85,.45); }
+    .direct-filter-mode .health-breakdown-row.selected { border-color:#6ee7b7; background:rgba(16,185,129,.12); color:#a7f3d0; }
+    .direct-filter-button { position:relative; overflow:hidden; width:100%; height:2.15rem; margin-top:.65rem; border:1px solid #64748b; border-radius:.5rem; background:#263244; color:#aeb9c9; font-size:.7rem; font-weight:700; transition:all .2s ease; }
+    .direct-filter-button[aria-pressed="true"] { border-color:#6ee7b7; background:#1d3440; color:#6ee7b7; box-shadow:0 0 5px rgba(110,231,183,.95),0 0 16px rgba(110,231,183,.48),inset 0 0 9px rgba(110,231,183,.14); }
+    @keyframes direct-filter-sweep { from { transform:translateX(-140%); opacity:0; } 18% { opacity:.9; } to { transform:translateX(140%); opacity:0; } }
+    .activation-flash .health-breakdown-row::after,.activation-flash .direct-filter-button::after { content:""; position:absolute; z-index:2; inset:-2px auto -2px 0; width:46%; background:linear-gradient(90deg,transparent,rgba(110,231,183,.18),rgba(167,243,208,.9),rgba(110,231,183,.18),transparent); transform:translateX(-140%); animation:direct-filter-sweep .3s ease-out both; }
+    .direct-filter-mode .health-breakdown-row { position:relative; overflow:hidden; }
+    .layer-bulk-button[aria-pressed="true"] { border-color:#6ee7b7; color:#6ee7b7; box-shadow:0 0 0 2px rgba(110,231,183,.15); }
+    .compact-filter-grid { display:grid; grid-template-columns:1.1fr 1.4fr 1.4fr 1.7fr auto; gap:.65rem; align-items:end; }
+    .compact-filter-select { width:100%; height:2.25rem; border:1px solid var(--border-default); border-radius:.5rem; background:var(--surface-secondary); padding:0 .55rem; font-size:.7rem; color:var(--text-primary); }
+    @media(max-width:1100px) { .compact-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>
 {% endblock %}
 
@@ -420,6 +455,7 @@
                         <div id="search-results" class="search-results"></div>
                     </div>
                 </div>
+                <div id="map-dim-overlay" class="map-dim-overlay" aria-hidden="true"></div>
                 <!-- Asset detail panel -->
                 <div id="asset-detail-panel" class="asset-detail-panel hidden">
                     <button id="close-panel" class="absolute top-2 right-2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700">
@@ -622,8 +658,9 @@
 
             <!-- Layer Controls -->
             <div class="network-map-layers rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                     <h2 class="font-semibold text-slate-900 dark:text-white">Layers</h2>
+                    <div class="flex gap-1 text-xs"><button id="layers-all" type="button" aria-pressed="true" class="layer-bulk-button rounded-md border border-slate-300 px-2 py-1 dark:border-slate-600">All</button><button id="layers-none" type="button" aria-pressed="false" class="layer-bulk-button rounded-md border border-slate-300 px-2 py-1 dark:border-slate-600">None</button></div>
                 </div>
                 <div class="grid grid-cols-2 gap-3 p-4">
                     <label class="flex items-center gap-2 cursor-pointer">
@@ -677,6 +714,17 @@
                     </label>
                 </div>
             </div>
+
+            <section class="network-map-filters rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700"><div><h2 class="font-semibold text-slate-900 dark:text-white">Map Filters</h2><p class="text-xs text-slate-500 dark:text-slate-400">Narrow visible assets within enabled layers</p></div><span id="map-filter-count" class="text-xs font-semibold text-emerald-400">All assets</span></div>
+                <div class="compact-filter-grid p-4">
+                    <label class="text-xs text-slate-500 dark:text-slate-400">Customers<select id="filter-customer-status" class="compact-filter-select mt-1"><option value="">All account statuses</option>{% for value in ['new','active','delinquent','blocked','suspended','disabled','canceled'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label>
+                    <div class="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400"><label>Device status<select id="filter-device-status" class="compact-filter-select mt-1"><option value="">Any status</option><option value="working">Working</option><option value="not_working">Not working</option></select></label><label>Device type<select id="filter-device-type" class="compact-filter-select mt-1"><option value="">Any type</option></select></label></div>
+                    <div class="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400"><label>ONT status<select id="filter-ont-status" class="compact-filter-select mt-1"><option value="">Any status</option><option value="working">Working</option><option value="not_working">Not working</option></select></label><label>Signal<select id="filter-signal" class="compact-filter-select mt-1"><option value="">Any signal</option>{% for value in ['good','warning','critical','unknown'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label></div>
+                    <div class="grid grid-cols-3 gap-2 text-xs text-slate-500 dark:text-slate-400"><label>Lifecycle<select id="filter-lifecycle" class="compact-filter-select mt-1"><option value="">Any lifecycle</option>{% for value in ['planned','active','suspended','retired'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label><label>Inspection<select id="filter-inspection" class="compact-filter-select mt-1"><option value="">Any inspection</option>{% for value in ['uninspected','due','passed','conditional','failed'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label><label>Cable<select id="filter-cable" class="compact-filter-select mt-1"><option value="">Any cable</option>{% for value in ['feeder','distribution','drop'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label></div>
+                    <button id="map-filter-reset" type="button" class="h-9 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-600">Reset</button>
+                </div>
+            </section>
 
             <!-- Wireless Planning -->
             <div class="network-map-wireless rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -738,6 +786,7 @@
 (function() {
     // Map data from server
     const mapData = {{ map_data | tojson | safe }};
+    const mapStats = {{ stats | tojson | safe }};
     const canReadCustomers = {{ can(request, "customer:read") | tojson }};
 
     function escapeHtml(value) {
@@ -778,6 +827,30 @@
     const semanticTone = tone => semanticTones.has(tone) ? tone : 'neutral';
     const semanticToneColor = tone =>
         `var(--color-semantic-${semanticTone(tone)}-600)`;
+
+    const customerStatusColors = {
+        new: semanticToneColor('info'), active: semanticToneColor('positive'),
+        delinquent: semanticToneColor('warning'), blocked: semanticToneColor('negative'),
+        suspended: semanticToneColor('warning'), disabled: semanticToneColor('neutral'),
+        canceled: semanticToneColor('negative'), offline: semanticToneColor('neutral')
+    };
+
+    function customerVisualStatus(properties) {
+        if (properties.connectivity?.layer !== 'connected') return 'offline';
+        return properties.customer_status || 'offline';
+    }
+
+    function customerMarkerIcon(properties) {
+        const status = customerVisualStatus(properties);
+        const outline = customerStatusColors[status] || customerStatusColors.offline;
+        const background = properties.connectivity?.layer === 'connected'
+            ? 'var(--color-semantic-positive-600)'
+            : 'var(--color-semantic-neutral-600)';
+        return L.divIcon({
+            html: `<div style="background:${background};width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid ${outline};box-shadow:0 0 0 1px white,0 2px 5px rgba(0,0,0,.35)"><svg style="width:9px;height:9px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>`,
+            className: '', iconSize: [20, 20], iconAnchor: [10, 10], popupAnchor: [0, -10]
+        });
+    }
 
     // Custom icons
     const icons = {
@@ -1013,7 +1086,8 @@
                 break;
             case 'customer':
                 const customerPresentation = p.connectivity.presentation;
-                iconBg = semanticToneColor(customerPresentation.tone);
+                const visualStatus = customerVisualStatus(p);
+                iconBg = customerStatusColors[visualStatus] || customerStatusColors.offline;
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
                 typeLabel = `Customer (${customerPresentation.label})`;
                 if (canReadCustomers && p.customer_detail_link) {
@@ -1034,12 +1108,18 @@
         }
 
         const safeTypeLabel = escapeHtml(typeLabel);
+        const customerStatus = p.type === 'customer' ? customerVisualStatus(p) : null;
+        const customerColor = customerStatus
+            ? (customerStatusColors[customerStatus] || customerStatusColors.offline)
+            : null;
+        panel.classList.toggle('customer-status-panel', p.type === 'customer');
+        panel.style.setProperty('--customer-status-color', customerColor || 'transparent');
         let html = `
             <div class="asset-header">
                 <div class="asset-icon" style="background:${iconBg}">${iconSvg}</div>
                 <div>
                     <div class="asset-type">${safeTypeLabel}</div>
-                    <div class="asset-title">${escapeHtml(p.name || 'Unnamed')}</div>
+                    <div class="asset-title">${customerColor ? `<span class="customer-status-dot" style="background:${customerColor}"></span>` : ''}${escapeHtml(p.name || 'Unnamed')}</div>
                 </div>
             </div>
             <div class="space-y-1">
@@ -1050,7 +1130,10 @@
         if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
         if (p.type === 'customer') {
             const customerPresentation = p.connectivity.presentation;
-            html += `<div class="asset-detail-row"><span class="asset-detail-label">Access session</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${escapeHtml(customerPresentation.label)}</span></div>`;
+            const sessionStatus = p.connectivity.layer === 'connected' ? 'Online' : 'Offline';
+            html += `<div class="asset-detail-row"><span class="asset-detail-label">Customer status</span><span class="asset-detail-value" style="color:${customerColor}">${escapeHtml(p.customer_status || 'Unknown')}</span></div>`;
+            html += `<div class="asset-detail-row"><span class="asset-detail-label">Session status</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${sessionStatus}</span></div>`;
+            html += `<div class="asset-detail-row"><span class="asset-detail-label">Connectivity</span><span class="asset-detail-value">${escapeHtml(customerPresentation.label)}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Source</span><span class="asset-detail-value">${escapeHtml(p.connectivity.source_owner)}</span></div>`;
             if (p.connectivity.observed_at) {
                 html += `<div class="asset-detail-row"><span class="asset-detail-label">Observed</span><span class="asset-detail-value">${escapeHtml(p.connectivity.observed_at)}</span></div>`;
@@ -1108,12 +1191,30 @@
 
         content.innerHTML = html;
         panel.classList.remove('hidden');
+        document.getElementById('map-dim-overlay').classList.add('open');
 
         const copyBtn = content.querySelector('[data-copy-coords]');
         if (copyBtn) {
             copyBtn.addEventListener('click', () => copyToClipboard(copyBtn.getAttribute('data-copy-coords')));
         }
 
+    }
+
+    function featureLayerName(properties) {
+        const names = {
+            pop_site: 'pop', fdh_cabinet: 'fdh', splice_closure: 'closures',
+            access_point: 'accessPoints', support_structure: 'supportStructures',
+            network_device: 'networkDevices', ont: 'onts'
+        };
+        if (properties.type === 'customer') {
+            return properties.connectivity?.layer === 'connected'
+                ? 'customersConnected' : 'customersNotConnected';
+        }
+        if (properties.type === 'fiber_segment') {
+            return properties.segment_type === 'feeder' ? 'feeder'
+                : properties.segment_type === 'drop' ? 'drop' : 'distribution';
+        }
+        return names[properties.type] || null;
     }
 
     // Process features
@@ -1129,9 +1230,7 @@
 
                 let icon;
                 if (p.type === 'customer') {
-                    icon = p.connectivity.layer === 'connected'
-                        ? icons.customer_connected
-                        : icons.customer_not_connected;
+                    icon = customerMarkerIcon(p);
                 } else if (p.type === 'ont') {
                     if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
                         icon = icons.ont_warning;
@@ -1178,7 +1277,9 @@
                     address: p.address || p.street || '',
                     city: p.city || '',
                     type: p.type,
-                    searchText
+                    searchText,
+                    layerName: featureLayerName(p),
+                    filteredOut: false
                 });
 
                 switch (p.type) {
@@ -1216,7 +1317,9 @@
                     address: '',
                     city: '',
                     type: 'fiber_segment',
-                    searchText
+                    searchText,
+                    layerName: featureLayerName(p),
+                    filteredOut: false
                 });
 
                 switch (segType) {
@@ -1230,8 +1333,13 @@
 
     // Fit bounds
     function fitAllBounds() {
-        if (bounds.length > 0) {
-            map.fitBounds(bounds, { padding: [50, 50] });
+        const visibleBounds = [];
+        allFeatures.filter(item => !item.filteredOut).forEach(item => {
+            if (item.marker) visibleBounds.push(item.marker.getLatLng());
+            else if (item.polyline) visibleBounds.push(...item.polyline.getLatLngs());
+        });
+        if (visibleBounds.length > 0) {
+            map.fitBounds(visibleBounds, { padding: [50, 50] });
         }
     }
     const initialFocus = new URLSearchParams(window.location.search).get('focus');
@@ -1263,14 +1371,169 @@
             checkbox.addEventListener('change', function() {
                 if (this.checked) map.addLayer(layers[layerName]);
                 else map.removeLayer(layers[layerName]);
+                syncLayerBulkButtons();
             });
         }
     });
 
+    const layersAll = document.getElementById('layers-all');
+    const layersNone = document.getElementById('layers-none');
+    function syncLayerBulkButtons() {
+        const toggles = Object.keys(layerToggles).map(id => document.getElementById(id));
+        const allChecked = toggles.every(toggle => toggle.checked);
+        const noneChecked = toggles.every(toggle => !toggle.checked);
+        layersAll.setAttribute('aria-pressed', String(allChecked));
+        layersNone.setAttribute('aria-pressed', String(noneChecked));
+    }
+    function setAllLayers(enabled) {
+        Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
+            const checkbox = document.getElementById(checkboxId);
+            checkbox.checked = enabled;
+            if (enabled) map.addLayer(layers[layerName]);
+            else map.removeLayer(layers[layerName]);
+        });
+        syncLayerBulkButtons();
+    }
+    layersAll.addEventListener('click', () => setAllLayers(true));
+    layersNone.addEventListener('click', () => setAllLayers(false));
+    syncLayerBulkButtons();
+
     // Close panel
-    document.getElementById('close-panel').addEventListener('click', () => {
+    function closeAssetPanel() {
         document.getElementById('asset-detail-panel').classList.add('hidden');
+        document.getElementById('map-dim-overlay').classList.remove('open');
+    }
+    document.getElementById('close-panel').addEventListener('click', closeAssetPanel);
+    document.getElementById('map-dim-overlay').addEventListener('click', closeAssetPanel);
+
+    const compactFilterIds = [
+        'filter-customer-status', 'filter-device-status', 'filter-device-type',
+        'filter-ont-status', 'filter-signal', 'filter-lifecycle',
+        'filter-inspection', 'filter-cable'
+    ];
+    const directFilters = {
+        device: { active: false, selected: new Set() },
+        ont: { active: false, selected: new Set() },
+        customer: { active: false, selected: new Set() }
+    };
+
+    function directFilterMatches(properties) {
+        let config = null;
+        let key = null;
+        if (properties.type === 'network_device') {
+            config = directFilters.device;
+            key = `${properties.status}|${properties.status_reason || 'unknown'}`;
+        } else if (properties.type === 'ont') {
+            config = directFilters.ont;
+            key = `${properties.status}|${properties.status_reason || 'unknown'}`;
+        } else if (properties.type === 'customer') {
+            config = directFilters.customer;
+            key = `${properties.connectivity?.layer || 'not_connected'}|${properties.customer_status || 'unknown'}`;
+        }
+        return !config || !config.active || config.selected.size === 0 || config.selected.has(key);
+    }
+
+    function featureMatchesFilters(properties) {
+        const value = id => document.getElementById(id).value;
+        if (properties.type === 'customer' && value('filter-customer-status') && properties.customer_status !== value('filter-customer-status')) return false;
+        if (properties.type === 'network_device') {
+            if (value('filter-device-status') && properties.status !== value('filter-device-status')) return false;
+            if (value('filter-device-type') && properties.device_type !== value('filter-device-type')) return false;
+        }
+        if (properties.type === 'ont') {
+            if (value('filter-ont-status') && properties.status !== value('filter-ont-status')) return false;
+            if (value('filter-signal') && properties.signal_quality !== value('filter-signal')) return false;
+        }
+        if (properties.type === 'support_structure') {
+            if (value('filter-lifecycle') && properties.lifecycle_status !== value('filter-lifecycle')) return false;
+            if (value('filter-inspection') && properties.inspection_status !== value('filter-inspection')) return false;
+        }
+        if (properties.type === 'fiber_segment' && value('filter-cable') && properties.segment_type !== value('filter-cable')) return false;
+        return directFilterMatches(properties);
+    }
+
+    function applyMapFilters() {
+        let visible = 0;
+        allFeatures.forEach(item => {
+            const shown = featureMatchesFilters(item.feature.properties);
+            const asset = item.marker || item.polyline;
+            const group = layers[item.layerName];
+            item.filteredOut = !shown;
+            if (!asset || !group) return;
+            if (shown) { if (!group.hasLayer(asset)) group.addLayer(asset); visible += 1; }
+            else if (group.hasLayer(asset)) group.removeLayer(asset);
+        });
+        const count = document.getElementById('map-filter-count');
+        count.textContent = visible === allFeatures.length ? 'All assets' : `${visible} of ${allFeatures.length}`;
+    }
+
+    const deviceTypes = [...new Set(mapData.features
+        .filter(feature => feature.properties.type === 'network_device' && feature.properties.device_type)
+        .map(feature => feature.properties.device_type))].sort();
+    const deviceTypeSelect = document.getElementById('filter-device-type');
+    deviceTypes.forEach(type => deviceTypeSelect.add(new Option(type.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase()), type)));
+    compactFilterIds.forEach(id => document.getElementById(id).addEventListener('change', applyMapFilters));
+    document.getElementById('map-filter-reset').addEventListener('click', () => {
+        compactFilterIds.forEach(id => { document.getElementById(id).value = ''; });
+        Object.values(directFilters).forEach(config => { config.active = false; config.selected.clear(); });
+        document.querySelectorAll('.health-drilldown').forEach(card => card.classList.remove('direct-filter-mode'));
+        document.querySelectorAll('.health-breakdown-row').forEach(row => row.classList.remove('selected'));
+        document.querySelectorAll('.direct-filter-button').forEach(button => {
+            button.setAttribute('aria-pressed', 'false'); button.textContent = 'Direct filter';
+        });
+        applyMapFilters();
     });
+
+    function setupHealthDrilldown(card, kind, groups) {
+        if (!card) return;
+        card.classList.add('health-drilldown');
+        const heading = card.firstElementChild;
+        heading.classList.add('health-drilldown-toggle');
+        heading.setAttribute('role', 'button'); heading.setAttribute('tabindex', '0'); heading.setAttribute('aria-expanded', 'false');
+        heading.insertAdjacentHTML('beforeend', '<span class="health-drilldown-chevron" aria-hidden="true">⌄</span>');
+        const content = document.createElement('div');
+        content.className = 'health-drilldown-content';
+        const columns = groups.map(group => `<div><div class="health-breakdown-title">${escapeHtml(group.label)}</div>${group.items.map(item => `<button type="button" class="health-breakdown-row" data-direct-key="${escapeHtml(group.key)}|${escapeHtml(item.key)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join('')}</div>`).join('');
+        content.innerHTML = `<div class="health-breakdown-grid">${columns}</div><button type="button" class="direct-filter-button" aria-pressed="false">Direct filter</button>`;
+        card.appendChild(content);
+        const toggle = () => {
+            const expanded = card.classList.toggle('expanded');
+            heading.setAttribute('aria-expanded', String(expanded));
+        };
+        heading.addEventListener('click', toggle);
+        heading.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
+        const button = content.querySelector('.direct-filter-button');
+        button.addEventListener('click', () => {
+            const config = directFilters[kind];
+            config.active = !config.active;
+            card.classList.toggle('direct-filter-mode', config.active);
+            button.setAttribute('aria-pressed', String(config.active));
+            button.textContent = config.active ? 'Direct filter active' : 'Direct filter';
+            if (config.active) { card.classList.remove('activation-flash'); void card.offsetWidth; card.classList.add('activation-flash'); setTimeout(() => card.classList.remove('activation-flash'), 300); }
+            applyMapFilters();
+        });
+        content.querySelectorAll('.health-breakdown-row').forEach(row => row.addEventListener('click', () => {
+            if (!directFilters[kind].active) return;
+            const key = row.dataset.directKey;
+            if (directFilters[kind].selected.has(key)) directFilters[kind].selected.delete(key); else directFilters[kind].selected.add(key);
+            row.classList.toggle('selected');
+            applyMapFilters();
+        }));
+    }
+
+    const healthCards = document.querySelectorAll('.network-map-health section');
+    setupHealthDrilldown(healthCards[0], 'device', [
+        { key: 'working', label: 'Working', items: mapStats.network_devices_working_breakdown || [] },
+        { key: 'not_working', label: 'Not working', items: mapStats.network_devices_not_working_breakdown || [] }
+    ]);
+    setupHealthDrilldown(healthCards[1], 'ont', [
+        { key: 'working', label: 'Working', items: mapStats.onts_working_breakdown || [] },
+        { key: 'not_working', label: 'Not working', items: mapStats.onts_not_working_breakdown || [] }
+    ]);
+    setupHealthDrilldown(healthCards[2], 'customer', [
+        { key: 'connected', label: 'Connected', items: mapStats.customers_connected_breakdown || [] },
+        { key: 'not_connected', label: 'Not connected', items: mapStats.customers_not_connected_breakdown || [] }
+    ]);
 
     // Refresh
     document.getElementById('btn-refresh').addEventListener('click', () => window.location.reload());
@@ -1448,7 +1711,7 @@
         }
 
         searchTimeout = setTimeout(() => {
-            const matches = allFeatures.filter(f => f.searchText.includes(query));
+            const matches = allFeatures.filter(f => !f.filteredOut && f.searchText.includes(query));
             showSearchResults(matches, query);
         }, 150);
     });

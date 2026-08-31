@@ -16,6 +16,7 @@ from app.services.network_map import (
     resolve_customer_connectivity,
 )
 from app.services.network_map_contracts import (
+    NetworkMapBreakdownItem,
     NetworkMapCustomerLayer,
     NetworkMapLink,
     NetworkMapPermission,
@@ -50,6 +51,15 @@ def test_network_map_returns_typed_projection(db_session):
     assert transport["map_data"] == {"type": "FeatureCollection", "features": []}
     assert transport["stats"]["customers_connected"] == 0
     assert transport["stats"]["customers_not_connected"] == 0
+    assert transport["stats"]["network_devices_working_breakdown"] == []
+    assert transport["stats"]["onts_not_working_breakdown"] == []
+    assert transport["stats"]["customers_connected_breakdown"] == []
+
+
+def test_network_map_breakdown_item_is_typed_and_transport_safe():
+    item = NetworkMapBreakdownItem(key="active", label="Active", count=12)
+
+    assert item.to_transport() == {"key": "active", "label": "Active", "count": 12}
 
 
 def test_customer_connectivity_uses_authoritative_session_presentation():
@@ -123,6 +133,12 @@ def test_customer_network_map_links_and_semantics_are_permission_aware():
     assert "if (canReadCustomers && p.customer_cohort_link)" in map_source
     assert "p.connectivity.presentation" in map_source
     assert "p.connectivity.source_owner" in map_source
+    assert "p.customer_status" in map_source
+    assert "customerMarkerIcon(p)" in map_source
+    assert "setupHealthDrilldown" in map_source
+    assert "applyMapFilters" in map_source
+    assert "layers-all" in map_source
+    assert "Direct filter" in map_source
     assert "p.is_online" not in map_source
     assert "initialFocus === 'customers'" in map_source
     assert "map.fitBounds(customerBounds" in map_source

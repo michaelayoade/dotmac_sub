@@ -4,6 +4,7 @@
 {% block title %}Customer Retention Tracker - Admin{% endblock %}
 
 {% block content %}
+{% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/customer-retention/export" %}{% include "admin/reports/_csv_export_button.html" %}
 <div class="space-y-6">
     {% call page_header("Customer Retention Tracker", "Retention queue for accounts surfaced by authoritative Selfcare billing facts, ordered by recovery urgency and balance exposure.", color="rose", color2="pink") %}
         <a href="/admin/reports/operational/billing-risk" class="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">

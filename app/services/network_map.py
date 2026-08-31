@@ -46,6 +46,7 @@ from app.services.network.signal_thresholds import (
     get_signal_thresholds,
 )
 from app.services.network_map_contracts import (
+    NetworkMapBreakdownItem,
     NetworkMapCustomerConnectivity,
     NetworkMapCustomerLayer,
     NetworkMapCustomerRouteKind,
@@ -77,9 +78,21 @@ from app.services.network_map_contracts import (
     VendorRoutePlanningFeatureProperties,
     VendorRoutePlanningMapProjection,
 )
-from app.services.status_presentation import access_session_status_presentation
+from app.services.status_presentation import (
+    access_session_status_presentation,
+    account_status_presentation,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _breakdown_items(
+    counts: Counter[str], labels: dict[str, str]
+) -> tuple[NetworkMapBreakdownItem, ...]:
+    return tuple(
+        NetworkMapBreakdownItem(key=key, label=labels.get(key, key), count=count)
+        for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
 
 
 def _point(longitude: object, latitude: object) -> NetworkMapPointGeometry:
@@ -226,6 +239,15 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         .all()
     )
     annotate_operational_status([device for device, _ in network_devices])
+    device_reason_counts: dict[str, Counter[str]] = {
+        "working": Counter(),
+        "not_working": Counter(),
+    }
+    device_reason_labels: dict[str, str] = {}
+    for device, _ in network_devices:
+        reason = str(device.operational_reason or "verification_inconclusive")
+        device_reason_counts[device.operational_status][reason] += 1
+        device_reason_labels[reason] = device.operational.reason_label
     for idx, (device, pop_site) in enumerate(network_devices):
         # Spread markers around the POP to avoid complete overlap.
         angle = (idx % 12) * (math.pi / 6.0)
@@ -243,7 +265,9 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                     feature_type=NetworkMapFeatureType.network_device,
                     name=device.name,
                     status=DeviceOperationalState(device.operational_status),
-                    status_reason=device.operational_reason,
+                    status_reason=str(
+                        device.operational_reason or "verification_inconclusive"
+                    ),
                     status_presentation=NetworkMapStatusPresentation.from_contract(
                         device.status_presentation
                     ),
@@ -407,9 +431,16 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
     ont_working = 0
     ont_not_working = 0
     ont_warning = 0
+    ont_reason_counts: dict[str, Counter[str]] = {
+        "working": Counter(),
+        "not_working": Counter(),
+    }
+    ont_reason_labels: dict[str, str] = {}
     warn_threshold, crit_threshold = get_signal_thresholds(db)
     for ont in ont_units:
         operational = derive_ont_operational_status(ont)
+        ont_reason_counts[operational.status][operational.reason] += 1
+        ont_reason_labels[operational.reason] = operational.reason_label
         if operational.status == "working":
             ont_working += 1
         else:
@@ -461,7 +492,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         map_limit = None
 
     mapped_addresses = (
-        db.query(Address.id, Address.subscriber_id)
+        db.query(Address.id, Address.subscriber_id, Subscriber.status)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
             Address.latitude.isnot(None),
@@ -472,6 +503,11 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         .all()
     )
     customer_total = len(mapped_addresses)
+    customer_status_by_subscriber = {
+        row.subscriber_id: row.status
+        for row in mapped_addresses
+        if row.subscriber_id is not None
+    }
     mapped_subscriber_ids = {
         row.subscriber_id for row in mapped_addresses if row.subscriber_id is not None
     }
@@ -508,6 +544,21 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         is NetworkMapCustomerLayer.connected
     )
     not_connected_count = customer_total - connected_count
+    customer_status_counts: dict[str, Counter[str]] = {
+        "connected": Counter(),
+        "not_connected": Counter(),
+    }
+    customer_status_labels: dict[str, str] = {}
+    for row in mapped_addresses:
+        status = customer_status_by_subscriber.get(row.subscriber_id)
+        if status is None:
+            continue
+        connectivity = connectivity_by_subscriber.get(
+            row.subscriber_id, inactive_connectivity
+        )
+        cohort = connectivity.layer.value
+        customer_status_counts[cohort][status.value] += 1
+        customer_status_labels[status.value] = account_status_presentation(status).label
 
     customer_addresses_query = (
         db.query(
@@ -524,6 +575,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
             .label("subscriber_category"),
             Subscriber.first_name,
             Subscriber.last_name,
+            Subscriber.status.label("customer_status"),
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
@@ -562,6 +614,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                     address=addr.address_line1,
                     city=addr.city or "",
                     subscriber_id=addr.subscriber_id,
+                    customer_status=addr.customer_status,
                     customer_route_kind=(
                         NetworkMapCustomerRouteKind.business
                         if is_business
@@ -617,6 +670,24 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         onts_working=ont_working,
         onts_not_working=ont_not_working,
         onts_warning=ont_warning,
+        network_devices_working_breakdown=_breakdown_items(
+            device_reason_counts["working"], device_reason_labels
+        ),
+        network_devices_not_working_breakdown=_breakdown_items(
+            device_reason_counts["not_working"], device_reason_labels
+        ),
+        onts_working_breakdown=_breakdown_items(
+            ont_reason_counts["working"], ont_reason_labels
+        ),
+        onts_not_working_breakdown=_breakdown_items(
+            ont_reason_counts["not_working"], ont_reason_labels
+        ),
+        customers_connected_breakdown=_breakdown_items(
+            customer_status_counts["connected"], customer_status_labels
+        ),
+        customers_not_connected_breakdown=_breakdown_items(
+            customer_status_counts["not_connected"], customer_status_labels
+        ),
     )
 
     return NetworkMapProjection(
