@@ -278,6 +278,7 @@ class LegacyImagePinBootstrapSnapshotV1(StrictContract):
     resolution: LegacyImagePinLocalResolutionV1
     target_container_id: ContainerId
     target_image_id: Sha256Digest
+    volume_identity_digest: Sha256Digest
     listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
     non_port_projection: Literal["DockerComposeServiceProjectionV1"] = (
         "DockerComposeServiceProjectionV1"
@@ -409,6 +410,7 @@ class LegacyImagePinBootstrapPlanV1(StrictContract):
     resolution: LegacyImagePinLocalResolutionV1
 
     target_container_id: ContainerId
+    volume_identity_digest: Sha256Digest
     current_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
     desired_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
     replication_client: IPvAnyNetwork
@@ -606,16 +608,30 @@ class LegacyImagePinBootstrapAdmissionV1(StrictContract):
 
 
 class LegacyImagePinBootstrapDeadmanStateV1(StrictContract):
-    """Root-local rollback state for the bootstrap.
+    """Root-local recovery state. Recovery goes FORWARD, never backwards.
 
-    It differs from the steady-state deadman in one load-bearing way: the
-    reference the container is EXPECTED to carry after a rollback is the
-    desired DIGEST, not the legacy tag it had before.  Rolling back restores
-    the listener preimage and keeps the immutable reference, because reverting
-    to the tag would put the service back where ordinary v2 PLAN/APPLY cannot
-    reach it -- and the whole point of the bootstrap is to make that retry
-    possible.  The bytes are unchanged either way, which is why keeping the
-    pin is safe: ``before_image_id`` must still hold after the rollback.
+    THE ASSERTION IS INVERTED, AND THIS IS THE POINT
+    ================================================
+
+    An earlier draft had the deadman restore the listener preimage it observed
+    -- a publish on both ``0.0.0.0`` and ``[::]``. That was wrong, and wrong in
+    the most dangerous direction: **the dual-family listener is the
+    vulnerability this whole change exists to remove**, not a healthy state to
+    return to. Its IPv6 half terminates on INPUT rather than traversing
+    DOCKER-USER, so no host firewall rule reaches it.
+
+    So a dual-family listener reappearing is a deadman FAILURE, not a deadman
+    success. Automatic recovery recreates forward: the retained immutable pin,
+    the IPv4-only bind, and an explicit refusal if any IPv6 listener is
+    observed afterwards.
+
+    There is deliberately no ``before_listeners`` field. A preimage that must
+    never be restored should not be sitting in the state where someone can
+    mistake it for a target.
+
+    Returning to dual-family is break-glass: separately authorized, never
+    automatic, and never retained on disk for convenience. The pre-staging
+    Compose is not bundled here for exactly that reason.
     """
 
     schema_id: Literal["LegacyImagePinBootstrapDeadmanStateV1"] = Field(
@@ -631,12 +647,15 @@ class LegacyImagePinBootstrapDeadmanStateV1(StrictContract):
     retained_image_reference: ImageDigestReference
     before_image_id: Sha256Digest
     bind_env: Literal["PG_LOCAL_BIND"] = "PG_LOCAL_BIND"
-    bind_was_present: bool
-    bind_preimage: str
+    # The FORWARD target, not a preimage. Recovery drives the host here.
+    forward_bind: Literal["0.0.0.0:"] = "0.0.0.0:"
+    forward_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
+    # Data identity. A recreate that keeps the container discipline and the
+    # image but silently re-binds a volume would pass every other check.
+    volume_identity_digest: Sha256Digest
     before_container_id: ContainerId
-    before_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
     deadline: datetime
-    state: Literal["armed", "rolled_back", "disarmed"] = "armed"
+    state: Literal["armed", "recovered_forward", "disarmed"] = "armed"
     state_reason: str | None = None
     updated_at: datetime
 
@@ -649,14 +668,26 @@ class LegacyImagePinBootstrapDeadmanStateV1(StrictContract):
                 raise ValueError("deadman paths must be absolute")
         if any(not path.startswith("/") for path in self.compose_files):
             raise ValueError("deadman compose paths must be absolute")
-        if not self.bind_was_present and self.bind_preimage:
-            raise ValueError("an absent bind variable has no prior value")
-        keys = tuple(
+        observed = tuple(
             (row.container_port, str(row.host_ip), row.host_port, row.protocol)
-            for row in self.before_listeners
+            for row in self.forward_listeners
         )
-        if keys != tuple(sorted(set(keys))):
-            raise ValueError("deadman listeners must be unique and sorted")
+        if observed != tuple(sorted(set(observed))):
+            raise ValueError("forward listeners must be unique and sorted")
+        if observed != (
+            (
+                DECLARED_CONTAINER_PORT,
+                DECLARED_IPV4_WILDCARD,
+                DECLARED_HOST_PORT,
+                "tcp",
+            ),
+        ):
+            raise ValueError(
+                "the forward target is exactly one IPv4 listener; a dual-family "
+                "listener is the vulnerability, not a recovery state"
+            )
+        if any(row.host_ip.version == 6 for row in self.forward_listeners):
+            raise ValueError("the forward target may not contain an IPv6 listener")
         if self.state == "armed" and self.state_reason is not None:
             raise ValueError("an armed deadman has no terminal reason")
         if self.state != "armed" and not self.state_reason:
@@ -678,7 +709,7 @@ class LegacyImagePinBootstrapReceiptV1(StrictContract):
     schema_id: Literal["LegacyImagePinBootstrapReceiptV1"] = Field(
         default=BOOTSTRAP_RECEIPT_SCHEMA, alias="schema"
     )
-    outcome: Literal["applied", "rolled_back"]
+    outcome: Literal["applied", "recovered_forward"]
     operation_id: BootstrapOperationId
     source_sha: GitSha
     apply_run_id: int = Field(gt=0)
@@ -716,6 +747,7 @@ class LegacyImagePinPostconditionVerdictV1(StrictContract):
     after_target_container_id: ContainerId
     image_id: Sha256Digest
     effective_image_reference: ImageDigestReference
+    volume_identity_digest: Sha256Digest
     observed_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(
         min_length=1
     )
@@ -836,4 +868,77 @@ class LegacyImagePinReachProofV1(StrictContract):
             raise ValueError(
                 "the positive control must name a target, not the vantage itself"
             )
+        return self
+
+
+class LegacyImagePinStagingJournalV1(StrictContract):
+    """The staging operation's intent record, and its COMMIT POINT.
+
+    Staging lands two things that are only safe together: the release Compose
+    file, and ``PG_LOCAL_BIND=0.0.0.0:`` in the deployment environment. A host
+    carrying the release Compose WITHOUT the variable resolves the publish to
+    ``127.0.0.1:`` -- and the next recreate of ``postgres-local``, this
+    operation's or anyone's, strands the replication standby on a port it is
+    actively streaming WAL through. So neither may land alone, and a torn write
+    must never leave that pairing half-applied.
+
+    Two files cannot be renamed in one atomic step, so the pairing is made
+    atomic by a journal instead. ``state`` names which regime the host is in:
+
+    ``preparing``
+        Nothing is committed. Both originals are preserved and recovery
+        restores them, atomically, leaving the host as it was observed.
+
+    ``committed``
+        THE COMMIT POINT HAS PASSED. Recovery never goes backwards from here:
+        it recreates forward with the retained immutable pin and the IPv4-only
+        bind. Returning to the dual-family publish is break-glass -- separately
+        authorized, never automatic, and deliberately not possible from
+        anything left on disk, which is why the pre-staging Compose is not
+        preserved past this point.
+    """
+
+    schema_id: Literal["LegacyImagePinStagingJournalV1"] = Field(
+        default="LegacyImagePinStagingJournalV1", alias="schema"
+    )
+    target_server_name: Literal["dotmac-sub-prod"] = PRODUCTION_SERVER_NAME
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+    source_sha: GitSha
+    compose_path: NonEmpty
+    env_path: NonEmpty
+    observed_compose_digest: Sha256Digest
+    observed_env_digest: Sha256Digest
+    desired_compose_digest: Sha256Digest
+    bind_env: Literal["PG_LOCAL_BIND"] = "PG_LOCAL_BIND"
+    desired_bind: Literal["0.0.0.0:"] = "0.0.0.0:"
+    container_ids_before: tuple[PublishedPortProjectContainerV1, ...] = Field(
+        min_length=1
+    )
+    state: Literal["preparing", "committed"]
+    committed_at: datetime | None = None
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def the_commit_point_is_explicit(self) -> Self:
+        _require_utc(self.updated_at, "updated_at")
+        for path in (self.compose_path, self.env_path):
+            if not path.startswith("/"):
+                raise ValueError("staging paths must be absolute")
+        if self.state == "preparing" and self.committed_at is not None:
+            raise ValueError("an uncommitted staging operation has no commit point")
+        if self.state == "committed":
+            if self.committed_at is None:
+                raise ValueError("a committed staging operation names its commit point")
+            _require_utc(self.committed_at, "committed_at")
+        if self.observed_compose_digest == self.desired_compose_digest:
+            raise ValueError(
+                "the host already carries the desired release Compose; there is "
+                "nothing to stage"
+            )
+        keys = tuple(
+            (row.service, row.container, row.container_id)
+            for row in self.container_ids_before
+        )
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("the pre-staging container map must be unique and sorted")
         return self

@@ -166,6 +166,7 @@ def _bootstrap_snapshot(*, image: str) -> dict[str, object]:
         },
         "target_container_id": "a" * 64,
         "target_image_id": running,
+        "volume_identity_digest": f"sha256:{'7' * 64}",
         "listeners": [
             {
                 "container_port": 5432,

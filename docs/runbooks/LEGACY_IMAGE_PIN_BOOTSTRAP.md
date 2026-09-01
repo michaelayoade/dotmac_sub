@@ -122,13 +122,33 @@ The sanitized receipt is written to
 `/var/lib/dotmac/legacy-image-pin/receipt.json` and uploaded as the run's
 artifact.
 
-## If it rolls back
+## If recovery fires
 
-The deadman restores the listener preimage and **keeps** the digest pin, then
-writes a `rolled_back` receipt. That receipt refuses another bootstrap, and it
-should: the durable half is already done, so the ordinary v2 PLAN/APPLY lane can
-now retry the listener correction on its own. Use
-`docs/runbooks/PUBLISHED_PORT_RECONCILE.md` from there.
+**Recovery goes forward, never backwards.** The deadman does not restore the
+dual-family listener: that listener is the vulnerability, and its reappearance
+is a deadman *failure*. Recovery recreates with the retained pin and the
+IPv4-only bind, then writes a `recovered_forward` receipt which refuses another
+bootstrap.
+
+Recovery succeeds only on all of: PostgreSQL healthy · standby streaming ·
+exactly one IPv4 listener · no IPv6 listener · pinned image unchanged ·
+data/volume identity unchanged · every non-target container ID unchanged.
+
+Returning to the dual-family publish is **break-glass** — separately
+authorized, never automatic. Nothing on disk enables it.
+
+### The commit point
+
+`legacy_image_pin_bootstrap.sh stage` lands the release Compose and
+`PG_LOCAL_BIND=0.0.0.0:` together, around one journal write:
+
+* **Journal says `preparing`** — nothing committed. `staging recover` restores
+  both observed files atomically and the host looks untouched.
+* **Journal says `committed`** — the boundary has passed. Recovery is forward
+  only, and `staging recover` refuses. The preserved originals were deleted at
+  the commit point.
+
+Check with `dotmac-legacy-image-pin-staging status`.
 
 ## Tunable knobs (defaults documented, all overridable)
 

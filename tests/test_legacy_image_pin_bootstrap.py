@@ -21,13 +21,21 @@ from pathlib import Path
 import pytest
 
 import scripts.legacy_image_pin_bootstrap as bootstrap
+import scripts.legacy_image_pin_deadman as deadman
 import scripts.legacy_image_pin_observer as observer
+import scripts.legacy_image_pin_staging as staging
 import scripts.published_port_reconcile_v2 as v2
 from scripts.legacy_image_pin_contracts import (
+    LegacyImagePinBootstrapDeadmanStateV1,
     LegacyImagePinBootstrapPlanV1,
     LegacyImagePinBootstrapSnapshotV1,
+    LegacyImagePinStagingJournalV1,
     overlay_digest,
     overlay_document,
+)
+from scripts.published_port_contracts import (
+    PublishedPortObservedListenerV1,
+    PublishedPortProjectContainerV1,
 )
 
 # The exact coordinates measured on dotmac-sub-prod on 2026-09-01. Using the
@@ -279,6 +287,7 @@ def _snapshot_document(
         },
         "target_container_id": TARGET_BEFORE,
         "target_image_id": RUNNING_IMAGE_ID,
+        "volume_identity_digest": f"sha256:{'7' * 64}",
         "listeners": listeners
         if listeners is not None
         else [
@@ -598,7 +607,7 @@ def test_an_unreadable_receipt_still_refuses(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_deadman_rolls_back_the_listener_and_keeps_the_pin(
+def test_the_deadman_target_is_forward_and_keeps_the_pin(
     tmp_path: Path, plan: LegacyImagePinBootstrapPlanV1
 ) -> None:
     receipt = tmp_path / "receipt.json"
@@ -615,14 +624,17 @@ def test_the_deadman_rolls_back_the_listener_and_keeps_the_pin(
         deadline=NOW + timedelta(minutes=5),
         now=NOW,
     )
-    # The rollback target is the DIGEST, not the legacy tag: reverting the
-    # reference would put the service back where v2 cannot reach it.
+    # The pin is retained, and the target is FORWARD: exactly one IPv4
+    # listener. There is deliberately no before_listeners field to restore.
     assert state.retained_image_reference == DESIRED_REFERENCE
     assert state.retained_image_reference != plan.legacy_image_reference
     assert state.before_image_id == RUNNING_IMAGE_ID
-    assert state.bind_was_present is False
-    assert state.bind_preimage == ""
-    assert state.before_listeners == plan.current_listeners
+    assert state.forward_bind == "0.0.0.0:"
+    assert state.forward_listeners == plan.desired_listeners
+    assert len(state.forward_listeners) == 1
+    assert state.forward_listeners[0].host_ip.version == 4
+    assert state.volume_identity_digest == plan.volume_identity_digest
+    assert not hasattr(state, "before_listeners")
 
 
 def test_the_prestate_key_changes_once_the_bootstrap_has_run(
@@ -786,3 +798,315 @@ def test_a_correctly_staged_host_is_still_admitted(tmp_path: Path) -> None:
     path = _write_snapshot(tmp_path / "staged.json", document)
     snapshot = LegacyImagePinBootstrapSnapshotV1.from_canonical_bytes(path.read_bytes())
     assert str(snapshot.bind_knob.current_host_ip) == "0.0.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Proof 8: the inverted assertion — dual-family is a FAILURE, not a target
+# ---------------------------------------------------------------------------
+
+
+def test_a_dual_family_forward_target_is_refused(tmp_path: Path) -> None:
+    """The inversion, stated as a contract.
+
+    An earlier draft had recovery restore the observed dual-family listeners.
+    That was wrong in the most dangerous direction: the IPv6 half of that
+    publish terminates on INPUT rather than traversing DOCKER-USER, so no host
+    firewall rule reaches it. It is the vulnerability, not a healthy state, and
+    a deadman that recreates it has failed rather than recovered.
+    """
+
+    dual = (
+        PublishedPortObservedListenerV1(
+            container_port=5432, host_ip="0.0.0.0", host_port=9001, protocol="tcp"
+        ),
+        PublishedPortObservedListenerV1(
+            container_port=5432, host_ip="::", host_port=9001, protocol="tcp"
+        ),
+    )
+    with pytest.raises(Exception, match="not a recovery state"):
+        LegacyImagePinBootstrapDeadmanStateV1(
+            operation_id="imagepin-postgres-local-303",
+            plan_digest=f"sha256:{'1' * 64}",
+            deploy_dir="/root/dotmac_sub",
+            env_file="/root/dotmac_sub/.env",
+            docker_bin="/usr/bin/docker",
+            compose_files=("/var/lib/dotmac/legacy-image-pin/compose-0.yml",),
+            retained_image_reference=DESIRED_REFERENCE,
+            before_image_id=RUNNING_IMAGE_ID,
+            forward_listeners=dual,
+            volume_identity_digest=f"sha256:{'7' * 64}",
+            before_container_id=TARGET_BEFORE,
+            deadline=NOW + timedelta(minutes=5),
+            updated_at=NOW,
+        )
+
+
+def test_the_single_ipv4_forward_target_is_accepted(tmp_path: Path) -> None:
+    """Sensitivity: the refusal above discriminates rather than refusing all."""
+
+    state = LegacyImagePinBootstrapDeadmanStateV1(
+        operation_id="imagepin-postgres-local-303",
+        plan_digest=f"sha256:{'1' * 64}",
+        deploy_dir="/root/dotmac_sub",
+        env_file="/root/dotmac_sub/.env",
+        docker_bin="/usr/bin/docker",
+        compose_files=("/var/lib/dotmac/legacy-image-pin/compose-0.yml",),
+        retained_image_reference=DESIRED_REFERENCE,
+        before_image_id=RUNNING_IMAGE_ID,
+        forward_listeners=(
+            PublishedPortObservedListenerV1(
+                container_port=5432, host_ip="0.0.0.0", host_port=9001, protocol="tcp"
+            ),
+        ),
+        volume_identity_digest=f"sha256:{'7' * 64}",
+        before_container_id=TARGET_BEFORE,
+        deadline=NOW + timedelta(minutes=5),
+        updated_at=NOW,
+    )
+    assert state.state == "armed"
+    assert state.forward_bind == "0.0.0.0:"
+
+
+def test_the_deadman_executor_never_restores_a_preimage() -> None:
+    """The executor's own vocabulary must not offer a way backwards."""
+
+    source = Path(deadman.__file__).read_text(encoding="utf-8")
+    for gone in ("_restore_bind", "before_listeners", "rollback-now", "rolled_back"):
+        assert gone not in source, gone
+    assert "_ensure_forward_bind" in source
+    assert "may not be recreated automatically" in source
+    assert "data/volume identity changed" in source
+    assert "_require_database_healthy" in source
+
+
+# ---------------------------------------------------------------------------
+# Proof 9: atomic staging and the commit point
+# ---------------------------------------------------------------------------
+
+
+def test_staging_is_uncommitted_until_the_commit_point(tmp_path: Path) -> None:
+    """Before the commit point the host is restorable; after it, it is not.
+
+    The journal state IS the boundary, rather than the boundary being implied
+    by wherever an exception happens to be raised.
+    """
+
+    common = {
+        "source_sha": SOURCE_SHA,
+        "compose_path": "/root/dotmac_sub/docker-compose.yml",
+        "env_path": "/root/dotmac_sub/.env",
+        "observed_compose_digest": f"sha256:{'a' * 64}",
+        "observed_env_digest": f"sha256:{'b' * 64}",
+        "desired_compose_digest": f"sha256:{'c' * 64}",
+        "container_ids_before": (
+            PublishedPortProjectContainerV1(
+                service="postgres-local",
+                container="dotmac_pg_local",
+                container_id=TARGET_BEFORE,
+            ),
+        ),
+        "updated_at": NOW,
+    }
+    preparing = LegacyImagePinStagingJournalV1(state="preparing", **common)
+    assert preparing.committed_at is None
+
+    committed = LegacyImagePinStagingJournalV1(
+        state="committed", committed_at=NOW + timedelta(seconds=1), **common
+    )
+    assert committed.committed_at is not None
+
+    # A committed journal with no commit point, or an uncommitted one that
+    # claims a commit point, are both incoherent and refused.
+    with pytest.raises(Exception, match="names its commit point"):
+        LegacyImagePinStagingJournalV1(state="committed", **common)
+    with pytest.raises(Exception, match="has no commit point"):
+        LegacyImagePinStagingJournalV1(state="preparing", committed_at=NOW, **common)
+
+
+def test_staging_refuses_when_there_is_nothing_to_stage(tmp_path: Path) -> None:
+    digest = f"sha256:{'a' * 64}"
+    with pytest.raises(Exception, match="nothing to stage"):
+        LegacyImagePinStagingJournalV1(
+            source_sha=SOURCE_SHA,
+            compose_path="/root/dotmac_sub/docker-compose.yml",
+            env_path="/root/dotmac_sub/.env",
+            observed_compose_digest=digest,
+            observed_env_digest=f"sha256:{'b' * 64}",
+            desired_compose_digest=digest,
+            container_ids_before=(
+                PublishedPortProjectContainerV1(
+                    service="postgres-local",
+                    container="dotmac_pg_local",
+                    container_id=TARGET_BEFORE,
+                ),
+            ),
+            state="preparing",
+            updated_at=NOW,
+        )
+
+
+def test_a_torn_write_leaves_a_restorable_host_before_the_commit_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both files land, or neither does.
+
+    The pairing is what matters: a host carrying the release Compose without
+    PG_LOCAL_BIND resolves the publish to loopback, and the next recreate
+    strands the standby. So a torn write must leave the host exactly as it was
+    observed, not half-applied.
+    """
+
+    root = tmp_path / "state"
+    compose = tmp_path / "docker-compose.yml"
+    env_file = tmp_path / ".env"
+    release = tmp_path / "release-compose.yml"
+    compose.write_text("bare: 9001:5432\n", encoding="utf-8")
+    env_file.write_text("APP_ENV=production\n", encoding="utf-8")
+    release.write_text(
+        "knob: ${PG_LOCAL_BIND:-127.0.0.1:}9001:5432\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(staging, "STATE_ROOT", root)
+    monkeypatch.setattr(staging, "JOURNAL", root / "staging-journal.json")
+    monkeypatch.setattr(staging, "PRESERVED", root / "preserved")
+    monkeypatch.setattr(
+        staging,
+        "_container_map",
+        lambda _bin: [
+            {
+                "service": "postgres-local",
+                "container": "dotmac_pg_local",
+                "container_id": TARGET_BEFORE,
+            }
+        ],
+    )
+    observed_compose = compose.read_bytes()
+    observed_env = env_file.read_bytes()
+
+    # Tear the operation between the two file landings.
+    real_replace = staging._atomic_replace
+    calls: list[Path] = []
+
+    def tearing(path: Path, payload: bytes, mode: int, uid: int, gid: int) -> None:
+        calls.append(path)
+        if path == env_file:
+            raise OSError("simulated torn write")
+        real_replace(path, payload, mode, uid, gid)
+
+    monkeypatch.setattr(staging, "_atomic_replace", tearing)
+    with pytest.raises(OSError, match="simulated torn write"):
+        staging.stage(
+            compose_path=compose,
+            env_path=env_file,
+            release=release,
+            source_sha=SOURCE_SHA,
+            docker_bin="/usr/bin/docker",
+        )
+
+    # Half-applied: the Compose moved, the variable did not. This is exactly
+    # the state that strands the standby, and it is what recovery must undo.
+    assert compose.read_bytes() != observed_compose
+    monkeypatch.setattr(staging, "_atomic_replace", real_replace)
+    journal = staging._read_journal()
+    assert journal["state"] == "preparing"
+
+    staging.recover()
+    assert compose.read_bytes() == observed_compose
+    assert env_file.read_bytes() == observed_env
+    assert not (root / "staging-journal.json").exists()
+
+
+def test_after_the_commit_point_recovery_refuses_to_go_backwards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regime boundary, observed.
+
+    Past the commit point the pre-staging Compose is deliberately gone: keeping
+    a known-vulnerable definition on disk in order to return to it is the
+    convenience the ruling refuses. Break-glass is a separate authorization.
+    """
+
+    root = tmp_path / "state"
+    compose = tmp_path / "docker-compose.yml"
+    env_file = tmp_path / ".env"
+    release = tmp_path / "release-compose.yml"
+    compose.write_text("bare: 9001:5432\n", encoding="utf-8")
+    env_file.write_text("APP_ENV=production\n", encoding="utf-8")
+    release.write_text(
+        "knob: ${PG_LOCAL_BIND:-127.0.0.1:}9001:5432\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(staging, "STATE_ROOT", root)
+    monkeypatch.setattr(staging, "JOURNAL", root / "staging-journal.json")
+    monkeypatch.setattr(staging, "PRESERVED", root / "preserved")
+    monkeypatch.setattr(
+        staging,
+        "_container_map",
+        lambda _bin: [
+            {
+                "service": "postgres-local",
+                "container": "dotmac_pg_local",
+                "container_id": TARGET_BEFORE,
+            }
+        ],
+    )
+    staging.stage(
+        compose_path=compose,
+        env_path=env_file,
+        release=release,
+        source_sha=SOURCE_SHA,
+        docker_bin="/usr/bin/docker",
+    )
+
+    # Both landed together, and the bind is set.
+    assert compose.read_text(encoding="utf-8") == release.read_text(encoding="utf-8")
+    assert "PG_LOCAL_BIND=0.0.0.0:" in env_file.read_text(encoding="utf-8")
+    assert staging._read_journal()["state"] == "committed"
+    # The way back is destroyed once it must never be taken.
+    assert not (root / "preserved" / "compose.observed").exists()
+
+    with pytest.raises(staging.StagingError, match="FORWARD"):
+        staging.recover()
+
+
+def test_staging_proves_it_recreated_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    monkeypatch.setattr(staging, "STATE_ROOT", root)
+    monkeypatch.setattr(staging, "JOURNAL", root / "staging-journal.json")
+    monkeypatch.setattr(staging, "PRESERVED", root / "preserved")
+    before = [
+        {
+            "service": "postgres-local",
+            "container": "dotmac_pg_local",
+            "container_id": TARGET_BEFORE,
+        }
+    ]
+    root.mkdir(parents=True)
+    staging._write_journal(
+        {
+            "schema": "LegacyImagePinStagingJournalV1",
+            "target_server_name": "dotmac-sub-prod",
+            "service": "postgres-local",
+            "source_sha": SOURCE_SHA,
+            "compose_path": "/root/dotmac_sub/docker-compose.yml",
+            "env_path": "/root/dotmac_sub/.env",
+            "observed_compose_digest": f"sha256:{'a' * 64}",
+            "observed_env_digest": f"sha256:{'b' * 64}",
+            "desired_compose_digest": f"sha256:{'c' * 64}",
+            "bind_env": "PG_LOCAL_BIND",
+            "desired_bind": "0.0.0.0:",
+            "container_ids_before": before,
+            "state": "committed",
+            "committed_at": "2026-09-01T12:00:00Z",
+            "updated_at": "2026-09-01T12:00:00Z",
+        }
+    )
+    monkeypatch.setattr(staging, "_container_map", lambda _bin: before)
+    staging.confirm_no_recreate("/usr/bin/docker")
+
+    recreated = [dict(before[0], container_id="d" * 64)]
+    monkeypatch.setattr(staging, "_container_map", lambda _bin: recreated)
+    with pytest.raises(staging.StagingError, match="recreate nothing"):
+        staging.confirm_no_recreate("/usr/bin/docker")

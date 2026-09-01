@@ -25,6 +25,7 @@ LOCK_FILE="${DEPLOY_LOCK_FILE:-/var/lock/dotmac_sub_deploy.lock}"
 STATE_ROOT="/var/lib/dotmac/legacy-image-pin"
 RECEIPT_PATH="${STATE_ROOT}/receipt.json"
 OBSERVER_BIN="/usr/local/libexec/dotmac-legacy-image-pin-observer"
+STAGING_BIN="/usr/local/libexec/dotmac-legacy-image-pin-staging"
 DEADMAN_BIN="/usr/local/libexec/dotmac-legacy-image-pin-deadman"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE="postgres-local"
@@ -39,7 +40,8 @@ die() {
 
 usage() {
   cat >&2 <<'EOF'
-usage: legacy_image_pin_bootstrap.sh plan --source-sha SHA \
+usage: legacy_image_pin_bootstrap.sh stage --source-sha SHA
+       legacy_image_pin_bootstrap.sh plan --source-sha SHA \
          --change-reference REF --reason TEXT --run-id ID --output-dir DIR
        legacy_image_pin_bootstrap.sh apply --plan FILE --admission FILE \
          --source-sha SHA --apply-run-id ID --output-dir DIR \
@@ -127,6 +129,65 @@ done
 [[ -n "${OUTPUT_DIR}" && -n "${DEPLOY_DIR}" ]] || usage
 require_single_use
 
+# ---------------------------------------------------------------------------
+# STAGE: land the release Compose and PG_LOCAL_BIND=0.0.0.0: ATOMICALLY.
+#
+# They are one change because a host carrying the release Compose without the
+# variable resolves the publish to loopback, and the next recreate -- this
+# operation's or anyone's -- strands the replication standby. Neither may land
+# alone, and a torn write must not leave the pairing half-applied.
+#
+# This mode writes files. It recreates nothing, and proves it.
+# ---------------------------------------------------------------------------
+if [[ "${MODE}" == "stage" ]]; then
+  require_source
+  [[ -f "${ENV_FILE}" ]] || die "missing production environment file"
+  [[ "$(env_value APP_ENV)" == "production" ]] || die "APP_ENV is not production"
+  [[ "$(env_value SERVER_NAME)" == "dotmac-sub-prod" ]] ||
+    die "SERVER_NAME is not dotmac-sub-prod"
+  DOCKER_BIN="$(command -v docker)" || die "docker is unavailable"
+  require_root_owned_nonwritable "${DOCKER_BIN}" "Docker binary"
+  [[ -x "${STAGING_BIN}" ]] || die "the root-owned staging program is absent"
+  require_root_owned_nonwritable "${STAGING_BIN}" "staging program"
+  cmp -s "${REPO_DIR}/scripts/legacy_image_pin_staging.py" "${STAGING_BIN}" ||
+    die "the installed staging program differs from the reviewed source"
+
+  if ! { exec 9>"${LOCK_FILE}"; } 2>/dev/null; then
+    die "cannot open the deploy lock"
+  fi
+  flock -n 9 || die "another deploy or reconcile holds the deploy lock"
+
+  sudo -n "${STAGING_BIN}" stage \
+    --compose "${DEPLOY_DIR}/docker-compose.yml" \
+    --env-file "${ENV_FILE}" \
+    --release-compose "${REPO_DIR}/docker-compose.yml" \
+    --source-sha "${SOURCE_SHA}" \
+    --docker-bin "${DOCKER_BIN}"
+
+  # Item 3: staging writes files and must recreate nothing.
+  sudo -n "${STAGING_BIN}" confirm-no-recreate --docker-bin "${DOCKER_BIN}"
+
+  # Item 2: render against the host's REAL environment and refuse unless the
+  # standby is admitted. This is the check that catches a half-applied pairing
+  # from any source, not only from a torn write of ours.
+  STAGED_HOST_IP="$("${DOCKER_BIN}" compose --project-name dotmac_sub \
+    --project-directory "${DEPLOY_DIR}" --env-file "${ENV_FILE}" \
+    -f "${DEPLOY_DIR}/docker-compose.yml" \
+    $( [[ -f "${DEPLOY_DIR}/docker-compose.override.yml" ]] &&
+       printf -- '-f %s' "${DEPLOY_DIR}/docker-compose.override.yml" ) \
+    config --format json |
+    "${PYTHON_BIN}" -c 'import json,sys
+rows=[r for r in json.load(sys.stdin)["services"]["postgres-local"].get("ports") or ()
+      if int(r.get("published") or 0)==9001]
+print(rows[0].get("host_ip","") if len(rows)==1 else "")')"
+  [[ "${STAGED_HOST_IP}" == "0.0.0.0" ]] ||
+    die "after staging the publish resolves to '${STAGED_HOST_IP}', which does not admit the replication standby"
+
+  echo "STAGED: release Compose and ${STAGED_HOST_IP} bind landed together; no container recreated."
+  echo "Every plan taken before this moment is now void. Take fresh plans."
+  exit 0
+fi
+
 if [[ "${MODE}" == "plan" ]]; then
   require_source
   [[ -n "${CHANGE_REFERENCE}" && -n "${REASON}" ]] || usage
@@ -200,7 +261,7 @@ ARMED=0
 cleanup() {
   local status="$?"
   if ((ARMED == 1)); then
-    sudo -n "${DEADMAN_BIN}" rollback-now --operation "${OPERATION_ID}" \
+    sudo -n "${DEADMAN_BIN}" recover-forward --operation "${OPERATION_ID}" \
       --reason postcondition-failure || true
   fi
   rm -rf -- "${SCRATCH}"
@@ -208,7 +269,7 @@ cleanup() {
 }
 signal_exit() {
   if ((ARMED == 1)); then
-    if sudo -n "${DEADMAN_BIN}" rollback-now --operation "${OPERATION_ID}" \
+    if sudo -n "${DEADMAN_BIN}" recover-forward --operation "${OPERATION_ID}" \
       --reason signal; then
       ARMED=0
     fi
@@ -419,7 +480,7 @@ docker_bin, container, service, deploy_dir, env_file, pin, *sources = sys.argv[1
 inspected = json.loads(
     subprocess.run(
         [docker_bin, "inspect", container, "--format",
-         '{"container_id":{{json .Id}},"image_id":{{json .Image}},"ports":{{json .NetworkSettings.Ports}}}'],
+         '{"container_id":{{json .Id}},"image_id":{{json .Image}},"ports":{{json .NetworkSettings.Ports}},"mounts":{{json .Mounts}}}'],
         check=True, capture_output=True, text=True,
     ).stdout
 )
@@ -447,6 +508,23 @@ definition = dict(rendered["services"][service])
 definition.pop("ports", None)
 effective_image = definition.get("image")
 definition.pop("image", None)
+
+
+def volume_identity(mounts):
+    rows = sorted(
+        (
+            {
+                "type": str(m.get("Type", "")),
+                "name": str(m.get("Name", "")),
+                "source": str(m.get("Source", "")),
+                "destination": str(m.get("Destination", "")),
+                "rw": bool(m.get("RW", False)),
+            }
+            for m in mounts
+        ),
+        key=lambda r: (r["destination"], r["source"], r["name"]),
+    )
+    return digest(rows)
 
 
 def digest(value):
@@ -481,6 +559,7 @@ sys.stdout.write(json.dumps({
     "effective_image_reference": effective_image,
     "listeners": listeners,
     "image_free_definition_digest": digest(definition),
+    "volume_identity_digest": volume_identity(inspected["mounts"]),
     "non_targets": non_targets,
 }, sort_keys=True) + "\n")
 PY

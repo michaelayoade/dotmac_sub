@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import ipaddress
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -50,6 +52,10 @@ TERMINAL_REASONS = {
     "operator-request",
     "verified-success",
 }
+REPLICATION_STANDBY = "75.119.157.91"
+DECLARED_HOST_IP = "0.0.0.0"  # noqa: S104 - declared, source-restricted
+DECLARED_HOST_PORT = 9001
+DECLARED_CONTAINER_PORT = 5432
 STATE_FIELDS = {
     "schema",
     "operation_id",
@@ -62,10 +68,10 @@ STATE_FIELDS = {
     "retained_image_reference",
     "before_image_id",
     "bind_env",
-    "bind_was_present",
-    "bind_preimage",
+    "forward_bind",
+    "forward_listeners",
+    "volume_identity_digest",
     "before_container_id",
-    "before_listeners",
     "deadline",
     "state",
     "state_reason",
@@ -149,14 +155,14 @@ def _validate_state(document: object, operation: str) -> dict[str, object]:
         _fail("the bootstrap deadman serves only postgres-local")
     if document["bind_env"] != BIND_KEY:
         _fail("the bootstrap deadman restores only the declared bind variable")
-    if document["state"] not in {"armed", "rolled_back", "disarmed"}:
+    if document["state"] not in {"armed", "recovered_forward", "disarmed"}:
         _fail("unknown deadman state")
     reason = document["state_reason"]
     if document["state"] == "armed" and reason is not None:
         _fail("an armed deadman state cannot carry a terminal reason")
     if document["state"] != "armed" and reason not in TERMINAL_REASONS:
         _fail("a terminal deadman state has an unsupported reason")
-    for field in ("plan_digest", "before_image_id"):
+    for field in ("plan_digest", "before_image_id", "volume_identity_digest"):
         value = document[field]
         if not isinstance(value, str) or not DIGEST.fullmatch(value):
             _fail(f"deadman {field} is invalid")
@@ -166,12 +172,8 @@ def _validate_state(document: object, operation: str) -> dict[str, object]:
     before = document["before_container_id"]
     if not isinstance(before, str) or not CONTAINER_ID.fullmatch(before):
         _fail("deadman container ID is invalid")
-    if not isinstance(document["bind_was_present"], bool) or not isinstance(
-        document["bind_preimage"], str
-    ):
-        _fail("invalid bind preimage")
-    if not document["bind_was_present"] and document["bind_preimage"]:
-        _fail("an absent bind variable carries no prior value")
+    if document["forward_bind"] != f"{DECLARED_HOST_IP}:":
+        _fail("the forward bind target is not the declared IPv4 wildcard")
     _parse_time(document["deadline"], "deadline")
     _parse_time(document["updated_at"], "updated_at")
     for field in ("deploy_dir", "env_file", "docker_bin"):
@@ -195,7 +197,14 @@ def _validate_state(document: object, operation: str) -> dict[str, object]:
         for value in compose_files
     ):
         _fail("compose file paths must be absolute")
-    _listener_keys(document["before_listeners"], "deadman listener preimage")
+    forward = _listener_keys(document["forward_listeners"], "deadman forward target")
+    if forward != [
+        (DECLARED_CONTAINER_PORT, DECLARED_HOST_IP, DECLARED_HOST_PORT, "tcp")
+    ]:
+        _fail(
+            "the forward target is exactly one IPv4 listener; a dual-family "
+            "listener is the vulnerability, not a recovery state"
+        )
     return document
 
 
@@ -236,15 +245,20 @@ def _atomic_write(path: Path, document: dict[str, object]) -> None:
             temporary.unlink()
 
 
-def _restore_bind(document: dict[str, object]) -> None:
-    """Put PG_LOCAL_BIND back exactly as it was, including absent."""
+def _ensure_forward_bind(document: dict[str, object]) -> None:
+    """Drive PG_LOCAL_BIND to the FORWARD target, never to a preimage.
+
+    Setting it rather than restoring it is the whole inversion: the value this
+    operation is recovering toward is the declared IPv4 wildcard, and the state
+    it is recovering FROM (an absent variable, which the release Compose
+    resolves to loopback) would strand the replication standby.
+    """
 
     path = Path(str(document["env_file"]))
     stat = path.stat()
     lines = path.read_text(encoding="utf-8").splitlines()
     retained = [line for line in lines if not line.startswith(f"{BIND_KEY}=")]
-    if document["bind_was_present"]:
-        retained.append(f"{BIND_KEY}={document['bind_preimage']}")
+    retained.append(f"{BIND_KEY}={document['forward_bind']}")
     temporary = path.with_name(f".{path.name}.imagepin-deadman-{os.getpid()}")
     descriptor = os.open(
         temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.st_mode & 0o777
@@ -289,23 +303,55 @@ def _recreate_command(document: dict[str, object]) -> list[str]:
     ]
 
 
+def _volume_identity(mounts: object) -> str:
+    """A stable fingerprint of what the container has mounted.
+
+    A recreate that preserves the container-ID discipline and the pinned image
+    but silently re-binds a volume would pass every other check here, and the
+    thing it would have moved is the data.
+    """
+
+    if not isinstance(mounts, list):
+        _fail("container mounts are not a list")
+    rows = []
+    for item in mounts:
+        if not isinstance(item, dict):
+            _fail("a container mount is not an object")
+        rows.append(
+            {
+                "type": str(item.get("Type", "")),
+                "name": str(item.get("Name", "")),
+                "source": str(item.get("Source", "")),
+                "destination": str(item.get("Destination", "")),
+                "rw": bool(item.get("RW", False)),
+            }
+        )
+    rows.sort(key=lambda row: (row["destination"], row["source"], row["name"]))
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    )
+
+
 def _observed_target(
     document: dict[str, object],
-) -> tuple[str, str, str, list[tuple[int, str, int, str]]]:
+) -> tuple[str, str, str, list[tuple[int, str, int, str]], str]:
     prefix = _compose_prefix(document)
     result = subprocess.run(
         [*prefix, "ps", "-q", SERVICE], check=True, text=True, capture_output=True
     )
     ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if len(ids) != 1:
-        _fail("rollback did not leave exactly one target container")
+        _fail("recovery did not leave exactly one target container")
     inspected = subprocess.run(
         [
             str(document["docker_bin"]),
             "inspect",
             ids[0],
             "--format",
-            '{"container_id":{{json .Id}},"image_id":{{json .Image}},"image_reference":{{json .Config.Image}},"ports":{{json .NetworkSettings.Ports}}}',
+            '{"container_id":{{json .Id}},"image_id":{{json .Image}},"image_reference":{{json .Config.Image}},"ports":{{json .NetworkSettings.Ports}},"mounts":{{json .Mounts}}}',
         ],
         check=True,
         text=True,
@@ -317,11 +363,12 @@ def _observed_target(
         "image_id",
         "image_reference",
         "ports",
+        "mounts",
     }:
-        _fail("rollback target observation has unexpected fields")
+        _fail("recovery target observation has unexpected fields")
     ports = observation["ports"]
     if not isinstance(ports, dict):
-        _fail("rollback target ports are not an object")
+        _fail("recovery target ports are not an object")
     keys: list[tuple[int, str, int, str]] = []
     for port_spec, bindings in (ports or {}).items():
         container_port, _, protocol = str(port_spec).partition("/")
@@ -339,22 +386,61 @@ def _observed_target(
         str(observation["image_id"]),
         str(observation["image_reference"]),
         sorted(keys),
+        _volume_identity(observation["mounts"]),
     )
+
+
+def _require_database_healthy(document: dict[str, object], container: str) -> None:
+    """PostgreSQL accepting connections, with the declared standby streaming."""
+
+    docker_bin = str(document["docker_bin"])
+    deadline = time.monotonic() + 120
+    while True:
+        ready = subprocess.run(
+            [docker_bin, "exec", container, "pg_isready", "-U", "postgres"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if ready.returncode == 0:
+            streaming = subprocess.run(
+                [
+                    docker_bin,
+                    "exec",
+                    container,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-tAc",
+                    "select 1 from pg_stat_replication where state = 'streaming' "
+                    f"and client_addr = '{REPLICATION_STANDBY}' limit 1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if streaming.returncode == 0 and streaming.stdout.strip() == "1":
+                return
+        if time.monotonic() >= deadline:
+            _fail(
+                "after recovery PostgreSQL is not healthy with the declared "
+                "standby streaming"
+            )
+        time.sleep(2)
 
 
 def _receipt_path() -> Path:
     return STATE_ROOT / RECEIPT_NAME
 
 
-def _write_rollback_receipt(
+def _write_forward_receipt(
     document: dict[str, object], after_container_id: str
 ) -> None:
     """The terminal record that stops this bootstrap being repeated.
 
-    A rollback is still a terminal outcome for the operation: the immutable
-    reference is retained, so the ordinary v2 lane can now own the listener
-    correction, and a second bootstrap would only buy another unreviewed
-    recreate.
+    Forward recovery is a terminal outcome: the pin is retained AND the
+    listener is already corrected, so there is nothing a second bootstrap
+    could add except another unreviewed recreate.
     """
 
     path = _receipt_path()
@@ -362,8 +448,8 @@ def _write_rollback_receipt(
         return
     operation = str(document["operation_id"])
     receipt = {
-        "schema": "LegacyImagePinBootstrapRollbackReceiptV1",
-        "outcome": "rolled_back",
+        "schema": "LegacyImagePinBootstrapForwardRecoveryReceiptV1",
+        "outcome": "recovered_forward",
         "operation_id": operation,
         "service": SERVICE,
         "plan_digest": document["plan_digest"],
@@ -387,27 +473,49 @@ def _write_rollback_receipt(
             temporary.unlink()
 
 
-def _rollback(document: dict[str, object], reason: str) -> None:
+def _recover_forward(document: dict[str, object], reason: str) -> None:
+    """Recreate FORWARD. Never restore the dual-family listener.
+
+    Every assertion below is a success condition Michael named: the pinned
+    image unchanged, data identity unchanged, exactly one IPv4 listener, NO
+    IPv6 listener, PostgreSQL healthy with the standby streaming, and a
+    container that really was recreated.
+    """
+
     if document["state"] != "armed":
         return
     if reason not in TERMINAL_REASONS - {"verified-success"}:
-        _fail("unsupported rollback reason")
-    _restore_bind(document)
+        _fail("unsupported recovery reason")
+    _ensure_forward_bind(document)
     subprocess.run(_recreate_command(document), check=True)
-    expected = _listener_keys(document["before_listeners"], "deadman listener preimage")
-    after_id, image_id, reference, listeners = _observed_target(document)
+    expected = _listener_keys(document["forward_listeners"], "deadman forward target")
+    after_id, image_id, reference, listeners, volumes = _observed_target(document)
+
     if image_id != document["before_image_id"]:
-        _fail("the rolled-back container does not run the prior image ID")
+        _fail("the recovered container does not run the pinned image ID")
     if reference != document["retained_image_reference"]:
-        # The pin is deliberately RETAINED across a rollback; losing it would
-        # return the service to the state the steady-state lane cannot touch.
-        _fail("the rolled-back container did not retain the immutable reference")
+        _fail("the recovered container did not retain the immutable reference")
+    if volumes != document["volume_identity_digest"]:
+        _fail("the recovered container's data/volume identity changed")
+    if any(family == 6 for family in (_family(row[1]) for row in listeners)):
+        # The whole reason this operation exists. Its reappearance is a
+        # failure, never a restored state.
+        _fail(
+            "an IPv6 listener is present after recovery; the dual-family publish "
+            "is the vulnerability and may not be recreated automatically"
+        )
     if listeners != expected:
-        _fail("the rolled-back container listeners do not match the preimage")
-    document["state"] = "rolled_back"
+        _fail("the recovered container is not bound to exactly the IPv4 target")
+    _require_database_healthy(document, after_id)
+
+    document["state"] = "recovered_forward"
     document["state_reason"] = reason
     document["updated_at"] = _now()
-    _write_rollback_receipt(document, after_id)
+    _write_forward_receipt(document, after_id)
+
+
+def _family(address: str) -> int:
+    return ipaddress.ip_address(address).version
 
 
 def check(operation: str) -> None:
@@ -416,13 +524,13 @@ def check(operation: str) -> None:
             return
         if datetime.now(UTC) < _parse_time(document["deadline"], "deadline"):
             return
-        _rollback(document, "timeout")
+        _recover_forward(document, "timeout")
         _atomic_write(path, document)
 
 
-def rollback_now(operation: str, reason: str) -> None:
+def recover_forward(operation: str, reason: str) -> None:
     with _locked_state(operation) as (path, document):
-        _rollback(document, reason)
+        _recover_forward(document, reason)
         _atomic_write(path, document)
 
 
@@ -442,7 +550,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("check", "disarm", "validate"):
         command = commands.add_parser(name)
         command.add_argument("--operation", required=True)
-    rollback = commands.add_parser("rollback-now")
+    rollback = commands.add_parser("recover-forward")
     rollback.add_argument("--operation", required=True)
     rollback.add_argument(
         "--reason",
@@ -457,8 +565,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "check":
             check(args.operation)
-        elif args.command == "rollback-now":
-            rollback_now(args.operation, args.reason)
+        elif args.command == "recover-forward":
+            recover_forward(args.operation, args.reason)
         elif args.command == "disarm":
             disarm(args.operation)
         elif args.command == "validate":

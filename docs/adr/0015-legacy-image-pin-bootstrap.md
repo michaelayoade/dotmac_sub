@@ -82,13 +82,35 @@ Three independent refusals:
   v2 PLAN/APPLY can now own the listener correction on its own, and repeating
   the bootstrap would only buy a second unreviewed recreate.
 
-### 4. Rollback keeps the pin
+### 4. Recovery goes FORWARD, and keeps the pin
 
-The bootstrap deadman restores the LISTENER preimage but retains the digest
-reference. The bytes are identical either way — the digest names the image that
-was already running — and reverting to the tag would put the service back in
-the state the steady-state lane refuses to touch, which is the exact condition
-this bootstrap exists to remove.
+Michael ruled roll-forward on 2026-09-01, and the ruling inverts what an
+earlier draft asserted:
+
+> **The deadman must not restore the dual-family listener. That listener is the
+> vulnerability, not a healthy rollback state. A dual-family listener
+> reappearing is a deadman FAILURE.**
+
+So automatic recovery recreates forward: the retained immutable pin, the
+IPv4-only bind, and an explicit refusal if any IPv6 listener is observed
+afterwards. There is deliberately no `before_listeners` field in the deadman
+state — a value that must never be restored should not sit where it can be
+mistaken for a target — and the deadman executable no longer carries the
+vocabulary for going backwards at all.
+
+Recovery succeeds only on all of: PostgreSQL healthy · standby
+`75.119.157.91` streaming · exactly one IPv4 listener · **no IPv6 listener** ·
+pinned image unchanged · **data/volume identity unchanged** · every non-target
+container ID unchanged.
+
+Volume identity is a fingerprint of the target's mounts (type, name, source,
+destination, rw). A recreate that preserved the container-ID discipline and the
+image but silently re-bound a volume would pass every other check, and the
+thing it moved would be the data.
+
+Returning to the dual-family publish is **break-glass**: separately authorized,
+never automatic, and never retained on disk for convenience. The pre-staging
+Compose is therefore not bundled anywhere.
 
 ### 4b. Two inputs, not one: CURRENT is revalidated, DESIRED is pinned
 
@@ -211,7 +233,27 @@ effective projection a third time with the host's REAL environment and no
 injection, and the contract refuses any host whose current resolved bind does
 not admit the standby.
 
-## 9. What a rollback can restore after staging — open
+## 9. The commit point — the recovery contract
+
+Staging lands two things that are only safe together, and two files cannot be
+renamed in one atomic step. A journal supplies the atomicity, and its state is
+the named boundary between two regimes:
+
+**Before the commit point.** Nothing is committed. Both originals are
+preserved, and `recover` restores them atomically, leaving the host exactly as
+it was observed. This is what a torn write must leave behind — never the
+half-applied pairing, which is precisely the state (release Compose, no
+`PG_LOCAL_BIND`) where the next recreate strands the standby.
+
+**After the commit point.** Recovery never goes backwards. It recreates forward
+with the retained pin and the IPv4-only bind. The preserved originals are
+deleted at the commit point, so the way back is destroyed at exactly the moment
+it must never be taken.
+
+The boundary is a single journal write, so it is explicit rather than implied
+by where an exception happens to be raised.
+
+## 9b. Superseded — what a rollback could restore after staging
 
 Once the release Compose is deployed, the bare dual-family publish **no longer
 exists in any file on the host**, so a rollback cannot reproduce it. The

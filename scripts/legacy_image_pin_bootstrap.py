@@ -192,6 +192,7 @@ def build_plan(
         desired_image_reference=snapshot.desired_image_reference,
         resolution=snapshot.resolution,
         target_container_id=snapshot.target_container_id,
+        volume_identity_digest=snapshot.volume_identity_digest,
         current_listeners=snapshot.listeners,
         desired_listeners=(
             PublishedPortObservedListenerV1(
@@ -375,6 +376,8 @@ def verify_prestate(
         _refuse("the live target container differs from the admitted plan")
     if snapshot.desired_image_reference != plan.desired_image_reference:
         _refuse("the live desired digest differs from the admitted plan")
+    if snapshot.volume_identity_digest != plan.volume_identity_digest:
+        _refuse("the target's data/volume identity differs from the admitted plan")
     if snapshot.resolution.resolved_image_id != plan.observed_image_id:
         _refuse("the desired digest no longer resolves to the running image ID")
     if snapshot.non_targets != plan.non_target_containers:
@@ -435,12 +438,8 @@ def prepare_deadman_state(
         _refuse("the deadman state does not bind the admitted plan")
     if deadline <= now or deadline - now > timedelta(minutes=10):
         _refuse("the deadman deadline must be within the next ten minutes")
-    rows = env_file.read_text(encoding="utf-8").splitlines()
-    matches = [
-        line.partition("=")[2] for line in rows if line.startswith("PG_LOCAL_BIND=")
-    ]
-    if len(matches) > 1:
-        _refuse("the environment file contains duplicate PG_LOCAL_BIND rows")
+    if not env_file.is_file():
+        _refuse("the deployment environment file is absent")
     return LegacyImagePinBootstrapDeadmanStateV1(
         operation_id=admission.operation_id,
         plan_digest=plan.canonical_digest(),
@@ -448,15 +447,18 @@ def prepare_deadman_state(
         env_file=str(env_file.resolve()),
         docker_bin=str(docker_bin.resolve()),
         compose_files=tuple(str(path.resolve()) for path in compose_files),
-        # The rollback target keeps the DIGEST, not the legacy tag: the bytes
-        # are identical either way, and reverting the reference would put the
-        # service back where ordinary v2 PLAN/APPLY cannot reach it.
+        # The pin is RETAINED across recovery: the bytes are identical either
+        # way, and reverting the reference would put the service back where the
+        # steady-state lane cannot reach it.
         retained_image_reference=plan.desired_image_reference,
         before_image_id=plan.observed_image_id,
-        bind_was_present=bool(matches),
-        bind_preimage=matches[0] if matches else "",
+        # A FORWARD target, not a preimage. There is deliberately no
+        # before_listeners field: the dual-family publish is the vulnerability,
+        # and a value that must never be restored should not be sitting in the
+        # state where it can be mistaken for a target.
+        forward_listeners=plan.desired_listeners,
+        volume_identity_digest=plan.volume_identity_digest,
         before_container_id=plan.target_container_id,
-        before_listeners=plan.current_listeners,
         deadline=deadline,
         updated_at=now,
     )
@@ -516,6 +518,13 @@ def verify_postconditions(
     )
     if non_targets != plan.non_target_containers:
         _refuse("one or more non-target container identities changed")
+    if str(poststate["volume_identity_digest"]) != plan.volume_identity_digest:
+        _refuse("the recreated target's data/volume identity changed")
+    if any(row.host_ip.version == 6 for row in listeners):
+        _refuse(
+            "an IPv6 listener is present after the recreate; removing it is the "
+            "entire purpose of this operation"
+        )
 
     firewall = _read_contract(firewall_proof_path, LegacyImagePinFirewallProofV1)
     reach = _read_contract(reach_proof_path, LegacyImagePinReachProofV1)
@@ -546,6 +555,7 @@ def verify_postconditions(
         after_target_container_id=after_container_id,
         image_id=after_image_id,
         effective_image_reference=after_reference,
+        volume_identity_digest=str(poststate["volume_identity_digest"]),
         observed_listeners=listeners,
         image_free_definition_digest=image_free_digest,
         unchanged_non_target_container_digest=_non_target_digest(non_targets),

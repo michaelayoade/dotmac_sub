@@ -75,6 +75,33 @@ def _digest(value: object) -> str:
     return f"sha256:{hashlib.sha256(_canonical(value)).hexdigest()}"
 
 
+def _volume_identity(mounts: object) -> str:
+    """A stable fingerprint of what the target has mounted.
+
+    A recreate that keeps the container-ID discipline and the pinned image but
+    silently re-binds a volume would pass every other check, and the thing it
+    moved would be the data.
+    """
+
+    if not isinstance(mounts, list):
+        _fail("container mounts are not a list")
+    rows = []
+    for item in mounts:
+        if not isinstance(item, dict):
+            _fail("a container mount is not an object")
+        rows.append(
+            {
+                "type": str(item.get("Type", "")),
+                "name": str(item.get("Name", "")),
+                "source": str(item.get("Source", "")),
+                "destination": str(item.get("Destination", "")),
+                "rw": bool(item.get("RW", False)),
+            }
+        )
+    rows.sort(key=lambda row: (row["destination"], row["source"], row["name"]))
+    return _digest(rows)
+
+
 def _repository_of(reference: str) -> str:
     if "@" in reference:
         return reference.rsplit("@", 1)[0]
@@ -351,7 +378,7 @@ def collect(
             "inspect",
             *ids,
             "--format",
-            '{"compose_project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"container_id":{{json .Id}},"image_id":{{json .Image}},"image_reference":{{json .Config.Image}},"ports":{{json .NetworkSettings.Ports}}}',
+            '{"compose_project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"container":{{json .Name}},"container_id":{{json .Id}},"image_id":{{json .Image}},"image_reference":{{json .Config.Image}},"ports":{{json .NetworkSettings.Ports}},"mounts":{{json .Mounts}}}',
         ]
     )
     allowed = {
@@ -362,6 +389,7 @@ def collect(
         "image_id",
         "image_reference",
         "ports",
+        "mounts",
     }
     target: dict[str, object] | None = None
     non_targets: list[dict[str, object]] = []
@@ -419,6 +447,7 @@ def collect(
             )
         )
         target = {
+            "volume_identity_digest": _volume_identity(row["mounts"]),
             "container_id": container_id,
             "image_id": str(row["image_id"]),
             "image_reference": str(row["image_reference"]),
@@ -485,6 +514,7 @@ def collect(
         "resolution": resolution,
         "target_container_id": target["container_id"],
         "target_image_id": running_image_id,
+        "volume_identity_digest": target["volume_identity_digest"],
         "listeners": target["listeners"],
         "non_port_projection": "DockerComposeServiceProjectionV1",
         "non_port_definition_digest": _digest(projection),

@@ -169,12 +169,26 @@ def test_the_single_use_guard_would_notice_if_it_were_removed() -> None:
     assert weakened.count("require_single_use(") < owner.count("require_single_use(")
 
 
-def test_the_rollback_retains_the_immutable_reference() -> None:
-    """Reverting the pin would undo the only durable half of the bootstrap."""
+def test_recovery_goes_forward_and_never_restores_the_vulnerability() -> None:
+    """The inversion, guarded structurally.
+
+    Recovery keeps the pin AND drives the listener forward. The dual-family
+    publish is the vulnerability; its reappearance is a failure, so the
+    executor must not even carry the vocabulary for restoring it.
+    """
 
     deadman = DEADMAN.read_text(encoding="utf-8")
     assert "retained_image_reference" in deadman
     assert "did not retain the immutable reference" in deadman
+    assert "_ensure_forward_bind" in deadman
+    assert "may not be recreated automatically" in deadman
+    assert "data/volume identity changed" in deadman
+    assert "_require_database_healthy" in deadman
+    for gone in ("_restore_bind", "before_listeners", "rolled_back", "rollback-now"):
+        assert gone not in deadman, gone
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    assert "not a recovery state" in contracts
+    assert "may not contain an IPv6 listener" in contracts
     assert "DIGEST_REFERENCE.fullmatch(retained)" in deadman
     # The rollback recreate is as narrow as the forward one.
     assert (
@@ -404,3 +418,46 @@ def test_a_moved_current_input_is_refused_rather_than_warned() -> None:
     assert "is not the admitted desired bytes" in adapter
     assert "is not staged to the admitted release Compose" in adapter
     assert "is not the admitted desired overlay" in adapter
+
+
+STAGING = ROOT / "scripts/legacy_image_pin_staging.py"
+
+
+def test_staging_lands_both_files_atomically_around_one_commit_point() -> None:
+    """The boundary is a named state, not wherever an exception happens to land."""
+
+    staging = STAGING.read_text(encoding="utf-8")
+    assert "THE COMMIT POINT" in staging
+    assert 'journal["state"] = "committed"' in staging
+    assert "def recover(" in staging
+    assert "def confirm_no_recreate(" in staging
+    # Before the commit point both originals exist; after it they are gone,
+    # because keeping a known-vulnerable definition on disk in order to return
+    # to it is exactly the convenience the ruling refuses.
+    assert 'PRESERVED / "compose.observed"' in staging
+    assert (
+        "The way back is deliberately destroyed once it must never be taken." in staging
+    )
+    assert "is not automatic" in staging
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    assert "class LegacyImagePinStagingJournalV1" in contracts
+    assert "THE COMMIT POINT HAS PASSED" in contracts
+
+    # The pairing is the point: the file and the variable are one change.
+    adapter = ADAPTER.read_text(encoding="utf-8")
+    assert '"${STAGING_BIN}" stage' in adapter
+    assert "confirm-no-recreate" in adapter
+    assert "does not admit the replication standby" in adapter
+    assert "Every plan taken before this moment is now void" in adapter
+
+
+def test_the_bootstrap_never_bundles_the_pre_staging_compose() -> None:
+    """Break-glass is an authorization, not a file left lying around."""
+
+    for path in (ADAPTER, DEADMAN, STAGING):
+        source = path.read_text(encoding="utf-8")
+        assert "pre-staging" not in source.lower() or "not" in source.lower()
+    staging = STAGING.read_text(encoding="utf-8")
+    # The only preserved copies live strictly before the commit point.
+    assert staging.count('PRESERVED / "compose.observed"') >= 1
+    assert "backup.unlink()" in staging or "target.unlink()" in staging
