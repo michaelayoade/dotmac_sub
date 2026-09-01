@@ -25,6 +25,11 @@ from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.subscriber import SubscriberStatus, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
+from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceEvent,
+    InboxAgentPresenceStatus,
+)
 from app.services import auth_flow as auth_flow_service
 from app.services import credential_recovery, staff_provisioning
 from app.services import web_system_user_mutations as web_system_user_mutations_service
@@ -937,6 +942,69 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
         request,
     )
     assert verified["access_token"]
+    presence = db_session.query(InboxAgentPresence).one()
+    assert presence.person_id == system_user.id
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+
+
+def test_successful_staff_login_defaults_agent_presence_online(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    system_user, _credential = _system_user_with_credential(
+        db_session, "admin-online-by-default@example.com"
+    )
+    prior_seen_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user.id,
+            status=InboxAgentPresenceStatus.offline.value,
+            manual_override_status=InboxAgentPresenceStatus.offline.value,
+            last_seen_at=prior_seen_at,
+        )
+    )
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+
+    assert result["access_token"]
+    session = db_session.query(AuthSession).one()
+    presence = db_session.query(InboxAgentPresence).one()
+    event = db_session.query(InboxAgentPresenceEvent).one()
+    assert presence.status == InboxAgentPresenceStatus.online.value
+    assert presence.manual_override_status is None
+    assert presence.last_seen_at == session.created_at
+    assert event.reason_code == "staff_sign_in"
+    assert event.source_id == f"auth-session:{session.id}"
+
+
+def test_successful_subscriber_login_does_not_create_agent_presence(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add(
+        UserCredential(
+            person_id=person.id,
+            provider=AuthProvider.local,
+            username="subscriber-no-agent-presence@example.com",
+            password_hash=hash_password("secret"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session,
+        "subscriber-no-agent-presence@example.com",
+        "secret",
+        _make_request(),
+        None,
+    )
+
+    assert result["access_token"]
+    assert db_session.query(InboxAgentPresence).count() == 0
+    assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
 def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkeypatch):

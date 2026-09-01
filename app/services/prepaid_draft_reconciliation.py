@@ -27,7 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -55,7 +55,20 @@ from app.models.billing import (
     ServiceEntitlement,
     ServiceEntitlementStatus,
 )
-from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.billing_contract import (
+    CadenceAlignment,
+    CollectionTiming,
+    EndOfMonthRule,
+    IntervalUnit,
+    ProrationPolicy,
+    RateBasis,
+)
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.collections import (
     FinancialAccessAction,
     FinancialAccessConsequence,
@@ -92,6 +105,7 @@ from app.services.billing.account_credit import (
     ReviewedOpeningSettlementAllocationRelease,
 )
 from app.services.billing.adjustments import AccountAdjustmentOrigin
+from app.services.billing.cadence import BillingCadence, service_period
 from app.services.billing.customer_subledger import (
     StageReversalCommand,
     resolve_position,
@@ -129,6 +143,9 @@ from app.services.prepaid_funding_reconstruction import (
     verified_prepaid_funding_balance,
 )
 from app.timezone import APP_TIMEZONE_NAME
+
+if TYPE_CHECKING:
+    from app.services.prepaid_service_renewals import PrepaidSettlementPeriod
 
 _OWNER = "financial.prepaid_draft_reconciliation"
 _CONCERN = "stranded prepaid draft invoice reconciliation"
@@ -1482,10 +1499,20 @@ def preview_historical_paid_prepaid_invoice_repair(
             billing_cycle=cycle,
         )
     )
-    stale_anchor = (
-        subscription.next_billing_at is None
-        or _utc(subscription.next_billing_at) <= period.starts_at
+    current_anchor = (
+        _utc(subscription.next_billing_at)
+        if subscription.next_billing_at is not None
+        else None
     )
+    anchor_period = _paid_invoice_repair_period_from_current_anchor(
+        invoice=invoice,
+        settlement_period=period,
+        current_anchor=current_anchor,
+        billing_cycle=cycle,
+    )
+    if anchor_period is not None:
+        period = anchor_period
+    stale_anchor = current_anchor is None or current_anchor <= period.starts_at
     if not stale_anchor:
         return _build_paid_invoice_repair_preview(
             invoice=invoice,
@@ -1572,6 +1599,63 @@ def _business_midnight(value: date) -> datetime:
         time.min,
         tzinfo=ZoneInfo(APP_TIMEZONE_NAME),
     ).astimezone(UTC)
+
+
+_PAID_INVOICE_REPAIR_CYCLE_INTERVALS: dict[BillingCycle, tuple[IntervalUnit, int]] = {
+    BillingCycle.daily: (IntervalUnit.day, 1),
+    BillingCycle.weekly: (IntervalUnit.week, 1),
+    BillingCycle.monthly: (IntervalUnit.month, 1),
+    BillingCycle.quarterly: (IntervalUnit.month, 3),
+    BillingCycle.annual: (IntervalUnit.year, 1),
+}
+
+
+def _paid_invoice_repair_period_from_current_anchor(
+    *,
+    invoice: Invoice,
+    settlement_period: PrepaidSettlementPeriod,
+    current_anchor: datetime | None,
+    billing_cycle: BillingCycle,
+) -> PrepaidSettlementPeriod | None:
+    if (
+        current_anchor is None
+        or current_anchor <= settlement_period.starts_at
+        or invoice.due_at is None
+    ):
+        return None
+    zone = ZoneInfo(settlement_period.timezone_name)
+    if current_anchor.astimezone(zone).date() != settlement_period.starts_on:
+        return None
+    interval_spec = _PAID_INVOICE_REPAIR_CYCLE_INTERVALS.get(billing_cycle)
+    if interval_spec is None:
+        return None
+    interval_unit, interval_count = interval_spec
+    cadence = BillingCadence(
+        rate_basis=RateBasis.fixed_per_service_period,
+        rate_unit=interval_unit,
+        rate_quantity=Decimal("1"),
+        service_interval_unit=interval_unit,
+        service_interval_count=interval_count,
+        invoice_interval_unit=interval_unit,
+        invoice_interval_count=interval_count,
+        collection_timing=CollectionTiming.advance,
+        alignment=CadenceAlignment.contract_anniversary,
+        timezone_name=settlement_period.timezone_name,
+        end_of_month_rule=EndOfMonthRule.clamp_to_month_end,
+        proration_policy=ProrationPolicy.none,
+    )
+    interval = service_period(cadence=cadence, contract_start=current_anchor)
+    starts_at = interval.starts_at.astimezone(UTC)
+    ends_at = interval.ends_at.astimezone(UTC)
+    if starts_at != current_anchor or ends_at != _utc(invoice.due_at):
+        return None
+    return replace(
+        settlement_period,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        starts_on=starts_at.astimezone(zone).date(),
+        ends_on=ends_at.astimezone(zone).date(),
+    )
 
 
 def _build_missing_paid_invoice_preview(

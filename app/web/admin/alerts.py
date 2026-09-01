@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import admin_alerts as admin_alerts_service
+from app.services import staff_notification_read_state
 from app.services.auth_dependencies import require_any_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/alerts", tags=["web-admin-alerts"])
@@ -74,21 +77,31 @@ def open_notification(
     db: Session = Depends(get_db),
     auth: dict = _ALERT_ACCESS,
 ):
-    system_user_id = (
-        str(auth.get("principal_id"))
-        if auth.get("principal_type") == "system_user"
-        else ""
-    )
-    notification = admin_alerts_service.mark_notification_read(
-        db,
-        str(notification_id),
-        system_user_id=system_user_id,
-    )
-    if notification is None:
+    if auth.get("principal_type") != "system_user":
         return RedirectResponse(url="/admin/alerts", status_code=303)
-    return RedirectResponse(
-        url=notification.target_url or "/admin/alerts", status_code=303
+    try:
+        system_user_id = UUID(str(auth.get("principal_id")))
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/admin/alerts", status_code=303)
+    db_session_adapter.release_read_transaction(db)
+    outcome = staff_notification_read_state.open_staff_notification(
+        db,
+        staff_notification_read_state.OpenStaffNotification(
+            notification_id=notification_id,
+            system_user_id=system_user_id,
+            context=CommandContext.system(
+                actor=f"system_user:{system_user_id}",
+                scope="communications:staff_notifications",
+                reason="Open personal staff notification from alerts",
+                idempotency_key=(
+                    f"staff-notification-open:{system_user_id}:{notification_id}"
+                ),
+            ),
+        ),
     )
+    if not outcome.opened or outcome.target_url is None:
+        return RedirectResponse(url="/admin/alerts", status_code=303)
+    return RedirectResponse(url=outcome.target_url, status_code=303)
 
 
 @router.post(

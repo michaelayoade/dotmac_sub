@@ -579,8 +579,12 @@ def seed_notification_settings(db: Session) -> None:
 
 
 def _seed_missing_notification_templates(db: Session) -> int:
-    """Insert any missing default notification templates without committing."""
+    """Ensure required defaults exist and are usable without committing."""
     from app.models.notification import NotificationChannel, NotificationTemplate
+    from app.services.notification_template_renderer import (
+        PAYMENT_RECEIPT_TEMPLATE_CODE,
+        validate_template_activation_text,
+    )
 
     templates = [
         {
@@ -1174,7 +1178,7 @@ def _seed_missing_notification_templates(db: Session) -> int:
         for channel in referral_template_channels
     )
 
-    created = 0
+    changed = 0
     for tmpl_data in templates:
         from sqlalchemy import select as sa_select
 
@@ -1187,18 +1191,51 @@ def _seed_missing_notification_templates(db: Session) -> int:
         if not existing:
             tmpl = NotificationTemplate(**tmpl_data)
             db.add(tmpl)
-            created += 1
+            changed += 1
             logger.info("Seeded notification template: %s", tmpl_data["code"])
+            continue
+
+        if tmpl_data["code"] != PAYMENT_RECEIPT_TEMPLATE_CODE:
+            continue
+
+        try:
+            validate_template_activation_text(
+                subject=existing.subject,
+                body=existing.body,
+                code=existing.code,
+            )
+            valid_for_activation = True
+        except ValueError:
+            valid_for_activation = False
+
+        if valid_for_activation and existing.is_active:
+            continue
+        if not valid_for_activation:
+            # An acknowledgement without a receipt identity and authorized URL
+            # is not a payment receipt. Restore the reviewed default rather
+            # than activating incomplete customer copy.
+            existing.name = str(tmpl_data["name"])
+            existing.subject = (
+                str(tmpl_data["subject"]) if tmpl_data["subject"] is not None else None
+            )
+            existing.body = str(tmpl_data["body"])
+        existing.is_active = True
+        changed += 1
+        logger.warning(
+            "Restored active payment receipt template for channel %s",
+            existing.channel.value,
+        )
 
     db.flush()
-    return created
+    return changed
 
 
 def seed_notification_templates(db: Session) -> None:
     """Seed default notification templates for key ISP events.
 
-    Uses upsert-by-code-and-channel: creates if missing, skips if already exists
-    (admin may have customized the content).
+    Uses upsert-by-code-and-channel and preserves customized usable content.
+    Payment-receipt rows are the deliberate exception: inactive rows are
+    restored, and incomplete rows are replaced with receipt-aware defaults.
     """
     _seed_missing_notification_templates(db)
     db.commit()

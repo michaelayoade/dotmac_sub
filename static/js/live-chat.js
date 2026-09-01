@@ -169,7 +169,7 @@
   }
 
   // ── Widget REST (direct, X-Visitor-Token) ──────────────────────────────
-  function crm(path, opts) {
+  function api(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
     opts.headers["X-Visitor-Token"] = state.session.visitor_token;
@@ -178,7 +178,7 @@
 
   function loadHistory(showErrors) {
     if (els.historyError) els.historyError.hidden = true;
-    return crm(
+    return api(
       "/session/" + state.session.session_id + "/messages?limit=50"
     )
       .then(function (r) {
@@ -206,7 +206,7 @@
       pending: true,
     });
     state.pending[clientId] = els.log.querySelector('[data-client-message-id="' + clientId + '"]');
-    return crm("/session/" + state.session.session_id + "/message", {
+    return api("/session/" + state.session.session_id + "/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ body: body, client_message_id: clientId }),
@@ -239,7 +239,7 @@
 
   function markRead() {
     if (!state.session) return;
-    crm("/session/" + state.session.session_id + "/read", { method: "POST" })
+    api("/session/" + state.session.session_id + "/read", { method: "POST" })
       .catch(function () {});
     setUnread(0);
   }

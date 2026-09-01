@@ -1,0 +1,216 @@
+# Declared publish intent for every host port this repository's compose file
+# publishes.
+#
+# WHY THIS FILE EXISTS
+#
+# A Docker publish with no host address -- `- 514:514/udp` -- is not "IPv4".
+# Docker starts a userland docker-proxy on 0.0.0.0 AND a second one on [::].
+# The v6 listener appears in no file, and its traffic terminates on INPUT
+# rather than traversing DOCKER-USER, so no rule in that chain can restrict
+# it. Grepping compose for "0.0.0.0" finds nothing and the port is public.
+#
+# That is not hypothetical. On 2026-08-31 postgres-local published 9001 on
+# both 0.0.0.0 and [::]; the v4 side was allowlisted to the replication
+# standby by a DOCKER-USER rule and the v6 side was governed by nothing.
+#
+# So intent is declared HERE, in one place, and checked two ways:
+#
+#   scripts/published_ports.py check-compose    (offline, in CI)
+#       compose's publish specs == this file, and no publish is bare.
+#
+#   scripts/published_ports.py check-listeners  (on the host)
+#       the ACTUAL listeners `docker inspect` reports == this file,
+#       for BOTH address families. This is the check that would have
+#       caught the defect above; a v4-only check passes it.
+#
+# Changing a `bind` here does not change a running host. Most of these
+# services are absent from deploy.sh's APP_SERVICES, so no deploy recreates
+# them. Applying a change is a deliberate, recorded operation:
+#
+#   scripts/reconcile_published_ports.sh --service <name> --environment <env>
+#
+# FIELDS
+#
+#   service           compose service name (matched via the container's
+#                     com.docker.compose.service label, not container_name).
+#   host_port         published host port.
+#   container_port    port inside the container.
+#   protocol          tcp | udp.
+#   bind_env          the env knob that sets the host-address prefix.
+#   default_bind      the value compose falls back to when the knob is unset.
+#                     Must be a single, explicit address prefix -- never "".
+#   reach             loopback | offhost. "offhost" requires `reason` and
+#                     `required_clients`, and is the only way a non-loopback
+#                     default is admitted.
+#   reason            why an offhost publish is necessary.
+#   required_clients  CIDRs that MUST retain a path to this port. The
+#                     reconcile refuses a bind that does not admit every one
+#                     of these -- this is what stops a loopback default from
+#                     binding a live client out of its own stream.
+#   environment_bind  per-environment override of default_bind. An
+#                     environment absent from this table is NOT assumed to
+#                     take the default: check-listeners refuses an
+#                     environment it has no declaration for.
+#   recreated_by_deploy
+#                     true when the service is in deploy.sh's APP_SERVICES,
+#                     so an ordinary deploy applies a change to this line.
+#                     false means only the reconcile operation applies it.
+#
+# Only `production` is declared below, because production is the only
+# environment whose listeners have actually been measured. Declaring an
+# unmeasured environment here would be asserting something unverified; add
+# one when it is observed, not before.
+
+schema_version = 1
+
+declared_environments = ["production"]
+
+# --- application surface ---------------------------------------------------
+
+[[publish]]
+service = "app"
+host_port = 8001
+container_port = 8001
+protocol = "tcp"
+bind_env = "APP_BIND"
+default_bind = "127.0.0.1:"
+reach = "loopback"
+recreated_by_deploy = true
+
+# --- datastores ------------------------------------------------------------
+
+[[publish]]
+service = "postgres-local"
+host_port = 9001
+container_port = 5432
+protocol = "tcp"
+bind_env = "PG_LOCAL_BIND"
+default_bind = "127.0.0.1:"
+reach = "offhost"
+reason = """
+The replication standby streams WAL through this published port from another \
+host, so loopback-only is not available here. Exposure is source-restricted \
+to the standby address by a host DOCKER-USER rule -- which governs IPv4 only, \
+which is exactly why the bind must name an explicit IPv4 address and never be \
+left bare."""
+required_clients = ["75.119.157.91/32"]
+environment_bind = { production = "0.0.0.0:" }
+recreated_by_deploy = false
+
+[[publish]]
+service = "genieacs-mongodb"
+host_port = 27017
+container_port = 27017
+protocol = "tcp"
+bind_env = "GENIEACS_MONGODB_BIND"
+default_bind = "127.0.0.1:"
+reach = "loopback"
+recreated_by_deploy = false
+
+[[publish]]
+service = "nominatim"
+host_port = 8088
+container_port = 8080
+protocol = "tcp"
+bind_env = "NOMINATIM_BIND"
+default_bind = "127.0.0.1:"
+reach = "loopback"
+recreated_by_deploy = false
+
+# --- metrics ---------------------------------------------------------------
+
+[[publish]]
+service = "victoriametrics"
+host_port = 8428
+container_port = 8428
+protocol = "tcp"
+bind_env = "VM_BIND"
+default_bind = "127.0.0.1:"
+reach = "offhost"
+reason = """
+The central observability host federates and scrapes this endpoint. Exposure \
+is source-restricted to the observe address by a host DOCKER-USER rule."""
+required_clients = ["75.119.128.247/32"]
+environment_bind = { production = "0.0.0.0:" }
+recreated_by_deploy = false
+
+# --- network-facing collectors ---------------------------------------------
+#
+# These two are the services a loopback default would silently break: the
+# devices that talk to them are off-host by definition. Their safe default is
+# therefore an explicit IPv4 wildcard, NOT loopback -- but explicit is the
+# whole point. `0.0.0.0:` publishes one listener; a bare `1812:1812/udp`
+# publishes two, and the second one is ungoverned.
+
+[[publish]]
+service = "freeradius"
+host_port = 1812
+container_port = 1812
+protocol = "udp"
+bind_env = "FREERADIUS_BIND"
+default_bind = "0.0.0.0:"
+reach = "offhost"
+reason = "NAS devices send RADIUS authentication from the access network."
+required_clients = ["160.119.127.0/24", "102.220.189.0/24"]
+recreated_by_deploy = false
+
+[[publish]]
+service = "freeradius"
+host_port = 1813
+container_port = 1813
+protocol = "udp"
+bind_env = "FREERADIUS_BIND"
+default_bind = "0.0.0.0:"
+reach = "offhost"
+reason = "NAS devices send RADIUS accounting from the access network."
+required_clients = ["160.119.127.0/24", "102.220.189.0/24"]
+recreated_by_deploy = false
+
+[[publish]]
+service = "freeradius"
+host_port = 1822
+container_port = 1822
+protocol = "udp"
+bind_env = "FREERADIUS_BIND"
+default_bind = "0.0.0.0:"
+reach = "offhost"
+reason = "Secondary RADIUS authentication socket for the access network."
+required_clients = ["160.119.127.0/24", "102.220.189.0/24"]
+recreated_by_deploy = false
+
+[[publish]]
+service = "freeradius"
+host_port = 1823
+container_port = 1823
+protocol = "udp"
+bind_env = "FREERADIUS_BIND"
+default_bind = "0.0.0.0:"
+reach = "offhost"
+reason = "Secondary RADIUS accounting socket for the access network."
+required_clients = ["160.119.127.0/24", "102.220.189.0/24"]
+recreated_by_deploy = false
+
+[[publish]]
+service = "syslog-listener"
+host_port = 514
+container_port = 514
+protocol = "udp"
+bind_env = "SYSLOG_BIND"
+default_bind = "0.0.0.0:"
+reach = "offhost"
+reason = "Routers and OLTs ship syslog to this collector over IPv4."
+required_clients = ["160.119.127.0/24", "102.220.189.0/24"]
+recreated_by_deploy = true
+
+# --- profile-gated ---------------------------------------------------------
+
+[[publish]]
+service = "team-inbox-smtp"
+host_port_env = "TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT"
+host_port = 2525
+container_port = 2525
+protocol = "tcp"
+bind_env = "TEAM_INBOX_SMTP_BIND"
+default_bind = "127.0.0.1:"
+reach = "loopback"
+recreated_by_deploy = false

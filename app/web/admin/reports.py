@@ -350,12 +350,6 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "permission": "reports:support:read",
             },
             {
-                "name": "CRM Performance",
-                "url": "/admin/reports/operational/crm-performance",
-                "description": "Inbox performance by service team",
-                "permission": "reports:support:read",
-            },
-            {
                 "name": "Agent Performance",
                 "url": "/admin/reports/operational/agent-performance",
                 "description": "Inbox handling and response performance by agent",
@@ -477,6 +471,7 @@ def _operational_report_query(
     per_page: int | None,
     personal: bool,
     search: str | None = None,
+    service_team_id: str | None = None,
 ) -> crm_reporting_service.CrmReportQuery:
     person_id = None
     if personal:
@@ -486,12 +481,21 @@ def _operational_report_query(
             person_id = UUID(str(raw_person_id)) if raw_person_id else None
         except ValueError:
             person_id = None
+    parsed_team_id = None
+    if service_team_id:
+        try:
+            parsed_team_id = UUID(service_team_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="Invalid service team"
+            ) from None
     return crm_reporting_service.CrmReportQuery(
         date_from=_parse_report_date(date_from),
         date_to=_parse_report_date(date_to),
         page=page,
         per_page=per_page,
         person_id=person_id,
+        service_team_id=parsed_team_id,
         search=search.strip() if search else None,
     )
 
@@ -1075,6 +1079,31 @@ def reports_ticket_sla(
     return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
 
 
+@router.get(
+    "/ticket-sla/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_ticket_sla_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    open_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    content = ticket_sla_reports_service.build_violation_export_csv(
+        db=db,
+        query=ticket_sla_reports_service.TicketSlaExportQuery(
+            start_at=_parse_date_start(date_from),
+            end_at=_parse_date_end(date_to),
+            open_only=open_only,
+        ),
+    )
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ticket-sla.csv"'},
+    )
+
+
 def _seconds_label(value: float | None) -> str:
     if value is None:
         return "-"
@@ -1642,6 +1671,65 @@ def reports_inbox_escalations_export(
 # ===================================================================
 
 
+_EXTENDED_EXPORT_PERMISSIONS = {
+    web_reports_ext_service.ExtendedReportExportKind.subscriber_growth: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.usage_by_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.upcoming_charges: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_per_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.invoices: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.statements: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.tax: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.mrr: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.new_services: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.custom_pricing: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_categories: "reports:billing:export",
+}
+
+
+@router.get(
+    "/extended-export/{report_kind}",
+    dependencies=[
+        Depends(require_any_permission("reports:billing:export", "customer:read"))
+    ],
+)
+def reports_extended_export(
+    request: Request,
+    report_kind: web_reports_ext_service.ExtendedReportExportKind,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    year: int | None = None,
+    days: int = Query(default=30, ge=1, le=3660),
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
+    db: Session = Depends(get_db),
+):
+    if not can(request, _EXTENDED_EXPORT_PERMISSIONS[report_kind]):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    export = web_reports_ext_service.build_extended_report_export(
+        db=db,
+        query=web_reports_ext_service.ExtendedReportExportQuery(
+            kind=report_kind,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            year=year,
+            days=days,
+            mode=mode,
+            state=state,
+            band=band,
+            include_funded=include_funded,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
+
+
 @router.get(
     "/subscriber-growth",
     response_class=HTMLResponse,
@@ -1936,6 +2024,46 @@ def reports_discounts(
         )
     context["report"] = report
     return templates.TemplateResponse("admin/reports/discounts.html", dict(context))
+
+
+@router.get(
+    "/discounts/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def reports_discounts_export(
+    tab: discount_report_service.DiscountReportTab = Query(
+        default=discount_report_service.DiscountReportTab.invoices
+    ),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = None,
+    customer: str | None = None,
+    salesperson_id: UUID | None = None,
+    discount_type: discount_report_service.DocumentDiscountType | None = None,
+    invoice_status: InvoiceStatus | None = None,
+    quote_status: QuoteStatus | None = None,
+    source: InvoiceDiscountSource | None = None,
+    db: Session = Depends(get_db),
+):
+    export = discount_report_service.build_document_discount_export(
+        db=db,
+        query=discount_report_service.DocumentDiscountReportQuery(
+            tab=tab,
+            date_from=date_from,
+            date_to=date_to,
+            customer=search or customer,
+            salesperson_id=salesperson_id,
+            discount_type=discount_type,
+            invoice_status=invoice_status if tab.value == "invoices" else None,
+            quote_status=quote_status if tab.value == "quotes" else None,
+            source=source if tab.value == "invoices" else None,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
 
 
 @router.get(
@@ -2560,6 +2688,7 @@ def _agent_report_url_params(
     search: str | None,
     page: int,
     per_page: int,
+    service_team_id: str | None = None,
 ) -> str:
     values: dict[str, str | int] = {
         "range": period.preset.value,
@@ -2570,7 +2699,33 @@ def _agent_report_url_params(
     }
     if search:
         values["search"] = search
+    if service_team_id:
+        values["service_team_id"] = service_team_id
     return urlencode(values)
+
+
+@router.get(
+    "/operational/crm-performance",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
+
+
+@router.get(
+    "/operational/crm-performance/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_export_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
+
+
+@router.get(
+    "/operational/crm-performance/data",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_crm_performance_data_retired():
+    return RedirectResponse(url="/admin/reports/inbox-performance", status_code=303)
 
 
 @router.get(
@@ -2584,6 +2739,7 @@ def reports_operational_export(
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     definition = _operational_definition(request, report_slug)
@@ -2597,10 +2753,6 @@ def reports_operational_export(
         date_to = period.end_date.isoformat()
     elif not definition.supports_date_filter:
         date_from = date_to = None
-    elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
-        date_from, date_to, _start_at, _end_at = _inbox_performance_period(
-            date_from, date_to
-        )
     query = _operational_report_query(
         request=request,
         date_from=date_from,
@@ -2611,6 +2763,9 @@ def reports_operational_export(
         search=search
         if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
         else None,
+        service_team_id=(
+            service_team_id if definition.slug in _LAZY_AGENT_REPORTS else None
+        ),
     )
     report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
     return Response(
@@ -2632,6 +2787,7 @@ def reports_operational_agent_data(
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
@@ -2657,11 +2813,20 @@ def reports_operational_agent_data(
         per_page=per_page,
         personal=definition.slug == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
         search=effective_search,
+        service_team_id=service_team_id,
     )
     report = None
+    detail = None
     report_error = None
     try:
-        report = crm_reporting_service.get_report(db, slug=definition.slug, query=query)
+        if definition.slug == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE:
+            detail = crm_reporting_service.agent_performance_detail(db, query=query)
+        else:
+            report = crm_reporting_service.get_report(
+                db, slug=definition.slug, query=query
+            )
+    except crm_reporting_service.CrmReportQueryError as exc:
+        report_error = str(exc)
     except SQLAlchemyError:
         logger.exception(
             "agent_performance_report_read_failed",
@@ -2682,13 +2847,21 @@ def reports_operational_agent_data(
             search=effective_search,
             page=target_page,
             per_page=per_page,
+            service_team_id=service_team_id,
         )
         return f"/admin/reports/operational/{report_slug}{suffix}?{params}"
 
     context = {
         "request": request,
         "report": report,
+        "detail": detail,
         "report_error": report_error,
+        "is_personal": definition.slug
+        == crm_reporting_service.CrmReportSlug.MY_PERFORMANCE,
+        "range_value": period.preset.value,
+        "date_from": period.start_date.isoformat(),
+        "date_to": period.end_date.isoformat(),
+        "service_team_id": service_team_id or "",
         "retry_url": link(effective_page, data=True),
         "previous_data_url": (
             link(effective_page - 1, data=True) if effective_page > 1 else None
@@ -2707,6 +2880,77 @@ def reports_operational_agent_data(
 
 
 @router.get(
+    "/operational/agent-performance/{agent_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_operational_agent_detail(
+    request: Request,
+    agent_id: UUID,
+    range_value: str = Query(default="month", alias="range"),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    service_team_id: str | None = None,
+    preserve_period: bool = False,
+    db: Session = Depends(get_db),
+):
+    _operational_definition(request, "agent-performance")
+    period = _agent_performance_period(
+        range_value=(
+            crm_reporting_service.AgentPerformancePeriodPreset.CUSTOM.value
+            if preserve_period and date_from and date_to
+            else range_value
+        ),
+        date_from=date_from,
+        date_to=date_to,
+    )
+    base_query = _operational_report_query(
+        request=request,
+        date_from=period.start_date.isoformat(),
+        date_to=period.end_date.isoformat(),
+        page=1,
+        per_page=None,
+        personal=False,
+        service_team_id=service_team_id,
+    )
+    query = crm_reporting_service.CrmReportQuery(
+        date_from=base_query.date_from,
+        date_to=base_query.date_to,
+        page=1,
+        per_page=None,
+        person_id=agent_id,
+        service_team_id=base_query.service_team_id,
+    )
+    try:
+        detail = crm_reporting_service.agent_performance_detail(db, query=query)
+    except crm_reporting_service.CrmReportQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    context = _base_context(
+        request,
+        db,
+        "reports-agent-performance-detail",
+        detail.agent_name,
+        "Agent performance detail",
+    )
+    context.update(
+        {
+            "detail": detail,
+            "is_personal": False,
+            "range_value": period.preset.value,
+            "date_from": period.start_date.isoformat(),
+            "date_to": period.end_date.isoformat(),
+            "service_team_id": service_team_id or "",
+            "service_teams": team_inbox_metrics_service.active_service_team_options(db),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/reports/agent_performance_detail.html",
+        context,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get(
     "/operational/{report_slug}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_any_permission(*_OPERATIONAL_REPORT_PERMISSIONS))],
@@ -2718,6 +2962,7 @@ def reports_operational_page(
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = Query(default=None, max_length=120),
+    service_team_id: str | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
@@ -2734,10 +2979,6 @@ def reports_operational_page(
         date_to = period.end_date.isoformat()
     elif not definition.supports_date_filter:
         date_from = date_to = None
-    elif definition.slug in _INBOX_PERFORMANCE_REPORT_SLUGS:
-        date_from, date_to, _start_at, _end_at = _inbox_performance_period(
-            date_from, date_to
-        )
     query = _operational_report_query(
         request=request,
         date_from=date_from,
@@ -2748,6 +2989,9 @@ def reports_operational_page(
         search=search
         if definition.slug == crm_reporting_service.CrmReportSlug.AGENT_PERFORMANCE
         else None,
+        service_team_id=(
+            service_team_id if definition.slug in _LAZY_AGENT_REPORTS else None
+        ),
     )
     lazy_load = definition.slug in _LAZY_AGENT_REPORTS
     report = (
@@ -2769,6 +3013,12 @@ def reports_operational_page(
             "date_from": date_from or "",
             "date_to": date_to or "",
             "search": search or "",
+            "service_team_id": service_team_id or "",
+            "service_teams": (
+                team_inbox_metrics_service.active_service_team_options(db)
+                if definition.slug in _LAZY_AGENT_REPORTS
+                else ()
+            ),
             "range_value": period.preset.value if period else range_value,
             "lazy_load": lazy_load,
             "lazy_data_url": (
@@ -2782,6 +3032,7 @@ def reports_operational_page(
                     else None,
                     page=page,
                     per_page=per_page,
+                    service_team_id=service_team_id,
                 )
                 if period
                 else None

@@ -158,6 +158,7 @@ class CrmReportQuery:
     page: int = 1
     per_page: int | None = 50
     person_id: UUID | None = None
+    service_team_id: UUID | None = None
     search: str | None = None
 
     @property
@@ -180,6 +181,107 @@ class CrmReportMetric:
     detail: str = ""
 
 
+class AgentPerformanceStatus(StrEnum):
+    TOP_PERFORMER = "Top performer"
+    ON_TRACK = "On track"
+    NEEDS_ATTENTION = "Needs attention"
+    LOW_EVIDENCE = "Low evidence"
+    SLA_NOT_CONFIGURED = "SLA not configured"
+
+
+@dataclass(frozen=True, slots=True)
+class CrmAgentPerformanceRow:
+    agent_id: UUID
+    agent_name: str
+    service_team_id: UUID
+    service_team_name: str
+    assigned: int
+    resolved: int
+    active_now: int
+    average_resolution_seconds: float | None
+    average_first_response_seconds: float | None
+    first_response_sla_seconds: int | None
+    first_response_sla_rate: float | None
+    first_response_sla_met_count: int
+    first_response_sla_breached_count: int
+    resolution_sla_seconds: int | None
+    resolution_sla_rate: float | None
+    resolution_sla_met_count: int
+    resolution_sla_breached_count: int
+    currently_overdue_count: int
+    first_response_observation_count: int
+    resolution_observation_count: int
+    status: AgentPerformanceStatus
+    score_label: str
+    attention_reasons: tuple[str, ...]
+
+    @property
+    def average_resolution_label(self) -> str:
+        return _duration_label(self.average_resolution_seconds)
+
+    @property
+    def average_first_response_label(self) -> str:
+        return _duration_label(self.average_first_response_seconds)
+
+    @property
+    def first_response_sla_label(self) -> str:
+        if self.first_response_sla_seconds is None:
+            return "Not configured"
+        return (
+            f"{_duration_label(self.first_response_sla_seconds)} / "
+            f"{_sla_rate_label(self.first_response_sla_rate)} "
+            f"({self.first_response_sla_met_count} met, "
+            f"{self.first_response_sla_breached_count} breached)"
+        )
+
+    @property
+    def resolution_sla_label(self) -> str:
+        if self.resolution_sla_seconds is None:
+            return "Not configured"
+        return (
+            f"{_duration_label(self.resolution_sla_seconds)} / "
+            f"{_sla_rate_label(self.resolution_sla_rate)} "
+            f"({self.resolution_sla_met_count} met, "
+            f"{self.resolution_sla_breached_count} breached)"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CrmTopAgent:
+    category: str
+    agent_name: str
+    service_team_name: str
+    value: str
+    agent_id: UUID
+    service_team_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CrmAgentEvidenceRow:
+    conversation_id: UUID
+    subject: str
+    service_team_name: str
+    assigned_at: str
+    resolved_at: str
+    active_now: bool
+    first_response: str
+    resolution: str
+
+
+@dataclass(frozen=True, slots=True)
+class CrmAgentDetailReport:
+    agent_id: UUID
+    agent_name: str
+    team_context: str
+    metrics: tuple[CrmReportMetric, ...]
+    status: AgentPerformanceStatus
+    score_label: str
+    indicators: tuple[str, ...]
+    team_rows: tuple[CrmAgentPerformanceRow, ...]
+    evidence: tuple[CrmAgentEvidenceRow, ...]
+    note: str
+
+
 @dataclass(frozen=True, slots=True)
 class CrmReportPage:
     definition: CrmReportDefinition
@@ -190,6 +292,10 @@ class CrmReportPage:
     page: int
     per_page: int
     note: str | None = None
+    agent_rows: tuple[CrmAgentPerformanceRow, ...] = ()
+    top_agents: tuple[CrmTopAgent, ...] = ()
+    export_columns: tuple[str, ...] = ()
+    export_rows: tuple[tuple[str, ...], ...] = ()
 
     @property
     def has_previous(self) -> bool:
@@ -346,7 +452,7 @@ def _money(value: object) -> str:
 
 def _text(value: object) -> str:
     if value is None:
-        return "—"
+        return "-"
     if isinstance(value, datetime):
         return (
             value.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
@@ -356,12 +462,12 @@ def _text(value: object) -> str:
     if isinstance(value, date):
         return value.isoformat()
     raw = getattr(value, "value", value)
-    return str(raw).replace("_", " ").title() if raw != "" else "—"
+    return str(raw).replace("_", " ").title() if raw != "" else "-"
 
 
 def _duration_label(value: float | None) -> str:
     if value is None:
-        return "â€”"
+        return "-"
     if value < 60:
         return f"{value:.0f}s"
     minutes = value / 60
@@ -371,6 +477,102 @@ def _duration_label(value: float | None) -> str:
     if hours < 24:
         return f"{hours:.1f}h"
     return f"{hours / 24:.1f}d"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExportQuery:
+    search: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExport:
+    filename: str
+    content: str
+
+
+def build_customer_retention_export(
+    db: Session, query: CustomerRetentionExportQuery
+) -> CustomerRetentionExport:
+    """Export the billing-risk cohort shown by the retention work queue."""
+
+    raw_rows, _ = crm_api.billing_risk_rows(db, page=1, per_page=10000)
+    term = (query.search or "").strip().casefold()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        (
+            "customer_id",
+            "customer",
+            "phone",
+            "email",
+            "status",
+            "location",
+            "plan",
+            "balance",
+            "next_bill_date",
+            "billing_start_date",
+            "blocked_date",
+            "risk_segment",
+            "recommended_action",
+        )
+    )
+    rows: list[tuple[object, ...]] = []
+    for raw in raw_rows:
+        balance = float(raw.get("balance") or 0)
+        blocked = bool(str(raw.get("blocked_date") or "").strip())
+        if not blocked and balance <= 0:
+            continue
+        customer_id = str(raw.get("id") or "").strip()
+        if not customer_id:
+            continue
+        searchable = (
+            customer_id,
+            str(raw.get("name") or ""),
+            str(raw.get("phone") or ""),
+            str(raw.get("email") or ""),
+            str(raw.get("location") or ""),
+        )
+        if term and not any(term in value.casefold() for value in searchable):
+            continue
+        segment = "Suspended" if blocked else "Due Soon"
+        action = (
+            "Review the blocked account and confirm restore conditions."
+            if blocked
+            else "Prioritize the account for billing follow-up."
+            if balance >= 50000
+            else "Review billing position and keep the account under observation."
+        )
+        rows.append(
+            (
+                customer_id,
+                raw.get("name") or "Unknown customer",
+                raw.get("phone") or "",
+                raw.get("email") or "",
+                raw.get("status") or "Unknown",
+                raw.get("location") or "Unknown location",
+                raw.get("service_plan") or "N/A",
+                balance,
+                raw.get("next_bill_date") or "",
+                raw.get("billing_start_date") or "",
+                raw.get("blocked_date") or "",
+                segment,
+                action,
+            )
+        )
+
+    def sort_key(row: tuple[object, ...]) -> tuple[int, float, str]:
+        balance_value = row[7]
+        if not isinstance(balance_value, float):
+            raise TypeError("Customer retention export balance must be a float.")
+        return (
+            0 if row[11] == "Suspended" else 1,
+            -balance_value,
+            str(row[1]).casefold(),
+        )
+
+    rows.sort(key=sort_key)
+    writer.writerows(rows)
+    return CustomerRetentionExport("customer-retention.csv", output.getvalue())
 
 
 def _subscriber_name(subscriber: Subscriber | None) -> str:
@@ -910,6 +1112,196 @@ def _crm_performance(db: Session, query: CrmReportQuery) -> CrmReportPage:
     )
 
 
+_MIN_PERFORMANCE_EVIDENCE = 5
+
+
+def _sla_rate_label(value: float | None) -> str:
+    return f"{value * 100:.1f}%" if value is not None else "Not scored"
+
+
+def _agent_status(
+    item: team_inbox_metrics.InboxAgentPerformanceAnalyticsRow,
+) -> tuple[AgentPerformanceStatus, str, tuple[str, ...]]:
+    """Return a conservative status without treating volume as quality."""
+
+    reasons: list[str] = []
+    if item.currently_overdue_count:
+        reasons.append(f"{item.currently_overdue_count} currently overdue")
+    sla_breaches = (
+        item.first_response_sla_breached_count + item.resolution_sla_breached_count
+    )
+    if sla_breaches:
+        reasons.append(f"{sla_breaches} SLA breach{'es' if sla_breaches != 1 else ''}")
+    if item.active_assignment_count >= 10:
+        reasons.append("High active load")
+    if (
+        item.average_first_response_seconds is not None
+        and item.average_first_response_seconds > 4 * 60 * 60
+    ):
+        reasons.append("Slow first response")
+
+    evidence_count = max(
+        item.assigned_conversation_count,
+        item.resolved_conversation_count,
+        item.first_response_observation_count,
+    )
+    sla_rates = tuple(
+        value
+        for value, observations in (
+            (item.first_response_sla_rate, item.first_response_observation_count),
+            (item.resolution_sla_rate, item.resolution_observation_count),
+        )
+        if value is not None and observations >= _MIN_PERFORMANCE_EVIDENCE
+    )
+    sla_configured = (
+        item.first_response_sla_seconds is not None
+        or item.resolution_sla_seconds is not None
+    )
+    if evidence_count < _MIN_PERFORMANCE_EVIDENCE:
+        return AgentPerformanceStatus.LOW_EVIDENCE, "Not scored", tuple(reasons)
+    if not sla_configured:
+        return (
+            AgentPerformanceStatus.SLA_NOT_CONFIGURED,
+            "Current evidence",
+            tuple(reasons),
+        )
+    if not sla_rates:
+        return AgentPerformanceStatus.LOW_EVIDENCE, "Not scored", tuple(reasons)
+    score = sum(sla_rates) / len(sla_rates)
+    if reasons or score < 0.8:
+        status = AgentPerformanceStatus.NEEDS_ATTENTION
+    elif score >= 0.95:
+        status = AgentPerformanceStatus.TOP_PERFORMER
+    else:
+        status = AgentPerformanceStatus.ON_TRACK
+    return status, _sla_rate_label(score), tuple(reasons)
+
+
+def _agent_view_row(
+    item: team_inbox_metrics.InboxAgentPerformanceAnalyticsRow,
+) -> CrmAgentPerformanceRow:
+    status, score_label, reasons = _agent_status(item)
+    return CrmAgentPerformanceRow(
+        agent_id=item.person_id,
+        agent_name=item.agent_name,
+        service_team_id=item.service_team_id,
+        service_team_name=item.service_team_name,
+        assigned=item.assigned_conversation_count,
+        resolved=item.resolved_conversation_count,
+        active_now=item.active_assignment_count,
+        average_resolution_seconds=item.average_resolution_seconds,
+        average_first_response_seconds=item.average_first_response_seconds,
+        first_response_sla_seconds=item.first_response_sla_seconds,
+        first_response_sla_rate=item.first_response_sla_rate,
+        first_response_sla_met_count=item.first_response_sla_met_count,
+        first_response_sla_breached_count=item.first_response_sla_breached_count,
+        resolution_sla_seconds=item.resolution_sla_seconds,
+        resolution_sla_rate=item.resolution_sla_rate,
+        resolution_sla_met_count=item.resolution_sla_met_count,
+        resolution_sla_breached_count=item.resolution_sla_breached_count,
+        currently_overdue_count=item.currently_overdue_count,
+        first_response_observation_count=item.first_response_observation_count,
+        resolution_observation_count=item.resolution_observation_count,
+        status=status,
+        score_label=score_label,
+        attention_reasons=reasons,
+    )
+
+
+def _top_agents(
+    rows: tuple[CrmAgentPerformanceRow, ...],
+) -> tuple[CrmTopAgent, ...]:
+    eligible = tuple(
+        row for row in rows if row.status is not AgentPerformanceStatus.LOW_EVIDENCE
+    )
+    cards: list[CrmTopAgent] = []
+
+    def evidenced_sla_rates(row: CrmAgentPerformanceRow) -> tuple[float, ...]:
+        return tuple(
+            value
+            for value, observations in (
+                (row.first_response_sla_rate, row.first_response_observation_count),
+                (row.resolution_sla_rate, row.resolution_observation_count),
+            )
+            if value is not None and observations >= _MIN_PERFORMANCE_EVIDENCE
+        )
+
+    def evidenced_sla_score(row: CrmAgentPerformanceRow) -> float:
+        rates = evidenced_sla_rates(row)
+        return sum(rates) / len(rates) if rates else -1.0
+
+    def add(category: str, row: CrmAgentPerformanceRow, value: str) -> None:
+        cards.append(
+            CrmTopAgent(
+                category=category,
+                agent_name=row.agent_name,
+                service_team_name=row.service_team_name,
+                value=value,
+                agent_id=row.agent_id,
+                service_team_id=row.service_team_id,
+            )
+        )
+
+    best = next(
+        (
+            row
+            for row in sorted(
+                eligible,
+                key=lambda candidate: (
+                    candidate.status is AgentPerformanceStatus.TOP_PERFORMER,
+                    evidenced_sla_score(candidate),
+                    (
+                        candidate.resolved / candidate.assigned
+                        if candidate.assigned
+                        else -1.0
+                    ),
+                    -(candidate.average_first_response_seconds or float("inf")),
+                ),
+                reverse=True,
+            )
+            if not row.attention_reasons
+        ),
+        None,
+    )
+    if best is not None:
+        add("Best overall", best, best.score_label)
+    fastest = min(
+        (
+            row
+            for row in eligible
+            if row.average_first_response_seconds is not None
+            and row.first_response_observation_count >= _MIN_PERFORMANCE_EVIDENCE
+        ),
+        key=lambda row: row.average_first_response_seconds or 0,
+        default=None,
+    )
+    if fastest is not None:
+        add(
+            "Fastest first response",
+            fastest,
+            _duration_label(fastest.average_first_response_seconds),
+        )
+    most_resolved = max(eligible, key=lambda row: row.resolved, default=None)
+    if most_resolved is not None and most_resolved.resolved:
+        add("Most resolved", most_resolved, str(most_resolved.resolved))
+    sla_rows = tuple(row for row in eligible if evidenced_sla_rates(row))
+    if sla_rows:
+        best_sla = max(
+            sla_rows,
+            key=evidenced_sla_score,
+        )
+        rates = evidenced_sla_rates(best_sla)
+        add("Best SLA adherence", best_sla, _sla_rate_label(sum(rates) / len(rates)))
+    attention = max(
+        (row for row in rows if row.attention_reasons),
+        key=lambda row: (len(row.attention_reasons), row.active_now),
+        default=None,
+    )
+    if attention is not None:
+        add("Needs attention", attention, ", ".join(attention.attention_reasons))
+    return tuple(cards)
+
+
 def _agent_performance(
     db: Session, query: CrmReportQuery, *, personal: bool = False
 ) -> CrmReportPage:
@@ -930,45 +1322,119 @@ def _agent_performance(
         query=team_inbox_metrics.InboxAgentPerformanceQuery(
             start_at=period.start_at,
             end_at=period.end_at,
-            page=query.page,
-            per_page=query.per_page,
+            page=1,
+            per_page=None,
             person_id=scoped_person_id if personal else None,
+            service_team_id=query.service_team_id,
             search=query.search if not personal else None,
         ),
     )
+    all_agent_rows = tuple(_agent_view_row(item) for item in analytics.rows)
+    per_page = query.per_page or max(analytics.total, 1)
+    last_page = max((analytics.total + per_page - 1) // per_page, 1)
+    effective_page = min(max(query.page, 1), last_page)
+    if query.per_page is None:
+        agent_rows = all_agent_rows
+    else:
+        start = (effective_page - 1) * per_page
+        agent_rows = all_agent_rows[start : start + per_page]
     rows = tuple(
         (
             item.agent_name,
             item.service_team_name,
-            str(item.assigned_conversation_count),
-            str(item.resolved_conversation_count),
-            str(item.active_assignment_count),
-            _duration_label(item.average_resolution_seconds),
+            str(item.assigned),
+            str(item.resolved),
+            str(item.active_now),
             _duration_label(item.average_first_response_seconds),
+            f"{item.status.value} / {item.score_label}",
         )
-        for item in analytics.rows
+        for item in agent_rows
     )
     definition = REPORT_DEFINITIONS[
         CrmReportSlug.MY_PERFORMANCE if personal else CrmReportSlug.AGENT_PERFORMANCE
     ]
     scope_note = " Metrics are restricted to the signed-in agent." if personal else ""
+    sla_note = (
+        "SLA is not configured for the selected active service teams; "
+        "workload and timing evidence remains visible and is not SLA-scored. "
+        if not analytics.summary.sla_configured
+        else "Configured SLA thresholds are scored from observed conversations. "
+    )
     note = (
         f"Live authoritative Inbox events for {period.start_date:%d %b %Y} to "
         f"{period.end_date:%d %b %Y} (Africa/Lagos). Resolutions are credited "
-        "only when the resolving agent had the matching assignment."
+        "only when the resolving agent had the matching assignment. Active now "
+        "includes only current valid active service-team-member assignments; "
+        "legacy unmatched assignment rows are excluded. "
+        f"{sla_note}"
         f"{scope_note}"
+    )
+    sla_scored_total = (
+        analytics.summary.first_response_sla_met_count
+        + analytics.summary.first_response_sla_breached_count
+        + analytics.summary.resolution_sla_met_count
+        + analytics.summary.resolution_sla_breached_count
+    )
+    sla_met_total = (
+        analytics.summary.first_response_sla_met_count
+        + analytics.summary.resolution_sla_met_count
+    )
+    sla_value = (
+        "SLA not configured"
+        if not analytics.summary.sla_configured
+        else (
+            _sla_rate_label(sla_met_total / sla_scored_total)
+            if sla_scored_total
+            else "Not scored"
+        )
+    )
+    export_columns = (
+        "agent",
+        "team",
+        "assigned",
+        "resolved",
+        "active_now",
+        "avg_resolution",
+        "avg_first_response",
+        "first_response_sla",
+        "first_response_sla_rate",
+        "resolution_sla",
+        "resolution_sla_rate",
+        "status",
+        "score",
+    )
+    export_rows = tuple(
+        (
+            item.agent_name,
+            item.service_team_name,
+            str(item.assigned),
+            str(item.resolved),
+            str(item.active_now),
+            _duration_label(item.average_resolution_seconds),
+            _duration_label(item.average_first_response_seconds),
+            str(item.first_response_sla_seconds or "-"),
+            _sla_rate_label(item.first_response_sla_rate),
+            str(item.resolution_sla_seconds or "-"),
+            _sla_rate_label(item.resolution_sla_rate),
+            item.status.value,
+            item.score_label,
+        )
+        for item in agent_rows
     )
     return CrmReportPage(
         definition=definition,
         metrics=(
-            CrmReportMetric("Agents", str(analytics.summary.agent_count)),
+            CrmReportMetric("Active member agents", str(analytics.summary.agent_count)),
             CrmReportMetric(
-                "Chats assigned",
+                "Agents with activity", str(analytics.summary.activity_agent_count)
+            ),
+            CrmReportMetric(
+                "Assigned chats",
                 str(analytics.summary.assigned_conversation_count),
                 "Assigned during the selected period",
             ),
             CrmReportMetric(
-                "Chats resolved",
+                "Resolved chats",
                 str(analytics.summary.resolved_conversation_count),
                 "Agent resolutions during the selected period",
             ),
@@ -976,12 +1442,17 @@ def _agent_performance(
                 "Active now", str(analytics.summary.active_assignment_count)
             ),
             CrmReportMetric(
-                "Avg resolution",
-                _duration_label(analytics.summary.average_resolution_seconds),
-            ),
-            CrmReportMetric(
                 "Avg first response",
                 _duration_label(analytics.summary.average_first_response_seconds),
+            ),
+            CrmReportMetric(
+                "SLA adherence",
+                sla_value,
+                (
+                    "No pass/fail is computed without configured thresholds"
+                    if not analytics.summary.sla_configured
+                    else "First-response and resolution observations"
+                ),
             ),
         ),
         columns=(
@@ -990,14 +1461,18 @@ def _agent_performance(
             "Assigned",
             "Resolved",
             "Active now",
-            "Avg resolution",
             "Avg first response",
+            "Status / score",
         ),
         rows=rows,
         total=analytics.total,
-        page=analytics.page,
-        per_page=analytics.per_page,
+        page=effective_page,
+        per_page=per_page,
         note=note,
+        agent_rows=agent_rows,
+        top_agents=_top_agents(all_agent_rows),
+        export_columns=export_columns,
+        export_rows=export_rows,
     )
 
 
@@ -1377,13 +1852,148 @@ def _project_task_performance(db: Session, query: CrmReportQuery) -> CrmReportPa
     )
 
 
+def agent_performance_detail(
+    db: Session,
+    *,
+    query: CrmReportQuery,
+) -> CrmAgentDetailReport:
+    """Return one agent's SLA-ready detail projection and bounded evidence."""
+
+    if query.person_id is None:
+        raise CrmReportQueryError("Agent detail requires one agent identity.")
+    period = resolve_agent_performance_period(
+        preset=(
+            AgentPerformancePeriodPreset.CUSTOM
+            if query.date_from is not None or query.date_to is not None
+            else AgentPerformancePeriodPreset.MONTH
+        ),
+        date_from=query.date_from,
+        date_to=query.date_to,
+    )
+    analytics_query = team_inbox_metrics.InboxAgentPerformanceQuery(
+        start_at=period.start_at,
+        end_at=period.end_at,
+        page=1,
+        per_page=None,
+        person_id=query.person_id,
+        service_team_id=query.service_team_id,
+    )
+    analytics = team_inbox_metrics.agent_performance_analytics(
+        db,
+        query=analytics_query,
+    )
+    if not analytics.rows:
+        raise CrmReportQueryError("Agent is not an active service-team member.")
+    team_rows = tuple(_agent_view_row(item) for item in analytics.rows)
+    agent_name = team_rows[0].agent_name
+    indicators = tuple(
+        dict.fromkeys(reason for row in team_rows for reason in row.attention_reasons)
+    )
+    first_response_sla_total = (
+        analytics.summary.first_response_sla_met_count
+        + analytics.summary.first_response_sla_breached_count
+    )
+    resolution_sla_total = (
+        analytics.summary.resolution_sla_met_count
+        + analytics.summary.resolution_sla_breached_count
+    )
+    sla_met = 0
+    sla_breached = 0
+    if first_response_sla_total >= _MIN_PERFORMANCE_EVIDENCE:
+        sla_met += analytics.summary.first_response_sla_met_count
+        sla_breached += analytics.summary.first_response_sla_breached_count
+    if resolution_sla_total >= _MIN_PERFORMANCE_EVIDENCE:
+        sla_met += analytics.summary.resolution_sla_met_count
+        sla_breached += analytics.summary.resolution_sla_breached_count
+    sla_total = sla_met + sla_breached
+    statuses = {row.status for row in team_rows}
+    if AgentPerformanceStatus.NEEDS_ATTENTION in statuses:
+        status = AgentPerformanceStatus.NEEDS_ATTENTION
+    elif not analytics.summary.sla_configured:
+        status = AgentPerformanceStatus.SLA_NOT_CONFIGURED
+    elif sla_total < _MIN_PERFORMANCE_EVIDENCE:
+        status = AgentPerformanceStatus.LOW_EVIDENCE
+    elif AgentPerformanceStatus.TOP_PERFORMER in statuses:
+        status = AgentPerformanceStatus.TOP_PERFORMER
+    else:
+        status = AgentPerformanceStatus.ON_TRACK
+
+    if not analytics.summary.sla_configured:
+        sla_value = "SLA not configured"
+        score_label = "Current evidence"
+    elif sla_total < _MIN_PERFORMANCE_EVIDENCE:
+        sla_value = "Not scored"
+        score_label = "Low evidence"
+    elif sla_breached:
+        sla_value = f"SLA breached ({sla_breached})"
+        score_label = _sla_rate_label(sla_met / sla_total)
+    elif sla_met:
+        sla_value = "SLA met"
+        score_label = _sla_rate_label(1.0)
+    else:
+        sla_value = "Not scored"
+        score_label = "Not scored"
+
+    team_names = tuple(dict.fromkeys(row.service_team_name for row in team_rows))
+    evidence = tuple(
+        CrmAgentEvidenceRow(
+            conversation_id=item.conversation_id,
+            subject=item.subject,
+            service_team_name=item.service_team_name,
+            assigned_at=_text(item.assigned_at),
+            resolved_at=_text(item.resolved_at),
+            active_now=item.is_active_assignment,
+            first_response=_duration_label(item.first_response_seconds),
+            resolution=_duration_label(item.resolution_seconds),
+        )
+        for item in team_inbox_metrics.agent_performance_evidence(
+            db,
+            query=analytics_query,
+        )
+    )
+    return CrmAgentDetailReport(
+        agent_id=query.person_id,
+        agent_name=agent_name,
+        team_context=", ".join(team_names),
+        metrics=(
+            CrmReportMetric(
+                "Assigned chats", str(analytics.summary.assigned_conversation_count)
+            ),
+            CrmReportMetric(
+                "Resolved chats", str(analytics.summary.resolved_conversation_count)
+            ),
+            CrmReportMetric(
+                "Active now", str(analytics.summary.active_assignment_count)
+            ),
+            CrmReportMetric(
+                "Avg first response",
+                _duration_label(analytics.summary.average_first_response_seconds),
+            ),
+            CrmReportMetric(
+                "Avg resolution",
+                _duration_label(analytics.summary.average_resolution_seconds),
+            ),
+            CrmReportMetric("SLA status", sla_value, score_label),
+        ),
+        status=status,
+        score_label=score_label,
+        indicators=indicators,
+        team_rows=team_rows,
+        evidence=evidence,
+        note=(
+            f"Live authoritative Inbox evidence for {period.start_date:%d %b %Y} "
+            f"to {period.end_date:%d %b %Y} (Africa/Lagos). Active now is limited "
+            "to current valid service-team-member assignments."
+        ),
+    )
+
+
 Builder = Callable[[Session, CrmReportQuery], CrmReportPage]
 _BUILDERS: dict[CrmReportSlug, Builder] = {
     CrmReportSlug.ONLINE_ACTIVITY: _online_activity,
     CrmReportSlug.BILLING_RISK: _billing_risk,
     CrmReportSlug.SUBSCRIBER_REVENUE: _subscriber_revenue,
     CrmReportSlug.POSTPAID_CUSTOMERS: _postpaid,
-    CrmReportSlug.CRM_PERFORMANCE: _crm_performance,
     CrmReportSlug.AGENT_PERFORMANCE: _agent_performance,
     CrmReportSlug.MY_PERFORMANCE: lambda db, query: _agent_performance(
         db, query, personal=True
@@ -1401,6 +2011,10 @@ def get_report(
     db: Session, *, slug: CrmReportSlug, query: CrmReportQuery
 ) -> CrmReportPage:
     """Return one typed CRM report projection from authoritative inputs."""
+    if slug is CrmReportSlug.CRM_PERFORMANCE:
+        raise CrmReportQueryError(
+            "CRM Performance is retired; use Inbox Performance instead."
+        )
     return _BUILDERS[slug](db, query)
 
 
@@ -1408,6 +2022,6 @@ def build_csv(report: CrmReportPage) -> str:
     """Serialize the exact filtered report projection rendered by the UI."""
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(report.columns)
-    writer.writerows(report.rows)
+    writer.writerow(report.export_columns or report.columns)
+    writer.writerows(report.export_rows or report.rows)
     return output.getvalue()

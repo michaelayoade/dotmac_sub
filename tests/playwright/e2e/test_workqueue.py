@@ -130,13 +130,11 @@ class TestNativeAgentWorkqueue:
         expect(admin_page.get_by_label("Audience")).to_be_visible()
         expect(admin_page.get_by_label("Service team")).to_be_visible()
         expect(admin_page.get_by_role("link", name="Open Inbox")).to_be_visible()
-        section_nav = admin_page.get_by_role(
-            "navigation", name="Workqueue sections"
-        )
+        section_nav = admin_page.get_by_role("navigation", name="Workqueue sections")
         expect(section_nav).to_be_visible()
-        tickets_link = section_nav.get_by_role("link", name="Tickets")
-        tickets_link.click()
-        expect(tickets_link).to_have_attribute("aria-current", "location")
+        tickets_tab = section_nav.get_by_role("tab", name="Tickets")
+        tickets_tab.click()
+        expect(tickets_tab).to_have_attribute("aria-selected", "true")
         tickets_heading = admin_page.get_by_role("heading", name="Tickets")
         expect(tickets_heading).to_be_in_viewport()
         heading_is_below_nav = admin_page.evaluate(

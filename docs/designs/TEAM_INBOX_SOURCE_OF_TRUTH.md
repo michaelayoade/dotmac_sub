@@ -88,8 +88,11 @@ transaction before applying the audited status transition.
    candidate evidence, candidate fingerprints, bounded changed-field names,
    and retry count. It never overwrites or processes the admitted observation.
    SMTP returns success only after that quarantine transaction commits, ending
-   deterministic redelivery; transient parsing, database, and processing
-   failures remain retryable. Other provider adapters retain fail-closed
+   deterministic redelivery. Pre-admission parsing and database failures remain
+   SMTP-retryable because Sub has not saved the message. Once the observation
+   is committed, processing failures are marked for internal replay/repair and
+   SMTP returns success so the customer mail server does not resend the same
+   saved message indefinitely. Other provider adapters retain fail-closed
    rejection until they deliberately adopt a transport disposition.
 4. A separate processing owner locks the observation. It resolves threading,
    contact and routing, then stores the consequence identity on the observation.
@@ -179,6 +182,16 @@ conversations per agent unless `InboxAgentPresence.max_concurrent_conversations`
 overrides it. Capacity counts active human assignments on `open`, human-owned
 `pending`, and `snoozed` conversations while ownership remains active. It
 excludes resolved conversations and unassigned AI-pending conversations.
+
+Successful staff session issuance submits one typed, flush-only sign-in command
+to the routing owner in the same transaction. That command sets the signed-in
+SystemUser's presence to `online`, clears any availability override left by the
+prior session, refreshes `last_seen_at`, and records native transition evidence
+when the effective state changes. The owner locks the active SystemUser row to
+serialize concurrent first-presence creation for the same agent. Subscriber and
+reseller sessions do not write agent presence. Operators may still select
+another availability after sign-in; the existing 30-minute freshness and
+assignment-capacity rules are unchanged.
 
 Queue communication is also owned by Team Inbox routing. `inbox_queue_notifications`
 records initial position notices, movement updates, fifteen-minute unchanged
@@ -387,9 +400,16 @@ stale. Realtime has no replay authority.
   render countdown and expired-state actions from that projection only; browser
   timers are presentation helpers and do not authorize a send.
 - Private notes are internal messages written by the operator command owner.
-  Mention metadata stores stable system-user identifiers, and internal mention
-  notifications use the existing notification owner with deterministic dedupe
-  keys. Private notes and mentions never create provider delivery intents.
+  Mention metadata stores stable system-user identifiers after the command owner
+  revalidates active conversation-team visibility. The same transaction stages
+  deterministic per-recipient in-app and email rows through
+  `communications.staff_notifications`. Optional Nextcloud Talk staging uses
+  `execute_owner_savepoint`; a staging failure is recorded on note metadata and
+  cannot roll back the private note. Notification copy excludes note and customer
+  content. Its personal Inbox-open link marks the notice read, then targets the
+  exact conversation and message for browser scroll and highlight. The author is
+  not notified. Mentions never assign, transfer, change status, or create a
+  customer/provider delivery intent.
 - Lifecycle activity appears as subtle inline system timeline entries ordered by
   occurrence time with messages. The template must distinguish system entries
   from customer, agent, and private-note messages and must not delete or rewrite
@@ -497,7 +517,11 @@ stale. Realtime has no replay authority.
   owner-provided eligibility and never reconstruct lifecycle rules. Operators
   may set their own availability to `online`, `away`, or `offline`; automatic
   conversation assignment selects only effectively-online agents and queues work
-  at the team when no eligible agent is available.
+  at the team when no eligible agent is available. The teammate picker renders
+  the routing owner's typed active-count, capacity-limit, remaining-capacity,
+  eligibility, and refusal reason. An online agent at capacity remains visible
+  with the exact `active / maximum` load and is disabled rather than being
+  offered as an assignable target.
 - States: empty, no-results, permission/error redirect, best-effort realtime
   stale state, and normal loading follow
   `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`.

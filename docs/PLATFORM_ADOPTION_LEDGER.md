@@ -133,14 +133,23 @@ pass.
 **2026-08-28 — production prerequisite bootstrap for composed commercial
 modules.** The commercial module shadow composition requires privileged
 database prerequisites that the restricted production migration role must not
-own: the module database roles, outbox dispatcher roles, and the `mod_payments`,
-`mod_billing`, `mod_coll`, `mod_serviceorders`, and `mod_subscriptions`
-schemas. `scripts/bootstrap_commercial_module_prereqs.py` now owns the module
-role/schema repair path, while `scripts/bootstrap_outbox_dispatcher_roles.py`
-continues to own dispatcher identities. `scripts/deploy.sh` verifies both
-contracts with the restricted migration connection before backup and before
-Alembic, and only runs repair when an elevated `BOOTSTRAP_DATABASE_URL` is
-explicitly supplied.
+own: the module database roles, the outbox dispatcher roles, and one `mod_*`
+schema per composed lineage — a set this ledger does not enumerate, because it
+is derived into `docs/generated/MODULE_SCHEMA_CONTRACT.md` by
+`make schema-contract`. `scripts/bootstrap_commercial_module_prereqs.py` owns
+the module role/schema repair path, while
+`scripts/bootstrap_outbox_dispatcher_roles.py` continues to own dispatcher
+identities. `scripts/deploy.sh` verifies both contracts with the restricted
+migration connection before backup and before Alembic, and only runs repair
+when an elevated `BOOTSTRAP_DATABASE_URL` is explicitly supplied.
+
+**This entry's enumeration and its repair condition are superseded by the
+2026-08-31 amendment to ADR-0011.** The prose list here was one of the three
+copies that had drifted and had never gained `mod_inbox`; the schema set is now
+derived, and nothing may list it again. The deploy no longer treats an absent
+elevated credential as nothing to do: it probes the contract and reports
+`already_satisfied`, `repaired` by the dedicated `dotmac_schema_bootstrap`
+credential, or `blocked`, and a `blocked` deploy refuses before migrations.
 
 The two provider revisions intentionally add four kernel-identical names to
 Sub's lineage-head collision inventory: `idempotency_records`,
@@ -160,6 +169,54 @@ and the deploy owner checks the port before backup or migration. Production
 resume after a post-migration failure is explicit and evidence-bound: it
 requires the same authorization, digest, prior run, backup artifact, candidate
 heads and database heads before skipping only backup and migration.
+
+**2026-08-30 — `dotmac-inbox==0.1.0a1` composed, conversation authority
+unchanged.** Sub exact-pins the published Inbox a1 artifacts recorded in the
+Poetry lock, and `alembic.ini` declares the installed
+`dotmac_inbox.migrations:versions` resource so the single `ib_0001_conversations`
+revision creates `mod_inbox`. The annotated Starter tag `dotmac-inbox-v0.1.0a1`
+is the publication oracle; it was written only after the version was published
+to the private index and installed back. Locking moved nothing else — the
+`poetry.lock` diff contains this package alone —
+
+| distribution | version | wheel SHA256 | sdist SHA256 |
+| --- | --- | --- | --- |
+| `dotmac-inbox` | 0.1.0a1 | `d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873` | `d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e` |
+
+No kernel move was needed: Inbox floors at `0.1.0a85` and Sub already pins a94.
+No new prerequisite migration was needed either: the module declares exactly
+`tenant_scope_catalog.v1` and `module_database_roles.v1`, which
+`app/migration_bindings.py` already binds to migrations 545 and 546, so
+`ASSEMBLY_PREREQUISITE_BINDINGS` is UNCHANGED. Inbox is atomic tenant-only, so
+it correctly has no `ModulePlaneSelection` entry.
+
+`app/commercial_module_prereqs.py` gains `mod_inbox`, which the architecture
+gate requires to match the composed-lineage set exactly. That contract is
+verified by `scripts/deploy.sh` with the restricted migration connection BEFORE
+Alembic, so **the next production deploy needs the elevated
+`BOOTSTRAP_DATABASE_URL` bootstrap supplied once** to create the schema — the
+same step the five existing composed modules took. The contract's name is now
+wider than its contents; the constant is keyed to composed lineages, not to the
+commercial domain.
+
+**Composition is not adoption, and this entry claims only composition.** Sub's
+`public.inbox_conversations`, `public.inbox_messages` and
+`public.inbox_conversation_read_states` remain the only authority for every
+conversation, message and read cursor. `app/services/inbox_channels.py`
+declares Sub's channel traits against `dotmac_inbox.channels` and is imported
+by nothing under `app/`; `tests/architecture/test_inbox_module_composition.py`
+allows exactly one importer of the package, allows it only the declaration
+surface, and fails the moment a second module or a service import appears. No
+route, job, webhook, reader, writer, backfill or dual write is added, and the
+runtime import graph is unchanged.
+
+The authority move is ruled by `docs/adr/0013-inbox-conversation-authority.md`
+and designed in `docs/designs/INBOX_MODULE_ADOPTION.md`. It is gated on a
+production-shaped census that has not been run, on four named module gaps that
+are not yet released, and on `dotmac-inbox 0.1.0a2` — which carries the
+identity-preserving history seam the backfill requires and is recorded
+`declared-unpublished` in the Starter baseline. `dotmac-inbox-operations` is a
+separate package and a separate decision; nothing here authorises it.
 
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
@@ -754,6 +811,7 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 | `dotmac_kernel.settings_models` / `.settings_resolver` / `.settings_cache` / `.settings_crypto` / `.setting_scopes` / `.setting_value_types` / `.secret_sources` | adapt (consumed) | settings cutover | Sub declares product specs and retains product storage/transaction owners while the kernel supplies typed vocabulary, resolution, cache, crypto, and held-secret contracts. `DomainSetting` and `DomainSettingHistory` collide with Sub tables; app code may import only `SettingDomain` from `settings_models`, and migration composition remains closed |
 | `dotmac_kernel.settings_admin` / `.setting_domains` | defer-db | deferred | Not imported by Sub. Admin/write authority remains in Sub services until a typed owner cutover removes the existing path; module availability alone is not a reason to add a second writer |
 | `dotmac_kernel.models` | **partial (S7a)** | ADR-0009 | `Tenant`/`TenantDomain` ONLY, per ADR-0009. Sub migrations 508/509 host and provision those exact kernel models as the one operator tenant; they are admitted records, not duplicate Sub models. Every other name stays prohibited: kernel Party/identity (`Party`, `PartyRoleGrant`, `Role`, `UserCredential`, `AuthSession`, and related records) would collide with or replace Sub identity or authorization. This program does not do that |
+| `dotmac_kernel.namespaces` | consume-pure | module composition | `module_schema` only, as the canonical pure mapping from a composed module code to its immutable `mod_*` schema name. It carries no database access or runtime decision authority |
 | `dotmac_kernel.tenancy` | prohibited | — | Sub records `tenancy="single"` as composition metadata but does not install the kernel binding/resolver runtime; the operator-tenant service remains the owner |
 | `dotmac_kernel.models_platform` | prohibited | — | `PlatformAdmin`/`PlatformSession` — Sub keeps its own staff identity (`app/models/system_user.py`, `app/models/auth.py`) |
 | `dotmac_kernel.config` | prohibited | — | `app/config.py` remains Sub's settings owner; a second `Settings`/`validate_settings` authority is a drift source |
@@ -788,6 +846,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.machine_auth`
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
+- `dotmac_kernel.namespaces`
 - `dotmac_kernel.planes`
 - `dotmac_kernel.prerequisites`
 - `dotmac_kernel.profiles`
@@ -800,6 +859,19 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+
+`dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
+with the derived module schema contract. The commercial schema prerequisite
+owner uses that pure mapping to derive the contract from the composed lineage
+declarations; every other namespace helper remains outside the admitted
+application surface.
+
+The mapping belongs to the kernel rather than to Sub: `module_schema()`
+validates the short code and the resulting name, and its docstring calls the
+`mod_` form structural rather than a convention a caller may opt out of.
+Reimplementing it as an f-string here would create a second, silently
+divergent naming authority — the same defect class as the prose schema lists
+this change removed.
 
 `dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
 the effect names `TENANT_SCOPE_CATALOG_V1`, `MODULE_DATABASE_ROLES_V1`,

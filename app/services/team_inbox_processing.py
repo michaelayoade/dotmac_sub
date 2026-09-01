@@ -37,6 +37,11 @@ _PROCESS_OBSERVATION = OwnerCommandDefinition(
     concern="provider observation consequence coordination",
     name="process_team_inbox_provider_observation",
 )
+_MARK_OBSERVATION_PROCESSING_FAILED = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="provider observation consequence coordination",
+    name="mark_team_inbox_provider_observation_processing_failed",
+)
 
 
 def _attachment_observation(
@@ -443,6 +448,54 @@ def process_provider_observation(
     return execute_owner_command(
         db,
         definition=_PROCESS_OBSERVATION,
+        context=context,
+        operation=operation,
+    )
+
+
+def mark_provider_observation_processing_failed(
+    db: Session,
+    *,
+    observation_id: UUID,
+    context: CommandContext,
+    error_code: str,
+) -> team_inbox_observations.ProviderObservationOutcome:
+    """Record a post-admission processing failure for internal replay/repair."""
+
+    def operation() -> team_inbox_observations.ProviderObservationOutcome:
+        row = db.execute(
+            select(InboxProviderObservation)
+            .where(InboxProviderObservation.id == observation_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise team_inbox_observations.TeamInboxObservationError(
+                code=f"{OWNER}.observation_not_found",
+                message="Inbox provider observation was not found.",
+                details={"observation_id": str(observation_id)},
+            )
+        if row.processing_status == InboxObservationStatus.processed.value:
+            return team_inbox_observations.ProviderObservationOutcome(
+                observation_id=row.id,
+                outcome=team_inbox_observations.ObservationProcessingOutcome.already_processed,
+                conversation_id=row.conversation_id,
+                message_id=row.message_id,
+                processing_status=InboxObservationStatus.processed,
+            )
+        row.processing_status = InboxObservationStatus.rejected.value
+        row.error_code = (error_code or "processing_failed")[:120]
+        db.flush()
+        return team_inbox_observations.ProviderObservationOutcome(
+            observation_id=row.id,
+            outcome=team_inbox_observations.ObservationProcessingOutcome.replayed,
+            conversation_id=row.conversation_id,
+            message_id=row.message_id,
+            processing_status=InboxObservationStatus.rejected,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_MARK_OBSERVATION_PROCESSING_FAILED,
         context=context,
         operation=operation,
     )

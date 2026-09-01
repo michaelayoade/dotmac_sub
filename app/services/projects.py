@@ -1145,6 +1145,38 @@ def _queue_in_app_notification(
     )
 
 
+def _queue_project_tag_notifications(
+    db: Session,
+    *,
+    entity_kind: str,
+    entity_id: UUID,
+    entity_reference: str,
+    entity_title: str | None,
+    target_url: str,
+    current_tags: list[str] | None,
+    previous_tags: tuple[str, ...],
+    actor_id: str | None,
+) -> None:
+    from app.services.staff_notifications import (
+        StaffTagNotificationCommand,
+        queue_staff_tag_notifications,
+    )
+
+    queue_staff_tag_notifications(
+        db,
+        StaffTagNotificationCommand(
+            entity_kind=entity_kind,
+            entity_id=str(entity_id),
+            entity_reference=entity_reference,
+            entity_title=entity_title,
+            target_url=target_url,
+            current_tags=tuple(str(tag) for tag in (current_tags or ())),
+            previous_tags=previous_tags,
+            actor_person_id=actor_id,
+        ),
+    )
+
+
 def _company_name(db: Session) -> str:
     """Company display name for customer-facing emails (best-effort)."""
     try:
@@ -2551,10 +2583,15 @@ def _notify_project_assignments(
     db: Session,
     project: Project,
     *,
+    context: CommandContext,
     actor_id: str | None,
     previous_user_ids: frozenset[str] = frozenset(),
 ) -> None:
-    from app.services.staff_notifications import queue_staff_assignment_notifications
+    from app.services.staff_notifications import (
+        StaffAssignmentEventType,
+        StageStaffAssignmentNotifications,
+        stage_staff_assignment_notifications,
+    )
 
     users = [
         user
@@ -2562,12 +2599,18 @@ def _notify_project_assignments(
         if str(user.id) not in previous_user_ids
     ]
     reference = project.number or str(project.id)
-    queue_staff_assignment_notifications(
+    stage_staff_assignment_notifications(
         db,
-        users=users,
-        subject=f"Project assigned: {reference}",
-        body=f"You were assigned to project {reference}: {project.name}.",
-        actor_id=actor_id,
+        StageStaffAssignmentNotifications(
+            system_user_ids=tuple(user.id for user in users),
+            source_event_id=context.command_id,
+            source_entity_id=project.id,
+            event_type=StaffAssignmentEventType.project_assignment,
+            subject=f"Project assigned: {reference}",
+            body=f"You were assigned to project {reference}: {project.name}.",
+            target_url=f"/admin/projects/{project.id}",
+            actor_identity_id=coerce_uuid(actor_id),
+        ),
     )
 
 
@@ -3087,6 +3130,20 @@ class Projects(ListResponseMixin):
         _notify_project_assignments(
             db,
             project,
+            context=context,
+            actor_id=str(payload.created_by_person_id)
+            if payload.created_by_person_id
+            else None,
+        )
+        _queue_project_tag_notifications(
+            db,
+            entity_kind="project",
+            entity_id=project.id,
+            entity_reference=project.number or str(project.id),
+            entity_title=project.name,
+            target_url=f"/admin/projects/{project.number or project.id}",
+            current_tags=project.tags,
+            previous_tags=(),
             actor_id=str(payload.created_by_person_id)
             if payload.created_by_person_id
             else None,
@@ -3427,6 +3484,7 @@ class Projects(ListResponseMixin):
         previous_assignment_user_ids = frozenset(
             str(user.id) for user in _project_assignment_users(db, project)
         )
+        previous_tags = tuple(str(tag) for tag in (project.tags or ()))
         previous_status = project.status
         previous_template_id = (
             str(project.project_template_id) if project.project_template_id else None
@@ -3493,9 +3551,21 @@ class Projects(ListResponseMixin):
             _notify_project_assignments(
                 db,
                 project,
+                context=context,
                 actor_id=str(actor_id) if actor_id else None,
                 previous_user_ids=previous_assignment_user_ids,
             )
+        _queue_project_tag_notifications(
+            db,
+            entity_kind="project",
+            entity_id=project.id,
+            entity_reference=project.number or str(project.id),
+            entity_title=project.name,
+            target_url=f"/admin/projects/{project.number or project.id}",
+            current_tags=project.tags,
+            previous_tags=previous_tags,
+            actor_id=str(actor_id) if actor_id else None,
+        )
 
         # Emit events based on status changes
         new_status = project.status
@@ -4142,6 +4212,19 @@ class ProjectTasks(ListResponseMixin):
                     context=context,
                     include_push=True,
                 )
+        _queue_project_tag_notifications(
+            db,
+            entity_kind="project task",
+            entity_id=task.id,
+            entity_reference=task.number or str(task.id),
+            entity_title=task.title,
+            target_url=f"/admin/projects/tasks/{task.number or task.id}",
+            current_tags=task.tags,
+            previous_tags=(),
+            actor_id=str(payload.created_by_person_id)
+            if payload.created_by_person_id
+            else None,
+        )
         _stage_project_audit(
             db,
             context=context,
@@ -4277,6 +4360,7 @@ class ProjectTasks(ListResponseMixin):
         project, task = _lock_project_task_scope(db, coerce_uuid(task_id))
         previous_status = task.status
         previous_assignee_ids = frozenset(task.assigned_to_person_ids)
+        previous_tags = tuple(str(tag) for tag in (task.tags or ()))
         changed_fields: list[str] = []
         data = _model_data(payload.model_dump(exclude_unset=True))
         if data.get("status"):
@@ -4339,6 +4423,17 @@ class ProjectTasks(ListResponseMixin):
                 previous_assignee_ids=previous_assignee_ids,
                 context=context,
             )
+        _queue_project_tag_notifications(
+            db,
+            entity_kind="project task",
+            entity_id=task.id,
+            entity_reference=task.number or str(task.id),
+            entity_title=task.title,
+            target_url=f"/admin/projects/tasks/{task.number or task.id}",
+            current_tags=task.tags,
+            previous_tags=previous_tags,
+            actor_id=str(actor_id) if actor_id else None,
+        )
         if (
             "assigned_to_person_ids" in payload.model_fields_set
             or "assigned_to_person_id" in payload.model_fields_set

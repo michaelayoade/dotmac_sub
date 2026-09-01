@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import APIRequestContext, Page, expect
 
 from tests.playwright.helpers.api import api_post_json, bearer_headers
@@ -264,7 +266,9 @@ class TestSubscriberEdit:
         form.fill_notes("E2E test note update")
         form.submit()
         # Should redirect back to detail
-        admin_page.wait_for_url(f"**/customers/person/{subscriber_id}**")
+        expect(admin_page).to_have_url(
+            re.compile(rf".*/customers/person/{re.escape(subscriber_id)}(?:[?#].*)?$")
+        )
 
 
 class TestSubscriberAPI:

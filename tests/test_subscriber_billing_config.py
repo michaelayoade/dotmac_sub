@@ -1,3 +1,4 @@
+import datetime as _dt
 from decimal import Decimal
 
 import pytest
@@ -272,3 +273,233 @@ def test_customer_vat_exemption_can_be_enabled_without_enabling_wht(
         account_id=account_id,
     )
     assert wht_policy.withholding_tax_enabled is False
+
+
+# --- billing_day must stay inside its declared domain ----------------------
+#
+# "0 = day of activation" used to write datetime.now(UTC).day straight onto the
+# subscriber. On the 29th, 30th or 31st that stores a day OUTSIDE the domain the
+# setting spec declares (max_value=28) and the admin customer form enforces
+# (max="28"). The consequence was not cosmetic: the browser refused to submit
+# that customer's edit form at all, and because the offending control sits in a
+# collapsed tab it could not be focused, so Chromium reported only
+# "An invalid form control with name='billing_day' is not focusable" to the
+# console -- no server error, no message to the admin, the Update button simply
+# did nothing. It reached CI as a browser test that had been green on the 28th
+# and red from the 29th, on every branch, with no code change in between.
+
+
+def _billing_day_after_activation(db_session, subscriber, monkeypatch, activation_day):
+    """Apply prepaid defaults as if the subscriber activated on a given day."""
+
+    import app.services.subscriber as subscriber_module
+
+    subscriber.billing_day = None
+    monkeypatch.setattr(
+        "app.services.subscriber.settings_spec.resolve_value",
+        lambda _db, _domain, key: {
+            "prepaid_default_billing_day": "0",
+            "prepaid_default_payment_due_days": "0",
+            "prepaid_default_min_balance": "0",
+        }.get(key),
+    )
+
+    class _FrozenDatetime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, activation_day, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(subscriber_module, "datetime", _FrozenDatetime)
+    _apply_billing_defaults(db_session, subscriber)
+    return subscriber.billing_day
+
+
+@pytest.mark.parametrize("activation_day", [29, 30, 31])
+def test_activation_day_past_the_declared_maximum_is_clamped(
+    db_session, subscriber, monkeypatch, activation_day
+):
+    stored = _billing_day_after_activation(
+        db_session, subscriber, monkeypatch, activation_day
+    )
+
+    assert stored == 28, (
+        f"activating on the {activation_day}th stored billing_day={stored}, "
+        "outside the 1..28 domain the setting spec declares and the admin "
+        "form enforces -- the customer's edit form becomes unsubmittable"
+    )
+
+
+@pytest.mark.parametrize("activation_day", [1, 15, 28])
+def test_an_in_domain_activation_day_is_stored_unchanged(
+    db_session, subscriber, monkeypatch, activation_day
+):
+    """The negative half of the control.
+
+    A clamp that flattened every activation day to 28 would pass the test
+    above and destroy the feature. The 28th is included deliberately: it is
+    the boundary, and it must survive untouched.
+    """
+
+    stored = _billing_day_after_activation(
+        db_session, subscriber, monkeypatch, activation_day
+    )
+
+    assert stored == activation_day
+
+
+# --- billing_day: every server path is guarded, legacy rows stay editable ---
+#
+# The 2026-08-29 incident had two halves. The activation default wrote a day
+# the admin form could not render (fixed by the clamp), and NO server path
+# range-checked anything, so the browser was the only validator -- which is
+# why a value it refused to submit could exist at all. These cover the second
+# half, at the model event that every writer passes through: the form handler,
+# the bulk path, the JSON API and the activation defaults all set the ORM
+# attribute, and none of them can route around it.
+
+
+def _legacy_row(db_session, subscriber, day: int = 31):
+    """Force an out-of-domain value the way history did, bypassing the guard.
+
+    A Core UPDATE, not an ORM assignment, precisely because the guard now
+    refuses to create one. These rows exist in real deployments; the tests
+    have to be able to make one.
+    """
+
+    from sqlalchemy import update
+
+    from app.models.subscriber import Subscriber
+
+    db_session.execute(
+        update(Subscriber).where(Subscriber.id == subscriber.id).values(billing_day=day)
+    )
+    db_session.commit()
+    db_session.expire_all()
+    return db_session.get(Subscriber, subscriber.id)
+
+
+@pytest.mark.parametrize("day", [29, 30, 31, 0, -1, 99])
+def test_the_orm_refuses_to_create_an_out_of_domain_billing_day(
+    db_session, subscriber, day
+):
+    from app.services.billing_day import BillingDayOutOfDomain
+
+    subscriber.billing_day = day
+    with pytest.raises(BillingDayOutOfDomain):
+        db_session.commit()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("day", [1, 14, 28])
+def test_an_in_domain_billing_day_still_saves(db_session, subscriber, day):
+    subscriber.billing_day = day
+    db_session.commit()
+    db_session.expire_all()
+    assert db_session.get(type(subscriber), subscriber.id).billing_day == day
+
+
+def test_an_unrelated_edit_leaves_a_legacy_billing_day_alone(db_session, subscriber):
+    """The repair for the uneditable customer, at the persistence layer.
+
+    Touching another column must not fail the save and must not rewrite the
+    billing day. Rewriting it would change when a real customer is billed.
+    """
+
+    row = _legacy_row(db_session, subscriber, 31)
+
+    row.phone = "+2348000000042"
+    db_session.commit()
+    db_session.expire_all()
+
+    saved = db_session.get(type(subscriber), subscriber.id)
+    assert saved.phone == "+2348000000042"
+    assert saved.billing_day == 31
+
+
+def test_resubmitting_the_same_legacy_value_is_not_a_change(db_session, subscriber):
+    """The admin form always posts the field back, so this is the common case."""
+
+    row = _legacy_row(db_session, subscriber, 30)
+
+    row.billing_day = 30
+    row.phone = "+2348000000043"
+    db_session.commit()
+    db_session.expire_all()
+
+    assert db_session.get(type(subscriber), subscriber.id).billing_day == 30
+
+
+def test_a_legacy_value_can_be_moved_into_the_domain(db_session, subscriber):
+    row = _legacy_row(db_session, subscriber, 31)
+
+    row.billing_day = 15
+    db_session.commit()
+    db_session.expire_all()
+
+    assert db_session.get(type(subscriber), subscriber.id).billing_day == 15
+
+
+def test_a_legacy_value_cannot_be_moved_to_another_out_of_domain_value(
+    db_session, subscriber
+):
+    from app.services.billing_day import BillingDayOutOfDomain
+
+    row = _legacy_row(db_session, subscriber, 31)
+
+    row.billing_day = 29
+    with pytest.raises(BillingDayOutOfDomain):
+        db_session.commit()
+    db_session.rollback()
+
+
+def test_the_form_context_flags_a_legacy_value_and_carries_the_bounds(
+    db_session, subscriber
+):
+    """The template renders bounds and the legacy flag; it must be given both."""
+
+    row = _legacy_row(db_session, subscriber, 31)
+    legacy = web_customer_actions_service.billing_form_defaults(row)
+
+    assert legacy["billing_day"] == "31"
+    assert legacy["billing_day_is_legacy"] == "true"
+    assert legacy["billing_day_min"] == "1"
+    assert legacy["billing_day_max"] == "28"
+
+    row.billing_day = 12
+    db_session.commit()
+    ordinary = web_customer_actions_service.billing_form_defaults(row)
+    assert ordinary["billing_day_is_legacy"] == "false"
+
+
+def test_an_absent_billing_day_does_not_clear_a_legacy_value():
+    """ABSENT and EMPTY are different instructions.
+
+    ``Form(None)`` means the field never arrived, so the stored value must be
+    left alone; an empty box submits ``""`` and is a deliberate "inherit".
+    Before this, both produced ``None`` in the payload and a partial POST
+    silently wiped a legacy billing day.
+    """
+
+    from app.services.web_customer_actions import _billing_override_payload
+
+    common = {
+        "billing_enabled_override": None,
+        "payment_due_days": None,
+        "grace_period_days": None,
+        "min_balance": None,
+        "captive_redirect_enabled": None,
+        "tax_rate_id": None,
+        "payment_method": None,
+    }
+
+    absent = _billing_override_payload(billing_day=None, **common)
+    assert "billing_day" not in absent, (
+        "an absent billing_day reached the update payload; it will be written "
+        "as NULL and a legacy value will be destroyed by an unrelated edit"
+    )
+
+    cleared = _billing_override_payload(billing_day="", **common)
+    assert cleared["billing_day"] is None
+
+    changed = _billing_override_payload(billing_day="9", **common)
+    assert changed["billing_day"] == 9

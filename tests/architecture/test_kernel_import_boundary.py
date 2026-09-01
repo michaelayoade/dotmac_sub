@@ -55,6 +55,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
+        "dotmac_kernel.namespaces",
         "dotmac_kernel.planes",
         "dotmac_kernel.prerequisites",
         "dotmac_kernel.profiles",
@@ -119,6 +120,7 @@ RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
     "dotmac_kernel.cache": frozenset({"TenantScope"}),
     "dotmac_kernel.migrations.verify": frozenset({"require_prerequisites"}),
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),
+    "dotmac_kernel.namespaces": frozenset({"module_schema"}),
     "dotmac_kernel.planes": frozenset({"ModulePlane", "ModulePlaneSelection"}),
     "dotmac_kernel.settings_models": frozenset({"SettingDomain"}),
     "dotmac_kernel.prerequisites": frozenset(

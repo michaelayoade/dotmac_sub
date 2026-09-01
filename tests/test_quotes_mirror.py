@@ -3,11 +3,36 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from app.models.audit import AuditEvent
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.subscriber import Subscriber
 from app.services import quotes_mirror
+from app.services.crm_client import CRMClientError
+from app.services.integrations.installations import InstallationError
+
+
+@contextmanager
+def _transport_enabled():
+    """Satisfy the portal-quote command precondition.
+
+    ``request_quote``/``accept_quote`` now refuse before touching the network
+    unless the CRM quote-command capability binding is enabled, so any test
+    that exercises the happy path has to say so explicitly.
+    """
+    with patch(
+        "app.services.quotes_mirror.installations.require_enabled_capability_binding",
+        return_value=MagicMock(),
+    ):
+        yield
+
+
+def _refusals(db, action: str) -> list[AuditEvent]:
+    return db.query(AuditEvent).filter(AuditEvent.action == action).all()
 
 
 def _subscriber(db, crm_id: uuid.UUID | None = None) -> Subscriber:
@@ -123,6 +148,7 @@ def test_request_quote_write_through_mirrors_result(db_session):
     client = MagicMock()
     client.request_portal_quote.return_value = _crm_quote(id="qNEW", status="draft")
     with (
+        _transport_enabled(),
         patch("app.services.quotes_mirror.capability_client", return_value=client),
         patch(
             "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
@@ -185,3 +211,120 @@ def test_webhook_unknown_event_ignored(db_session):
         {"subscriber_id": str(sub.id), "quote_id": "q9"},
     )
     assert out["status"] == "ignored"
+
+
+# ---------------------------------------------------------------------------
+# Portal quote COMMANDS fail closed
+#
+# CRM/Omni was decommissioned on 2026-08-29. These two commands are the last
+# Sub -> CRM business writes and they sit on a customer-money path, so a dead
+# transport must produce an explicit, audited refusal -- never a hang, never a
+# 200 with an empty body, and never a mirrored row for a command nobody
+# acknowledged.
+# ---------------------------------------------------------------------------
+
+
+def test_request_quote_refuses_when_the_transport_is_not_enabled(db_session):
+    """No enabled capability binding is a REFUSAL, decided without a network call."""
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    with (
+        patch(
+            "app.services.quotes_mirror.installations."
+            "require_enabled_capability_binding",
+            side_effect=InstallationError("no enabled binding"),
+        ),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
+        patch(
+            "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
+        ),
+        pytest.raises(quotes_mirror.PortalQuoteCommandError) as exc,
+    ):
+        quotes_mirror.request_quote(
+            db_session, str(sub.id), latitude=9.07, longitude=7.49
+        )
+
+    assert exc.value.code == "sales.portal_quote.transport_unavailable"
+    # Decided locally: the dead transport is never dialled, so the caller is
+    # refused immediately instead of blocking on a connect timeout.
+    client.request_portal_quote.assert_not_called()
+    assert db_session.query(QuoteMirror).count() == 0
+    refusals = _refusals(db_session, quotes_mirror.PORTAL_QUOTE_REQUEST_REFUSED)
+    assert len(refusals) == 1
+    assert refusals[0].is_success is False
+    assert refusals[0].metadata_["error_code"] == (
+        "sales.portal_quote.transport_unavailable"
+    )
+
+
+def test_accept_quote_refuses_and_mirrors_nothing_when_the_transport_fails(db_session):
+    """A transport failure on the acceptance leaves no partial mirror state."""
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    client.accept_portal_quote.side_effect = CRMClientError("connection refused")
+    with (
+        _transport_enabled(),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
+        patch(
+            "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
+        ),
+        pytest.raises(quotes_mirror.PortalQuoteCommandError) as exc,
+    ):
+        quotes_mirror.accept_quote(
+            db_session,
+            str(sub.id),
+            "q-dead",
+            deposit_reference="ref_1",
+            deposit_amount="37500.00",
+        )
+
+    assert exc.value.code == "sales.portal_quote.transport_failed"
+    assert db_session.query(QuoteMirror).count() == 0
+    refusals = _refusals(db_session, quotes_mirror.PORTAL_QUOTE_ACCEPT_REFUSED)
+    assert len(refusals) == 1
+    assert refusals[0].metadata_["quote_id"] == "q-dead"
+
+
+def test_accept_quote_refuses_an_unacknowledged_response(db_session):
+    """The silent-success regression: a 200 with an empty payload is a failure.
+
+    The old code returned ``{}`` here, so a customer whose deposit had already
+    been recorded saw a successful HTTP 200 for an acceptance that never
+    happened.
+    """
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    client.accept_portal_quote.return_value = {}
+    with (
+        _transport_enabled(),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
+        patch(
+            "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
+        ),
+        pytest.raises(quotes_mirror.PortalQuoteCommandError) as exc,
+    ):
+        quotes_mirror.accept_quote(
+            db_session,
+            str(sub.id),
+            "q-silent",
+            deposit_reference="ref_1",
+            deposit_amount="37500.00",
+        )
+
+    assert exc.value.code == "sales.portal_quote.command_not_acknowledged"
+    assert db_session.query(QuoteMirror).count() == 0
+
+
+def test_portal_quote_refusal_message_leaks_no_transport_detail(db_session):
+    """The customer-facing message names no endpoint, host or capability."""
+    message = quotes_mirror.PORTAL_QUOTE_UNAVAILABLE_MESSAGE.lower()
+    for forbidden in ("crm", "omni", "http", "://", "capability", "binding"):
+        assert forbidden not in message
+    # It must still say the two things a charged customer needs to hear.
+    assert "nothing was charged" in message
+    assert "no quote was" in message
+
+
+def test_ensure_portal_quote_commands_available_passes_when_enabled(db_session):
+    with _transport_enabled():
+        quotes_mirror.ensure_portal_quote_commands_available(db_session)

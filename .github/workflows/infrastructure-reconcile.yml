@@ -1,0 +1,47 @@
+name: Reconcile infrastructure published ports
+
+# V1 IS DISABLED FOR PRODUCTION. Its plan-only path writes .env before restoring
+# it, so it is not a read-only plan and cannot provide admissible production
+# evidence. This workflow deliberately contains no production environment, no
+# self-hosted runner and no reconcile invocation. Git history preserves the v1
+# executor; ADR-0014 defines the separately reviewed v2 admission gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Compose service requested for a future v2 plan
+        required: true
+        type: string
+      target_server_name:
+        description: Explicit target requested for a future v2 plan
+        required: true
+        type: string
+      change_reference:
+        description: Incident or change reference
+        required: true
+        type: string
+      reason:
+        description: Why reconciliation is requested
+        required: true
+        type: string
+      plan_only:
+        description: Retained v1 input; every current dispatch is refused
+        required: true
+        default: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  production_preflight:
+    name: Refuse v1 published-port production dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Refuse disabled v1 executor
+        run: |
+          echo "REFUSED: published-port reconcile v1 is disabled for production." >&2
+          echo "Its plan-only path mutates .env and is not read-only evidence." >&2
+          echo "ADR-0014 requires a separately reviewed v2 two-plan/apply/deadman path." >&2
+          exit 1

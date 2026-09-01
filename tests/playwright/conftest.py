@@ -48,6 +48,15 @@ from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import customer_portal, reseller_portal
+from tests.playwright.evidence import (
+    instrument_browser as _instrument_browser,
+)
+from tests.playwright.evidence import (
+    note_outcome as _note_evidence_outcome,
+)
+from tests.playwright.evidence import (
+    start_test as _start_evidence_test,
+)
 from tests.playwright.helpers.api import bearer_headers
 from tests.playwright.helpers.auth import (
     ensure_person,
@@ -138,6 +147,32 @@ def pytest_collection_modifyitems(config, items) -> None:
             item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
         else:
             item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+
+
+# --- Failure evidence -----------------------------------------------------
+#
+# A context is built inside a fixture that never sees the pytest item, so the
+# item identity and its outcome are published to tests.playwright.evidence
+# from here. Order matters and is load-bearing: pytest reports the "call"
+# phase BEFORE tearing down function-scoped fixtures, so by the time a
+# browser context closes it already knows whether the test failed, and can
+# save its trace instead of discarding it.
+
+
+def pytest_runtest_setup(item) -> None:
+    _start_evidence_test(item.nodeid)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    # An xfail (a quarantined spec) reports as skipped, not failed, and is
+    # deliberately NOT captured: it is a known failure with an owner, and
+    # capturing every one of them would bury the unexpected failure this
+    # exists to explain.
+    if report.when in {"setup", "call"} and report.failed:
+        _note_evidence_outcome(True)
 
 
 def _latest_subscription_id(db, subscriber_id: str) -> str | None:
@@ -330,6 +365,7 @@ def browser(playwright_instance, settings: E2ESettings):
         ]
 
     browser = browser_type.launch(**launch_kwargs)
+    _instrument_browser(browser)
     yield browser
     browser.close()
 

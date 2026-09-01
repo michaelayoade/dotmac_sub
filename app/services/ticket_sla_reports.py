@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +21,13 @@ from app.models.ticket_workflow import (
     SlaClockStatus,
     WorkflowEntityType,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TicketSlaExportQuery:
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    open_only: bool = False
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -291,3 +301,44 @@ def violation_records(
             }
         )
     return records
+
+
+def build_violation_export_csv(db: Session, query: TicketSlaExportQuery) -> str:
+    """Export the complete matching SLA violation projection."""
+
+    records = violation_records(
+        db,
+        start_at=query.start_at,
+        end_at=query.end_at,
+        open_only=query.open_only,
+        limit=10000,
+    )
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=(
+            "ticket_reference",
+            "title",
+            "status",
+            "service_team",
+            "assignee",
+            "due_at",
+            "breached_at",
+            "breach_duration",
+            "priority",
+        ),
+        extrasaction="ignore",
+    )
+    writer.writeheader()
+    writer.writerows(
+        {
+            key: (
+                getattr(value, "value", value).isoformat()
+                if isinstance(getattr(value, "value", value), datetime)
+                else getattr(value, "value", value)
+            )
+            for key, value in record.items()
+        }
+        for record in records
+    )
+    return output.getvalue()

@@ -175,11 +175,6 @@ def collect_channel_ingestion_observations(
                     contract.channel,
                     float(last_received is not None),
                 ),
-                StateObservation(
-                    "synthetic_history_present",
-                    contract.channel,
-                    float(last_probe is not None),
-                ),
             )
         )
     return observations

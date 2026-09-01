@@ -79,7 +79,6 @@ def _make_reseller_login(db, reseller, username="abc-admin", password="secret"):
                     last_name="Owner",
                     email="owner@abcnetworks.com",
                     username=username,
-                    password=password,
                     send_invite=False,
                 ),
             ),
@@ -92,6 +91,9 @@ def _make_reseller_login(db, reseller, username="abc-admin", password="secret"):
         .filter(UserCredential.reseller_user_id == outcome.reseller_user_id)
         .one()
     )
+    # The owner mints a per-account secret nobody sees; give this fixture a
+    # known one so the test can drive a real login.
+    credential.password_hash = auth_flow_service.hash_password(password)
     credential.must_change_password = False
     db.commit()
     return reseller_user

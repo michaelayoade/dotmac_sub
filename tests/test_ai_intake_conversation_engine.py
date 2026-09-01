@@ -282,7 +282,9 @@ def test_identifier_prompt_retries_when_customer_replies_without_identifier(
     assert first.metadata["reason"] == "missing_customer_identifier"
     assert second.action == "respond"
     assert second.metadata["reason"] == "identifier_reply_missing_value"
-    assert "Portal ID" in (second.response_text or "")
+    # The fixture policy declares phone -> email -> portal, a NON-CANONICAL
+    # order: the retry must name the first DECLARED identifier, not a fixed one.
+    assert "registered phone number" in (second.response_text or "")
     assert second.state.handoff_status == "not_requested"
     assert second.state.collected_facts["missing_identifier_retry_count"] == 1
 

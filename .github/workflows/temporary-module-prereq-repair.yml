@@ -1,3 +1,19 @@
+# TEMPORARY. Delete this workflow once the managed deployment path has produced
+# its first successful production prerequisite receipt.
+#
+# It exists only because the managed repair leg did not, and a hand-dispatched
+# job writing production database state is precisely the executor class this
+# programme is retiring. It is deliberately NOT authorized for production: the
+# production job below refuses. Production schema repair happens as the managed
+# repair leg of a real deployment (scripts/deploy.sh) or not at all.
+#
+# PR #2843's Unix-socket approach is reverted here. It assumed the container's
+# socket was reachable at /proc/<pid>/root/var/run/postgresql, but /var/run is a
+# symlink to /run inside the alpine image and the host kernel resolves that
+# absolute target against the HOST root, so the path can never exist. Measured
+# on the production host 2026-08-31. This uses TCP with the dedicated
+# schema-bootstrap role instead, matching the managed path exactly so the two
+# cannot drift.
 name: Temporary commercial module prerequisite repair
 
 on:
@@ -33,6 +49,8 @@ jobs:
       - name: Repair and verify exact staging database
         env:
           DEPLOY_DIR: ${{ vars.STAGING_DEPLOY_DIR }}
+          SCHEMA_BOOTSTRAP_PGPASS: /etc/dotmac/sub/schema-bootstrap.pgpass
+          SCHEMA_BOOTSTRAP_MOUNT: /run/secrets/schema-bootstrap.pgpass
         run: |
           set -euo pipefail
           set +x
@@ -50,46 +68,49 @@ jobs:
           }
 
           docker pull "$REPAIR_IMAGE"
-          test "$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REPAIR_REVISION"
+          # Every preflight says what failed. A bare `test` exiting 1 with no
+          # output is how the 2026-08-31 production attempt became
+          # undiagnosable from its own log.
+          actual_revision="$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          if [[ "$actual_revision" != "$REPAIR_REVISION" ]]; then
+            echo "PREFLIGHT: repair image revision is '$actual_revision'; expected '$REPAIR_REVISION'." >&2
+            exit 1
+          fi
 
-          bootstrap_url="$(python3 - <<'PY'
-          import os
-          from pathlib import Path
-          from urllib.parse import quote, urlsplit, urlunsplit
-
-          values = {}
-          for raw_line in (Path(os.environ["DEPLOY_DIR"]) / ".env").read_text().splitlines():
-              line = raw_line.strip()
-              if not line or line.startswith("#") or "=" not in line:
-                  continue
-              key, value = line.split("=", 1)
-              value = value.strip()
-              if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                  value = value[1:-1]
-              values[key.strip()] = value
-
-          database_url = values.get("DATABASE_URL", "")
-          password = values.get("POSTGRES_PASSWORD", "")
-          parsed = urlsplit(database_url)
-          if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
-              raise SystemExit("staging bootstrap inputs are incomplete")
-          host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-          port = f":{parsed.port}" if parsed.port else ""
-          netloc = f"postgres:{quote(password, safe='')}@{host}{port}"
-          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
-          PY
-          )"
-          test -n "$bootstrap_url"
+          if [[ -z "${SCHEMA_BOOTSTRAP_URL:-}" ]]; then
+            SCHEMA_BOOTSTRAP_URL="$(grep -E '^SCHEMA_BOOTSTRAP_URL=' .env | tail -n 1 | cut -d= -f2- || true)"
+          fi
+          if [[ -z "${SCHEMA_BOOTSTRAP_URL:-}" ]]; then
+            echo "PREFLIGHT: SCHEMA_BOOTSTRAP_URL is not configured for staging." >&2
+            exit 1
+          fi
+          if [[ "$SCHEMA_BOOTSTRAP_URL" == *:*@* ]]; then
+            echo "PREFLIGHT: SCHEMA_BOOTSTRAP_URL carries an inline password; the credential must come from the pgpass file." >&2
+            exit 1
+          fi
+          if [[ ! -f "$SCHEMA_BOOTSTRAP_PGPASS" ]]; then
+            echo "PREFLIGHT: credential file $SCHEMA_BOOTSTRAP_PGPASS is missing." >&2
+            exit 1
+          fi
+          mode="$(stat -c '%a' "$SCHEMA_BOOTSTRAP_PGPASS")"
+          owner="$(stat -c '%U' "$SCHEMA_BOOTSTRAP_PGPASS")"
+          if [[ "$mode" != "400" || "$owner" != "root" ]]; then
+            echo "PREFLIGHT: $SCHEMA_BOOTSTRAP_PGPASS is mode $mode owned by $owner; expected 400 root." >&2
+            exit 1
+          fi
 
           compose=(docker compose -f docker-compose.yml)
           test -f docker-compose.override.yml
           compose+=(-f docker-compose.override.yml)
 
-          BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
+          # No password in the URL, argv, environment or log: libpq reads it
+          # from the mounted pgpass file.
           APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
-            python scripts/bootstrap_commercial_module_prereqs.py --repair
-          unset bootstrap_url
+            "${compose[@]}" run --rm --no-deps --user 0:0 \
+            -v "$SCHEMA_BOOTSTRAP_PGPASS:$SCHEMA_BOOTSTRAP_MOUNT:ro" \
+            -e PGPASSFILE="$SCHEMA_BOOTSTRAP_MOUNT" \
+            -e BOOTSTRAP_DATABASE_URL="$SCHEMA_BOOTSTRAP_URL" \
+            app python scripts/bootstrap_commercial_module_prereqs.py --repair-schemas
 
           APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
             "${compose[@]}" run --rm --no-deps app sh -c \
@@ -98,71 +119,23 @@ jobs:
   production:
     name: Repair production prerequisites
     if: inputs.target == 'production'
-    runs-on: [self-hosted, linux, x64, dotmac-sub-production]
-    environment: production
-    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Repair and verify exact production database
-        env:
-          DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+      - name: Refuse — production repair is not authorized through this workflow
         run: |
-          set -euo pipefail
-          set +x
-          test -n "$DEPLOY_DIR"
-          test -f "$DEPLOY_DIR/.env"
-          grep -Fqx 'APP_ENV=production' "$DEPLOY_DIR/.env"
-          grep -Fqx 'SERVER_NAME=dotmac-sub-prod' "$DEPLOY_DIR/.env"
-          cd "$DEPLOY_DIR"
+          cat >&2 <<'REFUSAL'
+          REFUSED: production module schema repair is not authorized through the
+          temporary repair workflow.
 
-          exec 9>/var/lock/dotmac_sub_deploy.lock
-          flock -n 9 || {
-            echo 'A production deployment or database repair is already running.' >&2
-            exit 1
-          }
+          Production repair runs only as the managed repair leg of a real
+          deployment: scripts/deploy.sh probes the contract, and when repair is
+          required it uses the dedicated dotmac_schema_bootstrap credential and
+          reports already_satisfied / repaired / blocked. That path takes a
+          backup first, verifies afterwards, and leaves a deployment receipt.
+          None of that is true of a hand-dispatched job.
 
-          docker pull "$REPAIR_IMAGE"
-          test "$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REPAIR_REVISION"
-
-          bootstrap_url="$(python3 - <<'PY'
-          import os
-          from pathlib import Path
-          from urllib.parse import quote, urlsplit, urlunsplit
-
-          values = {}
-          for raw_line in (Path(os.environ["DEPLOY_DIR"]) / ".env").read_text().splitlines():
-              line = raw_line.strip()
-              if not line or line.startswith("#") or "=" not in line:
-                  continue
-              key, value = line.split("=", 1)
-              value = value.strip()
-              if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                  value = value[1:-1]
-              values[key.strip()] = value
-
-          database_url = values.get("DATABASE_URL", "")
-          password = values.get("POSTGRES_PASSWORD", "")
-          parsed = urlsplit(database_url)
-          if not parsed.scheme.startswith("postgresql") or not parsed.hostname or not password:
-              raise SystemExit("production bootstrap inputs are incomplete")
-          host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-          port = f":{parsed.port}" if parsed.port else ""
-          netloc = f"postgres:{quote(password, safe='')}@{host}{port}"
-          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
-          PY
-          )"
-          test -n "$bootstrap_url"
-
-          compose=(docker compose -f docker-compose.yml)
-          if [[ -f docker-compose.override.yml ]]; then
-            compose+=(-f docker-compose.override.yml)
-          fi
-
-          BOOTSTRAP_DATABASE_URL="$bootstrap_url" \
-          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps -e BOOTSTRAP_DATABASE_URL app \
-            python scripts/bootstrap_commercial_module_prereqs.py --repair
-          unset bootstrap_url
-
-          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps app sh -c \
-            'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+          See docs/runbooks/PRODUCTION_DEPLOYMENT.md, "Module database
+          prerequisites".
+          REFUSAL
+          exit 1

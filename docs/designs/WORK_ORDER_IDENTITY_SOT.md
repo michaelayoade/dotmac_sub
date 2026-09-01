@@ -56,6 +56,12 @@ Work orders need **re-keying, not migrating**.
 - Historical CRM identifiers remain provenance on already-imported roots. No
   runtime CRM reconcile, webhook, lazy read, task, or scheduler path writes the
   work-order root after migration 383.
+- Staff/team tag tokens on native work-order tags stage in-app staff
+  notifications from the work-order command owner. `person:`, `user:`, and
+  `staff:` tokens address an individual staff user; `team:` and `group:` tokens
+  address active Service Team members. Notifications link back to the work-order
+  detail page. Ordinary descriptive tags remain work-order metadata and do not
+  notify anyone.
 
 ## Identity pattern (applies to every module going Sub-native)
 

@@ -2368,7 +2368,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=0,
         min_value=0,
         max_value=28,
-        label="Prepaid Default Billing Day (0 = day of activation)",
+        label="Prepaid Default Billing Day (0 = activation day, capped at 28)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -3811,15 +3811,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="pending",
         allowed={"pending", "sent", "failed"},
     ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="chat_session_authority",
-        env_var="CHAT_SESSION_AUTHORITY",
-        value_type=SettingValueType.string,
-        default="selfcare",
-        allowed={"selfcare", "crm"},
-        label="Live chat authority",
-    ),
+    # `comms/chat_session_authority` was RETIRED here on 2026-08-30. It selected
+    # between Sub's native Team Inbox and an external CRM live-chat transport
+    # for the length of one temporary migration (ADR 0006). The CRM was
+    # decommissioned; the native inbox is the sole authority and there is no
+    # second value left to choose. Keeping the spec with a one-member `allowed`
+    # set would leave an editable control that decides nothing and an obvious
+    # place for a second chat writer to reappear, so the concept is gone rather
+    # than re-pointed. Migration 569 deletes any surviving row.
     SettingSpec(
         domain=SettingDomain.comms,
         key="inbox_reply_reminder_delay_minutes",
@@ -5234,7 +5233,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=(
             "Please find attached the NCC complaints report for the last "
             "{lookback_days} day(s).\nRows included: {row_count}.\n"
-            "Rows not yet filable: {not_filable_count}.\n"
             "Download: {download_url}"
         ),
     ),

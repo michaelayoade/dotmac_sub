@@ -41,9 +41,24 @@ jobs:
           if echo "$changed" | grep -qE \
             '^(templates/|static/|tests/playwright/|app/web/|app/services/web_|scripts/seed/|\.github/workflows/e2e)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "**E2E Gate: running the Playwright suite.**" \
+              >> "$GITHUB_STEP_SUMMARY"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
             echo "No e2e-relevant paths changed — gate passes without a run."
+            # A green check that ran nothing is indistinguishable, on the PR
+            # page, from a green check that ran 259 browser specs. On
+            # 2026-08-29 that difference was read as a branch-specific
+            # signal: a money PR was blamed for a red suite while sibling
+            # PRs "passed" the same gate without launching a browser. Say so
+            # where a reviewer actually looks.
+            {
+              echo "**E2E Gate: the Playwright suite did NOT run.**"
+              echo
+              echo "This PR changes no e2e-relevant path, so the gate reports"
+              echo "success without launching a browser. This green is NOT"
+              echo "evidence that the browser suite passes at this head."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Start database + redis
@@ -175,6 +190,23 @@ jobs:
           E2E_ADMIN_PASSWORD: "E2eAdminPass123!"
         run: |
           poetry run pytest tests/playwright/ -v --tb=short -o "addopts="
+
+      - name: Upload browser failure evidence
+        if: failure() && steps.relevance.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-evidence
+          # test-results/ holds a Playwright trace, video, screenshot,
+          # browser console log and network log per FAILING spec (see
+          # tests/playwright/evidence.py). Without these a browser failure
+          # whose symptom is "no request ever reached the server" has no
+          # evidence at all on the server side, and the only remaining
+          # response is a re-run — which is not a diagnosis.
+          path: |
+            test-results/
+            uvicorn.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: App log on failure
         if: failure() && steps.relevance.outputs.relevant == 'true'

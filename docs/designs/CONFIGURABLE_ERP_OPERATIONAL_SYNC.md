@@ -10,6 +10,8 @@ allowlist of enabled domains (`projects`, `project_tasks`, `tickets`, and
 `work_orders`); its policy fixes the destination to
 `/api/v1/sync/sub/bulk` and bounds batch size. Administrators configure all
 profiles from `/admin/integrations/erp`. They cannot enter arbitrary URLs.
+The configured ERP service credential must carry ERP scope `sub:domain:write`;
+otherwise ERP answers 403 and Sub refuses to enable the operational binding.
 
 Each domain advances an independent `(updated_at, id)` watermark only after ERP
 accepts the complete bulk request without errors. Replays are safe because ERP

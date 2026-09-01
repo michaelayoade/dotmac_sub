@@ -234,7 +234,7 @@ def test_revenue_category_template_composes_chart_and_table_side_by_side() -> No
         page_title="Revenue by Category",
     )
 
-    assert 'data-revenue-category-detail-grid' in html
+    assert "data-revenue-category-detail-grid" in html
     assert "lg:grid-cols-5" in html
     assert "lg:col-span-2" in html
     assert "lg:col-span-3" in html

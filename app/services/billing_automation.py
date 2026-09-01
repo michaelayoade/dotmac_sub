@@ -2527,6 +2527,7 @@ def generate_cancellation_credit(
     """
     from app.schemas.billing import CreditNoteIssuePreviewRequest
     from app.services.billing.credit_notes import CreditNotes
+    from app.services.catalog.subscriptions import billing_cycle_start
 
     if not subscription.next_billing_at:
         return
@@ -2558,25 +2559,14 @@ def generate_cancellation_credit(
         else BillingCycle.monthly
     )
 
-    period_start = _as_utc(subscription.next_billing_at)
-    if period_start:
-        # Work backwards: period_start = next_billing_at - cycle
-        if cycle == BillingCycle.daily:
-            period_start = period_start - timedelta(days=1)
-        elif cycle == BillingCycle.weekly:
-            period_start = period_start - timedelta(weeks=1)
-        elif cycle == BillingCycle.annual:
-            period_start = period_start.replace(year=period_start.year - 1)
-        else:  # monthly
-            month = period_start.month - 1 or 12
-            year = (
-                period_start.year if period_start.month > 1 else period_start.year - 1
-            )
-            day = min(period_start.day, monthrange(year, month)[1])
-            period_start = period_start.replace(year=year, month=month, day=day)
-
-    if not period_start:
-        return
+    # Work backwards to the period the customer was last billed for. Cadence
+    # geometry belongs to service_intent.subscription_billing_cadence
+    # (app.services.catalog.subscriptions) — this used to re-derive it inline,
+    # and that copy had no `quarterly` branch (so a cancelled quarterly
+    # subscription was credited against a one-month period and over-credited
+    # ~2.9x) and used `.replace(year=...)`, which raises on 29 February in a
+    # non-leap target year and left the customer with no credit at all.
+    period_start = billing_cycle_start(next_billing, cycle)
 
     total_seconds = max((next_billing - period_start).total_seconds(), 1)
     unused_seconds = max((next_billing - now).total_seconds(), 0)

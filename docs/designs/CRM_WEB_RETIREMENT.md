@@ -158,17 +158,25 @@ Work proceeds in coherent domain slices:
 8. delete the corresponding CRM routes, templates, services, jobs, and finally
    the CRM deployment.
 
-### Temporary portal-chat authority exception
+### Portal-chat authority exception — CLOSED 2026-08-30
 
-ADR 0006 temporarily pauses the portal-chat portion of CRM retirement. Until
-the staffed Inbox cutover gate is ready, CRM owns customer and reseller portal
-live chat through the typed `crm.chat_session.v1` transport capability.
-Selfcare does not mirror messages in this mode, and its native widget command
-fails closed for old and new tokens. The bounded history import and reversal
-gates are defined in
-`docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md`. This exception does not advance
-any ledger route to `retired`; final CRM removal still requires reconciliation,
-traffic evidence, capability cutover, fallback retirement, and source deletion.
+ADR 0006 temporarily paused the portal-chat portion of CRM retirement. That
+exception is closed, and not by the cutover gate it named: the CRM was
+decommissioned on 2026-08-29, so the transport it assigned authority to no
+longer exists.
+
+Portal and public live chat is owned outright by
+`communications.team_inbox_widget`. The `crm.chat_session.v1` capability is
+removed from the current `dotmac.crm` manifest (1.2.0), the
+`comms.chat_session_authority` selector and the CRM broker are deleted, and
+`tests/architecture/test_single_chat_authority.py` prevents a second chat
+authority returning. Retirement record: `docs/adr/0006-temporary-crm-chat-authority.md`.
+
+This closes the exception; it does not by itself advance a ledger route to
+`retired`. Final CRM removal still requires reconciliation, traffic evidence,
+capability cutover, fallback retirement, and source deletion for the remaining
+CRM surfaces — ticket observation, subscriber observation, portal session, the
+quote command write-through, and the inbound `/api/v1/crm/*` API Sub serves.
 
 Each slice updates the ledger, the owning design and relationship-map entries,
 the executable SOT registry when an owner changes, behavior tests, architecture
@@ -275,3 +283,65 @@ poetry run pytest tests/architecture/test_crm_web_retirement.py -q
 For a cross-repository drift check, add `--crm-root` and
 `--source-revision` to `validate`. CI does not need access to a sibling CRM
 checkout to enforce the checked-in completeness and retirement gates.
+
+## The vocabulary freeze, and the distinction that prevents data loss
+
+The CRM was decommissioned 2026-08-29. What remains inside Sub is replaced
+**domain by domain** — Inbox/Chat, then Support/Ticketing, Sales/Quotes,
+Party/Customer/Reseller, the relevant ERP modules, and finally a
+secrets/deployment/observability pass — each slice deleting residue **beside
+its replacement owner** rather than in a sweep. Michael's rule for every slice:
+
+> it cannot claim cutover while its displaced CRM reader, writer, flag or
+> transport remains.
+
+A slice-by-slice replacement only works if the surface holds still in between,
+so the surface is frozen: `tests/architecture/test_crm_vocabulary_freeze.py`
+over the baseline in `tests/architecture/crm_vocabulary_baseline.txt`. It is
+two-directional — a new CRM/Omni dependency cannot land, and an existing one
+cannot vanish without the baseline being lowered in the same change. Deleting
+CRM code therefore fails the guard until you lower the baseline, which is the
+guard working rather than a defect.
+
+### The surface is mostly not CRM-owned
+
+Measured at `a12b9ebca`, before this change: **705 files** — 251 `app/`, 248
+`tests/`, 106 `docs/`, 71 `alembic/`, 29 `scripts/`. The committed baseline
+carries **708**, because the freeze's own three files name the vocabulary they
+police. Of the `app/` files only about 21 are *named* for the CRM. The rest
+merely reference it.
+
+Matching is on identifier **tokens** with camelCase split first, not on the
+bare word: `\b` never fires beside `_` or a digit, so a word-boundary search
+reads `crm_subscriber_id`, `CRMClient` and `crm_ticket_pull` as clean — which
+is nearly the whole real surface.
+
+### CRM-owned artifact versus Sub-owned artifact with a CRM-era name
+
+**This is the distinction that prevents data loss, and it must survive into the
+Sales/Quotes and Party slices.**
+
+Several tables were seeded as CRM mirrors and have since become Sub-owned data
+that merely carries a CRM-era name. The name is cosmetic debt. The data is not.
+
+- `quote_mirror` (`app/models/quote_mirror.py`) and `referral_mirror`
+  (`app/models/referral.py`) are **real Sub-owned tables**, not caches of
+  anything that still exists.
+- `quotes_mirror` is read by **four live surfaces**:
+  `app/web/customer/quotes.py`, `app/api/reseller.py`, `app/api/me.py` and
+  `app/api/crm_webhooks.py`.
+- Its writers include `app/services/quote_deposits.py` and
+  `app/services/sales/selfserve.py` — **Sub's own self-serve selling flow**,
+  not CRM adapters.
+- `work_order_mirror` is referenced across **42** `app/` files.
+
+Dropping any of these because the name says "mirror" or "crm" would delete live
+quote and referral data. The Sales/Quotes slice retires the CRM *transport* and
+the refusal-compatibility path; renaming the Sub-owned tables is separate
+cosmetic work with its own expand/backfill/contract migration, and it is not a
+prerequisite for that slice's cutover claim.
+
+The general test, applied per artifact rather than per name: **does anything
+that still exists write it?** If a surviving Sub owner writes it, it is
+Sub-owned data with an unfortunate name. If only the departed CRM wrote it, it
+is residue.

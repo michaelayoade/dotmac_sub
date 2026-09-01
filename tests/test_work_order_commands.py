@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.models.admin_alert import AdminNotification
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.project import Project, ProjectTask
@@ -17,6 +18,7 @@ from app.schemas.dispatch import (
 )
 from app.services.work_order_commands import work_order_commands
 from app.services.work_order_errors import WorkOrderCommandError
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _subscriber(db_session) -> Subscriber:
@@ -106,6 +108,40 @@ def test_project_binding_and_evidence_policy_are_owned_by_work_order_command(
         WorkOrderHeaderUpdate(requires_as_built_evidence=False),
     )
     assert updated.requires_as_built_evidence is False
+
+
+def test_work_order_staff_tag_creates_staff_inbox_notification(db_session):
+    subscriber = _subscriber(db_session)
+    tagged_user, _person = add_bound_staff_user(
+        db_session, email=f"work-order-tag-{uuid4()}@example.test"
+    )
+    work_order = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            public_id="sub-tagged-work-order",
+            subscriber_id=subscriber.id,
+            title="Tagged work order",
+            tags=["install"],
+        ),
+    )
+
+    work_order_commands.update_header(
+        db_session,
+        work_order.public_id,
+        WorkOrderHeaderUpdate(tags=["install", f"person:{tagged_user.id}"]),
+    )
+
+    inbox = db_session.query(AdminNotification).one()
+    assert inbox.system_user_id == tagged_user.id
+    assert inbox.title == "You were tagged in this work order"
+    assert inbox.target_url == "/admin/dispatch/work-orders/sub-tagged-work-order"
+
+    work_order_commands.update_header(
+        db_session,
+        work_order.public_id,
+        WorkOrderHeaderUpdate(tags=["install", f"person:{tagged_user.id}"]),
+    )
+    assert db_session.query(AdminNotification).count() == 1
 
 
 def test_work_order_rejects_cross_subscriber_project_binding(db_session):

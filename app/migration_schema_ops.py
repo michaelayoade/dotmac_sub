@@ -50,7 +50,7 @@ from typing import Any
 import sqlalchemy as sa
 
 from alembic import op
-from app.commercial_module_prereqs import COMMERCIAL_MODULE_SCHEMAS
+from app.commercial_module_prereqs import module_schemas
 
 __all__ = [
     "columns_of",
@@ -98,7 +98,7 @@ def declared_idempotent_schema_create_target(statement: Any) -> str | None:
     if match is None:
         return None
     schema = match.group("quoted") or match.group("bare")
-    if schema not in COMMERCIAL_MODULE_SCHEMAS:
+    if schema not in module_schemas():
         return None
     return schema
 

@@ -67,7 +67,6 @@ def _reseller_login(db):
                 last_name="Admin",
                 email="brr@example.com",
                 username="brr-admin",
-                password="secret",  # noqa: S106
                 send_invite=False,
             ),
         ),
@@ -79,6 +78,9 @@ def _reseller_login(db):
         .filter(UserCredential.reseller_user_id == outcome.reseller_user_id)
         .one()
     )
+    # The owner mints a per-account secret nobody sees; give this fixture a
+    # known one so the test can drive a real login.
+    credential.password_hash = auth_flow_service.hash_password("secret")  # noqa: S106
     credential.must_change_password = False
     db.commit()
     tokens = AuthFlow.login(db, "brr-admin", "secret", _request(), None)
