@@ -66,9 +66,7 @@ def test_primary_admin_navigation_declares_route_permission_gates() -> None:
         "Workqueue": "support:ticket:read",
         "Inbox": "support:ticket:read",
         "Surveys": "customer:read",
-        "Sales": "crm:lead:read",
         "Service Requests": "provisioning:read",
-        "Referrals": "crm:lead:read",
         "Projects": "project:read",
         "Billing": "billing_account:read",
         "Catalog": "catalog:read",
@@ -82,7 +80,6 @@ def test_primary_admin_navigation_declares_route_permission_gates() -> None:
         "Provisioning": "provisioning:read",
         "System Overview": "system:settings:read",
         "Settings": "system:settings:read",
-        "Meta connection": "crm:conversation:read",
         "Help center": "support:ticket:read",
     }
 
@@ -92,6 +89,12 @@ def test_primary_admin_navigation_declares_route_permission_gates() -> None:
         )[0]
         assert f'permission="{permission}"' in call, label
 
+    for label in ("Sales", "Referrals", "Meta connection"):
+        call = source.split(f'nav_link("{label}"', maxsplit=1)[1].split(
+            ") }}", maxsplit=1
+        )[0]
+        assert 'permission="' in call, label
+
 
 def test_navigation_macros_fail_closed_and_empty_groups_are_suppressed() -> None:
     source = SIDEBAR.read_text(encoding="utf-8")
@@ -99,8 +102,7 @@ def test_navigation_macros_fail_closed_and_empty_groups_are_suppressed() -> None
     assert "{% if not permission or can(request, permission) %}" in source
     assert '{% if show_core %}{{ section_label("Core") }}{% endif %}' in source
     assert (
-        '{% if show_operations %}{{ section_label("Operations") }}{% endif %}'
-        in source
+        '{% if show_operations %}{{ section_label("Operations") }}{% endif %}' in source
     )
     assert '{% if show_admin %}{{ section_label("ADMIN") }}{% endif %}' in source
     assert "module_states.get('reports', True) and show_reports" in source

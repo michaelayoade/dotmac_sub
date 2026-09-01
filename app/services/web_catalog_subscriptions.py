@@ -1236,17 +1236,10 @@ def _upsert_access_credential(
             AccessCredential.created_at.desc()
         ).first()
     if credential is None and subscription_id is not None:
-        credential = (
-            db.query(AccessCredential)
-            .filter(
-                AccessCredential.subscriber_id == subscriber_id,
-                AccessCredential.subscription_id == subscription_id,
-            )
-            .order_by(
-                AccessCredential.is_active.desc(),
-                AccessCredential.created_at.desc(),
-            )
-            .first()
+        credential = _current_access_credential(
+            db,
+            subscriber_id,
+            subscription_id=subscription_id,
         )
     if credential is None and subscription_id is None:
         credential = (
@@ -1318,7 +1311,10 @@ def _upsert_access_credential(
 
 
 def _current_access_credential(
-    db: Session, subscriber_id: str | UUID | None
+    db: Session,
+    subscriber_id: str | UUID | None,
+    *,
+    subscription_id: str | UUID | None = None,
 ) -> AccessCredential | None:
     if not subscriber_id:
         return None
@@ -1326,34 +1322,19 @@ def _current_access_credential(
         subscriber_uuid = UUID(str(subscriber_id))
     except ValueError:
         return None
-    return (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == subscriber_uuid)
-        .order_by(AccessCredential.created_at.desc())
-        .first()
+    query = db.query(AccessCredential).filter(
+        AccessCredential.subscriber_id == subscriber_uuid
     )
-
-
-def _subscription_access_credential(
-    db: Session,
-    *,
-    subscriber_id: UUID,
-    subscription_id: UUID,
-) -> AccessCredential | None:
-    """Return only the credential explicitly owned by one subscription."""
-
-    return (
-        db.query(AccessCredential)
-        .filter(
-            AccessCredential.subscriber_id == subscriber_id,
-            AccessCredential.subscription_id == subscription_id,
-        )
-        .order_by(
-            AccessCredential.is_active.desc(),
-            AccessCredential.created_at.desc(),
-        )
-        .first()
-    )
+    if subscription_id is not None:
+        try:
+            subscription_uuid = UUID(str(subscription_id))
+        except ValueError:
+            return None
+        query = query.filter(AccessCredential.subscription_id == subscription_uuid)
+    return query.order_by(
+        AccessCredential.is_active.desc(),
+        AccessCredential.created_at.desc(),
+    ).first()
 
 
 def _current_service_password(
@@ -4565,9 +4546,9 @@ def create_subscription_with_audit(
     subscriber = db.get(Subscriber, created.subscriber_id)
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
-        existing_credential = _subscription_access_credential(
+        existing_credential = _current_access_credential(
             db,
-            subscriber_id=created.subscriber_id,
+            created.subscriber_id,
             subscription_id=created.id,
         )
         if (
@@ -4587,9 +4568,9 @@ def create_subscription_with_audit(
                     else None,
                     subscription_id=str(created.id),
                 )
-                existing_credential = _subscription_access_credential(
+                existing_credential = _current_access_credential(
                     db,
-                    subscriber_id=created.subscriber_id,
+                    created.subscriber_id,
                     subscription_id=created.id,
                 )
             except Exception:

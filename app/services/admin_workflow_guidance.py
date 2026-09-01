@@ -273,20 +273,6 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=("Do not change balances until bank-side facts are clear.",),
     ),
     _guide(
-        "meta-social-connection",
-        "Integrations",
-        "Configure the Meta social connection",
-        "Inbox administrators, integration administrators",
-        "Bind the reviewed Meta accounts, webhook credentials, and customer-conversion delivery settings.",
-        ("/admin/crm/meta",),
-        "Confirm the exact Facebook Page, Instagram account, graph version, and webhook URL for this installation.",
-        "Enter approved secret references for authentication, webhook verification, and Conversions API delivery; do not paste secret values into notes or logs.",
-        "Set the reviewed conversion dataset and event name, save, and verify the resulting installation and capability health before relying on delivery.",
-        notes=(
-            "Meta is a transport: lead lifecycle and customer-conversion owners retain the business decisions and repair evidence.",
-        ),
-    ),
-    _guide(
         "support-tickets",
         "Support",
         "Work customer support tickets",
