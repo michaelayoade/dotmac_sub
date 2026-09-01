@@ -126,7 +126,9 @@ def test_workqueue_navigation_tools_are_client_side_and_default_to_compact():
     assert 'data-workqueue-layout="compact"' in section
     assert 'data-workqueue-layout="list"' in section
     assert "<table" in section
-    assert all(label in section for label in ("Item", "Why now", "State / timing", "Actions"))
+    assert all(
+        label in section for label in ("Item", "Why now", "State / timing", "Actions")
+    )
     assert "<tr" in table_row
 
 

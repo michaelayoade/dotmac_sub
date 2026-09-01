@@ -42,8 +42,7 @@ def test_vendor_navigation_is_grouped_and_collapsed_by_default() -> None:
     )
     assert (
         'subnav_link("Vendor Routes", "/admin/vendors/routes", "vendor-routes", '
-        'permission="network:fiber:read")'
-        in sidebar
+        'permission="network:fiber:read")' in sidebar
     )
     assert "vendor_group_active | tojson" in sidebar
 

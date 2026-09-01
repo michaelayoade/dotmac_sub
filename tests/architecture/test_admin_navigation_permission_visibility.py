@@ -26,9 +26,9 @@ def _render_sidebar(*permission_keys: str) -> str:
         pending_orders=0,
         overdue_invoices=0,
     )
-    return environment.get_template(
-        "components/navigation/admin_sidebar.html"
-    ).render(request=request, active_page="dashboard", sidebar_stats=sidebar_stats)
+    return environment.get_template("components/navigation/admin_sidebar.html").render(
+        request=request, active_page="dashboard", sidebar_stats=sidebar_stats
+    )
 
 
 def test_sidebar_renders_only_destinations_held_by_the_principal() -> None:
@@ -97,12 +97,12 @@ def test_navigation_macros_fail_closed_and_empty_groups_are_suppressed() -> None
     source = SIDEBAR.read_text(encoding="utf-8")
 
     assert "{% if not permission or can(request, permission) %}" in source
-    assert "{% if show_core %}{{ section_label(\"Core\") }}{% endif %}" in source
+    assert '{% if show_core %}{{ section_label("Core") }}{% endif %}' in source
     assert (
-        "{% if show_operations %}{{ section_label(\"Operations\") }}{% endif %}"
+        '{% if show_operations %}{{ section_label("Operations") }}{% endif %}'
         in source
     )
-    assert "{% if show_admin %}{{ section_label(\"ADMIN\") }}{% endif %}" in source
+    assert '{% if show_admin %}{{ section_label("ADMIN") }}{% endif %}' in source
     assert "module_states.get('reports', True) and show_reports" in source
 
 
@@ -118,7 +118,9 @@ def test_admin_shell_shortcuts_follow_destination_permissions() -> None:
 def test_vendor_navigation_hides_each_destination_by_its_route_permission() -> None:
     source = SIDEBAR.read_text(encoding="utf-8")
 
-    assert 'can(request, "inventory:read") or can(request, "network:fiber:read")' in source
+    assert (
+        'can(request, "inventory:read") or can(request, "network:fiber:read")' in source
+    )
     assert (
         'subnav_link("Vendor Records", "/admin/vendors", "vendors", '
         'permission="inventory:read")' in source

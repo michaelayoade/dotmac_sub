@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import cast
+from typing import TypedDict, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -78,6 +78,32 @@ class PaymentCorrectionAction:
     permission: str
     preview_url: str
     label: str = "Correct accepted payment"
+
+
+class PaymentCreatePreparedResult(TypedDict):
+    """Typed adapter projection produced before manual-payment review."""
+
+    payload: PaymentCreate
+    resolved_invoice: Invoice | None
+    balance_value: str | None
+    balance_display: str | None
+
+
+class PaymentCreatePreviewResult(PaymentCreatePreparedResult):
+    """Typed duplicate-control preview consumed by the Admin adapter."""
+
+    preview: manual_payment_recording_service.ManualPaymentRecordingPreview
+
+
+class PaymentCreateResult(TypedDict):
+    """Typed confirmed-payment projection consumed by web and tests."""
+
+    payment: Payment
+    resolved_invoice: Invoice | None
+    balance_value: str | None
+    balance_display: str | None
+    idempotent_replay: bool
+    audit_metadata: dict[str, object]
 
 
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -1355,7 +1381,7 @@ def _prepare_payment_create(
     payment_method_id: str | None,
     reference: str | None,
     memo: str | None,
-) -> dict[str, object]:
+) -> PaymentCreatePreparedResult:
     """Resolve adapter inputs into the canonical payment owner request."""
     from app.services import web_billing_payment_forms as forms_svc
 
@@ -1411,7 +1437,7 @@ def preview_payment_create(
     payment_method_id: str | None,
     reference: str | None,
     memo: str | None,
-) -> dict[str, object]:
+) -> PaymentCreatePreviewResult:
     prepared = _prepare_payment_create(
         db,
         account_id=account_id,
@@ -1424,7 +1450,7 @@ def preview_payment_create(
         reference=reference,
         memo=memo,
     )
-    payload = cast(PaymentCreate, prepared["payload"])
+    payload = prepared["payload"]
     preview = manual_payment_recording_service.preview_manual_payment_recording(
         db,
         ManualPaymentRecordingPreviewRequest(
@@ -1433,7 +1459,10 @@ def preview_payment_create(
         ),
     )
     return {
-        **prepared,
+        "payload": prepared["payload"],
+        "resolved_invoice": prepared["resolved_invoice"],
+        "balance_value": prepared["balance_value"],
+        "balance_display": prepared["balance_display"],
         "preview": preview,
     }
 
@@ -1455,7 +1484,7 @@ def process_payment_create(
     control_fingerprint: str | None = None,
     duplicate_risk_acknowledged: bool = False,
     context: CommandContext | None = None,
-) -> dict[str, object]:
+) -> PaymentCreateResult:
     """Confirm a reviewed payment through the duplicate-control coordinator."""
     prepared = _prepare_payment_create(
         db,
@@ -1469,7 +1498,7 @@ def process_payment_create(
         reference=reference,
         memo=memo,
     )
-    payload = cast(PaymentCreate, prepared["payload"])
+    payload = prepared["payload"]
     resolved_token = idempotency_token or secrets.token_urlsafe(24)
     owner_key = _owner_payment_idempotency_key(resolved_token)
     result = None
@@ -1554,7 +1583,7 @@ def process_payment_create_with_audit(
     preview_fingerprint: str | None = None,
     control_fingerprint: str | None = None,
     duplicate_risk_acknowledged: bool = False,
-) -> dict[str, object]:
+) -> PaymentCreateResult:
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)

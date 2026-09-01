@@ -1156,7 +1156,7 @@ def test_force_subscription_reauth_reconciles_disconnects_and_audits(
     assert metadata["nas_device_id"] == str(nas.id)
     assert metadata["nas_name"] == "NAS Force Reauth"
     assert metadata["nas_ip"] == "10.20.30.1"
-    assert metadata["login"] == "pppoe-force-1"
+    assert metadata["login"] == subscription.login
     assert metadata["sessions_disconnected"] == 2
     assert metadata["radius_reconciled"] is True
 
@@ -1230,19 +1230,12 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
     pending_profile = RadiusProfile(name="Pending profile", is_active=True)
     db_session.add_all([live_profile, pending_profile])
     db_session.flush()
-    live_subscription = Subscription(
-        subscriber_id=subscriber.id,
-        offer_id=catalog_offer.id,
-        status=SubscriptionStatus.active,
-        billing_mode=BillingMode.prepaid,
-        radius_profile_id=live_profile.id,
-        login="live-service-login",
-    )
-    db_session.add(live_subscription)
-    db_session.flush()
+    # Model the legacy subscriber-level credential that exposed the regression.
+    # A second pending subscription cannot coexist with an active subscription,
+    # but it must still leave an unbound active credential untouched.
     live_credential = AccessCredential(
         subscriber_id=subscriber.id,
-        subscription_id=live_subscription.id,
+        subscription_id=None,
         username="live-service-login",
         secret_hash=auth_flow_service.hash_service_secret("LivePass123"),
         radius_profile_id=live_profile.id,
@@ -1269,7 +1262,7 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
 
     db_session.refresh(live_credential)
     assert created.status == SubscriptionStatus.pending
-    assert live_credential.subscription_id == live_subscription.id
+    assert live_credential.subscription_id is None
     assert live_credential.username == original_username
     assert live_credential.secret_hash == original_secret
     assert live_credential.radius_profile_id == original_profile_id
