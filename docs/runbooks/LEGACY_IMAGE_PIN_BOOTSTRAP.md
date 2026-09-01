@@ -33,6 +33,9 @@ could be a newer image, and the window would silently become an upgrade.
    `dotmac_sub`, service `postgres-local` and the legacy tag.
 5. `scripts/legacy_image_pin_observer.py` is installed byte-identically at
    `/usr/local/libexec/dotmac-legacy-image-pin-observer`, root-owned, `0750`.
+   Same for `scripts/legacy_image_pin_staging.py` at
+   `/usr/local/libexec/dotmac-legacy-image-pin-staging`. Both are compared
+   byte-for-byte against the reviewed source before they are used.
 6. No file at `/var/lib/dotmac/legacy-image-pin/receipt.json`. If one exists the
    bootstrap has already run and will refuse; that is correct, not a fault.
 
