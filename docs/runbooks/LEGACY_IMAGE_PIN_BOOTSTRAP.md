@@ -103,6 +103,19 @@ should: the durable half is already done, so the ordinary v2 PLAN/APPLY lane can
 now retry the listener correction on its own. Use
 `docs/runbooks/PUBLISHED_PORT_RECONCILE.md` from there.
 
+## Tunable knobs (defaults documented, all overridable)
+
+| variable | default | meaning |
+|---|---|---|
+| `LEGACY_IMAGE_PIN_PROOF_WAIT_SECONDS` | `120` | how long APPLY waits for the external firewall and reach proofs |
+| `LEGACY_IMAGE_PIN_REPLICATION_WAIT_SECONDS` | `90` | how long the replication probe waits for `streaming` |
+| `DEPLOY_LOCK_FILE` | `/var/lock/dotmac_sub_deploy.lock` | the deploy lock APPLY takes exclusively and PLAN takes shared |
+
+The replication probe **waits** rather than sampling once: the standby's walreceiver
+does not reconnect instantly after a recreate and Postgres takes a moment to accept
+connections, so a single probe would make a healthy window look like a failure and
+trigger a needless rollback. It still fails closed when the deadline passes.
+
 ## What this never touches
 
 PostgreSQL auth, TLS, credentials or data; any port other than 9001; any

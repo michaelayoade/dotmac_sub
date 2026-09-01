@@ -29,6 +29,7 @@ DEADMAN_BIN="/usr/local/libexec/dotmac-legacy-image-pin-deadman"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE="postgres-local"
 PROOF_WAIT_SECONDS="${LEGACY_IMAGE_PIN_PROOF_WAIT_SECONDS:-120}"
+REPLICATION_WAIT_SECONDS="${LEGACY_IMAGE_PIN_REPLICATION_WAIT_SECONDS:-90}"
 DOCKER_BIN=""
 
 die() {
@@ -227,14 +228,28 @@ CONTAINER_ID="$(sudo -n "${DOCKER_BIN}" ps -q --no-trunc \
   --filter "label=com.docker.compose.project=dotmac_sub" \
   --filter "label=com.docker.compose.service=${SERVICE}")"
 [[ -n "${CONTAINER_ID}" ]] || die "the target container is not running"
+# The standby's walreceiver does not reconnect instantly after a recreate, and
+# Postgres itself takes a moment to accept connections. Probing once would make
+# a healthy window look like a failure and trigger a needless rollback, so the
+# probe waits -- bounded, and still fails closed when the deadline passes.
 probe_replication() {
-  local phase="$1" observed
-  observed="$(sudo -n "${DOCKER_BIN}" exec "$(sudo -n "${DOCKER_BIN}" ps -q --no-trunc \
-    --filter "label=com.docker.compose.project=dotmac_sub" \
-    --filter "label=com.docker.compose.service=${SERVICE}")" \
-    psql -U postgres -tAc \
-    "select client_addr || ' ' || state from pg_stat_replication")"
-  [[ -n "${observed}" ]] || die "no replication client is connected"
+  local phase="$1" observed="" target="" wait_deadline
+  wait_deadline="$(( $(date +%s) + REPLICATION_WAIT_SECONDS ))"
+  while :; do
+    target="$(sudo -n "${DOCKER_BIN}" ps -q --no-trunc \
+      --filter "label=com.docker.compose.project=dotmac_sub" \
+      --filter "label=com.docker.compose.service=${SERVICE}")"
+    if [[ -n "${target}" ]] &&
+       sudo -n "${DOCKER_BIN}" exec "${target}" pg_isready -U postgres >/dev/null 2>&1; then
+      observed="$(sudo -n "${DOCKER_BIN}" exec "${target}" psql -U postgres -tAc \
+        "select client_addr || ' ' || state from pg_stat_replication \
+         where state = 'streaming'" 2>/dev/null || true)"
+      [[ -z "${observed}" ]] || break
+    fi
+    (( $(date +%s) < wait_deadline )) ||
+      die "replication did not reach streaming within ${REPLICATION_WAIT_SECONDS}s (${phase})"
+    sleep 2
+  done
   "${PYTHON_BIN}" - "$phase" "$OPERATION_ID" "$observed" \
     >"${SCRATCH}/replication-${phase}.json" <<'PY'
 import json, sys
