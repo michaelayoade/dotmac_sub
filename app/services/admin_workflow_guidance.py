@@ -241,9 +241,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Record confirmed money and apply it to the right invoices.",
         ("/admin/billing/payments",),
         "Confirm external payment evidence, then enter amount, currency, method, date, reference, and memo.",
-        "Preview allocation and service effects before confirming.",
+        "Review the preview, duplicate-reference and duplicate-evidence warnings, allocation, and service effects before confirming.",
+        "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
-        notes=("Use Payment Proof review for customer-uploaded transfer receipts.",),
+        notes=(
+            "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
+        ),
     ),
     _guide(
         "payment-proofs",
@@ -268,6 +271,20 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open the related payment, proof, invoice, or account before correcting anything.",
         "Use the specific import, allocation, refund, reversal, or proof-correction workflow.",
         notes=("Do not change balances until bank-side facts are clear.",),
+    ),
+    _guide(
+        "meta-social-connection",
+        "Integrations",
+        "Configure the Meta social connection",
+        "Inbox administrators, integration administrators",
+        "Bind the reviewed Meta accounts, webhook credentials, and customer-conversion delivery settings.",
+        ("/admin/crm/meta",),
+        "Confirm the exact Facebook Page, Instagram account, graph version, and webhook URL for this installation.",
+        "Enter approved secret references for authentication, webhook verification, and Conversions API delivery; do not paste secret values into notes or logs.",
+        "Set the reviewed conversion dataset and event name, save, and verify the resulting installation and capability health before relying on delivery.",
+        notes=(
+            "Meta is a transport: lead lifecycle and customer-conversion owners retain the business decisions and repair evidence.",
+        ),
     ),
     _guide(
         "support-tickets",
