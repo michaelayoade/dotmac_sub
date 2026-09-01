@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
@@ -73,6 +74,36 @@ from app.services.service_entitlements import (
 )
 
 logger = logging.getLogger(__name__)
+
+_RETRYABLE_BILLING_SQLSTATES = frozenset(
+    {
+        "40001",  # serialization_failure
+        "40P01",  # deadlock_detected
+        "55P03",  # lock_not_available / lock timeout
+    }
+)
+
+
+def _billing_database_sqlstate(exc: DBAPIError) -> str | None:
+    """Return a normalized driver SQLSTATE without parsing exception text."""
+    current: BaseException | None = exc.orig
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for attribute in ("sqlstate", "pgcode"):
+            value = getattr(current, attribute, None)
+            if isinstance(value, str) and value:
+                return value.upper()
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _is_retryable_billing_database_error(exc: DBAPIError) -> bool:
+    """Classify only transaction-safe transient database failures for retry."""
+    return bool(
+        exc.connection_invalidated
+        or _billing_database_sqlstate(exc) in _RETRYABLE_BILLING_SQLSTATES
+    )
 
 
 class PostpaidChargePreviewError(DomainError):
@@ -190,6 +221,8 @@ def _billing_run_extra(
     auto_activate_pending: bool,
     summary: dict[str, Any] | None = None,
     error: str | None = None,
+    error_type: str | None = None,
+    sqlstate: str | None = None,
     attempt: int | None = None,
     max_retries: int | None = None,
 ) -> dict[str, object]:
@@ -222,6 +255,10 @@ def _billing_run_extra(
                 extra[key] = str(value) if isinstance(value, Decimal) else value
     if error is not None:
         extra["error"] = error
+    if error_type is not None:
+        extra["error_type"] = error_type
+    if sqlstate is not None:
+        extra["sqlstate"] = sqlstate
     if attempt is not None:
         extra["attempt"] = attempt
     if max_retries is not None:
@@ -2371,7 +2408,7 @@ def run_invoice_cycle_with_retry(
         dry_run: If True, don't create records
         include_pending: If True, include pending subscriptions
         auto_activate_pending: If True, auto-activate pending subscriptions
-        max_retries: Maximum number of retry attempts
+        max_retries: Maximum total number of attempts
         retry_delay_seconds: Delay between retries
 
     Returns:
@@ -2379,8 +2416,10 @@ def run_invoice_cycle_with_retry(
     """
     import time
 
-    from sqlalchemy.exc import IntegrityError, OperationalError
-
+    if max_retries < 1:
+        raise ValueError("max_retries must be at least one")
+    if retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds cannot be negative")
     last_error: BaseException | None = None
     for attempt in range(max_retries):
         try:
@@ -2405,13 +2444,25 @@ def run_invoice_cycle_with_retry(
                 include_pending=include_pending,
                 auto_activate_pending=auto_activate_pending,
             )
-        except (OperationalError, IntegrityError) as exc:
+        except DBAPIError as exc:
             last_error = exc
+            sqlstate = _billing_database_sqlstate(exc)
+            retryable = _is_retryable_billing_database_error(exc)
+            db.rollback()
+            if not retryable:
+                logger.error(
+                    "billing_run_database_failure_not_retryable",
+                    extra={
+                        "event": "billing_run_database_failure_not_retryable",
+                        "error_type": type(exc).__name__,
+                        "sqlstate": sqlstate,
+                    },
+                )
+                raise
             logger.warning(
-                "Billing run attempt %d/%d failed: %s",
+                "Billing run transient database attempt %d/%d failed",
                 attempt + 1,
                 max_retries,
-                exc,
                 extra=_billing_run_extra(
                     run_uuid=None,
                     run_at=_as_utc(run_at) or datetime.now(UTC),
@@ -2419,14 +2470,14 @@ def run_invoice_cycle_with_retry(
                     dry_run=dry_run,
                     include_pending=include_pending,
                     auto_activate_pending=auto_activate_pending,
-                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    sqlstate=sqlstate,
                     attempt=attempt + 1,
                     max_retries=max_retries,
                 ),
             )
             if attempt < max_retries - 1:
-                db.rollback()
-                time.sleep(retry_delay_seconds)
+                time.sleep(retry_delay_seconds * (attempt + 1))
                 continue
             raise
         except Exception:

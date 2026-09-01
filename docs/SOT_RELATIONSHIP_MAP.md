@@ -2131,8 +2131,10 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `access.subscription_lifecycle.stage_subscription_billing_anchor` is the only
   physical writer. Every deciding owner submits a typed source, evidence
   reference, expected previous value, and aware target; the writer locks the
-  subscription, rejects stale compare-and-set requests, and permits retraction
-  only for named coverage/review/service-extension authorities.
+  subscription with `FOR NO KEY UPDATE`, which serializes anchor writers
+  without conflicting with foreign-key `KEY SHARE` observations, rejects stale
+  compare-and-set requests, and permits retraction only for named
+  coverage/review/service-extension authorities.
   An active subscription must carry both `start_at` and `next_billing_at`.
   Catalog construction materializes those values, persists a pending baseline,
   and asks the lifecycle owner to activate in the same transaction. Revision
@@ -3416,6 +3418,12 @@ database transaction. Per-subscription/period invoice-line keys repair partial
 work on retry. `BillingRun` is authoritative operational evidence; the
 post-status `AuditEvent` is a rebuildable projection and cannot reverse
 already-created invoices.
+
+The scheduled adapter invokes the billing owner's bounded transient-database
+retry path. It rolls back and backs off only for PostgreSQL serialization
+failure (`40001`), deadlock (`40P01`), lock-unavailable (`55P03`), or an
+invalidated connection. Validation and ordinary integrity failures propagate
+without retry.
 
 Migration record:
 

@@ -26,7 +26,7 @@ def run_invoice_cycle() -> dict[str, int]:
     logger.info("Starting billing invoice cycle")
     session = SessionLocal()
     try:
-        result = billing_automation_service.run_invoice_cycle(session)
+        result = billing_automation_service.run_invoice_cycle_with_retry(session)
         processed = result.get("subscriptions_billed", 0)
         errors = result.get("errors", 0)
         logger.info(

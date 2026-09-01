@@ -476,6 +476,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "financial.access_resolution",
         "financial.billing_health",
+        "financial.billing_automation",
     )
     financial_services = sot_relationships.service_names_for_domain("financial_access")
     assert "financial.payment_arrangements" in financial_services

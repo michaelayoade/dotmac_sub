@@ -135,7 +135,11 @@ def stage_subscription_billing_anchor(
     locked = db.scalar(
         select(Subscription)
         .where(Subscription.id == command.subscription_id)
-        .with_for_update()
+        # The projection changes no subscription key, so FOR NO KEY UPDATE is
+        # the strongest lock required. It still serializes competing anchor
+        # writers while remaining compatible with the KEY SHARE lock taken by
+        # concurrent foreign-key inserts such as bandwidth samples.
+        .with_for_update(key_share=True)
     )
     if locked is None:
         raise BillingAnchorProjectionError("Subscription not found")
