@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +29,8 @@ from app.services import (
     team_inbox_media,
     team_inbox_observations,
     team_inbox_operations,
+    team_inbox_outbound,
+    team_inbox_realtime,
     team_inbox_routing,
     team_inbox_status,
 )
@@ -75,8 +78,205 @@ class MaintenanceOutcome:
     skipped: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class MetaProfileRepairCandidate:
+    conversation_id: UUID
+    channel_type: str
+    contact_address: str
+
+
+@dataclass(frozen=True, slots=True)
+class MetaProfileRepairPreview:
+    candidates: tuple[MetaProfileRepairCandidate, ...]
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyMetaProfileObservationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    expected_channel_type: str
+    expected_contact_address: str
+    display_name: str
+    username: str | None
+    profile_pic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FailedMetaDeliveryCandidate:
+    message_id: UUID
+    channel_type: str
+    retry_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class FailedMetaDeliveryPreview:
+    candidates: tuple[FailedMetaDeliveryCandidate, ...]
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetryFailedMetaDeliveriesCommand:
+    context: CommandContext
+    message_ids: tuple[UUID, ...]
+    max_retry_count: int = 5
+
+
 class TeamInboxMaintenanceError(DomainError):
     """A bounded Inbox repair command cannot be executed safely."""
+
+
+def preview_meta_profile_repairs(
+    db: Session, *, limit: int = 500
+) -> MetaProfileRepairPreview:
+    rows = (
+        db.query(InboxConversation)
+        .filter(
+            InboxConversation.channel_type.in_(("facebook_messenger", "instagram_dm")),
+            InboxConversation.contact_address.isnot(None),
+            InboxConversation.is_active.is_(True),
+        )
+        .order_by(InboxConversation.id)
+        .limit(5000)
+        .all()
+    )
+    candidates = tuple(
+        MetaProfileRepairCandidate(
+            conversation_id=row.id,
+            channel_type=row.channel_type,
+            contact_address=str(row.contact_address),
+        )
+        for row in rows
+        if not str((row.metadata_ or {}).get("contact_name") or "").strip()
+    )[: max(1, min(int(limit), 5000))]
+    digest = hashlib.sha256(
+        "\n".join(
+            f"{row.conversation_id}:{row.channel_type}:{row.contact_address}"
+            for row in candidates
+        ).encode()
+    ).hexdigest()
+    return MetaProfileRepairPreview(candidates=candidates, digest=digest)
+
+
+def apply_meta_profile_observation(
+    db: Session, command: ApplyMetaProfileObservationCommand
+) -> MaintenanceOutcome:
+    def operation() -> MaintenanceOutcome:
+        conversation = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id == command.conversation_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if conversation is None:
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.conversation_not_found",
+                message="Conversation was not found.",
+            )
+        if (
+            conversation.channel_type != command.expected_channel_type
+            or conversation.contact_address != command.expected_contact_address
+        ):
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.profile_target_changed",
+                message="Conversation identity changed after preview.",
+            )
+        display_name = command.display_name.strip()
+        if not display_name:
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.profile_name_missing",
+                message="Meta did not return a usable contact name.",
+            )
+        metadata = dict(conversation.metadata_ or {})
+        metadata["contact_name"] = display_name[:200]
+        metadata["contact_name_source"] = "provider_observation"
+        metadata["contact_profile"] = {
+            "display_name": display_name[:255],
+            "username": (command.username or "")[:255] or None,
+            "profile_pic": (command.profile_pic or "")[:1000] or None,
+        }
+        conversation.metadata_ = metadata
+        db.flush()
+        return MaintenanceOutcome(changed=1)
+
+    return execute_owner_command(
+        db,
+        definition=_MAINTENANCE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def preview_failed_meta_deliveries(
+    db: Session, *, limit: int = 100
+) -> FailedMetaDeliveryPreview:
+    rows = (
+        db.query(InboxMessage)
+        .filter(
+            InboxMessage.direction == "outbound",
+            InboxMessage.channel_type.in_(("facebook_messenger", "instagram_dm")),
+            InboxMessage.metadata_["delivery_status"].as_string() == "failed",
+        )
+        .order_by(InboxMessage.id)
+        .limit(max(1, min(int(limit), 1000)))
+        .all()
+    )
+    candidates = tuple(
+        FailedMetaDeliveryCandidate(
+            message_id=row.id,
+            channel_type=row.channel_type,
+            retry_count=int((row.metadata_ or {}).get("retry_count") or 0),
+        )
+        for row in rows
+    )
+    digest = hashlib.sha256(
+        "\n".join(
+            f"{row.message_id}:{row.channel_type}:{row.retry_count}"
+            for row in candidates
+        ).encode()
+    ).hexdigest()
+    return FailedMetaDeliveryPreview(candidates=candidates, digest=digest)
+
+
+def retry_failed_meta_deliveries(
+    db: Session, command: RetryFailedMetaDeliveriesCommand
+) -> MaintenanceOutcome:
+    def operation() -> MaintenanceOutcome:
+        changed = 0
+        skipped = 0
+        for message_id in command.message_ids:
+            message = (
+                db.query(InboxMessage)
+                .filter(InboxMessage.id == message_id)
+                .with_for_update()
+                .one_or_none()
+            )
+            if message is None or message.channel_type not in {
+                "facebook_messenger",
+                "instagram_dm",
+            }:
+                skipped += 1
+                continue
+            metadata = dict(message.metadata_ or {})
+            if (
+                metadata.get("delivery_status") != "failed"
+                or int(metadata.get("retry_count") or 0) >= command.max_retry_count
+            ):
+                skipped += 1
+                continue
+            result = team_inbox_outbound.retry_outbound_message(db, message=message)
+            if result.kind in {"sent", "queued"}:
+                changed += 1
+            else:
+                skipped += 1
+        return MaintenanceOutcome(changed=changed, skipped=skipped)
+
+    return execute_owner_command(
+        db,
+        definition=_MAINTENANCE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -313,6 +313,11 @@ configuration. Changing one requires a migration/versioned contract and tests.
 1. Capture never creates a Subscriber implicitly and never deduplicates a
    person by email, phone, name, or social handle. Exact provider-event replay
    is idempotent; different content under the same event identity is rejected.
+   A Meta Lead may receive a rebuildable customer-match suggestion based only
+   on existing verified Party contact points. That suggestion is review-only
+   and never binds Party, Subscriber, authentication, consent, or ownership.
+   One exact active-customer match may project the customer lifecycle stage to
+   Meta; ambiguous and unverified matches cannot.
 2. A Quote is authored manually from an exact Lead or Customer and requires a selected
    Project Type. The typed `Quote.project_type` column is the authoritative
    downstream input; the metadata key is a compatibility projection only. The Lead

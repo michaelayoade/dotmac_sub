@@ -69,7 +69,10 @@ from app.tasks.infrastructure_availability import (
     snapshot_infrastructure_availability,
 )
 from app.tasks.infrastructure_polling import run_infrastructure_poll
-from app.tasks.integration_delivery import deliver_integration_event
+from app.tasks.integration_delivery import (
+    deliver_integration_event,
+    deliver_meta_lead_conversion,
+)
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -246,6 +249,7 @@ __all__ = [
     "run_import_job",
     "run_integration_job",
     "deliver_integration_event",
+    "deliver_meta_lead_conversion",
     "process_due_campaigns",
     "process_due_campaign_steps",
     "send_campaign_batch",

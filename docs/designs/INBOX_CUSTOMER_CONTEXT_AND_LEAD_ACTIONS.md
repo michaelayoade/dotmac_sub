@@ -109,3 +109,9 @@ intake evidence missing its native link, Lead/Party mismatches, and conflicts
 with current exact Party identity. Approved repairs use the idempotent
 `link_existing_lead` coordinator with the `reviewed_repair` source, actor,
 reason, and command identity; ordinary resolution cannot replace a link.
+
+Missing Facebook and Instagram display names are a separate provider-observation
+repair and never establish customer identity. The preview-gated Meta profile
+reconciler may add a provider name to an existing conversation, while the
+customer-context resolver continues to prefer reviewed Party and Subscriber
+identity and refuses ambiguous contact matches.

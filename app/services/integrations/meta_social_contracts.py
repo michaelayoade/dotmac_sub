@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -47,6 +48,48 @@ class MetaContactProfile(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=255)
     profile_pic: str | None = Field(default=None, max_length=1000)
+
+
+class MetaLeadField(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    values: tuple[str, ...] = Field(max_length=20)
+
+
+class MetaLeadObservation(BaseModel):
+    """Normalized Lead Ads observation fetched after a verified webhook."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leadgen_id: str = Field(min_length=1, max_length=240)
+    created_at: datetime
+    page_id: str = Field(min_length=1, max_length=200)
+    form_id: str = Field(min_length=1, max_length=200)
+    campaign_id: str = Field(min_length=1, max_length=200)
+    ad_set_id: str | None = Field(default=None, max_length=200)
+    ad_id: str | None = Field(default=None, max_length=200)
+    fields: tuple[MetaLeadField, ...] = Field(max_length=100)
+
+
+class MetaLeadConversionCommand(BaseModel):
+    """One customer-conversion projection for an original Meta Lead."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leadgen_id: str = Field(min_length=1, max_length=240)
+    converted_at: datetime
+    event_id: str = Field(min_length=1, max_length=160)
+    correlation_id: str = Field(min_length=1, max_length=160)
+    preview: bool = False
+
+
+class MetaLeadConversionOutcome(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    accepted: bool
+    operation_status: str = Field(min_length=1, max_length=80)
+    error_code: str | None = Field(default=None, max_length=120)
 
 
 class MetaWebhookSecretMaterial(BaseModel):

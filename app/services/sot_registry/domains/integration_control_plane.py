@@ -827,6 +827,163 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="integration.meta_lead_conversion",
+            module="app.services.integrations.meta_lead_conversion",
+            owns=(
+                "Meta customer-conversion delivery projection",
+                "Meta customer-conversion delivery lifecycle",
+            ),
+            depends_on=(
+                "events.store",
+                "integration.installations",
+                "integration.runtime",
+                "sales.meta_lead_customer_match",
+                "sales.lead_lifecycle",
+            ),
+            notes=(
+                "Only a committed Lead account-conversion event with immutable Meta "
+                "origin evidence can create this external projection."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="Meta customer-conversion delivery projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "committed Lead account conversion",
+                            "verified existing-customer match",
+                            "immutable Meta Lead origin",
+                            "enabled Meta conversion capability",
+                        ),
+                        canonical_writer="integration.meta_lead_conversion",
+                    ),
+                    ConcernContract(
+                        name="Meta customer-conversion delivery lifecycle",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "Meta conversion delivery protocol",
+                            "Meta conversion transport receipt",
+                        ),
+                        canonical_writer="integration.meta_lead_conversion",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="committed Lead account conversion",
+                        owner="events.store",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="lead.account_converted event and occurrence time.",
+                    ),
+                    AuthorityInput(
+                        name="verified existing-customer match",
+                        owner="sales.meta_lead_customer_match",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Exactly one active Subscriber matched through an active, "
+                            "verified Party email address or phone number."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="immutable Meta Lead origin",
+                        owner="sales.lead_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Append-only Meta LeadOriginCapture and source interaction ID.",
+                    ),
+                    AuthorityInput(
+                        name="enabled Meta conversion capability",
+                        owner="integration.installations",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="One enabled sales.lead_conversion.send.v1 binding.",
+                    ),
+                    AuthorityInput(
+                        name="Meta conversion transport receipt",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Typed Meta acceptance, rejection, retry, or ambiguous result.",
+                    ),
+                    AuthorityInput(
+                        name="Meta conversion delivery protocol",
+                        owner="integration.meta_lead_conversion",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Stable event/binding identity, bounded backoff, and terminal states.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Event handling stages one delivery; each worker attempt locks and records one result.",
+                    locking="Unique delivery key plus row lock serializes creation and attempts.",
+                    idempotency=(
+                        "One Lead/binding delivery survives event replay; its original "
+                        "Sub event ID is reused as Meta event_id for every retry."
+                    ),
+                    retries="Retryable and ambiguous outcomes use bounded backoff; permanent rejection dead-letters.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "integration.meta_lead_conversion"
+                        ),
+                        "integration.meta_lead_conversion.delivery_not_found",
+                        "integration.meta_lead_conversion.capability_mismatch",
+                        "integration.meta_lead_conversion.binding_ambiguous",
+                        "integration.meta_lead_conversion.scope_invalid",
+                        "integration.meta_lead_conversion.payload_invalid",
+                        "integration.meta_lead_conversion.transport_retryable",
+                    ),
+                    mapping_owner="Meta conversion event and task adapters",
+                    retryable_codes=(
+                        "integration.meta_lead_conversion.transport_retryable",
+                    ),
+                    fail_closed_on=(
+                        "missing Meta origin",
+                        "missing or ambiguous enabled capability",
+                        "permanent provider rejection",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "lead.account_converted",
+                        "meta_lead.customer_match_reconciled",
+                    ),
+                    schema_version=1,
+                    delivery_owner="integration.meta_lead_conversion",
+                    compatibility="Uses only stable Lead, source interaction, event, and occurrence identifiers.",
+                    replay=(
+                        "Event replay or a later equivalent customer signal returns the "
+                        "same IntegrationDelivery and Meta event_id."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="Meta customer-conversion delivery projection",
+                        input_names=(
+                            "committed Lead account conversion",
+                            "verified existing-customer match",
+                            "immutable Meta Lead origin",
+                            "enabled Meta conversion capability",
+                        ),
+                        writer="integration.meta_lead_conversion",
+                        freshness="Queued after the committed conversion event is dispatched.",
+                        stale_behavior="Missing configuration leaves the local conversion authoritative and unsent.",
+                        drift_signal="A Meta-origin converted Lead lacks a delivered or pending projection.",
+                        rebuild_operation="Replay the committed conversion event or run the bounded reconciler.",
+                        repair_owner="integration.meta_lead_conversion",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="integration.meta_lead_conversion",
+                    verification="Origin filtering, idempotency, retry, rejection, and repair tests.",
+                ),
+                steward="sales and platform integrations",
+                design_refs=(
+                    "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                    "docs/designs/MARKETING_SALES_SOT.md",
+                ),
+                test_refs=("tests/test_meta_lead_conversion.py",),
+            ),
+        ),
+        SOTService(
             name="integration.inbox",
             module="app.services.integrations.inbox",
             owns=(

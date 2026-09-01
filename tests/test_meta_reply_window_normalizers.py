@@ -3,9 +3,49 @@ from app.api.inbox_webhooks import (
     _iter_meta_whatsapp_statuses,
 )
 from app.api.meta_inbox_webhooks import (
+    _iter_meta_leadgen,
     _iter_meta_social_comments,
     _iter_meta_social_messages,
 )
+
+
+def test_meta_leadgen_webhook_extracts_verified_retrieval_identity():
+    items = list(
+        _iter_meta_leadgen(
+            {
+                "object": "page",
+                "entry": [
+                    {
+                        "id": "page-1",
+                        "changes": [
+                            {
+                                "field": "leadgen",
+                                "value": {
+                                    "leadgen_id": "lead-1",
+                                    "form_id": "form-1",
+                                    "page_id": "page-1",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+
+    assert items == [
+        {
+            "leadgen_id": "lead-1",
+            "page_id": "page-1",
+            "payload": {
+                "leadgen_id": "lead-1",
+                "form_id": "form-1",
+                "page_id": "page-1",
+            },
+        }
+    ]
+
+
 from app.models.team_inbox import InboxChannelType
 
 
