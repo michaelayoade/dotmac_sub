@@ -710,6 +710,121 @@ def test_stale_anchor_repair_preview_then_apply_drives_the_cohort_to_zero(
     assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
 
+def test_stale_anchor_repair_targets_entitlement_and_extension_coverage_union(
+    db_session, subscriber, subscription
+):
+    """Repair must not stop below a later applied extension grant."""
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+    entitlement_end = at(entitlement.ends_at)
+    assert entitlement_end is not None
+    granted_through = entitlement_end + timedelta(days=10)
+    extension = ServiceExtension(
+        reason="Regional outage goodwill",
+        window_start=PERIOD_START,
+        window_end=PERIOD_END,
+        days=10,
+        scope_type=ServiceExtensionScope.subscribers,
+        status=ServiceExtensionStatus.applied,
+        applied_at=PERIOD_START,
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            previous_next_billing_at=entitlement_end,
+            grant_starts_at=entitlement_end,
+            grant_ends_at=granted_through,
+            new_next_billing_at=granted_through,
+        )
+    )
+    # Reproduce the generic-edit defect after the extension was applied.
+    subscription.next_billing_at = PERIOD_START
+    db_session.commit()
+
+    preview = preview_stale_prepaid_billing_anchor_repair(db_session, limit=50)
+
+    assert preview.cohort_size == 1
+    assert preview.candidates[0].entitlement_coverage_end == entitlement_end
+    assert preview.candidates[0].extension_coverage_end == granted_through
+    assert preview.candidates[0].coverage_end == granted_through
+
+    result = apply_stale_prepaid_billing_anchor_repair(
+        db_session,
+        preview,
+        actor="pytest:operator",
+        reason="restore the complete entitlement and extension coverage union",
+    )
+
+    assert result.repaired == 1
+    db_session.refresh(subscription)
+    assert at(subscription.next_billing_at) == granted_through
+    assert (
+        preview_stale_prepaid_billing_anchor_repair(db_session, limit=50).cohort_size
+        == 0
+    )
+
+
+def test_stale_anchor_repair_skips_changed_extension_coverage(
+    db_session, subscriber, subscription
+):
+    """Extension evidence is rechecked before the fingerprinted repair writes."""
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+    entitlement_end = at(entitlement.ends_at)
+    assert entitlement_end is not None
+    granted_through = entitlement_end + timedelta(days=5)
+    extension = ServiceExtension(
+        reason="Regional outage goodwill",
+        window_start=PERIOD_START,
+        window_end=PERIOD_END,
+        days=5,
+        scope_type=ServiceExtensionScope.subscribers,
+        status=ServiceExtensionStatus.applied,
+        applied_at=PERIOD_START,
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            previous_next_billing_at=entitlement_end,
+            grant_starts_at=entitlement_end,
+            grant_ends_at=granted_through,
+            new_next_billing_at=granted_through,
+        )
+    )
+    subscription.next_billing_at = PERIOD_START
+    db_session.commit()
+    preview = preview_stale_prepaid_billing_anchor_repair(db_session, limit=50)
+    assert preview.candidates[0].entitlement_coverage_end == entitlement_end
+    assert preview.candidates[0].extension_coverage_end == granted_through
+    assert preview.candidates[0].coverage_end == granted_through
+
+    extension.status = ServiceExtensionStatus.reversed
+    db_session.commit()
+    result = apply_stale_prepaid_billing_anchor_repair(
+        db_session,
+        preview,
+        actor="pytest:operator",
+        reason="stale extension evidence must not be guessed",
+    )
+
+    assert result.repaired == 0
+    assert result.skipped_changed == 1
+    db_session.refresh(subscription)
+    assert at(subscription.next_billing_at) == PERIOD_START
+
+
 def test_reviewed_anchor_repair_retracts_an_explicit_unsupported_lead(
     db_session, subscriber, subscription
 ):
