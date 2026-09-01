@@ -661,7 +661,7 @@ def test_deadman_restores_env_and_target_with_no_pull_build_or_dependencies(
 
     def fake_run(command: list[str], **kwargs: object) -> object:
         commands.append(command)
-        if command[:2] == ["/usr/bin/python3", "inspect"]:
+        if command[:2] == [state.docker_bin, "inspect"]:
             ports: dict[str, list[dict[str, str]]] = {}
             for row in execution.plan.prestate.listeners:
                 key = f"{row.container_port}/{row.protocol}"
