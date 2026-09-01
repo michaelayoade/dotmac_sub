@@ -608,16 +608,13 @@ def _regulator_safe_body_template(template: str) -> str:
     lines = [
         line
         for line in template.splitlines()
-        if "{not_filable_count}" not in line
-        and "not yet fil" not in line.lower()
+        if "{not_filable_count}" not in line and "not yet fil" not in line.lower()
     ]
     cleaned = "\n".join(lines).strip()
     return cleaned or DEFAULT_BODY_TEMPLATE
 
 
-def _raise_if_report_not_filable(
-    *, row_count: int, not_filable_count: int
-) -> None:
+def _raise_if_report_not_filable(*, row_count: int, not_filable_count: int) -> None:
     if not_filable_count <= 0:
         return
     raise _error(

@@ -41,6 +41,12 @@ def test_anchor_writer_uses_foreign_key_compatible_row_lock() -> None:
         ),
         None,
     )
+    read = next(
+        (keyword.value for keyword in lock_calls[0].keywords if keyword.arg == "read"),
+        None,
+    )
+    assert isinstance(read, ast.Constant)
+    assert read.value is True
     assert isinstance(key_share, ast.Constant)
     assert key_share.value is True
 

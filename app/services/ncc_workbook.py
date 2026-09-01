@@ -1701,9 +1701,7 @@ def excel_serial_from_display_timestamp(value: str) -> float | None:
     if not cleaned:
         return None
     try:
-        timestamp = datetime.strptime(cleaned, "%d/%m/%Y %H:%M:%S").replace(
-            tzinfo=UTC
-        )
+        timestamp = datetime.strptime(cleaned, "%d/%m/%Y %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return None
     excel_epoch = datetime(1899, 12, 30, tzinfo=UTC)
