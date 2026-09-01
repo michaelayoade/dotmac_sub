@@ -476,6 +476,10 @@ def _task_work_order_create_action(
 ) -> tuple[Action, str | None]:
     if not task.is_active:
         allowed, reason = False, "Archived tasks cannot create field work"
+    elif project.status == ProjectStatus.completed.value:
+        allowed, reason = False, "Completed projects cannot create field work"
+    elif project.status == ProjectStatus.canceled.value:
+        allowed, reason = False, "Canceled projects cannot create field work"
     elif not project.is_active:
         allowed, reason = False, "Archived projects cannot create field work"
     elif project.subscriber_id is None:
@@ -535,6 +539,41 @@ def _task_work_order_projection(
         action=action,
         action_url=action_url,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTaskWorkOrderCreateProjection:
+    """Create-only field-work action for a task row on project detail."""
+
+    task_id: UUID
+    action: Action
+    action_url: str | None
+
+
+def _task_work_order_create_projection(
+    task: ProjectTask, project: Project
+) -> ProjectTaskWorkOrderCreateProjection:
+    action, action_url = _task_work_order_create_action(task, project)
+    return ProjectTaskWorkOrderCreateProjection(
+        task_id=task.id,
+        action=action,
+        action_url=action_url,
+    )
+
+
+def _project_actions_locked(project: Project) -> bool:
+    return project.status in {
+        ProjectStatus.completed.value,
+        ProjectStatus.canceled.value,
+    }
+
+
+def _project_actions_locked_reason(project: Project) -> str | None:
+    if project.status == ProjectStatus.completed.value:
+        return "Project is completed; only status changes remain available."
+    if project.status == ProjectStatus.canceled.value:
+        return "Project is canceled; only status changes remain available."
+    return None
 
 
 # ── shared option helpers ────────────────────────────────────────────────────
@@ -1195,11 +1234,22 @@ def build_project_detail_context(
         ).items
     else:
         material_requests = ()
+    task_work_order_create_projections = (
+        {
+            str(task.id): _task_work_order_create_projection(task, project)
+            for task in tasks
+        }
+        if can_read_work_orders
+        else {}
+    )
     return {
         "project": project,
         "project_url": project_url(project),
         "tasks": tasks,
+        "project_actions_locked": _project_actions_locked(project),
+        "project_actions_locked_reason": _project_actions_locked_reason(project),
         "show_field_work": can_read_work_orders,
+        "task_work_order_create_projections": task_work_order_create_projections,
         "project_work_orders": (
             work_order_views.list_project_work_order_summaries(db, project.id)
             if can_read_work_orders
@@ -1654,6 +1704,8 @@ def build_task_detail_context(
         "task_url": task_url(task),
         "project": project,
         "project_href": project_url(project),
+        "project_actions_locked": _project_actions_locked(project),
+        "project_actions_locked_reason": _project_actions_locked_reason(project),
         "show_field_work": can_read_work_orders,
         "task_work_orders": (
             work_order_views.list_task_work_order_summaries(db, task.id)

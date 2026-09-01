@@ -187,7 +187,11 @@ def test_project_ui_does_not_write_or_join_work_order_bindings() -> None:
     assert "crm_project_id" not in projection
     assert "crm_work_order_id" not in templates
     assert "list_task_work_order_summaries_bulk" in projection
+    task_list = (ROOT / "templates/admin/projects/tasks.html").read_text()
+    assert "Field Work" not in task_list
+    assert "task_work_order_projections" not in task_list
     project_detail = (ROOT / "templates/admin/projects/project_detail.html").read_text()
+    assert "task_work_order_create_projections" in project_detail
     assert "/admin/projects/tasks/{{ task.id }}" in project_detail
     assert "/admin/projects/tasks/{{ task.number or task.id }}" not in project_detail
 
