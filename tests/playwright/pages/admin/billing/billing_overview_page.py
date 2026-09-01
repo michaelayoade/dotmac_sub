@@ -25,7 +25,9 @@ class BillingOverviewPage(BasePage):
 
     def expect_stats_visible(self) -> None:
         """Assert billing stats are displayed."""
-        expect(self.page.get_by_text("Payments").first).to_be_visible()
+        expect(
+            self.page.locator("a[href='/admin/billing/payments']").first
+        ).to_be_visible()
 
     def get_total_revenue(self) -> str | None:
         """Get the total revenue displayed."""
