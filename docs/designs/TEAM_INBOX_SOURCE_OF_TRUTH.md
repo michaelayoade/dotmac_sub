@@ -13,6 +13,27 @@ by its list and detail screens. Providers are transports. They do not decide
 conversation, contact, ticket, assignment, escalation, read, or official
 timeline state.
 
+## Meta contact profile observations and repair
+
+Facebook Messenger and Instagram DM webhooks provide scoped sender identifiers,
+not reliable display names. The Meta transport retrieves the sender profile and
+`communications.team_inbox_processing` records the returned name as provider
+observation metadata. Canonical Party or Subscriber identity still takes
+precedence in Inbox display.
+
+`communications.team_inbox_maintenance` owns historical repair. Its operator
+tool is preview-only by default, produces a digest of exact conversation targets,
+and applies only when the same digest is supplied. Each write locks the
+conversation and refuses to continue if its channel or sender identity changed.
+Unavailable profiles remain unchanged instead of replacing an identifier with a
+guessed name.
+
+Failed Facebook and Instagram replies use a separate preview digest and retry
+only the exact failed message IDs shown in that preview. The outbound owner
+preserves the original failed attempt, creates the retry with provenance, and
+enforces the retry ceiling; repair never rewrites a failed attempt into a false
+success.
+
 Inbox and Support remain separate workspaces and lifecycle owners. A
 conversation may carry a reviewed ticket reference for context, but it does not
 create, transition, assign, or append to the official Support ticket timeline.

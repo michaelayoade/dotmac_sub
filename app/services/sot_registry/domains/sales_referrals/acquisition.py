@@ -11,6 +11,7 @@ from app.services.sot_manifest import (
     EventContract,
     MigrationContract,
     OwnerRole,
+    ProjectionContract,
     ServiceContract,
     SOTService,
     TransactionContract,
@@ -202,6 +203,96 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_sales_capture_account_conversion.py",
                 "tests/architecture/test_service_http_boundary.py",
             ),
+        ),
+    ),
+    SOTService(
+        name="sales.meta_lead_customer_match",
+        module="app.services.sales.meta_lead_ads",
+        owns=("Meta Lead customer-match projection",),
+        depends_on=("customer.accounts", "party.registry", "sales.capture"),
+        notes=(
+            "Lead Ads contact observations may suggest existing customers but never "
+            "silently merge identity. Only active verified Party contact points are "
+            "eligible evidence; ambiguous candidates remain review-only."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Meta Lead customer-match projection",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=(
+                        "captured Meta Lead contact observations",
+                        "verified customer contact identity",
+                    ),
+                    canonical_writer="sales.meta_lead_customer_match",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="captured Meta Lead contact observations",
+                    owner="sales.capture",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Meta prospect Party and its unverified contact observations.",
+                ),
+                AuthorityInput(
+                    name="verified customer contact identity",
+                    owner="party.registry",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Active verified PartyContactPoints on active Party-bound Subscribers.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary="One owner command locks the Lead and writes only its match projection.",
+                locking="Locks the exact Lead; customer identity remains read-only.",
+                idempotency="The same current verified contacts produce the same ordered candidates and fingerprint.",
+                retries="A complete retry rebuilds the projection from current authoritative contacts.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "sales.meta_lead_customer_match"
+                    ),
+                    "sales.meta_lead_ads.scope_invalid",
+                    "sales.meta_lead_ads.lead_not_found",
+                    "sales.meta_lead_ads.lead_party_missing",
+                ),
+                mapping_owner="Meta Lead Ads webhook and reconciliation adapters",
+                fail_closed_on=("missing Lead Party or unverified/ambiguous identity",),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="Meta Lead customer-match projection",
+                    input_names=(
+                        "captured Meta Lead contact observations",
+                        "verified customer contact identity",
+                    ),
+                    writer="sales.meta_lead_customer_match",
+                    freshness="Rebuilt after capture and on explicit reconciliation.",
+                    stale_behavior="A stale or unavailable result remains review-only and grants no identity.",
+                    drift_signal="Stored candidate fingerprint differs from current verified contact evidence.",
+                    rebuild_operation="Reconcile the exact Lead from current Party contact facts.",
+                    repair_owner="sales.meta_lead_customer_match",
+                ),
+            ),
+            events=EventContract(
+                event_types=("meta_lead.customer_match_reconciled",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Carries Lead ID, status, candidate count, and evidence fingerprint without contact values.",
+                replay="The deterministic rebuild emits the same non-PII match evidence for unchanged inputs.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="sales.meta_lead_customer_match",
+                verification="Focused matching, ambiguity, and rebuild tests.",
+            ),
+            steward="sales operations",
+            design_refs=(
+                "docs/designs/MARKETING_SALES_SOT.md",
+                "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+            ),
+            test_refs=("tests/test_meta_lead_ads.py",),
         ),
     ),
     SOTService(

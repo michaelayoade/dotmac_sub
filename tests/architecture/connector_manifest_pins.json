@@ -44,8 +44,8 @@
     {
         "current": true,
         "key": "meta.social",
-        "manifest_digest": "dfa7b8229d870b1524ba8fcab76448c9ba3de2f4922ac6031105398811c993d6",
-        "version": "1.1.0"
+        "manifest_digest": "ebbab59c10536ba381078733e3f23abd10d2234e012ac5e84d0a281214ce9f23",
+        "version": "1.2.0"
     },
     {
         "current": true,
@@ -106,6 +106,12 @@
         "key": "dotmac.crm",
         "manifest_digest": "9230e15377ffb8b595d27256fa303b77463ba7a73bdb643819fcd5f93cf88adf",
         "version": "1.0.0"
+    },
+    {
+        "current": false,
+        "key": "meta.social",
+        "manifest_digest": "dfa7b8229d870b1524ba8fcab76448c9ba3de2f4922ac6031105398811c993d6",
+        "version": "1.1.0"
     },
     {
         "current": false,
