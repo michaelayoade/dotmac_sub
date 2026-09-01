@@ -138,10 +138,23 @@ WhatsApp, Facebook Messenger, or Instagram Direct notification path. The
 provider call remains asynchronous to webhook acknowledgement. A dedupe key
 derived from the inbound message prevents a repeated delivery from creating a
 second clarification. A second uncertain result, disabled clarification,
-provider failure, invalid output, or a five-minute timeout takes the configured
-fallback team or normal channel default. The scheduled Team Inbox maintenance
-owner locks each conversation row and repairs stale `classifying` or
-`awaiting_follow_up` state idempotently.
+provider failure or invalid output takes the configured fallback team or normal
+channel default. Customer silence uses the dedicated
+`customer_response_timeout_minutes` policy value; older runtime configurations
+fall back to `escalate_after_minutes`, then five minutes. When AI sends a
+clarification or conversational response and enters `awaiting_customer`, it
+records `customer_wait_started_at` and `customer_wait_expires_at` on the active
+`ai_intake_sessions` row. The scheduled Team Inbox maintenance owner locks
+expired `awaiting_customer` sessions, rechecks for newer inbound customer
+messages and human takeover, creates one private handoff summary note, and then
+uses the normal Team Inbox routing, assignment and FIFO queue services. A newer
+customer reply cancels the timeout and resumes AI processing; a completed
+handoff keeps later replies in the human/queue flow. A legacy `awaiting_customer`
+session that has no persisted deadline is not immediately handed off: recovery
+records a fresh deadline from the policy fallback and leaves it eligible for the
+next scan. The timeout idempotency identity is the session ID plus persisted
+deadline, with database locks and terminal session state as the primary
+duplicate protection.
 
 Inbound processing serializes one channel/thread with a PostgreSQL transaction
 advisory lock, then locks an existing conversation row before reading or
@@ -149,9 +162,17 @@ replacing intake metadata. This prevents concurrent webhooks, or a webhook and
 the recovery task, from losing the follow-up count, fallback deadline, or
 delivery evidence.
 
+The first persisted eligible inbound customer message is turn 1. Starting or
+resuming AI intake is not a separate customer turn: welcome delivery is
+idempotent and may occur immediately before processing the same persisted
+inbound, but it never consumes, replaces, or skips that message. Duplicate
+provider webhooks are suppressed by the inbound message path before the session
+processor sees work; processor retries use the welcome and per-inbound AI
+message dedupe keys and mark `processed_inbound:<message_id>` only after the
+classification/engine path reaches a durable outcome.
+
 The conversational intake extension stores durable lifecycle in
-`ai_intake_sessions`. `ai_intake_configs` remains the compatibility row used by
-existing routes, but customer-visible AI messages attach to immutable
+`ai_intake_sessions`. `ai_intake_configs` remains the compatibility row used by existing routes, but customer-visible AI messages attach to immutable
 `ai_intake_policy_versions` so the display name, welcome message, editable
 business instructions, approved ISP information, queue templates and data
 cleanup policy are auditable after activation. Protected system, security,

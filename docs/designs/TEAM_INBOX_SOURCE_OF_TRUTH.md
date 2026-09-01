@@ -68,6 +68,15 @@ always excludes the conversation. The maintenance owner locks each candidate
 conversation and rechecks assignment and message evidence in the owner
 transaction before applying the audited status transition.
 
+AI customer-response timeout is a separate maintenance consequence. The AI
+session row owns the persisted `awaiting_customer` deadline, but Team Inbox owns
+what happens after it expires: the maintenance owner locks the expired session
+and conversation, rejects races with newer customer replies or human takeover,
+backfills a fresh policy-derived deadline for legacy waits that have no deadline,
+creates one private handoff summary note, applies the normal routing plan, and
+uses the existing assignment/FIFO queue services. Queue notices, handoff notices
+and agent assignment remain Team Inbox consequences with their existing dedupe
+and audit evidence; AI does not create queue records directly.
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the

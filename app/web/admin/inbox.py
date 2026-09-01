@@ -2949,6 +2949,7 @@ def team_inbox_ai_intake_policy_draft_update(
     allow_followup_questions: bool = Form(default=True),
     max_clarification_turns: int = Form(default=1),
     escalate_after_minutes: int = Form(default=5),
+    customer_response_timeout_minutes: int | None = Form(default=None),
     exclude_campaign_attribution: bool = Form(default=True),
     conversational_engine_enabled: bool = Form(default=False),
     conversation_engine_mode: str = Form(default="custom_v1"),
@@ -3118,11 +3119,26 @@ def team_inbox_ai_intake_policy_draft_update(
             ),
             "heartbeat_minutes": max(5, min(int(queue_heartbeat_minutes), 240)),
         }
+        clean_escalate_after_minutes = max(1, min(int(escalate_after_minutes), 1440))
+        if customer_response_timeout_minutes is None:
+            clean_customer_response_timeout_minutes = (
+                ai_conversation_intake.configured_customer_response_timeout_minutes(
+                    db,
+                    channel_type=channel_type,
+                    provider=provider,
+                    account_scope=account_scope,
+                )
+            )
+        else:
+            clean_customer_response_timeout_minutes = max(
+                1, min(int(customer_response_timeout_minutes), 1440)
+            )
         escalation_rules = {
             "confidence_threshold": min(max(float(confidence_threshold), 0.0), 1.0),
             "allow_followup_questions": bool(allow_followup_questions),
             "max_clarification_turns": max(0, min(int(max_clarification_turns), 5)),
-            "escalate_after_minutes": max(1, min(int(escalate_after_minutes), 1440)),
+            "escalate_after_minutes": clean_escalate_after_minutes,
+            "customer_response_timeout_minutes": clean_customer_response_timeout_minutes,
             "exclude_campaign_attribution": bool(exclude_campaign_attribution),
         }
         data_cleanup_policy = {

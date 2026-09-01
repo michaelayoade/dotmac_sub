@@ -795,9 +795,12 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_routing",
             ),
             notes=(
-                "Background owner for AI intake sessions. It never owns Inbox "
-                "status, assignment, queue membership, or outbound transport; "
-                "those consequences go through Team Inbox owners."
+                "Background owner for AI intake sessions. The first persisted "
+                "eligible inbound is turn one; welcome delivery is idempotent "
+                "and does not replace it. Awaiting-customer sessions persist "
+                "explicit wait deadlines. It never owns Inbox status, "
+                "assignment, queue membership, or outbound transport; those "
+                "consequences go through Team Inbox owners."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -845,8 +848,8 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary="Session processing enters execute_owner_command once and delegates Inbox consequences to Team Inbox owners.",
-                    locking="Ready sessions are selected with row locks and skip_locked; human takeover is rechecked before dispatch.",
-                    idempotency="Session/message/generation and outbound dedupe keys suppress duplicate webhook and worker execution.",
+                    locking="Ready sessions are selected with row locks and skip_locked; human takeover and customer-wait timeout races are rechecked before dispatch.",
+                    idempotency="Session/message/generation, welcome, timeout-deadline, and outbound dedupe keys suppress duplicate webhook and worker execution.",
                     retries="Beat reruns pick up incomplete sessions; failed sessions are recorded and safely escalated.",
                 ),
                 errors=ErrorContract(
