@@ -676,6 +676,34 @@ class PaymentCreationConfirm(PaymentCreationPreviewRequest):
     idempotency_key: str = Field(min_length=16, max_length=120)
 
 
+class ManualPaymentRecordingPreviewRequest(PaymentCreationPreviewRequest):
+    """Administrative payment request assessed against proof/payment evidence."""
+
+
+class ManualPaymentDuplicateRiskRead(BaseModel):
+    kind: str
+    evidence_id: UUID
+    evidence_status: str
+    amount: Decimal
+    currency: str
+    reference: str | None = None
+    observed_at: datetime
+
+
+class ManualPaymentRecordingPreviewRead(BaseModel):
+    payment_preview: PaymentCreationPreviewRead
+    duplicate_risks: list[ManualPaymentDuplicateRiskRead]
+    requires_duplicate_acknowledgement: bool
+    control_fingerprint: str
+
+
+class ManualPaymentRecordingConfirm(ManualPaymentRecordingPreviewRequest):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+    control_fingerprint: str = Field(min_length=64, max_length=64)
+    duplicate_risk_acknowledged: bool = False
+
+
 class PaymentSettlementRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

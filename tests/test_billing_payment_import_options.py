@@ -146,6 +146,7 @@ def test_create_payment_assigns_selected_payment_method_type(db_session, subscri
         invoice_id=None,
         collection_account_id=None,
         payment_method_id="type:transfer",
+        reference="TRF-METHOD-700",
         memo="TRF-700",
     )
 
@@ -173,6 +174,7 @@ def test_create_payment_assigns_saved_payment_method(db_session, subscriber):
         invoice_id=None,
         collection_account_id=None,
         payment_method_id=f"id:{method.id}",
+        reference="CASH-RECEIPT-500",
         memo="Cash receipt",
     )
 
@@ -191,6 +193,7 @@ def test_manual_payment_create_replays_same_idempotency_token(db_session, subscr
         invoice_id=None,
         collection_account_id=None,
         payment_method_id=None,
+        reference="CASH-REPLAY-500",
         memo="Cash receipt",
         idempotency_token="manual-token-1",
     )
@@ -204,6 +207,7 @@ def test_manual_payment_create_replays_same_idempotency_token(db_session, subscr
         invoice_id=None,
         collection_account_id=None,
         payment_method_id=None,
+        reference="CASH-REPLAY-500",
         memo="Cash receipt",
         idempotency_token="manual-token-1",
     )

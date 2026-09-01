@@ -2424,6 +2424,45 @@ class Payments(ListResponseMixin):
         origin: PaymentSettlementOrigin = PaymentSettlementOrigin.manual,
         commit: bool = True,
     ) -> PaymentCreationResult:
+        """Legacy root wrapper; coordinators use ``stage_confirm_creation``."""
+
+        try:
+            result = Payments.stage_confirm_creation(db, payload, origin=origin)
+            if commit:
+                db.commit()
+                db.refresh(result.payment)
+                if result.settlement:
+                    db.refresh(result.settlement)
+            return result
+        except IntegrityError as exc:
+            db.rollback()
+            replay = Payments._creation_replay(
+                db,
+                key=_normalize_payment_creation_key(payload.idempotency_key),
+                fingerprint=payload.preview_fingerprint,
+            )
+            if replay:
+                return replay
+            raise HTTPException(
+                status_code=409, detail="Payment is already being recorded"
+            ) from exc
+        except Exception:
+            db.rollback()
+            raise
+
+    @staticmethod
+    def stage_confirm_creation(
+        db: Session,
+        payload: PaymentCreationConfirm,
+        *,
+        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.manual,
+    ) -> PaymentCreationResult:
+        """Stage a previewed payment inside an approved coordinator transaction.
+
+        This participant locks, recomputes, and appends the canonical payment
+        evidence but never commits or rolls back the caller-owned transaction.
+        """
+
         key = _normalize_payment_creation_key(payload.idempotency_key)
         replay = Payments._creation_replay(
             db, key=key, fingerprint=payload.preview_fingerprint
@@ -2461,38 +2500,19 @@ class Payments(ListResponseMixin):
             account_id=create_payload.account_id,
         )
         db.add(reservation)
-        try:
-            db.flush()
-            result = _create_account_payment_from_preview(
-                db,
-                create_payload,
-                preview,
-                auto_allocate=payload.auto_allocate,
-                origin=origin,
-                idempotency_key=key,
-                commit=False,
-            )
-            reservation.ref_id = str(result.payment.id)
-            db.flush()
-            if commit:
-                db.commit()
-                db.refresh(result.payment)
-                if result.settlement:
-                    db.refresh(result.settlement)
-            return result
-        except IntegrityError as exc:
-            db.rollback()
-            replay = Payments._creation_replay(
-                db, key=key, fingerprint=payload.preview_fingerprint
-            )
-            if replay:
-                return replay
-            raise HTTPException(
-                status_code=409, detail="Payment is already being recorded"
-            ) from exc
-        except Exception:
-            db.rollback()
-            raise
+        db.flush()
+        result = _create_account_payment_from_preview(
+            db,
+            create_payload,
+            preview,
+            auto_allocate=payload.auto_allocate,
+            origin=origin,
+            idempotency_key=key,
+            commit=False,
+        )
+        reservation.ref_id = str(result.payment.id)
+        db.flush()
+        return result
 
     @staticmethod
     def create_account_credit_deposit(
