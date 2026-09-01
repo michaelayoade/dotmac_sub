@@ -145,6 +145,64 @@ class LegacyImagePinLocalResolutionV1(StrictContract):
         return self
 
 
+class LegacyImagePinBindKnobProofV1(StrictContract):
+    """Proof that setting the bind variable actually moves the listener.
+
+    WHY THIS EXISTS
+    ===============
+
+    Measured on dotmac-sub-prod on 2026-09-01, the DEPLOYED Compose file
+    publishes ``- 9001:5432`` -- a bare publish with no ``${PG_LOCAL_BIND}``
+    interpolation at all.  ``main`` carries the knob; the host is running an
+    older release that does not.  Against that file, setting
+    ``PG_LOCAL_BIND=0.0.0.0:`` changes NOTHING: the recreate would faithfully
+    reproduce the same dual-family publish, the containment defect would
+    survive the maintenance window, and the only thing that would notice is
+    the deadman rolling the change back on the listener postcondition.
+
+    A plan that assumes a knob is wired, when the file it will actually be
+    applied to has no such knob, is a plan that cannot do what it says.  So
+    the bootstrap proves the knob instead of assuming it: the observer renders
+    the effective Compose projection three times -- once as-is, once with the
+    variable set to the desired IPv4 wildcard, and once with it set to
+    loopback -- and this contract refuses unless the two injections produce
+    two DIFFERENT, exactly-predicted bindings.
+
+    One injection would not be enough.  A file that hardcodes ``0.0.0.0:``
+    would satisfy a single ``0.0.0.0`` probe while being just as unresponsive
+    to the variable.  The loopback probe is the control that makes the first
+    result mean something.
+    """
+
+    schema_id: Literal["LegacyImagePinBindKnobProofV1"] = Field(
+        default="LegacyImagePinBindKnobProofV1", alias="schema"
+    )
+    env_key: Literal["PG_LOCAL_BIND"] = "PG_LOCAL_BIND"
+    wildcard_injection: Literal["0.0.0.0:"] = "0.0.0.0:"
+    wildcard_host_ip: IPvAnyAddress
+    control_injection: Literal["127.0.0.1:"] = "127.0.0.1:"
+    control_host_ip: IPvAnyAddress
+    host_port: Literal[9001] = DECLARED_HOST_PORT
+    container_port: Literal[5432] = DECLARED_CONTAINER_PORT
+    protocol: Literal["tcp"] = "tcp"
+
+    @model_validator(mode="after")
+    def the_knob_is_live_and_the_proof_is_falsifiable(self) -> Self:
+        if str(self.wildcard_host_ip) != DECLARED_IPV4_WILDCARD:
+            raise ValueError(
+                "setting the bind variable to the IPv4 wildcard did not produce "
+                "an IPv4 wildcard binding; the deployed Compose file does not "
+                "interpolate this variable and the bootstrap cannot correct the "
+                "listener through it"
+            )
+        if str(self.control_host_ip) != "127.0.0.1":
+            raise ValueError(
+                "the loopback control injection did not move the binding; the "
+                "observed wildcard binding is hardcoded, not variable-driven"
+            )
+        return self
+
+
 class LegacyImagePinBootstrapSnapshotV1(StrictContract):
     """Safe output of the root-owned, read-only bootstrap observer.
 
@@ -171,6 +229,7 @@ class LegacyImagePinBootstrapSnapshotV1(StrictContract):
     non_port_definition_digest: Sha256Digest
     image_free_definition_digest: Sha256Digest
     effective_image_reference: LegacyImageTag
+    bind_knob: LegacyImagePinBindKnobProofV1
     non_targets: tuple[PublishedPortProjectContainerV1, ...]
 
     @model_validator(mode="after")
@@ -280,6 +339,7 @@ class LegacyImagePinBootstrapPlanV1(StrictContract):
     replication_client: IPvAnyNetwork
     non_port_definition_digest: Sha256Digest
     image_free_definition_digest: Sha256Digest
+    bind_knob: LegacyImagePinBindKnobProofV1
     non_target_containers: tuple[PublishedPortProjectContainerV1, ...] = Field(
         min_length=1
     )
@@ -590,5 +650,90 @@ class LegacyImagePinPostconditionVerdictV1(StrictContract):
         ):
             raise ValueError(
                 "the bootstrap requires exactly one IPv4 listener afterwards"
+            )
+        return self
+
+
+class LegacyImagePinReplicationProbeV1(StrictContract):
+    """A read-only observation that the standby is actually streaming.
+
+    Taken before the mutation (a recreate must not be started while
+    replication is already broken, or the change would be blamed for a fault
+    it did not cause) and again after it.
+    """
+
+    schema_id: Literal["LegacyImagePinReplicationProbeV1"] = Field(
+        default="LegacyImagePinReplicationProbeV1", alias="schema"
+    )
+    operation_id: BootstrapOperationId
+    phase: Literal["prestate", "poststate"]
+    state: Literal["streaming"]
+    client_addr: IPvAnyAddress
+    observed_at: datetime
+
+    @model_validator(mode="after")
+    def probe_names_the_declared_standby(self) -> Self:
+        _require_utc(self.observed_at, "observed_at")
+        if str(self.client_addr) != "75.119.157.91":
+            raise ValueError("the replication probe names another standby")
+        return self
+
+
+class LegacyImagePinFirewallProofV1(StrictContract):
+    """Sanitized proof that host policy admits exactly the declared path."""
+
+    schema_id: Literal["LegacyImagePinFirewallProofV1"] = Field(
+        default="LegacyImagePinFirewallProofV1", alias="schema"
+    )
+    operation_id: BootstrapOperationId
+    plan_digest: Sha256Digest
+    client_network: IPvAnyNetwork
+    verifier_identity: NonEmpty
+    ruleset_digest: Sha256Digest
+    verdict: Literal["admitted"] = "admitted"
+    ipv6_listener_absent: Literal[True] = True
+    observed_at: datetime
+
+    @model_validator(mode="after")
+    def proof_names_the_declared_client(self) -> Self:
+        _require_utc(self.observed_at, "observed_at")
+        if str(self.client_network) != "75.119.157.91/32":
+            raise ValueError("the firewall proof names another client path")
+        return self
+
+
+class LegacyImagePinReachProofV1(StrictContract):
+    """External-vantage evidence; the target host cannot mint it.
+
+    A refusal on its own proves nothing -- a collector with a broken route, a
+    wrong port, or no network at all also "fails to connect". So the same
+    unauthorized vantage must, in the same observation, successfully reach a
+    control target. Without that, "refused" is indistinguishable from "the
+    probe never left the building".
+    """
+
+    schema_id: Literal["LegacyImagePinReachProofV1"] = Field(
+        default="LegacyImagePinReachProofV1", alias="schema"
+    )
+    operation_id: BootstrapOperationId
+    plan_digest: Sha256Digest
+    collector_identity: NonEmpty
+    authorized_client: IPvAnyNetwork
+    authorized_verdict: Literal["reachable"] = "reachable"
+    unauthorized_vantage: NonEmpty
+    unauthorized_verdict: Literal["refused"] = "refused"
+    positive_control_target: NonEmpty
+    positive_control_verdict: Literal["reachable"] = "reachable"
+    collector_evidence_digest: Sha256Digest
+    observed_at: datetime
+
+    @model_validator(mode="after")
+    def the_refusal_is_falsifiable(self) -> Self:
+        _require_utc(self.observed_at, "observed_at")
+        if str(self.authorized_client) != "75.119.157.91/32":
+            raise ValueError("the reach proof names another authorized client")
+        if self.unauthorized_vantage == self.positive_control_target:
+            raise ValueError(
+                "the positive control must name a target, not the vantage itself"
             )
         return self

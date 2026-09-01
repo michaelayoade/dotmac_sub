@@ -1,0 +1,17 @@
+[Unit]
+Description=Dotmac legacy image-pin bootstrap rollback deadman for %i
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/dotmac-legacy-image-pin-deadman check --operation %i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dotmac/legacy-image-pin /var/lock
+# The deployment .env and Docker socket are host-specific. The installer adds
+# their exact paths through a per-operation drop-in before arming the timer.
