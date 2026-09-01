@@ -205,10 +205,10 @@
    STATS CARD
    Metric card with hover glow effect
    ============================================ #}
-{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="", compact_value=False) %}
+{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="", compact_value=False, active=False) %}
 {% set c2 = color2 or color %}
 {% set is_link = href != "" %}
-<{% if is_link %}a href="{{ href }}"{% else %}div{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 {% if tone %}status-tone-{{ tone }} status-metric{% else %}hover:border-{{ color }}-200 dark:hover:border-{{ color }}-700/40{% endif %}">
+<{% if is_link %}a href="{{ href }}"{% else %}div{% endif %}{% if active %} aria-current="true"{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 {% if is_link %}focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 dark:focus:ring-{{ color }}-400 dark:focus:ring-offset-slate-900{% endif %} {% if active %}ring-2 ring-{{ color }}-500 ring-offset-2 dark:ring-{{ color }}-400 dark:ring-offset-slate-900{% endif %} {% if tone %}status-tone-{{ tone }} status-metric{% else %}hover:border-{{ color }}-200 dark:hover:border-{{ color }}-700/40{% endif %}">
     <div class="absolute inset-x-5 top-0 h-px {% if tone %}status-metric-accent{% else %}bg-gradient-to-r from-transparent via-{{ color }}-400/40 to-transparent{% endif %}"></div>
     <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full blur-2xl transition-all group-hover:scale-150 {% if tone %}status-metric-glow{% else %}bg-gradient-to-br from-{{ color }}-500/10 to-{{ c2 }}-500/10{% endif %}"></div>
     <div class="relative flex items-center justify-between gap-3">

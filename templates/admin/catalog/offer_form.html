@@ -15,13 +15,13 @@
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define the tariff customers subscribe to, including provisioning parameters.</p>
         </div>
         <div class="flex flex-wrap gap-2">
-            <a href="#service-policy" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <a href="#service-policy" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:!bg-slate-700 dark:hover:!text-white">
                 Policies
             </a>
-            <a href="#linked-add-ons" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <a href="#linked-add-ons" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:!bg-slate-700 dark:hover:!text-white">
                 Add-Ons
             </a>
-            <a href="/admin/catalog/settings" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <a href="/admin/catalog/settings" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:!bg-slate-700 dark:hover:!text-white">
                 Catalog Components
             </a>
         </div>
@@ -53,10 +53,10 @@
                         } %}
                         {% for cat in plan_categories %}
                         <label class="relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors
-                            {% if offer.plan_category == cat %}border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300{% else %}border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500{% endif %}">
+                            {% if offer.plan_category == cat %}border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300{% else %}border-slate-200 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:!border-slate-500 dark:hover:!bg-slate-700 dark:hover:!text-white{% endif %}">
                             <input type="radio" name="plan_category" value="{{ cat }}" {% if offer.plan_category == cat %}checked{% endif %}
                                 class="sr-only peer"
-                                onchange="this.form.querySelectorAll('[name=plan_category]').forEach(r => { r.closest('label').className = r.checked ? 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300' : 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500'; })">
+                                onchange="this.form.querySelectorAll('[name=plan_category]').forEach(r => { r.closest('label').className = r.checked ? 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300' : 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-slate-200 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:!border-slate-500 dark:hover:!bg-slate-700 dark:hover:!text-white'; })">
                             {{ category_icons.get(cat, '') | safe }}
                             <span class="text-sm font-medium">{{ category_labels.get(cat, cat | replace("_", " ") | title) }}</span>
                         </label>
