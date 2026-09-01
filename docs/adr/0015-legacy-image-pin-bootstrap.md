@@ -117,6 +117,59 @@ service are out of scope. FreeRADIUS gets the same generic facility later, with
 its own digest, plans, proofs, receipt and window; the two are deliberately not
 combined.
 
+## 6. Admit demonstrations, and one outstanding obligation
+
+A gate that enumerates real targets has to be shown admitting one of them. This
+observer is the case that made that concrete: it demanded an immutable
+reference from every container in the project, so it could never have admitted
+anything it would actually be asked to admit — and nothing noticed, because
+acceptance had only ever been exercised against hand-built inputs and refusal
+only against planted ones. That pair misses this defect by construction.
+
+`tests/architecture/test_declared_target_admission.py` therefore draws its
+demonstrations from DECLARED state: the target enumeration comes from each PLAN
+workflow's own `options:` list rather than a copy kept in the test, and the
+image under test is the one `docker-compose.yml` really declares.
+
+`deploy/shadow/docker-compose.shadow.yml` is deliberately not a source. It is
+digest-pinned throughout and even carries the exact PostGIS digest this
+bootstrap adopts, but for a stack the PLAN workflow does not offer; an admit
+drawn from it would be green and would mean nothing. The service names are
+asserted disjoint so the two cannot be confused.
+
+**Delivered now.** The bootstrap lane's admissibility property — the target
+carries the exact configured legacy tag — is satisfied by real declared state
+today, so its real-target admit is demonstrated against
+`postgis/postgis:16-3.4-alpine` as `docker-compose.yml` declares it, alongside
+a planted refusal through the same validator.
+
+**Delivered now for the steady-state lane.** The real-target REFUSAL over the
+live enumeration: every service that workflow offers is fed, as declared, to
+the real immutable-image validator, and every one is refused. That is the
+observation that would have caught the original defect. Both of that
+validator's branches are also exercised for the first time — a planted admit
+and a planted refusal — because a validator only ever seen refusing is
+indistinguishable from one that refuses unconditionally.
+
+**Owed.** The steady-state lane's real-target ADMIT. It is not writable yet:
+both declared services are tag-pinned, which is the whole reason this bootstrap
+exists. Writing a digest-pinned stand-in and calling it an admit would be
+exactly the defect this section is written from, so it is recorded as an
+obligation rather than fabricated.
+
+The obligation discharges after the bootstrap has EXECUTED — not when this
+change merges. Note precisely where the admissible target then appears: the
+bootstrap applies a host-side Compose overlay and does not pin the release
+Compose file, so the digest-pinned target exists in the host's effective
+Compose, which CI cannot observe.
+
+`test_a_declared_target_that_becomes_digest_pinned_must_retire_this_gap`
+ratchets the half that IS repository-observable and fails the moment a declared
+target becomes digest-pinned in `docker-compose.yml`. The host-side half is
+discharged by executed evidence from the maintenance window and is tracked
+here, not by a check, because a check that cannot observe a condition must not
+claim to guard it.
+
 ## Consequences
 
 * One extra observer, owner, deadman and pair of workflows exist for a single
