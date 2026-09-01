@@ -2256,8 +2256,10 @@ def test_legacy_awaiting_customer_null_deadline_is_backfilled_not_handed_off(
     assert outcome.changed == 1
     assert outcome.skipped == 0
     assert session.state == "awaiting_customer"
-    assert session.customer_wait_started_at == now
-    assert session.customer_wait_expires_at == now + timedelta(minutes=5)
+    assert session.customer_wait_started_at.replace(tzinfo=UTC) == now
+    assert session.customer_wait_expires_at.replace(tzinfo=UTC) == now + timedelta(
+        minutes=5
+    )
     assert (
         db_session.query(InboxMessage)
         .filter(InboxMessage.conversation_id == received.conversation_id)

@@ -507,7 +507,7 @@ scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py
 scripts/seed/seed_rbac.py
 #
-# --- tests: 252 files ---
+# --- tests: 251 files ---
 tests/architecture/adapter_keyword_service_call_baseline.txt
 tests/architecture/adapter_transaction_baseline.txt
 tests/architecture/connector_manifest_pins.json
@@ -676,7 +676,6 @@ tests/test_integration_manifest_registry.py
 tests/test_integrations_external_services.py
 tests/test_main_domain_routing.py
 tests/test_maps_vendor_route_domain.py
-tests/test_migrated_test_database_contract.py
 tests/test_missing_pages_web_surfaces.py
 tests/test_ncc_categorisation.py
 tests/test_ncc_complaints_report.py
@@ -761,4 +760,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 711 files
+# TOTAL: 710 files

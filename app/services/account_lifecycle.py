@@ -121,7 +121,7 @@ def stage_subscription_billing_anchor(
     subscription: Subscription,
     command: BillingAnchorProjectionCommand,
 ) -> bool:
-    """Canonical, flush-only writer for ``Subscription.next_billing_at``."""
+    """Canonical transactional writer for ``Subscription.next_billing_at``."""
 
     if subscription.id != command.subscription_id:
         raise BillingAnchorProjectionError("Billing-anchor subscription mismatch")
@@ -175,7 +175,6 @@ def stage_subscription_billing_anchor(
             "next_billing_at": target.isoformat(),
         },
     )
-    db.flush()
     return True
 
 
