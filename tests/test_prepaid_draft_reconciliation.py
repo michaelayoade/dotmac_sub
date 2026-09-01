@@ -441,6 +441,111 @@ def test_historical_paid_invoice_repair_accepts_stale_anchor_and_old_entitlement
     assert preview.billing_period_end == datetime(2026, 9, 2, 23, tzinfo=UTC)
 
 
+def test_historical_paid_invoice_repair_accepts_same_business_day_due_anchor(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, payment, allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    paid_at = datetime(2026, 8, 31, 8, 21, 57, tzinfo=UTC)
+    current_anchor = datetime(2026, 8, 31, tzinfo=UTC)
+    next_anchor = datetime(2026, 9, 30, tzinfo=UTC)
+    invoice.issued_at = paid_at
+    invoice.paid_at = paid_at
+    invoice.due_at = next_anchor
+    payment.paid_at = paid_at
+    payment.created_at = paid_at
+    payment.settlement.created_at = paid_at
+    subscriber.status = SubscriberStatus.suspended
+    subscription.status = SubscriptionStatus.suspended
+    subscription.access_state = "suspended"
+    subscription.next_billing_at = current_anchor
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            starts_at=datetime(2026, 7, 31, tzinfo=UTC),
+            ends_at=current_anchor,
+            amount_funded=Decimal("18812.50"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+            metadata_={"source": "previous_paid_period"},
+        )
+    )
+    db_session.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            notes="pytest same business-day due anchor lock",
+        )
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+    db_session.commit()
+
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+
+    assert preview.disposition is (
+        PaidPrepaidInvoiceRepairDisposition.exact_paid_unlinked_invoice
+    )
+    assert preview.actionable is True
+    assert preview.allocation_id == allocation.id
+    assert preview.billing_period_start == current_anchor
+    assert preview.billing_period_end == next_anchor
+    invoice_id = invoice.id
+    subscription_id = subscription.id
+    fingerprint = preview.fingerprint
+    db_session.commit()
+
+    result = repair_historical_paid_prepaid_invoice(
+        db_session,
+        RepairHistoricalPaidPrepaidInvoiceCommand(
+            context=CommandContext.system(
+                actor="pytest:billing-operator",
+                scope="prepaid_draft_reconciliation",
+                reason="Reviewed exact same-day paid invoice evidence",
+                idempotency_key=f"pytest-paid-anchor-boundary-{invoice_id}",
+            ),
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
+            preview_fingerprint=fingerprint,
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscription)
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    repaired_entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .one()
+    )
+    assert result.subscriptions_restored == 1
+    assert invoice.billing_period_start == current_anchor.replace(tzinfo=None)
+    assert invoice.billing_period_end == next_anchor.replace(tzinfo=None)
+    assert line.subscription_id == subscription.id
+    assert repaired_entitlement.starts_at == current_anchor.replace(tzinfo=None)
+    assert repaired_entitlement.ends_at == next_anchor.replace(tzinfo=None)
+    assert subscription.next_billing_at == next_anchor.replace(tzinfo=None)
+    assert subscription.status is SubscriptionStatus.active
+    assert subscriber.status is SubscriberStatus.active
+
+
 def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
     db_session,
     subscriber,
