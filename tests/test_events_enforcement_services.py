@@ -1226,6 +1226,10 @@ class TestNotificationHandler:
     ):
         from app.tasks.notifications import _deliver_notification_queue
 
+        monkeypatch.setattr(
+            "app.services.notification.quiet_hours_send_at",
+            lambda _db: None,
+        )
         subscriber.phone = "+2348000000199"
         payment = Payment(
             account_id=subscriber.id,
