@@ -171,6 +171,62 @@ class Declaration:
         return tuple(dict.fromkeys(p.service for p in self.publishes))
 
 
+@dataclass(frozen=True, order=True)
+class PublishedPortAssignment:
+    """One non-secret bind assignment selected by declared intent."""
+
+    key: str
+    value: str
+
+
+@dataclass(frozen=True, order=True)
+class PublishedPortTarget:
+    """One exact published socket selected by declared intent."""
+
+    key: str
+    host_port: int
+    container_port: int
+    protocol: str
+    bind_env: str
+    bind: str
+    expected_listeners: tuple[str, ...]
+    required_clients: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DeclaredPublishedPortPlan:
+    """Typed declaration decision before host prestate is attached."""
+
+    service: str
+    environment: str
+    assignments: tuple[PublishedPortAssignment, ...]
+    targets: tuple[PublishedPortTarget, ...]
+    recreated_by_deploy: bool
+
+    def as_json_object(self) -> dict[str, object]:
+        return {
+            "service": self.service,
+            "environment": self.environment,
+            "assignments": {
+                assignment.key: assignment.value for assignment in self.assignments
+            },
+            "targets": [
+                {
+                    "key": target.key,
+                    "host_port": target.host_port,
+                    "container_port": target.container_port,
+                    "protocol": target.protocol,
+                    "bind_env": target.bind_env,
+                    "bind": target.bind,
+                    "expected_listeners": list(target.expected_listeners),
+                    "required_clients": list(target.required_clients),
+                }
+                for target in self.targets
+            ],
+            "recreated_by_deploy": self.recreated_by_deploy,
+        }
+
+
 def load_declaration(path: Path | None = None) -> Declaration:
     raw = tomllib.loads((path or DECLARATION_PATH).read_text())
     environments = tuple(raw.get("declared_environments", ()))
@@ -515,7 +571,9 @@ def check_listeners(
 # --------------------------------------------------------------------------
 
 
-def plan(declaration: Declaration, service: str, environment: str) -> dict[str, Any]:
+def plan(
+    declaration: Declaration, service: str, environment: str
+) -> DeclaredPublishedPortPlan:
     if environment not in declaration.environments:
         raise DeclarationError(
             f"environment {environment!r} is not declared (declared: "
@@ -529,7 +587,7 @@ def plan(declaration: Declaration, service: str, environment: str) -> dict[str, 
         )
 
     assignments: dict[str, str] = {}
-    targets = []
+    targets: list[PublishedPortTarget] = []
     for publish in publishes:
         bind = publish.bind_for(environment)
         existing = assignments.get(publish.bind_env)
@@ -552,24 +610,28 @@ def plan(declaration: Declaration, service: str, environment: str) -> dict[str, 
                 "would cut them off."
             )
         targets.append(
-            {
-                "key": publish.key,
-                "host_port": publish.host_port,
-                "container_port": publish.container_port,
-                "protocol": publish.protocol,
-                "bind": bind,
-                "expected_listeners": sorted(expected_listeners(bind)),
-                "required_clients": list(publish.required_clients),
-            }
+            PublishedPortTarget(
+                key=publish.key,
+                host_port=publish.host_port,
+                container_port=publish.container_port,
+                protocol=publish.protocol,
+                bind_env=publish.bind_env,
+                bind=bind,
+                expected_listeners=tuple(sorted(expected_listeners(bind))),
+                required_clients=publish.required_clients,
+            )
         )
 
-    return {
-        "service": service,
-        "environment": environment,
-        "assignments": assignments,
-        "targets": targets,
-        "recreated_by_deploy": any(p.recreated_by_deploy for p in publishes),
-    }
+    return DeclaredPublishedPortPlan(
+        service=service,
+        environment=environment,
+        assignments=tuple(
+            PublishedPortAssignment(key=key, value=value)
+            for key, value in sorted(assignments.items())
+        ),
+        targets=tuple(sorted(targets)),
+        recreated_by_deploy=any(p.recreated_by_deploy for p in publishes),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -660,7 +722,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        print(json.dumps(plan(declaration, args.service, args.environment), indent=2))
+        # Import at the adapter edge to keep the declaration owner independent
+        # of its serialized evidence contract.
+        from scripts.published_port_contracts import PublishedPortIntentV1
+
+        wire_plan = PublishedPortIntentV1.from_declared(
+            plan(declaration, args.service, args.environment)
+        )
+        sys.stdout.buffer.write(wire_plan.canonical_bytes())
     except DeclarationError as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 1
