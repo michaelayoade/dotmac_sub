@@ -223,6 +223,12 @@ domain rules; they must not silently become zero.
   consistent overflow menu.
 - Hide unauthorized actions. Show a disabled action only when explaining its
   state-based unavailability helps the user.
+- Navigation follows the same default-deny RBAC contract as its destination:
+  do not render a link, shortcut, submenu, or section heading unless the
+  principal holds a permission accepted by the destination route. Module
+  enablement and authorization are independent gates and both must pass. Hide
+  a navigation group when none of its children remain visible; route guards
+  remain mandatory even when discovery is suppressed.
 - Read eligibility, required amount, restoration possibility, completion
   readiness, and destructive impact from the owning backend service.
 - Never rely on hidden UI controls as enforcement; the command owner rechecks
