@@ -46,24 +46,34 @@
 
     <nav id="workqueue-section-nav"
          class="sticky top-0 z-20 flex flex-wrap gap-1.5 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/95"
-         aria-label="Workqueue sections">
-        <a href="#workqueue-right-now" class="workqueue-section-link is-active" aria-current="location">Right now</a>
-        <a href="#workqueue-section-conversation" class="workqueue-section-link">Inbox</a>
-        <a href="#workqueue-section-ticket" class="workqueue-section-link">Tickets</a>
-        <a href="#workqueue-section-project" class="workqueue-section-link">Projects</a>
-        <a href="#workqueue-section-work_order" class="workqueue-section-link">Work orders</a>
+         aria-label="Workqueue sections" role="tablist">
+        <a href="#workqueue-right-now" class="workqueue-section-link is-active" role="tab" aria-selected="true" aria-controls="workqueue-right-now">Right now <span>{{ projection.right_now|length }}</span></a>
+        <a href="#workqueue-section-conversation" class="workqueue-section-link" role="tab" aria-selected="false" aria-controls="workqueue-section-conversation" tabindex="-1">Inbox <span>{{ projection.sections[0].total }}</span></a>
+        <a href="#workqueue-section-ticket" class="workqueue-section-link" role="tab" aria-selected="false" aria-controls="workqueue-section-ticket" tabindex="-1">Tickets <span>{{ projection.sections[1].total }}</span></a>
+        <a href="#workqueue-section-project" class="workqueue-section-link" role="tab" aria-selected="false" aria-controls="workqueue-section-project" tabindex="-1">Projects <span>{{ projection.sections[2].total }}</span></a>
+        <a href="#workqueue-section-work_order" class="workqueue-section-link" role="tab" aria-selected="false" aria-controls="workqueue-section-work_order" tabindex="-1">Work orders <span>{{ projection.sections[3].total }}</span></a>
     </nav>
 
+    <div id="workqueue-tools" class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+        <label class="block min-w-0"><span class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search active section</span><input id="workqueue-search" type="search" placeholder="Name, phone, ticket ID, title…" autocomplete="off" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></label>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-2" role="group" aria-label="Workqueue layout"><button type="button" data-density="compact" class="workqueue-density is-active">Compact</button><button type="button" data-density="list" class="workqueue-density">List</button></div>
+        </div>
+    </div>
+
     <div id="workqueue-right-now"
+         role="tabpanel"
          hx-get="/admin/workqueue/_right-now?audience={{ projection.audience.value }}{% if projection.selected_team_id %}&service_team_id={{ projection.selected_team_id }}{% endif %}{% if projection.include_snoozed %}&include_snoozed=true{% endif %}"
          hx-trigger="every 30s, workqueue-refresh from:body"
          hx-swap="innerHTML">
         {% include "admin/workqueue/_right_now.html" %}
     </div>
 
-    <div class="space-y-8">
+    <div>
         {% for section in projection.sections %}
         <div id="workqueue-section-{{ section.item_kind.value }}"
+             role="tabpanel"
+             hidden
              hx-get="/admin/workqueue/_section/{{ section.item_kind.value }}?audience={{ projection.audience.value }}{% if projection.selected_team_id %}&service_team_id={{ projection.selected_team_id }}{% endif %}{% if projection.include_snoozed %}&include_snoozed=true{% endif %}"
              hx-trigger="workqueue-refresh from:body"
              hx-swap="innerHTML">
@@ -71,91 +81,128 @@
         </div>
         {% endfor %}
     </div>
+    <div id="workqueue-pagination" class="flex flex-wrap items-center justify-end gap-2" aria-label="Active section pagination">
+        <button type="button" id="workqueue-page-previous" class="workqueue-page-button">Previous</button>
+        <span id="workqueue-page-summary" class="text-sm text-slate-500 dark:text-slate-400" aria-live="polite"></span>
+        <button type="button" id="workqueue-page-next" class="workqueue-page-button">Next</button>
+    </div>
 </div>
+
+<button id="workqueue-back-top" type="button" class="fixed bottom-5 right-5 z-30 hidden rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg">Back to top</button>
 
 <script nonce="{{ csp_nonce }}">
 (() => {
     const nav = document.getElementById("workqueue-section-nav");
     const links = Array.from(nav?.querySelectorAll('a[href^="#"]') || []);
-    let programmaticScroll = false;
-    let scrollSettleTimer;
+    const panels = links
+        .map((link) => document.getElementById(link.getAttribute("aria-controls")))
+        .filter(Boolean);
+    const search = document.getElementById("workqueue-search");
+    const pagination = document.getElementById("workqueue-pagination");
+    const pageSummary = document.getElementById("workqueue-page-summary");
+    const previousPage = document.getElementById("workqueue-page-previous");
+    const nextPage = document.getElementById("workqueue-page-next");
+    const PAGE_SIZE = 21;
+    const pagesByPanel = new Map();
+    let density = "compact";
+    let activePanel = panels[0];
 
-    const setActiveLink = (activeLink) => {
+    const renderRecords = () => {
+        if (!activePanel) return;
+        const query = (search?.value || "").trim().toLocaleLowerCase();
+        document.querySelectorAll(".workqueue-density").forEach((button) => {
+            const selected = button.dataset.density === density;
+            button.classList.toggle("is-active", selected);
+            button.setAttribute("aria-pressed", String(selected));
+        });
+        activePanel.querySelectorAll("[data-workqueue-layout]").forEach((layout) => {
+            layout.classList.toggle("hidden", layout.dataset.workqueueLayout !== density);
+        });
+        const activeLayout = activePanel.querySelector(`[data-workqueue-layout="${density}"]`);
+        const records = Array.from(activeLayout?.querySelectorAll("[data-workqueue-record]") || []);
+        const matches = records.filter((record) => (record.dataset.search || "").toLocaleLowerCase().includes(query));
+        const pageCount = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
+        const currentPage = Math.min(pagesByPanel.get(activePanel.id) || 1, pageCount);
+        pagesByPanel.set(activePanel.id, currentPage);
+        const visible = new Set(matches.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE));
+        records.forEach((record) => { record.hidden = !visible.has(record); });
+        pagination?.classList.toggle("hidden", pageCount <= 1);
+        if (pageSummary) pageSummary.textContent = `${matches.length} records · Page ${currentPage} of ${pageCount}`;
+        if (previousPage) previousPage.disabled = currentPage <= 1;
+        if (nextPage) nextPage.disabled = currentPage >= pageCount;
+    };
+
+    const showSection = (activeLink, updateHash = true) => {
         links.forEach((link) => {
             const isActive = link === activeLink;
             link.classList.toggle("is-active", isActive);
-            if (isActive) link.setAttribute("aria-current", "location");
-            else link.removeAttribute("aria-current");
+            link.setAttribute("aria-selected", String(isActive));
+            link.tabIndex = isActive ? 0 : -1;
         });
-    };
-
-    const syncScrollOffset = () => {
-        if (!nav) return;
-        document.documentElement.style.setProperty(
-            "--workqueue-nav-offset",
-            `${nav.offsetHeight + 16}px`,
-        );
+        panels.forEach((panel) => {
+            const isActive = panel.id === activeLink.getAttribute("aria-controls");
+            panel.hidden = !isActive;
+            if (isActive) {
+                activePanel = panel;
+                panel.classList.remove("workqueue-panel-enter");
+                void panel.offsetWidth;
+                panel.classList.add("workqueue-panel-enter");
+            }
+        });
+        renderRecords();
+        if (updateHash) history.replaceState(null, "", activeLink.hash);
     };
 
     if (nav) {
-        syncScrollOffset();
-        if (typeof ResizeObserver === "function") {
-            new ResizeObserver(syncScrollOffset).observe(nav);
-        } else {
-            window.addEventListener("resize", syncScrollOffset, { passive: true });
-        }
-
         links.forEach((link) => {
             link.addEventListener("click", (event) => {
-                const target = document.querySelector(link.hash);
-                if (!target) return;
                 event.preventDefault();
-                programmaticScroll = true;
-                window.clearTimeout(scrollSettleTimer);
-                syncScrollOffset();
-                setActiveLink(link);
-                target.scrollIntoView({ behavior: "smooth", block: "start" });
-                scrollSettleTimer = window.setTimeout(() => {
-                    programmaticScroll = false;
-                }, 1200);
-                history.replaceState(null, "", link.hash);
+                showSection(link);
+            });
+            link.addEventListener("keydown", (event) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const current = links.indexOf(link);
+                const next = event.key === 'Home' ? 0
+                    : event.key === 'End' ? links.length - 1
+                    : event.key === 'ArrowRight' ? (current + 1) % links.length
+                    : (current - 1 + links.length) % links.length;
+                links[next].focus();
+                showSection(links[next]);
             });
         });
 
         const hashLink = links.find((link) => link.hash === window.location.hash);
-        if (hashLink) setActiveLink(hashLink);
-
-        if (typeof IntersectionObserver === "function") {
-            const observer = new IntersectionObserver((entries) => {
-                if (programmaticScroll) return;
-                const visible = entries
-                    .filter((entry) => entry.isIntersecting)
-                    .sort(
-                        (left, right) =>
-                            Math.abs(left.boundingClientRect.top) -
-                            Math.abs(right.boundingClientRect.top),
-                    )[0];
-                if (!visible) return;
-                const link = links.find(
-                    (candidate) => candidate.hash === `#${visible.target.id}`,
-                );
-                if (link) setActiveLink(link);
-            }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
-
-            links.forEach((link) => {
-                const section = document.querySelector(link.hash);
-                if (section) observer.observe(section);
-            });
-        }
-
-        window.addEventListener("scroll", () => {
-            if (!programmaticScroll) return;
-            window.clearTimeout(scrollSettleTimer);
-            scrollSettleTimer = window.setTimeout(() => {
-                programmaticScroll = false;
-            }, 180);
-        }, { passive: true, capture: true });
+        showSection(hashLink || links[0], false);
+        window.addEventListener("hashchange", () => {
+            const matchingLink = links.find((link) => link.hash === window.location.hash);
+            if (matchingLink) showSection(matchingLink, false);
+        });
     }
+
+    search?.addEventListener("input", () => {
+        if (activePanel) pagesByPanel.set(activePanel.id, 1);
+        renderRecords();
+    });
+    document.querySelectorAll(".workqueue-density").forEach((button) => button.addEventListener("click", () => {
+        density = button.dataset.density;
+        renderRecords();
+    }));
+    previousPage?.addEventListener("click", () => {
+        if (!activePanel) return;
+        pagesByPanel.set(activePanel.id, Math.max(1, (pagesByPanel.get(activePanel.id) || 1) - 1));
+        renderRecords();
+    });
+    nextPage?.addEventListener("click", () => {
+        if (!activePanel) return;
+        pagesByPanel.set(activePanel.id, (pagesByPanel.get(activePanel.id) || 1) + 1);
+        renderRecords();
+    });
+
+    const backTop = document.getElementById("workqueue-back-top");
+    window.addEventListener("scroll", () => backTop?.classList.toggle("hidden", window.scrollY < 700), { passive: true });
+    backTop?.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+    document.body.addEventListener("htmx:afterSwap", renderRecords);
 
     if (!window.EventSource) return;
     const source = new EventSource("/api/v1/workqueue/events?audience={{ projection.audience.value }}");
@@ -167,11 +214,6 @@
 </script>
 
 <style nonce="{{ csp_nonce }}">
-    html { scroll-behavior: smooth; }
-    #workqueue-right-now,
-    [id^="workqueue-section-"] {
-        scroll-margin-top: var(--workqueue-nav-offset, 4.5rem);
-    }
     .workqueue-section-link {
         display: inline-flex;
         min-height: 2.25rem;
@@ -201,6 +243,54 @@
     .workqueue-section-link:focus-visible {
         outline: 2px solid var(--color-primary-500);
         outline-offset: 2px;
+    }
+    .workqueue-section-link span { margin-left: .35rem; opacity: .8; font-size: .7rem; }
+    .workqueue-density {
+        min-height: 2.25rem;
+        border: 1px solid var(--border-default);
+        border-radius: .55rem;
+        padding: .4rem .75rem;
+        color: var(--text-secondary);
+        font-size: .8rem;
+        font-weight: 600;
+    }
+    .workqueue-density.is-active {
+        border-color: rgb(34 197 94);
+        background: rgb(21 128 61 / 30%);
+        color: rgb(187 247 208);
+    }
+    .workqueue-page-button {
+        min-height: 2.35rem;
+        border: 1px solid var(--border-default);
+        border-radius: .55rem;
+        padding: .4rem .8rem;
+        color: var(--text-secondary);
+        font-size: .8rem;
+        font-weight: 600;
+    }
+    .workqueue-page-button:disabled { cursor: not-allowed; opacity: .4; }
+    [data-workqueue-record][hidden] { display: none !important; }
+
+    .workqueue-panel-enter article,
+    .workqueue-panel-enter [data-workqueue-empty],
+    .workqueue-panel-enter tr[data-workqueue-record] {
+        animation: workqueue-card-enter 320ms ease-out both;
+    }
+    .workqueue-panel-enter article:nth-child(2) { animation-delay: 45ms; }
+    .workqueue-panel-enter article:nth-child(3) { animation-delay: 90ms; }
+    .workqueue-panel-enter article:nth-child(4) { animation-delay: 135ms; }
+    .workqueue-panel-enter article:nth-child(5) { animation-delay: 180ms; }
+    .workqueue-panel-enter article:nth-child(6) { animation-delay: 225ms; }
+    @keyframes workqueue-card-enter {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .workqueue-panel-enter article,
+        .workqueue-panel-enter [data-workqueue-empty],
+        .workqueue-panel-enter tr[data-workqueue-record] {
+            animation: none;
+        }
     }
 </style>
 {% endblock %}
