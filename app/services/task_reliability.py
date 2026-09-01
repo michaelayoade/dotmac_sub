@@ -338,6 +338,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Persisted delivery identity and state gate retries; terminal failures "
         "are visible and replayable from integration administration.",
     ),
+    "app.tasks.integration_delivery.deliver_meta_lead_conversion": _c(
+        "integrations",
+        STATE,
+        STATEFUL,
+        DEAD,
+        "Durable delivery state, stable Meta event ID, bounded retry, and "
+        "dead-letter evidence.",
+    ),
     "app.tasks.invoice_pdf.generate_invoice_pdf_export": _c(
         "billing", MANUAL, IDEMP, STATUS
     ),
