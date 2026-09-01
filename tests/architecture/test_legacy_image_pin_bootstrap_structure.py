@@ -346,3 +346,61 @@ def test_the_bootstrap_never_names_a_service_outside_its_scope() -> None:
         assert not {
             item for item in literals if item in {"redis-local", "victoriametrics"}
         }, path.name
+
+
+def test_the_plan_separates_observed_current_state_from_pinned_desired_bytes() -> None:
+    """Two inputs, and neither may stand in for the other.
+
+    CURRENT comes from the host's deployed tree; an Actions checkout must never
+    masquerade as observed production state. DESIRED is pinned by digest in the
+    plan, so APPLY uses the reviewed bytes rather than whatever a checkout holds
+    at the time.
+    """
+
+    tree = ast.parse(CONTRACTS.read_text(encoding="utf-8"))
+    plan = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and node.name == "LegacyImagePinBootstrapPlanV1"
+    )
+    fields = {
+        node.target.id
+        for node in plan.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert "deployed_compose_files" in fields
+    assert "desired_release_compose_digest" in fields
+    assert "desired_overlay_digest" in fields
+    # The old single, ambiguous "compose_digest" must be gone: it named neither
+    # input and could be read as either.
+    assert "compose_digest" not in fields
+
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    assert "are not among the bytes " in contracts
+    assert "stage the release first" in contracts
+    assert "the overlay digest does not match the desired image" in contracts
+
+    # The CURRENT input is observed by the root-owned observer, from the paths
+    # the root-owned config names -- never from the repository.
+    observer = OBSERVER.read_text(encoding="utf-8")
+    assert 'for path in config["compose_files"]' in observer
+    assert "deployed_compose_files" in observer
+
+
+def test_a_moved_current_input_is_refused_rather_than_warned() -> None:
+    """Staging the release moves it, so no earlier plan may survive."""
+
+    owner = OWNER.read_text(encoding="utf-8")
+    assert "have moved since the plan was " in owner
+    assert "take fresh plans" in owner
+    # Folded into the prestate key as well, so the refusal does not depend on
+    # one comparison being reached.
+    assert "deployed_compose_digests" in CONTRACTS.read_text(encoding="utf-8")
+    assert "row.digest" in owner or "row.path" in owner
+
+    # And APPLY proves the desired bytes from a second, independent source.
+    adapter = ADAPTER.read_text(encoding="utf-8")
+    assert "is not the admitted desired bytes" in adapter
+    assert "is not staged to the admitted release Compose" in adapter
+    assert "is not the admitted desired overlay" in adapter

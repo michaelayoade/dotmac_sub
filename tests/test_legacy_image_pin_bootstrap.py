@@ -26,6 +26,8 @@ import scripts.published_port_reconcile_v2 as v2
 from scripts.legacy_image_pin_contracts import (
     LegacyImagePinBootstrapPlanV1,
     LegacyImagePinBootstrapSnapshotV1,
+    overlay_digest,
+    overlay_document,
 )
 
 # The exact coordinates measured on dotmac-sub-prod on 2026-09-01. Using the
@@ -42,6 +44,10 @@ DESIRED_REFERENCE = (
 TARGET_BEFORE = "46c9490482a34303a65dad139914a358207da628c00f049e53e0380a2731613c"
 TARGET_AFTER = "b" * 64
 SOURCE_SHA = "c" * 40
+# The plan requires the DESIRED release bytes to be among the bytes deployed on
+# the host -- the staging precondition, made structural. So the fixture's
+# deployed set really contains this repository's release Compose digest.
+RELEASE_DIGEST = bootstrap.sha256_file(bootstrap.COMPOSE)
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
 # Every one of these is a real non-target that runs on the host under a MUTABLE
@@ -292,6 +298,13 @@ def _snapshot_document(
         "non_port_definition_digest": f"sha256:{'2' * 64}",
         "image_free_definition_digest": f"sha256:{'3' * 64}",
         "effective_image_reference": legacy,
+        "deployed_compose_files": [
+            {
+                "path": "/root/dotmac_sub/docker-compose.override.yml",
+                "digest": f"sha256:{'b' * 64}",
+            },
+            {"path": "/root/dotmac_sub/docker-compose.yml", "digest": RELEASE_DIGEST},
+        ],
         "bind_knob": {
             "schema": "LegacyImagePinBindKnobProofV1",
             "env_key": "PG_LOCAL_BIND",
@@ -617,3 +630,127 @@ def test_the_prestate_key_changes_once_the_bootstrap_has_run(
 
     recreated = plan.model_copy(update={"target_container_id": TARGET_AFTER})
     assert recreated.prestate_key() != plan.prestate_key()
+
+
+# ---------------------------------------------------------------------------
+# Proof 7: the two inputs — current is revalidated, desired is pinned
+# ---------------------------------------------------------------------------
+
+
+def test_the_plan_binds_current_host_bytes_and_desired_release_bytes(
+    plan: LegacyImagePinBootstrapPlanV1,
+) -> None:
+    """Two inputs, not one.
+
+    CURRENT is what the host actually has: the deployed Compose bytes and the
+    live container identities. DESIRED is what APPLY will use: an immutable
+    release Compose digest and a fully determined overlay. The Actions checkout
+    is never allowed to stand in for the first, and a moving checkout is never
+    allowed to supply the second.
+    """
+
+    deployed = {row.digest for row in plan.deployed_compose_files}
+    assert plan.desired_release_compose_digest in deployed
+    assert plan.desired_release_compose_digest == RELEASE_DIGEST
+    assert plan.desired_overlay_digest == overlay_digest(DESIRED_REFERENCE)
+    assert overlay_document(DESIRED_REFERENCE) == {
+        "services": {"postgres-local": {"image": DESIRED_REFERENCE}}
+    }
+    paths = [row.path for row in plan.deployed_compose_files]
+    assert paths == sorted(paths)
+    assert all(path.startswith("/") for path in paths)
+
+
+def test_a_plan_is_unbuildable_until_the_host_is_staged_to_the_release(
+    tmp_path: Path,
+) -> None:
+    """The PG_LOCAL_BIND precondition, made structural rather than remembered.
+
+    Until the host carries the exact release bytes, the desired release digest
+    is not among the deployed digests and the plan cannot be constructed at
+    all. "Verify the deployed Compose digest" therefore stops being a step
+    somebody performs and becomes a thing the contract will not let you skip.
+    """
+
+    document = _snapshot_document()
+    document["deployed_compose_files"] = [
+        {
+            "path": "/root/dotmac_sub/docker-compose.override.yml",
+            "digest": f"sha256:{'b' * 64}",
+        },
+        # An UNSTAGED host: still the older release, so the desired bytes are
+        # nowhere in the deployed set.
+        {"path": "/root/dotmac_sub/docker-compose.yml", "digest": f"sha256:{'e' * 64}"},
+    ]
+    document["observer_digest"] = bootstrap.sha256_file(Path(observer.__file__))
+    path = _write_snapshot(tmp_path / "unstaged.json", document)
+    with pytest.raises(Exception, match="stage the release first"):
+        _build(path, tmp_path / "absent-receipt.json")
+
+
+def test_a_plan_whose_deployed_bytes_moved_is_refused_at_apply(
+    tmp_path: Path, plan: LegacyImagePinBootstrapPlanV1, snapshot_path: Path
+) -> None:
+    """No plan taken before staging survives staging.
+
+    Staging the release that carries the knob rewrites the host's deployed
+    Compose. A plan taken before that describes a host which no longer exists,
+    so APPLY refuses it outright rather than warning — the same shape as the
+    single-use refusal, applied to a different coordinate.
+    """
+
+    receipt = tmp_path / "absent-receipt.json"
+    admission = _admit(tmp_path, plan, receipt=receipt)
+
+    moved = _snapshot_document()
+    moved["observer_digest"] = bootstrap.sha256_file(Path(observer.__file__))
+    moved["deployed_compose_files"] = [
+        {
+            "path": "/root/dotmac_sub/docker-compose.override.yml",
+            "digest": f"sha256:{'b' * 64}",
+        },
+        {"path": "/root/dotmac_sub/docker-compose.yml", "digest": RELEASE_DIGEST},
+        # A third file appeared on the host between planning and apply.
+        {
+            "path": "/root/dotmac_sub/docker-compose.staged.yml",
+            "digest": RELEASE_DIGEST,
+        },
+    ]
+    moved_path = _write_snapshot(tmp_path / "moved.json", moved)
+
+    with pytest.raises(bootstrap.BootstrapRefused, match="no longer exists"):
+        bootstrap.verify_prestate(
+            admission=admission,
+            plan=plan,
+            snapshot_path=moved_path,
+            now=NOW + timedelta(minutes=2),
+            receipt_path=receipt,
+        )
+
+    # The same host, unmoved, is still admitted — so the refusal above is
+    # discriminating rather than unconditional.
+    bootstrap.verify_prestate(
+        admission=admission,
+        plan=plan,
+        snapshot_path=snapshot_path,
+        now=NOW + timedelta(minutes=2),
+        receipt_path=receipt,
+    )
+
+
+def test_the_prestate_key_covers_the_deployed_bytes(
+    plan: LegacyImagePinBootstrapPlanV1,
+) -> None:
+    """The admission's single prestate coordinate moves when the host does."""
+
+    restaged = plan.model_copy(
+        update={
+            "deployed_compose_files": (
+                *plan.deployed_compose_files[:-1],
+                plan.deployed_compose_files[-1].model_copy(
+                    update={"digest": f"sha256:{'f' * 64}"}
+                ),
+            )
+        }
+    )
+    assert restaged.prestate_key() != plan.prestate_key()

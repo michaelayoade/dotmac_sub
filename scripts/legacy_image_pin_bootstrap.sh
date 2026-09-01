@@ -289,6 +289,20 @@ RESOLVED_IMAGE_ID="$(sudo -n "${DOCKER_BIN}" image inspect "${DESIRED_REFERENCE}
 [[ "${RESOLVED_IMAGE_ID}" == "${RUNNING_IMAGE_ID}" ]] ||
   die "the desired digest does not resolve locally to the running image ID"
 
+# 4b. The DESIRED bytes. The plan binds an immutable release Compose digest;
+#     prove the checkout at the pinned source SHA really carries those bytes,
+#     and that the host's deployed tree carries them too. Together with the
+#     plan's own validator this means the file APPLY composes with is the exact
+#     reviewed release, verified from two independent sources rather than
+#     trusted because a checkout happened to be sitting there.
+DESIRED_RELEASE_DIGEST="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["desired_release_compose_digest"])' "${PLAN_PATH}")"
+CHECKOUT_RELEASE_DIGEST="sha256:$(sha256sum "${REPO_DIR}/docker-compose.yml" | cut -d" " -f1)"
+[[ "${CHECKOUT_RELEASE_DIGEST}" == "${DESIRED_RELEASE_DIGEST}" ]] ||
+  die "the checkout's release Compose is not the admitted desired bytes"
+DEPLOYED_RELEASE_DIGEST="sha256:$(sha256sum "${DEPLOY_DIR}/docker-compose.yml" | cut -d" " -f1)"
+[[ "${DEPLOYED_RELEASE_DIGEST}" == "${DESIRED_RELEASE_DIGEST}" ]] ||
+  die "the host is not staged to the admitted release Compose; take fresh plans"
+
 # 5. Root-owned rollback bundle. Its Compose inputs and deadman executable
 #    survive runner death, checkout cleanup and reboot.
 sudo -n install -d -o root -g root -m 0700 "${STATE_ROOT}"
@@ -314,6 +328,10 @@ for source in "${COMPOSE_SOURCES[@]}"; do
   index=$((index + 1))
 done
 run_owner write-image-pin --plan "${PLAN_PATH}" --output "${SCRATCH}/image-pin.json"
+OVERLAY_DIGEST="sha256:$(sha256sum "${SCRATCH}/image-pin.json" | cut -d" " -f1)"
+DESIRED_OVERLAY_DIGEST="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["desired_overlay_digest"])' "${PLAN_PATH}")"
+[[ "${OVERLAY_DIGEST}" == "${DESIRED_OVERLAY_DIGEST}" ]] ||
+  die "the written overlay is not the admitted desired overlay"
 sudo -n install -o root -g root -m 0600 "${SCRATCH}/image-pin.json" \
   "${STATE_DIR}/image-pin.json"
 BUNDLE_FILES+=("${STATE_DIR}/image-pin.json")

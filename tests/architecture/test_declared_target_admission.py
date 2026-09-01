@@ -184,6 +184,16 @@ def _bootstrap_snapshot(*, image: str) -> dict[str, object]:
         "non_port_definition_digest": f"sha256:{'2' * 64}",
         "image_free_definition_digest": f"sha256:{'3' * 64}",
         "effective_image_reference": image,
+        "deployed_compose_files": [
+            {
+                "path": "/root/dotmac_sub/docker-compose.override.yml",
+                "digest": f"sha256:{'b' * 64}",
+            },
+            {
+                "path": "/root/dotmac_sub/docker-compose.yml",
+                "digest": f"sha256:{'a' * 64}",
+            },
+        ],
         "bind_knob": {
             "schema": "LegacyImagePinBindKnobProofV1",
             "env_key": "PG_LOCAL_BIND",

@@ -90,6 +90,36 @@ was already running — and reverting to the tag would put the service back in
 the state the steady-state lane refuses to touch, which is the exact condition
 this bootstrap exists to remove.
 
+### 4b. Two inputs, not one: CURRENT is revalidated, DESIRED is pinned
+
+The plan binds two separate inputs, and they are not interchangeable.
+
+**CURRENT** is what the host actually has: the digests of its DEPLOYED Compose
+files, the live target container, and every non-target container identity. The
+host's deployed tree is the sole authority for this. An Actions checkout must
+never masquerade as observed production state.
+
+**DESIRED** is the bytes APPLY will use: an immutable release Compose digest and
+a fully determined overlay digest. These are pinned in the plan, so APPLY uses
+exactly the reviewed bytes rather than whatever a checkout happens to contain
+when it runs.
+
+The plan requires the desired release bytes to be **among** the deployed bytes.
+That single validator is the staging precondition made structural: until the
+host carries this exact release, a plan cannot be constructed at all, so
+"verify the deployed Compose digest" stops being a step somebody performs and
+becomes one the contract will not let anybody skip. It also resolves the
+tension both ways — applying a checkout would diverge observation from
+execution, while applying the host's file alone would leave the change with no
+immutable definition of what it is applying.
+
+APPLY revalidates CURRENT under the lock and refuses outright — not warns — if
+the deployed bytes have moved, because **staging the release that carries
+`PG_LOCAL_BIND` moves them**. No plan taken before staging survives it. The
+deployed digests are also folded into the prestate key, so a moved host is
+refused twice over; the dedicated check runs first only so the operator is told
+*which* coordinate moved.
+
 ### 5. The bind variable is proved, not assumed
 
 Measured on the host: the DEPLOYED `docker-compose.yml` publishes a bare
@@ -105,9 +135,30 @@ enough: a file that hardcoded the wildcard would satisfy a single wildcard
 probe while being just as unresponsive to the variable. The loopback probe is
 the control that makes the first result mean anything.
 
-**Operational consequence: the bootstrap cannot run until the host's deployed
-Compose file is the release that carries the knob.** That is an ordinary
-deploy and is a precondition of the maintenance window, not part of this change.
+**Operational consequence — the authorized sequence.** The bootstrap cannot run
+until the host's deployed Compose is the release carrying the knob:
+
+1. Publish and verify an exact Sub release carrying the knob.
+2. Authorize staging that release's Compose on the host **without recreating
+   `postgres-local`**.
+3. Verify the deployed Compose digest.
+4. Take **fresh**, byte-identical bootstrap plans.
+5. Apply the digest pin and IPv4-only binding in a separately named window.
+6. Verify non-target container IDs, replication, listener families and firewall
+   reach.
+7. Produce the bootstrap receipt, then demonstrate steady-state v2 admission.
+
+Step 4's *fresh* is load-bearing and is enforced, not advised: staging rewrites
+the deployed Compose, so any earlier plan's CURRENT input no longer describes
+the host and is refused at apply.
+
+If staging cannot avoid recreating PostgreSQL, then staging and containment
+become **one explicitly authorized maintenance operation**, and no plan taken
+before staging survives it.
+
+Step 7 is also what discharges the outstanding ADR 0034 obligation in § 6: the
+steady-state real-target admit becomes demonstrable only after the bootstrap has
+executed.
 
 ## Scope
 

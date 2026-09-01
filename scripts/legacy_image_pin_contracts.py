@@ -33,6 +33,7 @@ adopting it would silently schedule an upgrade inside a containment change.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, Self
 
@@ -145,6 +146,43 @@ class LegacyImagePinLocalResolutionV1(StrictContract):
         return self
 
 
+class LegacyImagePinDeployedFileV1(StrictContract):
+    """One Compose file as it exists ON THE HOST, with the bytes' digest.
+
+    This is a CURRENT-state fact. The host's deployed tree is the authority for
+    what production actually is; an Actions checkout must never masquerade as
+    observed production state.
+    """
+
+    path: NonEmpty
+    digest: Sha256Digest
+
+    @model_validator(mode="after")
+    def deployed_paths_are_absolute(self) -> Self:
+        if not self.path.startswith("/"):
+            raise ValueError("a deployed Compose path must be absolute")
+        return self
+
+
+def overlay_document(image_reference: str) -> dict[str, object]:
+    """The single Compose overlay this operation adds: the digest reference."""
+
+    return {"services": {BOOTSTRAP_SERVICE: {"image": image_reference}}}
+
+
+def overlay_digest(image_reference: str) -> str:
+    raw = (
+        json.dumps(
+            overlay_document(image_reference),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
 class LegacyImagePinBindKnobProofV1(StrictContract):
     """Proof that setting the bind variable actually moves the listener.
 
@@ -229,6 +267,9 @@ class LegacyImagePinBootstrapSnapshotV1(StrictContract):
     non_port_definition_digest: Sha256Digest
     image_free_definition_digest: Sha256Digest
     effective_image_reference: LegacyImageTag
+    deployed_compose_files: tuple[LegacyImagePinDeployedFileV1, ...] = Field(
+        min_length=1
+    )
     bind_knob: LegacyImagePinBindKnobProofV1
     non_targets: tuple[PublishedPortProjectContainerV1, ...]
 
@@ -263,6 +304,9 @@ class LegacyImagePinBootstrapSnapshotV1(StrictContract):
             raise ValueError("the target service may not appear among non-targets")
         if self.target_container_id in {row.container_id for row in self.non_targets}:
             raise ValueError("the target container may not appear among non-targets")
+        paths = tuple(row.path for row in self.deployed_compose_files)
+        if paths != tuple(sorted(set(paths))):
+            raise ValueError("deployed Compose files must be unique and sorted")
         return self
 
 
@@ -325,8 +369,21 @@ class LegacyImagePinBootstrapPlanV1(StrictContract):
     change_reference: NonEmpty
     reason: NonEmpty
     declaration_digest: Sha256Digest
-    compose_digest: Sha256Digest
     observer_digest: Sha256Digest
+
+    # ---- CURRENT: what is deployed and running now. Measured from the host,
+    # and revalidated under the lock at apply. A plan whose current input has
+    # moved describes a host that no longer exists and is refused, not warned
+    # about -- staging the release that carries PG_LOCAL_BIND moves it, so no
+    # plan taken before staging survives.
+    deployed_compose_files: tuple[LegacyImagePinDeployedFileV1, ...] = Field(
+        min_length=1
+    )
+
+    # ---- DESIRED: the immutable bytes APPLY will use, pinned by digest rather
+    # than taken from whatever a checkout happens to contain at the time.
+    desired_release_compose_digest: Sha256Digest
+    desired_overlay_digest: Sha256Digest
 
     legacy_image_reference: LegacyImageTag
     observed_image_id: Sha256Digest
@@ -369,6 +426,26 @@ class LegacyImagePinBootstrapPlanV1(StrictContract):
             )
         if str(self.replication_client) != "75.119.157.91/32":
             raise ValueError("the declared replication obligation differs")
+
+        deployed_paths = tuple(row.path for row in self.deployed_compose_files)
+        if deployed_paths != tuple(sorted(set(deployed_paths))):
+            raise ValueError("deployed Compose files must be unique and sorted")
+        # The release bytes must be AMONG the bytes actually deployed. This is
+        # the PG_LOCAL_BIND precondition made structural: until the host has
+        # been staged to this exact release, the plan cannot be built at all,
+        # so "verify the deployed Compose digest" is a contract check rather
+        # than a step someone remembers to perform.
+        if self.desired_release_compose_digest not in {
+            row.digest for row in self.deployed_compose_files
+        }:
+            raise ValueError(
+                "the desired release Compose bytes are not among the bytes "
+                "deployed on the host; stage the release first"
+            )
+        # The overlay is fully determined by the desired reference, so it
+        # cannot be substituted between planning and apply.
+        if self.desired_overlay_digest != overlay_digest(self.desired_image_reference):
+            raise ValueError("the overlay digest does not match the desired image")
 
         # The prestate is the dual-family publish that this change exists to
         # correct: both a v4 and a v6 listener on the declared socket.
@@ -433,6 +510,9 @@ class LegacyImagePinBootstrapPlanV1(StrictContract):
             observed_image_id=self.observed_image_id,
             target_container_id=self.target_container_id,
             non_port_definition_digest=self.non_port_definition_digest,
+            deployed_compose_digests=tuple(
+                f"{row.path}={row.digest}" for row in self.deployed_compose_files
+            ),
         )
 
     def desired_ipv4_address(self) -> IPvAnyAddress:
@@ -445,6 +525,7 @@ def _prestate_key(
     observed_image_id: str,
     target_container_id: str,
     non_port_definition_digest: str,
+    deployed_compose_digests: tuple[str, ...],
 ) -> str:
     material = "\n".join(
         (
@@ -453,6 +534,7 @@ def _prestate_key(
             observed_image_id,
             target_container_id,
             non_port_definition_digest,
+            *deployed_compose_digests,
         )
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(material).hexdigest()}"

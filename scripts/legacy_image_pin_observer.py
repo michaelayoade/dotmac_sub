@@ -451,6 +451,21 @@ def collect(
 
     bind_knob = _prove_bind_knob(compose)
 
+    # CURRENT state: the bytes actually deployed on this host. The Actions
+    # checkout is never allowed to stand in for this.
+    deployed_compose_files = sorted(
+        (
+            {
+                "path": str(path),
+                "digest": (
+                    "sha256:" + hashlib.sha256(Path(str(path)).read_bytes()).hexdigest()
+                ),
+            }
+            for path in config["compose_files"]
+        ),
+        key=lambda row: row["path"],
+    )
+
     return {
         "schema": "LegacyImagePinBootstrapSnapshotV1",
         "target_server_name": config["target_server_name"],
@@ -468,6 +483,7 @@ def collect(
         "non_port_definition_digest": _digest(projection),
         "image_free_definition_digest": _digest(image_free),
         "effective_image_reference": effective_image,
+        "deployed_compose_files": deployed_compose_files,
         "bind_knob": bind_knob,
         "non_targets": non_targets,
     }

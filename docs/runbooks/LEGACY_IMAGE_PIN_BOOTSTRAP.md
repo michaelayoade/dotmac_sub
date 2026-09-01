@@ -36,6 +36,24 @@ could be a newer image, and the window would silently become an upgrade.
 6. No file at `/var/lib/dotmac/legacy-image-pin/receipt.json`. If one exists the
    bootstrap has already run and will refuse; that is correct, not a fault.
 
+## The authorized sequence
+
+1. Publish and verify an exact Sub release carrying the knob. **This needs its
+   own authorization and is not part of the bootstrap.**
+2. Authorize staging that release's Compose on the host **without recreating
+   `postgres-local`**.
+3. Verify the deployed Compose digest.
+4. Take **fresh**, byte-identical bootstrap plans.
+5. Apply the digest pin and IPv4-only binding in a separately named window.
+6. Verify non-target container IDs, replication, listener families, firewall reach.
+7. Produce the bootstrap receipt, then demonstrate steady-state v2 admission.
+
+Step 4's *fresh* is enforced. Staging rewrites the deployed Compose, so a plan
+taken before it binds a CURRENT input that no longer describes the host and is
+**refused at apply**, not warned about. If staging cannot avoid recreating
+PostgreSQL, staging and containment become one explicitly authorized maintenance
+operation and no earlier plan survives.
+
 ## Sequence
 
 ### 1. Two plans

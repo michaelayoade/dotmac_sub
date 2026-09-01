@@ -44,6 +44,8 @@ from scripts.legacy_image_pin_contracts import (
     LegacyImagePinPostconditionVerdictV1,
     LegacyImagePinReachProofV1,
     LegacyImagePinReplicationProbeV1,
+    overlay_digest,
+    overlay_document,
 )
 from scripts.published_port_contracts import (
     CanonicalContractError,
@@ -181,8 +183,10 @@ def build_plan(
         change_reference=change_reference,
         reason=reason,
         declaration_digest=sha256_file(declaration_path),
-        compose_digest=sha256_file(compose_path),
         observer_digest=snapshot.observer_digest,
+        deployed_compose_files=snapshot.deployed_compose_files,
+        desired_release_compose_digest=sha256_file(compose_path),
+        desired_overlay_digest=overlay_digest(snapshot.desired_image_reference),
         legacy_image_reference=snapshot.legacy_image_reference,
         observed_image_id=snapshot.target_image_id,
         desired_image_reference=snapshot.desired_image_reference,
@@ -349,6 +353,18 @@ def verify_prestate(
     if not hmac.compare_digest(admission.operation_digest, plan.operation_digest()):
         _refuse("the admission does not bind the exact operation")
     snapshot = _read_contract(snapshot_path, LegacyImagePinBootstrapSnapshotV1)
+    # The CURRENT input is compared FIRST, and on its own coordinate. It is
+    # folded into the prestate key too, so a moved host is refused either way
+    # -- but the key's message ("the prestate is not the admitted prestate")
+    # cannot tell an operator WHICH coordinate moved, and at 03:00 the
+    # difference between "someone staged a release" and "this already ran" is
+    # the whole diagnosis.
+    if snapshot.deployed_compose_files != plan.deployed_compose_files:
+        _refuse(
+            "the host's deployed Compose bytes have moved since the plan was "
+            "taken; that plan describes a host that no longer exists and cannot "
+            "be applied -- take fresh plans"
+        )
     live = _prestate_from_snapshot(snapshot)
     if not hmac.compare_digest(live, plan.prestate_key()):
         _refuse(
@@ -378,6 +394,7 @@ def _prestate_from_snapshot(snapshot: LegacyImagePinBootstrapSnapshotV1) -> str:
             snapshot.target_image_id,
             snapshot.target_container_id,
             snapshot.non_port_definition_digest,
+            *(f"{row.path}={row.digest}" for row in snapshot.deployed_compose_files),
         )
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(material).hexdigest()}"
@@ -598,13 +615,11 @@ def write_receipt(
 
 
 def write_image_pin(plan: LegacyImagePinBootstrapPlanV1, path: Path) -> None:
-    """The one Compose overlay this operation adds: the digest reference."""
+    """Write the DESIRED overlay, and only if it is the one the plan bound."""
 
-    document = {
-        "services": {
-            plan.service: {"image": plan.desired_image_reference},
-        }
-    }
+    document = overlay_document(plan.desired_image_reference)
+    if overlay_digest(plan.desired_image_reference) != plan.desired_overlay_digest:
+        _refuse("the overlay bytes differ from the admitted desired overlay")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
