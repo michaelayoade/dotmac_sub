@@ -1808,13 +1808,13 @@ def _team_sla_expression(
     """Build a portable SQL expression for per-team SLA thresholds."""
 
     if not thresholds:
-        return cast(literal(None), Integer)
+        return literal(None, type_=Integer)
     return case(
         *(
             (team_column == team_id, literal(seconds, type_=Integer))
             for team_id, seconds in thresholds.items()
         ),
-        else_=cast(literal(None), Integer),
+        else_=literal(None, type_=Integer),
     )
 
 
