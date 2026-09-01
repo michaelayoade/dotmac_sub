@@ -357,8 +357,12 @@ def test_service_recovery_enables_olt_fallback_when_acs_hides_ppp_wan(
             return ScalarResult()
 
     monkeypatch.setattr(
-        "app.services.web_network_service_ports._resolve_ont_olt_context",
-        lambda *_args, **_kwargs: (object(), object(), "0/2/1", 13),
+        context_builders,
+        "resolve_ont_olt_read_context",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(olt=object(), fsp="0/2/1", ont_id_on_olt=13),
+            None,
+        ),
     )
     ont_id = uuid.uuid4()
 

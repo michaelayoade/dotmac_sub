@@ -25,7 +25,18 @@ from dataclasses import dataclass
 from typing import cast
 
 import psycopg
-from sqlalchemy import Boolean, Column, Integer, String, delete, insert, select, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Integer,
+    String,
+    delete,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.orm import joinedload
 
 from app.db import SessionLocal
@@ -669,39 +680,52 @@ def populate(
         suspended_list_name = suspended_address_list(db)
         from app.models.subscriber import Subscriber
 
+        scoped = only_usernames is not None
+        requested_usernames = set(only_usernames or set())
+
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
         # effect at the BNG (hard-deleting their rows would fail-closed but
         # lose the captive pay-page treatment).
-        rows = (
-            db.execute(
-                select(Subscription)
-                .options(
-                    joinedload(Subscription.offer),
-                    joinedload(Subscription.radius_profile),
-                    joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
-                )
-                .where(
-                    Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
-                    Subscription.login.isnot(None),
-                )
+        subscription_statement = (
+            select(Subscription)
+            .options(
+                joinedload(Subscription.offer),
+                joinedload(Subscription.radius_profile),
+                joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
             )
-            .unique()
-            .scalars()
-            .all()
+            .where(
+                Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                Subscription.login.isnot(None),
+            )
         )
+        if scoped:
+            # Include every candidate for a duplicated requested login so the
+            # canonical planner picks the same owner as a full sweep.
+            subscription_statement = subscription_statement.where(
+                Subscription.login.in_(requested_usernames)
+            )
+        rows = db.execute(subscription_statement).unique().scalars().all()
         stats["subscriptions_considered"] = len(rows)
         logger.info(
             "considering %d active/blocked subscriptions with a login", len(rows)
         )
         login_projections = plan_login_radius_projections(db, rows)
 
-        # Pre-fetch all AccessCredentials keyed by username
+        cohort_subscription_ids = {row.id for row in rows}
+        cohort_subscriber_ids = {row.subscriber_id for row in rows}
+
+        # Pre-fetch AccessCredentials keyed by username. Scoped reconciliation
+        # does not hydrate unrelated fleet credentials.
+        credential_statement = select(AccessCredential).where(
+            AccessCredential.is_active.is_(True)
+        )
+        if scoped:
+            credential_statement = credential_statement.where(
+                AccessCredential.username.in_(requested_usernames)
+            )
         creds_by_username: dict[str, AccessCredential] = {
-            c.username: c
-            for c in db.scalars(
-                select(AccessCredential).where(AccessCredential.is_active.is_(True))
-            ).all()
+            c.username: c for c in db.scalars(credential_statement).all()
         }
 
         # Pre-fetch RadiusProfiles by id so a credential-level profile override
@@ -712,8 +736,18 @@ def populate(
         # mirrors the credential>subscription precedence in
         # enforcement.resolve_radius_profile; the offer-derived fallback below is
         # unchanged, so a non-throttled customer's speed is untouched.
+        credential_profile_ids = {
+            credential.radius_profile_id
+            for credential in creds_by_username.values()
+            if credential.radius_profile_id is not None
+        }
+        profile_statement = select(RadiusProfile)
+        if scoped:
+            profile_statement = profile_statement.where(
+                RadiusProfile.id.in_(credential_profile_ids)
+            )
         radius_profiles_by_id: dict = {
-            p.id: p for p in db.scalars(select(RadiusProfile)).all()
+            p.id: p for p in db.scalars(profile_statement).all()
         }
 
         # Pre-fetch additional routed IP blocks,
@@ -722,18 +756,46 @@ def populate(
         from app.models.network import SubscriberAdditionalRoute
 
         subscriber_service_counts: dict = {}
-        for row in rows:
-            subscriber_service_counts[row.subscriber_id] = (
-                subscriber_service_counts.get(row.subscriber_id, 0) + 1
-            )
+        if scoped and cohort_subscriber_ids:
+            # Legacy subscriber-owned IP/route facts are valid only for an
+            # account with one projected service. Count complete service cohorts
+            # for affected accounts without loading their ORM rows.
+            for subscriber_id, service_count in db.execute(
+                select(Subscription.subscriber_id, func.count(Subscription.id))
+                .where(
+                    Subscription.subscriber_id.in_(cohort_subscriber_ids),
+                    Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                    Subscription.login.isnot(None),
+                )
+                .group_by(Subscription.subscriber_id)
+            ).all():
+                subscriber_service_counts[subscriber_id] = int(service_count)
+        else:
+            for row in rows:
+                subscriber_service_counts[row.subscriber_id] = (
+                    subscriber_service_counts.get(row.subscriber_id, 0) + 1
+                )
 
         routes_by_subscription: dict = {}
         legacy_routes_by_subscriber: dict = {}
-        for r in db.scalars(
-            select(SubscriberAdditionalRoute).where(
-                SubscriberAdditionalRoute.is_active.is_(True)
+        route_statement = select(SubscriberAdditionalRoute).where(
+            SubscriberAdditionalRoute.is_active.is_(True)
+        )
+        if scoped:
+            route_statement = route_statement.where(
+                or_(
+                    SubscriberAdditionalRoute.subscription_id.in_(
+                        cohort_subscription_ids
+                    ),
+                    (
+                        SubscriberAdditionalRoute.subscription_id.is_(None)
+                        & SubscriberAdditionalRoute.subscriber_id.in_(
+                            cohort_subscriber_ids
+                        )
+                    ),
+                )
             )
-        ).all():
+        for r in db.scalars(route_statement).all():
             target = (
                 routes_by_subscription.setdefault(r.subscription_id, [])
                 if getattr(r, "subscription_id", None)
@@ -766,7 +828,7 @@ def populate(
         ipv4_primary_by_subscription: dict = {}
         ipv4_candidates_by_subscription: dict = {}
         legacy_ipv4_candidates_by_subscriber: dict = {}
-        for sid, subscription_id, is_primary, addr in db.execute(
+        ipv4_statement = (
             select(
                 IPAssignment.subscriber_id,
                 IPAssignment.subscription_id,
@@ -776,7 +838,18 @@ def populate(
             .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
             .where(IPAssignment.is_active.is_(True))
             .where(IPAssignment.ip_version == IPVersion.ipv4)
-        ).all():
+        )
+        if scoped:
+            ipv4_statement = ipv4_statement.where(
+                or_(
+                    IPAssignment.subscription_id.in_(cohort_subscription_ids),
+                    (
+                        IPAssignment.subscription_id.is_(None)
+                        & IPAssignment.subscriber_id.in_(cohort_subscriber_ids)
+                    ),
+                )
+            )
+        for sid, subscription_id, is_primary, addr in db.execute(ipv4_statement).all():
             if sid and addr:
                 if subscription_id:
                     ipv4_candidates_by_subscription.setdefault(
@@ -798,14 +871,27 @@ def populate(
         if pd_enabled():
             from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
 
-            for sid, subscription_id, prefix, plen in db.execute(
-                select(
-                    Ipv6DelegatedPrefix.subscriber_id,
-                    Ipv6DelegatedPrefix.subscription_id,
-                    Ipv6DelegatedPrefix.prefix,
-                    Ipv6DelegatedPrefix.prefix_length,
-                ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
-            ).all():
+            pd_statement = select(
+                Ipv6DelegatedPrefix.subscriber_id,
+                Ipv6DelegatedPrefix.subscription_id,
+                Ipv6DelegatedPrefix.prefix,
+                Ipv6DelegatedPrefix.prefix_length,
+            ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+            if scoped:
+                pd_statement = pd_statement.where(
+                    or_(
+                        Ipv6DelegatedPrefix.subscription_id.in_(
+                            cohort_subscription_ids
+                        ),
+                        (
+                            Ipv6DelegatedPrefix.subscription_id.is_(None)
+                            & Ipv6DelegatedPrefix.subscriber_id.in_(
+                                cohort_subscriber_ids
+                            )
+                        ),
+                    )
+                )
+            for sid, subscription_id, prefix, plen in db.execute(pd_statement).all():
                 if sid and prefix:
                     value = f"{prefix}/{plen}"
                     if subscription_id:
@@ -973,12 +1059,10 @@ def populate(
             db.close()
 
     work = list(by_login.values())
-    # A scoped reconcile writes only the requested usernames. The projection is
-    # still computed fleet-wide above, so the subscriber service-count and
-    # duplicate-login dedup stay identical to the full sweep; only the write set
-    # narrows. A requested username absent from `work` has no active/blocked
-    # subscription and is deleted (removal), never reinserted.
-    scoped = only_usernames is not None
+    # A scoped reconcile computes only the requested login cohort. Duplicate
+    # login candidates and affected subscriber service counts retain full-sweep
+    # semantics without loading unrelated fleet state. A requested username
+    # absent from `work` is deleted (removal), never reinserted.
     if only_usernames is not None:
         work = [item for item in work if item.username in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
@@ -1095,9 +1179,9 @@ def reconcile_usernames(
 ) -> dict[str, object]:
     """Scoped `access.radius_projection` reconcile for a bounded username set.
 
-    Computes the same fleet-wide projection as the full sweep — so the
-    subscriber service-count and duplicate-login dedup stay identical — then
-    writes only the requested usernames. A requested username with no active/
+    Computes the requested login cohort plus the affected subscribers' service
+    counts, preserving full-sweep legacy-fallback and duplicate-login semantics
+    without loading unrelated fleet state. A requested username with no active/
     blocked/suspended subscription is deleted (removal); one still present is
     rewritten. No global orphan reap and no probe sync.
 

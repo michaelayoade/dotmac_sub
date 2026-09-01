@@ -691,11 +691,22 @@ def subscription_detail_page_context(
     subscription = get_subscription_or_none(db, subscription_id)
     if subscription is None:
         return None
+    lifecycle = resolve_subscription_lifecycle(db, subscription_id)
+    cancel_subscription_preview = preview_subscription_command(
+        db,
+        SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:catalog:subscription_detail",
+            expected_head=lifecycle.head,
+        ),
+    )
     context: dict[str, object] = {
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
         "pending_plan_change": _pending_plan_change_context(db, subscription_id),
+        "cancel_subscription_preview": cancel_subscription_preview,
         "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
         "scheduled_status_changes": _scheduled_status_change_context(
             db, subscription_id

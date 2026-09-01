@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.services.web_network_ont_actions.context_builders import (
     _desired_config_context,
@@ -165,6 +168,89 @@ def test_service_recovery_uses_olt_fallback_when_acs_hides_ppp_wan() -> None:
     assert "Huawei OLT fallback path" in context["recovery_stage"]["action_hint"]
     assert "OLT/RADIUS shows PPPoE is online" in ppp_row["message"]
     assert "Huawei OLT fallback bind is available" in bind_row["message"]
+
+
+def test_read_ont_olt_context_does_not_lock_assignment() -> None:
+    from app.models.network import OLTDevice, OntUnit, PonPort
+    from app.services.network.ont_olt_context import resolve_ont_olt_read_context
+
+    ont_id = uuid4()
+    pon_port_id = uuid4()
+    olt_id = uuid4()
+    ont = SimpleNamespace(
+        id=ont_id,
+        board="0/1",
+        port="7",
+        external_id="7",
+    )
+    assignment = SimpleNamespace(pon_port_id=pon_port_id)
+    pon_port = SimpleNamespace(olt_id=olt_id)
+    olt = SimpleNamespace(id=olt_id)
+    db = MagicMock()
+    captured_statements = []
+
+    def get(model, entity_id):
+        if model is OntUnit:
+            assert entity_id == ont_id
+            return ont
+        if model is PonPort:
+            assert entity_id == pon_port_id
+            return pon_port
+        if model is OLTDevice:
+            assert entity_id == olt_id
+            return olt
+        raise AssertionError(f"Unexpected model lookup: {model!r}")
+
+    def scalars(statement):
+        captured_statements.append(statement)
+        return SimpleNamespace(first=lambda: assignment)
+
+    db.get.side_effect = get
+    db.scalars.side_effect = scalars
+
+    context, message = resolve_ont_olt_read_context(db, str(ont_id))
+
+    assert message is None
+    assert context is not None
+    assert context.ont is ont
+    assert context.olt is olt
+    assert context.fsp == "0/1/7"
+    assert context.ont_id_on_olt == 7
+    assert captured_statements
+    assert captured_statements[0]._for_update_arg is None
+
+
+def test_service_recovery_rolls_back_after_read_context_db_error(monkeypatch) -> None:
+    from app.services.web_network_ont_actions import context_builders
+
+    db = MagicMock()
+    db.scalars.return_value.first.return_value = None
+    ont = SimpleNamespace(id=uuid4(), tr069_last_snapshot={"raw_device": {}})
+
+    def fail_read_context(*_args, **_kwargs):
+        raise SQLAlchemyError("simulated aborted read context")
+
+    monkeypatch.setattr(
+        context_builders,
+        "resolve_ont_olt_read_context",
+        fail_read_context,
+    )
+
+    context = _service_recovery_context(
+        db,
+        ont,
+        desired_wan={
+            "wan_mode": "pppoe",
+            "pppoe_username": "100024285",
+            "wan_vlan": "203",
+        },
+        service_ports_context={"service_ports": [], "deferred": True},
+        olt_status={"deferred": True, "entry": {}},
+        has_tr069_device=False,
+    )
+
+    db.rollback.assert_called_once()
+    assert context["service_recovery"]["bind_action_enabled"] is False
 
 
 def test_unified_config_context_does_not_perform_live_reads(

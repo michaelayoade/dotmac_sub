@@ -10,6 +10,32 @@
 [`CRM_WEB_RETIREMENT.md`](CRM_WEB_RETIREMENT.md) and
 [`crm_web_retirement_ledger.json`](../audits/crm_web_retirement_ledger.json)
 
+## Meta Lead Ads acquisition and conversion feedback
+
+`integration.inbox` records each signature-verified `leadgen` notification.
+The Meta connector retrieves the named Lead from Meta and submits the typed
+Party-first capture contract owned by `sales.capture`. The provider Lead ID is
+the immutable source-interaction identity; campaign, ad set, ad, form, and
+capture time remain attribution evidence. Raw Meta payloads do not become a
+second Lead record.
+
+`sales.meta_lead_customer_match` owns the rebuildable customer-match projection.
+It compares captured email and phone observations only with active, verified
+Party contact points on active Party-bound customer accounts. A single match is
+a review candidate, not an identity merge, but it is sufficient to report the
+customer lifecycle stage back to Meta. Several matches remain ambiguous and no
+match remains unmatched. Name equality, an unverified contact, or a legacy
+Subscriber contact column can never attach the Lead to a customer.
+
+When Sales commits `lead.account_converted`, or the match projection finds one
+exact verified active customer, `integration.meta_lead_conversion` sends one
+conversion event only if the Lead has immutable Meta origin evidence and one
+enabled Meta conversion capability. One Lead and capability binding produces
+one delivery; its first Sub event ID is reused as Meta's event ID on every
+attempt. Local customer state remains authoritative if Meta is unavailable;
+retry or dead-letter evidence records projection drift without rolling back the
+customer conversion or changing the review-only match.
+
 ## Why this map exists
 
 The CRM retirement ledger references this path from nine modules and 107 routes,

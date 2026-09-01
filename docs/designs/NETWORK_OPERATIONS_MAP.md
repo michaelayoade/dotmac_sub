@@ -168,6 +168,9 @@ be presented locally as offline, while the detail panel continues to show the
 canonical customer status separately from the Online/Offline session label.
 Layer All/None, search, Fit All, profile dimming, and panel transitions are
 local presentation controls and make no authoritative state change.
+All data layers are disabled on initial load so the map remains responsive while
+the operator chooses the infrastructure or customer cohort relevant to the
+current investigation.
 
 ## Availability, freshness, and failure behavior
 

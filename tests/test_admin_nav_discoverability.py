@@ -32,14 +32,17 @@ def test_vendor_navigation_is_grouped_and_collapsed_by_default() -> None:
     assert ':aria-expanded="vendorMenuOpen.toString()"' in sidebar
     assert 'aria-controls="admin-vendor-navigation"' in sidebar
     assert 'x-show="vendorMenuOpen && !sidebarCollapsed"' in sidebar
-    assert 'subnav_link("Vendor Records", "/admin/vendors", "vendors")' in sidebar
     assert (
-        'subnav_link("Vendor Review Quotes", "/admin/vendors/operations", '
-        '"vendor-operations")' in sidebar
+        'subnav_link("Vendor Records", "/admin/vendors", "vendors", '
+        'permission="inventory:read")' in sidebar
     )
     assert (
-        'subnav_link("Vendor Routes", "/admin/vendors/routes", "vendor-routes")'
-        in sidebar
+        'subnav_link("Vendor Review Quotes", "/admin/vendors/operations", '
+        '"vendor-operations", permission="inventory:read")' in sidebar
+    )
+    assert (
+        'subnav_link("Vendor Routes", "/admin/vendors/routes", "vendor-routes", '
+        'permission="network:fiber:read")' in sidebar
     )
     assert "vendor_group_active | tojson" in sidebar
 

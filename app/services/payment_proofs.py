@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -377,6 +377,24 @@ def find_duplicate_proofs(db: Session, proof: PaymentProof) -> list[PaymentProof
         .filter(PaymentProof.status != PaymentProofStatus.rejected)
         .order_by(PaymentProof.created_at.asc())
         .all()
+    )
+
+
+def _payment_with_reference(db: Session, proof: PaymentProof) -> Payment | None:
+    """Return an account payment that already represents this proof reference."""
+    reference = (proof.reference or "").strip().casefold()
+    if proof.account_id is None or not reference:
+        return None
+    return db.scalar(
+        select(Payment)
+        .where(
+            Payment.account_id == proof.account_id,
+            Payment.currency == proof.currency.upper(),
+            Payment.external_id.is_not(None),
+            func.lower(func.trim(Payment.external_id)) == reference,
+        )
+        .order_by(Payment.created_at.asc(), Payment.id.asc())
+        .limit(1)
     )
 
 
@@ -1297,6 +1315,17 @@ def _verify_proof(
             "Proof already reviewed",
             proof_id=proof_id,
             status=proof.status.value,
+        )
+
+    represented_payment = _payment_with_reference(db, proof)
+    if represented_payment is not None:
+        raise _error(
+            "duplicate_transfer_reference",
+            (
+                f"Reference '{proof.reference}' is already recorded as payment "
+                f"{represented_payment.id}. Reject this submission as a duplicate."
+            ),
+            payment_id=str(represented_payment.id),
         )
 
     try:

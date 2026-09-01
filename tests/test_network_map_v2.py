@@ -19,7 +19,7 @@ from app.web.templates import templates
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_BASE_MAP_NORMALIZED_SHA256 = (
-    "512a6599558bdfb14b6615d125219e9d6b6c4484fe74b8a2d5b3004944ea296b"
+    "abc692efb8157cd9b2a60ffec8d98c1124cd2e2e78667cf57b4e0e1e8164b9b5"
 )
 
 

@@ -1631,8 +1631,6 @@ def clean_basic_text(value: object) -> str:
 
 def clean_age(value: object) -> str:
     age_text = clean_text(value)
-    if age_text.lower() in {"n/a", "na"}:
-        return "N/A"
     if not age_text or not age_text.isdigit():
         return ""
     age = int(age_text)
@@ -1690,8 +1688,14 @@ _TEMPLATE_COLUMN_LETTERS = {
     for index, column in enumerate(TEMPLATE_COLUMNS, start=1)
 }
 
-_DATA_ENTRY_FIRST_ROW = 4
-_DATA_ENTRY_LAST_ROW = 1048576
+_DATA_ENTRY_FIRST_ROW = 2
+_DATA_ENTRY_LAST_ROW = 16001
+_DATA_ENTRY_SCAFFOLD_LAST_ROW = 15001
+_TEMPLATE_DATE_COLUMNS = {
+    "created_date_time *",
+    "Resolved_date",
+    "user_notes_datetime",
+}
 
 
 def excel_serial_from_display_timestamp(value: str) -> float | None:
@@ -1841,9 +1845,7 @@ def validation_status(record: dict[str, str]) -> str:
 
     for column in REQUIRED_COLUMNS:
         value = clean_text(record.get(column))
-        # "N/A" is an accepted answer for Age/Gender; "Unknown" for Last Name.
-        if column in {"Age", "Gender"} and value == "N/A":
-            continue
+        # "Unknown" is an accepted answer for Last Name in incomplete CRM data.
         if column == "Last Name" and value == "Unknown":
             continue
         if not value or not clean_basic_text(value):
@@ -1867,10 +1869,10 @@ def validation_status(record: dict[str, str]) -> str:
         add_error("First Name", "must not contain test data")
     if name_contains_test(record.get("Last Name")):
         add_error("Last Name", "must not contain test data")
-    if clean_text(record.get("Age")) != "N/A" and not clean_age(record.get("Age")):
-        add_error("Age", "must be N/A or a whole number from 13 to 150")
-    if clean_text(record.get("Gender")) not in {"Female", "Male", "N/A"}:
-        add_error("Gender", "must be Female, Male, or N/A")
+    if not clean_age(record.get("Age")):
+        add_error("Age", "must be a whole number from 13 to 150")
+    if clean_text(record.get("Gender")) not in {"Female", "Male"}:
+        add_error("Gender", "must be Female or Male")
     if clean_text(record.get("Ticket ID")) and not re.fullmatch(
         rf"{re.escape(OPERATOR_PREFIX)}-\d{{8}}-[A-Za-z0-9-]+",
         clean_text(record.get("Ticket ID")),
@@ -1891,6 +1893,13 @@ def validation_status(record: dict[str, str]) -> str:
             add_error("Resolved within SLA", "is required when Status is Resolved")
         if not clean_basic_text(record.get("Resolution Note")):
             add_error("Resolution Note", "is required when Status is Resolved")
+    elif clean_status(record.get("Status")) == "Pending":
+        if clean_basic_text(record.get("Resolved date")):
+            add_error("Resolved date", "must be empty when Status is Pending")
+        if clean_basic_text(record.get("Resolved within SLA")):
+            add_error("Resolved within SLA", "must be empty when Status is Pending")
+        if clean_basic_text(record.get("Resolution Note")):
+            add_error("Resolution Note", "must be empty when Status is Pending")
     if clean_category(
         record.get("Category")
     ) == "Data Depletion" and not clean_basic_text(record.get("Phone Type")):
@@ -2112,6 +2121,33 @@ def _cell_xml(ref: str, value: str, style_id: int) -> str:
     )
 
 
+def _numeric_cell_xml(ref: str, value: float, style_id: int) -> str:
+    return f'<c r="{ref}" s="{style_id}"><v>{value:.12g}</v></c>'
+
+
+def _formula_string_cell_xml(
+    ref: str, formula: str, cached_value: str, style_id: int
+) -> str:
+    return (
+        f'<c r="{ref}" s="{style_id}" t="str"><f>{escape(formula)}</f>'
+        f"<v>{escape(str(cached_value or ''))}</v></c>"
+    )
+
+
+def _template_auto_formula(column: str, row_number: int) -> str | None:
+    if column == "category_code (auto)":
+        return (
+            f'IF($I{row_number}="","",'
+            f'IFERROR(VLOOKUP($I{row_number},Lookups!$AL$2:$AM$19,2,0),""))'
+        )
+    if column == "Description (auto)":
+        return (
+            f'IF($K{row_number}="","",'
+            f'IFERROR(VLOOKUP($K{row_number},Lookups!$BH$2:$BI$88,2,0),""))'
+        )
+    return None
+
+
 def _lookups_sheet_xml() -> str:
     """The hidden NCC lookup grid used by the validated template."""
     state_lga_states = [state for state in STATE_LGAS if state != "INTERNATIONAL"]
@@ -2181,16 +2217,24 @@ def _lookups_sheet_xml() -> str:
 
 def _data_validation_xml(
     *,
-    validation_type: str,
+    validation_type: str | None,
     sqref: str,
-    formula1: str,
+    formula1: str | None,
     allow_blank: bool,
-    error_title: str,
-    error: str,
+    error_title: str | None = None,
+    error: str | None = None,
     operator: str | None = None,
     prompt_title: str | None = None,
     prompt: str | None = None,
+    formula2: str | None = "0",
 ) -> str:
+    type_xml = f' type="{validation_type}"' if validation_type else ""
+    allow_blank_xml = ' allowBlank="1"' if allow_blank else ""
+    error_xml = ' showErrorMessage="1"' if error_title or error else ""
+    if error_title:
+        error_xml += f' errorTitle="{escape(error_title)}"'
+    if error:
+        error_xml += f' error="{escape(error)}"'
     operator_xml = f' operator="{operator}"' if operator else ""
     prompt_xml = ""
     if prompt_title or prompt:
@@ -2198,11 +2242,14 @@ def _data_validation_xml(
             f' showInputMessage="1" promptTitle="{escape(prompt_title or "")}"'
             f' prompt="{escape(prompt or "")}"'
         )
+    formulas_xml = ""
+    if formula1 is not None:
+        formulas_xml += f"<formula1>{escape(formula1)}</formula1>"
+    if formula2 is not None:
+        formulas_xml += f"<formula2>{escape(formula2)}</formula2>"
     return (
-        f'<dataValidation type="{validation_type}" allowBlank="'
-        f'{1 if allow_blank else 0}" showErrorMessage="1"{prompt_xml}{operator_xml} '
-        f'errorTitle="{escape(error_title)}" error="{escape(error)}" '
-        f'sqref="{sqref}"><formula1>{escape(formula1)}</formula1></dataValidation>'
+        f"<dataValidation{type_xml}{allow_blank_xml}{error_xml}{prompt_xml}"
+        f'{operator_xml} sqref="{sqref}">{formulas_xml}</dataValidation>'
     )
 
 
@@ -2217,8 +2264,7 @@ def _list_validation_xml(
     return _data_validation_xml(
         validation_type="list",
         allow_blank=allow_blank,
-        error_title=error_title or f"Invalid {column}",
-        error="Select an accepted NCC value from the dropdown.",
+        error_title=error_title,
         sqref=f"{letter}{_DATA_ENTRY_FIRST_ROW}:{letter}{_DATA_ENTRY_LAST_ROW}",
         formula1=formula1,
     )
@@ -2228,70 +2274,51 @@ def _data_validations_xml(columns: list[str]) -> str:
     if columns != TEMPLATE_COLUMNS:
         return ""
 
+    row = _DATA_ENTRY_FIRST_ROW
     validations = [
-        _data_validation_xml(
-            validation_type="custom",
-            allow_blank=False,
-            error_title="Invalid MSISDN",
-            error=(
-                "Enter a Nigerian MSISDN starting 234, 11 to 14 digits, or an "
-                "accepted ISP device identifier without a leading plus sign."
-            ),
-            sqref=f"A{_DATA_ENTRY_FIRST_ROW}:A{_DATA_ENTRY_LAST_ROW}",
-            formula1=(
-                'AND(LEFT(A4,1)<>"+",OR(NOT(ISNUMBER(VALUE(A4))),'
-                'AND(LEFT(A4,3)="234",LEN(A4)>=11,LEN(A4)<=14)))'
-            ),
-        ),
         _data_validation_xml(
             validation_type="textLength",
             allow_blank=False,
             operator="greaterThanOrEqual",
-            error_title="Required field",
-            error="This NCC field is required.",
             sqref=(
-                f"M{_DATA_ENTRY_FIRST_ROW}:M{_DATA_ENTRY_LAST_ROW} "
                 f"B{_DATA_ENTRY_FIRST_ROW}:C{_DATA_ENTRY_LAST_ROW}"
+                f" M{_DATA_ENTRY_FIRST_ROW}:M{_DATA_ENTRY_LAST_ROW}"
             ),
             formula1="1",
         ),
         _data_validation_xml(
             validation_type="custom",
             allow_blank=True,
-            error_title="Invalid Email",
-            error="Enter a valid email address or leave blank.",
             sqref=f"D{_DATA_ENTRY_FIRST_ROW}:D{_DATA_ENTRY_LAST_ROW}",
             formula1=(
-                'OR(D4="",AND(ISNUMBER(SEARCH("@",D4)),'
-                'ISNUMBER(SEARCH(".",D4)),LEN(D4)<=100))'
+                f'OR(D{row}="",AND(ISNUMBER(FIND("@",D{row})),'
+                f'ISNUMBER(FIND(".",D{row},FIND("@",D{row})+1))))'
             ),
         ),
         _data_validation_xml(
             validation_type="whole",
             allow_blank=False,
-            operator="between",
-            error_title="Invalid Age",
-            error="Age must be a whole number from 13 to 150.",
             sqref=f"E{_DATA_ENTRY_FIRST_ROW}:E{_DATA_ENTRY_LAST_ROW}",
             formula1="13",
-        ).replace("</dataValidation>", "<formula2>150</formula2></dataValidation>"),
+            formula2="150",
+        ),
         _list_validation_xml(
             column="Gender *", formula1='"Male,Female"', allow_blank=False
         ),
         _data_validation_xml(
             validation_type="custom",
             allow_blank=False,
-            error_title="Invalid created_date_time",
-            error="Enter a date and time value.",
             sqref=f"G{_DATA_ENTRY_FIRST_ROW}:G{_DATA_ENTRY_LAST_ROW}",
-            formula1="AND(G4>=DATE(2000,1,1),G4<=DATE(2099,12,31),MOD(G4,1)>0)",
+            formula1=(
+                f"AND(G{row}>=DATE(2000,1,1),G{row}<=DATE(2099,12,31),MOD(G{row},1)>0)"
+            ),
         ),
         _list_validation_xml(
             column="Category *", formula1="NCC_CATEGORIES", allow_blank=False
         ),
         _list_validation_xml(
             column="sub_category_code *",
-            formula1='INDIRECT("CAT_"&$J4)',
+            formula1=f'INDIRECT("CAT_"&$J{row})',
             allow_blank=False,
         ),
         _list_validation_xml(
@@ -2305,21 +2332,16 @@ def _data_validations_xml(columns: list[str]) -> str:
         _data_validation_xml(
             validation_type="custom",
             allow_blank=True,
-            error_title="Invalid Resolved_date",
-            error="Enter a date and time value or leave blank.",
-            sqref=f"P{_DATA_ENTRY_FIRST_ROW}:P{_DATA_ENTRY_LAST_ROW}",
-            formula1='OR(P4="",AND(P4>=DATE(2000,1,1),P4<=DATE(2099,12,31),MOD(P4,1)>0))',
+            sqref=(
+                f"P{_DATA_ENTRY_FIRST_ROW}:P{_DATA_ENTRY_LAST_ROW} "
+                f"T{_DATA_ENTRY_FIRST_ROW}:T{_DATA_ENTRY_LAST_ROW}"
+            ),
+            formula1=(
+                f"AND(P{row}>=DATE(2000,1,1),P{row}<=DATE(2099,12,31),MOD(P{row},1)>0)"
+            ),
         ),
         _list_validation_xml(
             column="Resolved within SLA", formula1='"Yes,No"', allow_blank=True
-        ),
-        _data_validation_xml(
-            validation_type="custom",
-            allow_blank=True,
-            error_title="Invalid user_notes_datetime",
-            error="Enter a date and time value or leave blank.",
-            sqref=f"T{_DATA_ENTRY_FIRST_ROW}:T{_DATA_ENTRY_LAST_ROW}",
-            formula1='OR(T4="",AND(T4>=DATE(2000,1,1),T4<=DATE(2099,12,31),MOD(T4,1)>0))',
         ),
         _list_validation_xml(
             column="Language *",
@@ -2334,13 +2356,11 @@ def _data_validations_xml(columns: list[str]) -> str:
         _data_validation_xml(
             validation_type="custom",
             allow_blank=True,
-            error_title="Invalid alt_phone_number",
-            error="Enter a valid phone number without a leading plus sign or leave blank.",
             sqref=f"W{_DATA_ENTRY_FIRST_ROW}:W{_DATA_ENTRY_LAST_ROW}",
             formula1=(
-                'OR(W4="",AND(LEFT(W4,1)<>"+",'
-                'OR(NOT(ISNUMBER(VALUE(W4))),AND(LEFT(W4,3)="234",'
-                "LEN(W4)>=11,LEN(W4)<=14))))"
+                f'OR(W{row}="",AND(ISNUMBER(VALUE(W{row})),'
+                f'LEN(TRIM(TEXT(W{row},"0")))>=10,'
+                f'LEN(TRIM(TEXT(W{row},"0")))<=15))'
             ),
         ),
         _list_validation_xml(
@@ -2348,8 +2368,20 @@ def _data_validations_xml(columns: list[str]) -> str:
         ),
         _list_validation_xml(
             column="LGA *",
-            formula1='INDIRECT(SUBSTITUTE($Y4," ","_"))',
+            formula1=f'INDIRECT(SUBSTITUTE($Y{row}," ","_"))',
             allow_blank=False,
+        ),
+        _data_validation_xml(
+            validation_type=None,
+            allow_blank=True,
+            sqref=f"AB{_DATA_ENTRY_FIRST_ROW}:AB{_DATA_ENTRY_LAST_ROW}",
+            formula1="0",
+            formula2="0",
+            prompt_title="Phone Type",
+            prompt=(
+                "Required for Data Depletion complaints. Enter the complainant's "
+                "device type."
+            ),
         ),
     ]
     return (
@@ -2405,7 +2437,13 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
         archive.writestr("xl/styles.xml", _STYLES_XML)
 
         last_column_letter = _excel_column_letter(len(output_columns))
-        last_row_number = max(1, _DATA_ENTRY_FIRST_ROW + len(records) - 1)
+        data_last_row_number = max(1, _DATA_ENTRY_FIRST_ROW + len(records) - 1)
+        template_layout = output_columns == TEMPLATE_COLUMNS
+        last_row_number = (
+            max(_DATA_ENTRY_SCAFFOLD_LAST_ROW, data_last_row_number)
+            if template_layout
+            else data_last_row_number
+        )
         cols_xml = "".join(
             f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
             for index, width in enumerate(widths, start=1)
@@ -2416,7 +2454,7 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
             for index, column in enumerate(output_columns, start=1)
         ]
         rows_xml.append(
-            f'<row r="1" ht="24" customHeight="1">{"".join(header_cells)}</row>'
+            f'<row r="1" ht="64.5" customHeight="1">{"".join(header_cells)}</row>'
         )
         for row_number, row in enumerate(records, start=_DATA_ENTRY_FIRST_ROW):
             cells: list[str] = []
@@ -2430,9 +2468,20 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
             )
             for column_index, column in enumerate(output_columns, start=1):
                 value = " ".join(str(_row_value(row, column) or "").strip().split())
-                if not value:
+                auto_formula = _template_auto_formula(column, row_number)
+                if not value and not auto_formula:
                     continue
                 cell_ref = f"{_excel_column_letter(column_index)}{row_number}"
+                if column in _TEMPLATE_DATE_COLUMNS:
+                    serial_value = excel_serial_from_display_timestamp(value)
+                    if serial_value is not None:
+                        cells.append(_numeric_cell_xml(cell_ref, serial_value, 4))
+                        continue
+                if auto_formula is not None:
+                    cells.append(
+                        _formula_string_cell_xml(cell_ref, auto_formula, value, 9)
+                    )
+                    continue
                 if row_style_id is not None:
                     style_id = row_style_id
                 elif column in {"Status", "Status *"}:
@@ -2451,14 +2500,13 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
   <dimension ref="A1:{last_column_letter}{last_row_number}"/>
   <sheetViews>
     <sheetView workbookViewId="0">
-      <pane ySplit="1" topLeftCell="A4" activePane="bottomLeft" state="frozen"/>
-      <selection pane="bottomLeft" activeCell="A4" sqref="A4"/>
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+      <selection pane="bottomLeft" activeCell="D3" sqref="D3"/>
     </sheetView>
   </sheetViews>
   <sheetFormatPr defaultRowHeight="18"/>
   <cols>{cols_xml}</cols>
   <sheetData>{"".join(rows_xml)}</sheetData>
-  <autoFilter ref="A1:{last_column_letter}{last_row_number}"/>
   {_data_validations_xml(output_columns)}
 </worksheet>""",
         )

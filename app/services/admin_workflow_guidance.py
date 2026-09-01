@@ -241,9 +241,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Record confirmed money and apply it to the right invoices.",
         ("/admin/billing/payments",),
         "Confirm external payment evidence, then enter amount, currency, method, date, reference, and memo.",
-        "Preview allocation and service effects before confirming.",
+        "Review the preview, duplicate-reference and duplicate-evidence warnings, allocation, and service effects before confirming.",
+        "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
-        notes=("Use Payment Proof review for customer-uploaded transfer receipts.",),
+        notes=(
+            "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
+        ),
     ),
     _guide(
         "payment-proofs",

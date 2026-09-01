@@ -1,8 +1,8 @@
 """Bank-transfer payment proofs: customer/reseller submission + admin review."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -61,21 +61,90 @@ class ProofReview(BaseModel):
 
 @router.post("/me")
 async def submit_my_payment_proof(
-    amount: str = Form(...),
+    amount: str | None = Form(default=None),
     bank_name: str | None = Form(default=None),
     reference: str | None = Form(default=None),
     paid_at: str | None = Form(default=None),
+    intent_id: str | None = Form(default=None),
+    selected_account_id: str | None = Form(default=None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Customer uploads their own transfer receipt."""
+    """Customer uploads a receipt for a started direct-transfer intent."""
+    del amount, bank_name, reference
     if principal.get("principal_type") != "subscriber":
         raise HTTPException(status_code=403, detail="Customer account required")
-    raise HTTPException(
-        status_code=403,
-        detail="Bank transfer is available to resellers only",
+    if not intent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Start a direct bank transfer payment first",
+        )
+    try:
+        account_id = UUID(str(principal["subscriber_id"]))
+        transfer_intent_id = UUID(str(intent_id))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid transfer intent") from exc
+
+    from app.services import customer_portal_flow_payments as customer_payments
+    from app.services import payment_proofs
+    from app.services.topup_intents import (
+        DirectTransferAccountMapping,
+        DirectTransferBankAccountEvidence,
     )
+
+    accounts = customer_payments.enabled_direct_bank_transfer_accounts(db)
+    if not accounts:
+        raise HTTPException(
+            status_code=400,
+            detail="Direct bank transfer is not configured",
+        )
+    selected_account: DirectTransferAccountMapping | None = accounts[0]
+    supplied_account_id = str(selected_account_id or "").strip()
+    if supplied_account_id:
+        selected_account = next(
+            (
+                account
+                for account in accounts
+                if str(account.get("id")) == supplied_account_id
+            ),
+            None,
+        )
+    elif len(accounts) > 1:
+        selected_account = None
+    if not selected_account:
+        raise HTTPException(
+            status_code=400,
+            detail="Choose the bank account you paid into",
+        )
+
+    try:
+        path = await payment_proofs.save_proof_file(file)
+        db_session_adapter.release_read_transaction(db)
+        return payment_proofs.submit_direct_transfer_proof(
+            db,
+            payment_proofs.DirectTransferProofSubmissionCommand(
+                intent_id=transfer_intent_id,
+                account_id=account_id,
+                submitted_by=account_id,
+                selected_bank_account=DirectTransferBankAccountEvidence(
+                    id=str(selected_account.get("id") or ""),
+                    bank_name=str(selected_account.get("bank_name") or ""),
+                    account_name=str(selected_account.get("account_name") or ""),
+                    account_number=str(selected_account.get("account_number") or ""),
+                    sort_code=str(selected_account.get("sort_code") or ""),
+                ),
+                paid_at=_parse_dt(paid_at) or datetime.now(UTC),
+                file_path=path,
+            ),
+            context=_command_context(
+                principal,
+                scope=payment_proofs.SUBMISSION_SCOPE,
+                reason="Customer submitted direct-transfer evidence",
+            ),
+        ).to_dict()
+    except DomainError as exc:
+        raise payment_proof_http_error(exc) from exc
 
 
 @router.get("/me")

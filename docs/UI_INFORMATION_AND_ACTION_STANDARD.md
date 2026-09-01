@@ -223,6 +223,12 @@ domain rules; they must not silently become zero.
   consistent overflow menu.
 - Hide unauthorized actions. Show a disabled action only when explaining its
   state-based unavailability helps the user.
+- Navigation follows the same default-deny RBAC contract as its destination:
+  do not render a link, shortcut, submenu, or section heading unless the
+  principal holds a permission accepted by the destination route. Module
+  enablement and authorization are independent gates and both must pass. Hide
+  a navigation group when none of its children remain visible; route guards
+  remain mandatory even when discovery is suppressed.
 - Read eligibility, required amount, restoration possibility, completion
   readiness, and destructive impact from the owning backend service.
 - Never rely on hidden UI controls as enforcement; the command owner rechecks
@@ -239,7 +245,11 @@ request with its target plan, effective date, execution state, request identity,
 and submission time. Operators with `catalog:write` may cancel that pending
 request only after entering a reason and confirming that the subscription stays
 on its current plan. The action is absent after approval or application and does
-not offer a revoke path.
+not offer a revoke path. While the request is outstanding, subscription and
+customer detail views show a prominent `Pending plan change` badge, and the
+subscription lifecycle owner refuses cancellation of the live subscription.
+Operators must cancel the pending request first; the UI explains that ordering
+instead of offering a second, replacement subscription as a workaround.
 
 For prepaid recovery, the service page consumes the recovery eligibility
 owner's typed next action. An unresolved service invoice disables Bill Now,

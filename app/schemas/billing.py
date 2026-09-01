@@ -676,6 +676,34 @@ class PaymentCreationConfirm(PaymentCreationPreviewRequest):
     idempotency_key: str = Field(min_length=16, max_length=120)
 
 
+class ManualPaymentRecordingPreviewRequest(PaymentCreationPreviewRequest):
+    """Administrative payment request assessed against proof/payment evidence."""
+
+
+class ManualPaymentDuplicateRiskRead(BaseModel):
+    kind: str
+    evidence_id: UUID
+    evidence_status: str
+    amount: Decimal
+    currency: str
+    reference: str | None = None
+    observed_at: datetime
+
+
+class ManualPaymentRecordingPreviewRead(BaseModel):
+    payment_preview: PaymentCreationPreviewRead
+    duplicate_risks: list[ManualPaymentDuplicateRiskRead]
+    requires_duplicate_acknowledgement: bool
+    control_fingerprint: str
+
+
+class ManualPaymentRecordingConfirm(ManualPaymentRecordingPreviewRequest):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+    control_fingerprint: str = Field(min_length=64, max_length=64)
+    duplicate_risk_acknowledged: bool = False
+
+
 class PaymentSettlementRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1233,9 +1261,8 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
-    # The customer pay-with selector: online gateways (Paystack/Flutterwave)
-    # plus saved-card flows. Direct bank transfer is returned only as a disabled
-    # compatibility projection because transfer payment is reseller-only.
+    # The customer pay-with selector: online gateways (Paystack/Flutterwave),
+    # saved-card flows, and configured direct bank transfer.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
 
@@ -1269,6 +1296,7 @@ class TopupInitiateResponse(BaseModel):
     # the gateway webview and go straight to verify.
     charged: bool = False
     checkout_url: str | None = None
+    redirect_url: str | None = None
     purpose: str = "account_credit_deposit"
     allocation_policy: str = "credit_only"
     credit_application_policy: str = "pay_eligible_invoices"

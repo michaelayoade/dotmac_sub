@@ -34,6 +34,7 @@ from app.schemas.billing import (
     AccountBalanceResponse,
     AutopayEnableRequest,
     AutopayStatusResponse,
+    BankTransferAccount,
     DirectBankTransferConfig,
     InvoiceRead,
     LedgerEntryRead,
@@ -779,20 +780,30 @@ def my_topup_page(
 ):
     """Deposit Account Credit context, eligibility, limits, and payment options.
 
-    ``payment_options`` mirrors the customer web chooser. Direct bank transfer
-    stays disabled for customer selfcare; reseller transfer flows use their own
-    endpoints and configuration projection.
+    ``payment_options`` mirrors the customer web chooser, including configured
+    direct bank transfer when the collection-account owner enables it.
     """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
     options = [
         PaymentProviderOption(provider_type=opt["provider_type"], label=opt["label"])
         for opt in ctx.get("payment_options", [])
-        if opt.get("provider_type") != "direct_bank_transfer"
     ]
+    accounts = [
+        BankTransferAccount(
+            bank_name=str(account.get("bank_name") or ""),
+            account_name=str(account.get("account_name") or ""),
+            account_number=str(account.get("account_number") or ""),
+            sort_code=(
+                str(account.get("sort_code")) if account.get("sort_code") else None
+            ),
+        )
+        for account in customer_payments.enabled_direct_bank_transfer_accounts(db)
+    ]
+    transfer_settings = customer_payments.direct_bank_transfer_settings(db)
     direct_transfer = DirectBankTransferConfig(
         enabled=customer_payments.customer_direct_bank_transfer_enabled(db),
-        instructions=None,
-        accounts=[],
+        instructions=transfer_settings.get("direct_bank_transfer_instructions") or None,
+        accounts=accounts,
     )
     return TopupPageResponse(
         provider_type=ctx["provider_type"],
@@ -864,6 +875,7 @@ def my_topup_initiate(
         customer_email=customer["username"] or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
+        redirect_url=result.get("redirect_url"),
         preview_fingerprint=result["preview_fingerprint"],
     )
 
