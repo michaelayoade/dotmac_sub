@@ -160,6 +160,81 @@ Step 7 is also what discharges the outstanding ADR 0034 obligation in § 6: the
 steady-state real-target admit becomes demonstrable only after the bootstrap has
 executed.
 
+## 7. Can staging avoid recreating `postgres-local`? Yes — measured
+
+Step 2 of the sequence asks for the release's Compose to be staged *without*
+recreating `postgres-local`. Measured on `dotmac-sub-prod` 2026-09-01, it can be:
+
+* **Nothing depends on it.** No service in the deployed base Compose, the host
+  override, or the release Compose declares `depends_on: postgres-local`. The
+  only `depends_on` edges in the project are `victoriametrics` (three workers
+  plus `vmagent`) and `genieacs-mongodb` (`genieacs`).
+* **No deploy names it.** `deploy.sh` runs `up -d "${APP_SERVICES[@]}"`, and
+  `APP_SERVICES` is `app`, the eight `celery-worker-*`, `celery-beat`,
+  `bandwidth-poller` and `syslog-listener`. `postgres-local` is neither named
+  nor in that set's dependency closure. `deploy.sh` touches the container only
+  through `docker exec` for dumps and a `pg_dump` guard — never a recreate.
+* **Staging is a file write.** Placing the release Compose recreates nothing on
+  its own; only a `docker compose up` naming the service (or a bare
+  `docker compose up` with no arguments, which names everything) would.
+
+So staging and containment do NOT have to be one operation. Michael's fallback —
+*"staging and containment become one explicitly authorized maintenance
+operation; no plan taken before staging survives it"* — is not required here,
+though the plan refuses a stale `current` input either way (§ 4b).
+
+## 8. The hazard staging itself creates
+
+The release publishes `${PG_LOCAL_BIND:-127.0.0.1:}9001:5432`, and
+`PG_LOCAL_BIND` is **absent** from the production `.env` (measured: zero
+occurrences). Rendering the release Compose against that `.env`:
+
+| `PG_LOCAL_BIND` | resolved publish | admits `75.119.157.91/32`? |
+|---|---|---|
+| unset | `127.0.0.1:9001:5432` | **no** |
+| `0.0.0.0:` | `0.0.0.0:9001:5432` | yes |
+
+The instant the release Compose is staged, the deployed definition resolves to
+**loopback**. The running container is untouched, so nothing breaks
+immediately — but the next recreate of `postgres-local`, by this operation or
+by anything else, strands the replication standby on a port it is actively
+streaming WAL through. The change written to remove an exposure would have
+caused an outage.
+
+**Therefore staging MUST set `PG_LOCAL_BIND=0.0.0.0:` in the same authorized
+step that places the Compose file.** That makes staging bind-neutral: the
+resolved publish equals the currently effective IPv4 listener, so an accidental
+recreate reproduces today's exposure rather than severing replication.
+
+This is refused at plan time rather than trusted: the observer now renders the
+effective projection a third time with the host's REAL environment and no
+injection, and the contract refuses any host whose current resolved bind does
+not admit the standby.
+
+## 9. What a rollback can restore after staging — open
+
+Once the release Compose is deployed, the bare dual-family publish **no longer
+exists in any file on the host**, so a rollback cannot reproduce it. The
+deadman's preimage assertion (restore the observed dual-family listeners) is
+therefore unsatisfiable after staging, and every rollback would fail its own
+check.
+
+Two possible resolutions, and this one is **not** ours to pick:
+
+1. **Roll forward.** Accept that rollback restores the single IPv4 listener and
+   the retained pin. The bytes are unchanged and the standby keeps its path;
+   the dual-family state is the defect, so declining to recreate it is
+   arguably correct. But it contradicts "so ordinary v2 PLAN/APPLY can safely
+   retry the listener correction" — there would be nothing left to correct.
+2. **Bundle the pre-staging Compose** so the dual-family publish is genuinely
+   restorable, preserving the stated rollback semantics at the cost of keeping
+   a known-vulnerable definition on disk specifically to be able to return to
+   it.
+
+Michael's ruling is required before the window. Until then the deadman still
+asserts the dual-family preimage, which is correct for an unstaged host and
+will fail loudly rather than silently on a staged one.
+
 ## Scope
 
 Only `postgres-local`, only port 9001. PostgreSQL auth, TLS, credentials, data,

@@ -215,16 +215,23 @@ def _prove_bind_knob(compose: list[str]) -> dict[str, object]:
     for injection, field in (
         ("0.0.0.0:", "wildcard_host_ip"),
         ("127.0.0.1:", "control_host_ip"),
+        (None, "current_host_ip"),
     ):
         rendered = json.loads(
             _run(
                 [*compose, "config", "--format", "json"],
-                {"PG_LOCAL_BIND": injection},
+                {} if injection is None else {"PG_LOCAL_BIND": injection},
             )
         )
         publish = _target_publish(rendered)
         host_ip = str(publish.get("host_ip") or "")
         if not host_ip:
+            if injection is None:
+                _fail(
+                    "the deployed Compose and .env resolve this publish to no "
+                    "host address at all -- a bare publish, which is dual-family "
+                    "and whose IPv6 half no DOCKER-USER rule can reach"
+                )
             _fail(
                 "setting PG_LOCAL_BIND produced a publish with no host address; "
                 "the deployed Compose file does not interpolate this variable, "

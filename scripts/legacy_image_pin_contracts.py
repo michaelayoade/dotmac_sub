@@ -220,6 +220,9 @@ class LegacyImagePinBindKnobProofV1(StrictContract):
     wildcard_host_ip: IPvAnyAddress
     control_injection: Literal["127.0.0.1:"] = "127.0.0.1:"
     control_host_ip: IPvAnyAddress
+    # Rendered with the host's REAL environment and no injection: what the
+    # deployed file plus the deployed .env actually resolve to right now.
+    current_host_ip: IPvAnyAddress
     host_port: Literal[9001] = DECLARED_HOST_PORT
     container_port: Literal[5432] = DECLARED_CONTAINER_PORT
     protocol: Literal["tcp"] = "tcp"
@@ -237,6 +240,21 @@ class LegacyImagePinBindKnobProofV1(StrictContract):
             raise ValueError(
                 "the loopback control injection did not move the binding; the "
                 "observed wildcard binding is hardcoded, not variable-driven"
+            )
+        # THE STAGING HAZARD, refused at plan time rather than discovered at
+        # 03:00. The release publishes ${PG_LOCAL_BIND:-127.0.0.1:}9001:5432.
+        # PG_LOCAL_BIND is absent from the production .env, so the moment the
+        # release Compose is staged the file resolves to LOOPBACK -- and any
+        # recreate after that, by this operation or by anything else, cuts the
+        # replication standby off from a port it is streaming WAL through.
+        # Staging must therefore set the variable, and a plan cannot be built
+        # against a host where it has not been set.
+        if str(self.current_host_ip) != DECLARED_IPV4_WILDCARD:
+            raise ValueError(
+                "the deployed Compose and .env currently resolve this publish to "
+                f"{self.current_host_ip}, which does not admit the replication "
+                "standby; set PG_LOCAL_BIND when staging the release, before any "
+                "recreate can strand it"
             )
         return self
 

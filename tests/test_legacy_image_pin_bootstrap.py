@@ -261,6 +261,7 @@ def _snapshot_document(
     listeners: list[dict[str, object]] | None = None,
     wildcard_host_ip: str = "0.0.0.0",
     control_host_ip: str = "127.0.0.1",
+    current_host_ip: str = "0.0.0.0",
 ) -> dict[str, object]:
     return {
         "schema": "LegacyImagePinBootstrapSnapshotV1",
@@ -312,6 +313,7 @@ def _snapshot_document(
             "wildcard_host_ip": wildcard_host_ip,
             "control_injection": "127.0.0.1:",
             "control_host_ip": control_host_ip,
+            "current_host_ip": current_host_ip,
             "host_port": 9001,
             "container_port": 5432,
             "protocol": "tcp",
@@ -754,3 +756,33 @@ def test_the_prestate_key_covers_the_deployed_bytes(
         }
     )
     assert restaged.prestate_key() != plan.prestate_key()
+
+
+def test_a_staged_host_that_would_strand_the_standby_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The hazard staging itself creates, refused before any window is named.
+
+    The release publishes ``${PG_LOCAL_BIND:-127.0.0.1:}9001:5432`` and
+    PG_LOCAL_BIND is absent from the production .env. So the instant the
+    release Compose is staged, the deployed file resolves to LOOPBACK -- and
+    the next recreate, whether this operation's or anyone else's, cuts the
+    replication standby off a port it is actively streaming WAL through.
+
+    Staging must set the variable. A plan cannot be built against a host where
+    it has not been, which is what stops the hazard being discovered at 03:00.
+    """
+
+    document = _snapshot_document(current_host_ip="127.0.0.1")
+    path = _write_snapshot(tmp_path / "stranded.json", document)
+    with pytest.raises(Exception, match="does not admit the replication"):
+        LegacyImagePinBootstrapSnapshotV1.from_canonical_bytes(path.read_bytes())
+
+
+def test_a_correctly_staged_host_is_still_admitted(tmp_path: Path) -> None:
+    """Sensitivity: the refusal above discriminates, it does not refuse all."""
+
+    document = _snapshot_document(current_host_ip="0.0.0.0")
+    path = _write_snapshot(tmp_path / "staged.json", document)
+    snapshot = LegacyImagePinBootstrapSnapshotV1.from_canonical_bytes(path.read_bytes())
+    assert str(snapshot.bind_knob.current_host_ip) == "0.0.0.0"

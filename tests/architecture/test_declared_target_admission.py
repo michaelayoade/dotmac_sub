@@ -201,6 +201,7 @@ def _bootstrap_snapshot(*, image: str) -> dict[str, object]:
             "wildcard_host_ip": "0.0.0.0",
             "control_injection": "127.0.0.1:",
             "control_host_ip": "127.0.0.1",
+            "current_host_ip": "0.0.0.0",
             "host_port": 9001,
             "container_port": 5432,
             "protocol": "tcp",

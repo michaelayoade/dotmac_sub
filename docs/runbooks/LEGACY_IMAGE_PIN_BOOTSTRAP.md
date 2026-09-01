@@ -41,7 +41,16 @@ could be a newer image, and the window would silently become an upgrade.
 1. Publish and verify an exact Sub release carrying the knob. **This needs its
    own authorization and is not part of the bootstrap.**
 2. Authorize staging that release's Compose on the host **without recreating
-   `postgres-local`**.
+   `postgres-local`** — measured to be possible: nothing declares
+   `depends_on: postgres-local`, it is not in `deploy.sh`'s `APP_SERVICES`, and
+   placing a file recreates nothing.
+
+   **Set `PG_LOCAL_BIND=0.0.0.0:` in `.env` in the same step.** The release
+   publishes `${PG_LOCAL_BIND:-127.0.0.1:}9001:5432` and the variable is absent
+   from production, so a staged Compose alone resolves to LOOPBACK and the next
+   recreate — anyone's — strands the replication standby. Setting it makes
+   staging bind-neutral. A plan cannot be built against a host where it was not
+   set.
 3. Verify the deployed Compose digest.
 4. Take **fresh**, byte-identical bootstrap plans.
 5. Apply the digest pin and IPv4-only binding in a separately named window.
