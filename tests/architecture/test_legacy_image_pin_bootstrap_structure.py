@@ -156,8 +156,14 @@ def test_the_bootstrap_is_structurally_single_use() -> None:
     # The adapter refuses on both lanes before doing anything.
     adapter = ADAPTER.read_text(encoding="utf-8")
     assert adapter.count("require_single_use") >= 3
-    # A rollback is terminal too.
-    assert "_write_rollback_receipt(" in DEADMAN.read_text(encoding="utf-8")
+    # Forward recovery is terminal too. (The pre-inversion name for this was
+    # _write_rollback_receipt; the rename is why the guard below asserts the
+    # receipt PATH as well as the writer, so a future rename cannot make the
+    # single-use property silently unguarded again.)
+    deadman_source = DEADMAN.read_text(encoding="utf-8")
+    assert "_write_forward_receipt(" in deadman_source
+    assert 'RECEIPT_NAME = "receipt.json"' in deadman_source
+    assert "_receipt_path()" in deadman_source
 
 
 def test_the_single_use_guard_would_notice_if_it_were_removed() -> None:

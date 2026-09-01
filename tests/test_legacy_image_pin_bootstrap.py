@@ -723,12 +723,16 @@ def test_a_plan_whose_deployed_bytes_moved_is_refused_at_apply(
             "path": "/root/dotmac_sub/docker-compose.override.yml",
             "digest": f"sha256:{'b' * 64}",
         },
-        {"path": "/root/dotmac_sub/docker-compose.yml", "digest": RELEASE_DIGEST},
-        # A third file appeared on the host between planning and apply.
+        # A third file appeared on the host between planning and apply. It sits
+        # in SORTED position deliberately: an unsorted list is refused by the
+        # canonical snapshot contract one layer earlier, which would make this
+        # test pass for the wrong reason and never exercise the comparison it
+        # exists to prove.
         {
             "path": "/root/dotmac_sub/docker-compose.staged.yml",
             "digest": RELEASE_DIGEST,
         },
+        {"path": "/root/dotmac_sub/docker-compose.yml", "digest": RELEASE_DIGEST},
     ]
     moved_path = _write_snapshot(tmp_path / "moved.json", moved)
 
