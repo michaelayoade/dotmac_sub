@@ -228,6 +228,7 @@ def test_customer_360_rehomes_canonical_service_health() -> None:
         not in template
     )
     assert "service_health_by_subscription" in template
+    assert "pending-plan-change-badge-{{ subscription.id }}" in template
     assert "{% set card_health = card.service_health %}" in template
 
 
