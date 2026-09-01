@@ -124,6 +124,14 @@ Audience rules are:
 - `org`: unrestricted only for administrators or an explicit org-audience
   scope.
 
+RBAC seeds `workqueue:audience:team` and `workqueue:audience:org` as active,
+UI-assignable permissions without granting them to any non-admin role. The role
+builder may grant team audience to an operational lead or accountable manager;
+the permission cannot invent that service-team responsibility. Organization
+audience is a high-trust cross-team, cross-region grant and should be assigned
+only to roles whose operating mandate requires unassigned work across the whole
+organization.
+
 A requested audience is clamped to the principal's natural authority. An
 explicit service-team filter outside that scope fails closed.
 
