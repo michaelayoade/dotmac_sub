@@ -54,7 +54,7 @@ def _group_articles(articles: list[HelpArticle]) -> list[dict[str, object]]:
     return categories
 
 
-ARTICLES = (
+ARTICLES: tuple[HelpArticle, ...] = (
     HelpArticle(
         "Getting started",
         "Navigate Selfcare",
