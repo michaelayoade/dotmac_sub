@@ -88,7 +88,10 @@ async def submit_my_payment_proof(
 
     from app.services import customer_portal_flow_payments as customer_payments
     from app.services import payment_proofs
-    from app.services.topup_intents import DirectTransferBankAccountEvidence
+    from app.services.topup_intents import (
+        DirectTransferAccountMapping,
+        DirectTransferBankAccountEvidence,
+    )
 
     accounts = customer_payments.enabled_direct_bank_transfer_accounts(db)
     if not accounts:
@@ -96,7 +99,7 @@ async def submit_my_payment_proof(
             status_code=400,
             detail="Direct bank transfer is not configured",
         )
-    selected_account = accounts[0]
+    selected_account: DirectTransferAccountMapping | None = accounts[0]
     supplied_account_id = str(selected_account_id or "").strip()
     if supplied_account_id:
         selected_account = next(
