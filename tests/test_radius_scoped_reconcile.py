@@ -187,7 +187,9 @@ def test_active_login_without_credential_is_reported_unbuildable(
 def test_scoped_reconcile_writes_only_the_requested_login(_radius_env, db_session):
     a1, a2, b1 = _seed(db_session)
     stats = radius_population.reconcile_usernames({a1}, dry_run=True)
-    # fleet compute ran (a's sibling service exists), but only a1 is written
+    # The sibling still contributes to the bounded account service count, but
+    # neither it nor the unrelated account is hydrated into the projection.
+    assert stats["subscriptions_considered"] == 1
     assert stats["scoped_targets"] == 1
     assert stats["radcheck_upserts"] == 1
 

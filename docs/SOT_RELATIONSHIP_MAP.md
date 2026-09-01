@@ -5156,7 +5156,10 @@ map it to RADIUS state once, and let enforcement apply the network-side change.
 No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
 `radusergroup`;
 event-time and per-user callers request a projection (full sweep or a scoped
-reconcile) or enqueue `refresh_radius_from_subs`. The permanent account-access
+reconcile) or enqueue `refresh_radius_from_subs`. A scoped reconcile loads only
+the requested duplicate-login cohort plus bounded service counts for the
+affected subscribers; unrelated subscriptions, credentials, profiles, routes,
+and address assignments stay outside that command. The permanent account-access
 reconciler is the only periodic drift detector; the full refresh transport is
 never independently scheduled. Target failures are reported per target and
 suppress downstream CoA. The closed boundary is pinned by

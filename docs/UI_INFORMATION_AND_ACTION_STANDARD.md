@@ -239,7 +239,11 @@ request with its target plan, effective date, execution state, request identity,
 and submission time. Operators with `catalog:write` may cancel that pending
 request only after entering a reason and confirming that the subscription stays
 on its current plan. The action is absent after approval or application and does
-not offer a revoke path.
+not offer a revoke path. While the request is outstanding, subscription and
+customer detail views show a prominent `Pending plan change` badge, and the
+subscription lifecycle owner refuses cancellation of the live subscription.
+Operators must cancel the pending request first; the UI explains that ordering
+instead of offering a second, replacement subscription as a workaround.
 
 For prepaid recovery, the service page consumes the recovery eligibility
 owner's typed next action. An unresolved service invoice disables Bill Now,
