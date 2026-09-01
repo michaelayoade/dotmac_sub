@@ -2179,7 +2179,8 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   leave the coverage union and the anchor follows the evidence down. `payment.refunded` and `payment.reversed` reach the same owner through
   `PrepaidRenewalHandler`. The accumulated drift cohort (an active
   `ServiceEntitlement` ending after `next_billing_at`, or an absent anchor with
-  exact entitlement evidence) is repaired by the owner's idempotent,
+  exact entitlement evidence) is repaired to the later of active entitlement
+  coverage and any applied `ServiceExtensionEntry` grant end by the owner's idempotent,
   fingerprint-bound
   `preview_stale_prepaid_billing_anchor_repair` /
   `apply_stale_prepaid_billing_anchor_repair` pair, driven by
