@@ -454,12 +454,13 @@ def test_sidebar_shell_header_and_icon_use_the_page_scoped_contract():
     ):
         assert class_name in INDEX
     for class_name in (
-        "flex items-center justify-between gap-2 border-b border-slate-200/60 px-5 py-4",
-        "h-11 w-11",
-        "rounded-xl",
+        "space-y-2 border-b border-slate-200/60 px-5 py-3",
+        "flex items-center justify-between gap-2",
+        "h-10 w-10",
+        "rounded-lg",
         "from-amber-500 to-orange-600",
         "shadow-lg shadow-amber-500/25",
-        "h-[22px] w-[22px]",
+        "h-[20px] w-[20px]",
         "text-lg font-bold text-slate-900",
         "font-semibold tabular-nums text-amber-600 dark:text-amber-400",
     ):
@@ -467,7 +468,7 @@ def test_sidebar_shell_header_and_icon_use_the_page_scoped_contract():
 
 
 def test_header_actions_have_live_states_and_tooltips():
-    assert SIDEBAR.count('role="tooltip"') == 5
+    assert SIDEBAR.count('role="tooltip"') == 6
     assert "h-9 w-9" in SIDEBAR
     assert "hover:bg-amber-50 hover:text-amber-600" in SIDEBAR
     assert "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700" in SIDEBAR
