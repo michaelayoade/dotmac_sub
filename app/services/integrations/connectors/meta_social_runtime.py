@@ -592,7 +592,6 @@ class MetaSocialRuntimeRunner:
                     "event_id": event_id,
                     "action_source": "system_generated",
                     "user_data": {"lead_id": leadgen_id},
-                    "custom_data": {"event_source": "crm"},
                 }
             ]
         }

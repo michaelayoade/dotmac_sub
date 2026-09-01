@@ -116,11 +116,11 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_email_services.py` | `test_send_email_auth_failure_logs` | `outbound_transport` | `e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e` |
 | `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |
-| `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `da26118627024438b99b7d12c0404b12db39c72e7dd40c57515659f458cddfd2` |
+| `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `fc7bb83c3ed15b6a49fa08d1d7991abaed40008d6704adb24afb268e64d96670` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `2ad03d19e91abbbd467037d4672ba61b4433b2533ead11b04955f1873b6017af` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
-| `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb` |
+| `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `2cfb33c493921333d14bb1a84b0426ad12e15e535a8f752d0add3ff9e9d33002` |
 | `tests/test_team_inbox_smtp_runtime.py` | `test_readiness_uses_smtp_noop` | `outbound_transport` | `4e19294b80d017343f252be4e1284480dc628225f164bb616e894b80a5c9f9c4` |
 | `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `4c2d111b3d7cf8106ad94a8250c80cb921adaeea0cc82159b3670f49d3ec6991` |
 

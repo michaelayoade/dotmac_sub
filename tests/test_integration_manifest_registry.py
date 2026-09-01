@@ -34,7 +34,7 @@ EXPECTED_MARKETPLACE = {
     "lead.capture.http": ("Lead Capture Webhook", "1.0.0", "sales"),
     "whatsapp": ("WhatsApp", "1.1.0", "messaging"),
     "nextcloud.talk": ("Nextcloud Talk", "1.0.0", "messaging"),
-    "meta.social": ("Meta Social Inbox", "1.1.0", "messaging"),
+    "meta.social": ("Meta Social Inbox", "1.2.0", "messaging"),
     "paystack": ("Paystack", "1.0.1", "payment"),
     "flutterwave": ("Flutterwave", "1.0.0", "payment"),
     "3cx": ("3CX", "1.0.0", "voice"),
@@ -146,6 +146,10 @@ def test_exact_historical_meta_social_pins_remain_bounded_and_executable() -> No
     assert [
         (definition.version, definition.digest) for definition in supported_meta_social
     ] == [
+        (
+            "1.2.0",
+            "ebbab59c10536ba381078733e3f23abd10d2234e012ac5e84d0a281214ce9f23",
+        ),
         (
             "1.1.0",
             "dfa7b8229d870b1524ba8fcab76448c9ba3de2f4922ac6031105398811c993d6",
