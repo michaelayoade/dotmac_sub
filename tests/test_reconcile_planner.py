@@ -1039,6 +1039,32 @@ def test_stale_service_port_is_deleted():
     assert delete_actions[0].service_port_index == 99
 
 
+def test_unindexed_matching_management_service_port_is_preserved():
+    desired = _desired(mgmt_service_port_index=None, wan_service_port_index=None)
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 83, "vlan_id": 203, "gem_index": 1, "state": "up"},
+            {"index": 91, "vlan_id": 201, "gem_index": 2, "state": "up"},
+            {"index": 99, "vlan_id": 999, "gem_index": 3, "state": "up"},
+        ),
+    )
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    delete_actions = [a for a in plan.actions if isinstance(a, OltDeleteServicePort)]
+    assert [a.service_port_index for a in delete_actions] == [99]
+
+
 def test_no_action_when_service_ports_match():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sync")
