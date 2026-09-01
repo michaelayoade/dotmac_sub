@@ -196,8 +196,32 @@ class PublishedPortObservedListenerV1(StrictContract):
     protocol: Literal["tcp", "udp"]
 
 
+class PublishedPortProjectContainerV1(StrictContract):
+    """Identity of one project container: what it is, not what it came from.
+
+    This is the whole of the non-target observation contract.  A non-target is
+    never recreated by this operation, so its provenance is not a property the
+    operation can promise anything about; what must hold is that it is the
+    SAME RUNNING CONTAINER before and after, and a container ID proves that
+    strictly better than an image reference does.  There is deliberately no
+    image field here, so a non-target's mutable tag is not merely tolerated --
+    it is unrepresentable, and therefore cannot be borrowed as evidence.
+    """
+
+    service: ServiceName
+    container: ContainerName
+    container_id: ContainerId
+
+
 class PublishedPortContainerObservationV2(StrictContract):
-    """Secret-free normalized subset collected from one Docker container."""
+    """Secret-free normalized subset collected from the TARGET container.
+
+    The target is the one container this operation destroys and recreates, so
+    it is the only one whose image identity must be immutable: a tag could
+    resolve to different bytes between the plan and the recreate.  Requiring
+    the same of a non-target would fail PLAN for services this operation never
+    touches -- see ``PublishedPortProjectContainerV1``.
+    """
 
     compose_project: Literal["dotmac_sub"] = "dotmac_sub"
     service: ServiceName
@@ -217,9 +241,21 @@ class PublishedPortContainerObservationV2(StrictContract):
             raise ValueError("container listeners must be unique and sorted")
         return self
 
+    def identity(self) -> PublishedPortProjectContainerV1:
+        return PublishedPortProjectContainerV1(
+            service=self.service,
+            container=self.container,
+            container_id=self.container_id,
+        )
+
 
 class PublishedPortHostSnapshotV2(StrictContract):
-    """Safe output of the root-owned, read-only Docker observer."""
+    """Safe output of the root-owned, read-only Docker observer.
+
+    The two observation contracts are split rather than uniform: ``target``
+    carries immutable image identity and listeners, ``non_targets`` carry
+    identity alone.
+    """
 
     schema_id: Literal["PublishedPortHostSnapshotV2"] = Field(
         default=HOST_SNAPSHOT_SCHEMA, alias="schema"
@@ -232,30 +268,34 @@ class PublishedPortHostSnapshotV2(StrictContract):
     )
     non_port_definition_digest: Sha256Digest
     effective_image_reference: ImageReference
-    containers: tuple[PublishedPortContainerObservationV2, ...] = Field(min_length=1)
+    target: PublishedPortContainerObservationV2
+    non_targets: tuple[PublishedPortProjectContainerV1, ...]
 
     @model_validator(mode="after")
     def snapshot_is_complete_and_canonical(self) -> Self:
+        if self.target.service != self.service:
+            raise ValueError("snapshot target does not name the observed service")
         keys = tuple(
             (item.service, item.container, item.container_id)
-            for item in self.containers
+            for item in self.non_targets
         )
         if keys != tuple(sorted(set(keys))):
-            raise ValueError("snapshot containers must be unique and sorted")
-        if (
-            len(tuple(item for item in self.containers if item.service == self.service))
-            != 1
-        ):
-            raise ValueError(
-                "snapshot must contain exactly one target service container"
-            )
+            raise ValueError("snapshot non-targets must be unique and sorted")
+        if any(item.service == self.service for item in self.non_targets):
+            raise ValueError("the target service may not appear among non-targets")
+        if self.target.container_id in {item.container_id for item in self.non_targets}:
+            raise ValueError("the target container may not appear among non-targets")
         return self
 
+    def project_containers(self) -> tuple[PublishedPortProjectContainerV1, ...]:
+        """The complete container-identity map, target included."""
 
-class PublishedPortProjectContainerV1(StrictContract):
-    service: ServiceName
-    container: ContainerName
-    container_id: ContainerId
+        return tuple(
+            sorted(
+                (self.target.identity(), *self.non_targets),
+                key=lambda item: (item.service, item.container, item.container_id),
+            )
+        )
 
 
 class PublishedPortPrestateV1(StrictContract):

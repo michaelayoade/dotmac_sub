@@ -121,9 +121,22 @@ def _write_contract(path: Path, contract: StrictContract) -> None:
 
 
 def _normalise_container_rows(
-    path: Path,
-) -> tuple[PublishedPortContainerObservationV2, ...]:
-    rows: list[PublishedPortContainerObservationV2] = []
+    path: Path, service: str
+) -> tuple[
+    PublishedPortContainerObservationV2, tuple[PublishedPortProjectContainerV1, ...]
+]:
+    """Reduce raw Docker rows into the split target/non-target observations.
+
+    Only the target's row is parsed for image identity and listeners.  A
+    non-target's image reference is dropped here rather than validated: this
+    operation never recreates it, so the property that must hold across the
+    recreate is that its container ID is unchanged, and demanding an immutable
+    reference from it would refuse a project whose sidecars are ordinarily
+    tag-pinned.
+    """
+
+    target: PublishedPortContainerObservationV2 | None = None
+    non_targets: list[PublishedPortProjectContainerV1] = []
     for line_number, line in enumerate(
         path.read_text(encoding="utf-8").splitlines(), 1
     ):
@@ -149,54 +162,70 @@ def _normalise_container_rows(
                 "container observation must contain only the seven approved, "
                 "secret-free fields"
             )
-        listeners: list[PublishedPortObservedListenerV1] = []
-        for port_spec, bindings in (raw["ports"] or {}).items():
-            container_port_text, separator, protocol = port_spec.partition("/")
-            if not separator or protocol not in {"tcp", "udp"}:
-                _refuse(f"unsupported observed port key {port_spec!r}")
-            for binding in bindings or ():
-                if set(binding) != {"HostIp", "HostPort"}:
-                    _refuse("observed port binding contains an unapproved field")
-                listeners.append(
-                    PublishedPortObservedListenerV1(
-                        container_port=int(container_port_text),
-                        host_ip=ip_address(binding["HostIp"]),
-                        host_port=int(binding["HostPort"]),
-                        protocol=protocol,
+        container = str(raw["container"]).lstrip("/")
+        container_id = str(raw["container_id"]).removeprefix("sha256:")
+        try:
+            if raw["service"] != service:
+                non_targets.append(
+                    PublishedPortProjectContainerV1(
+                        service=raw["service"],
+                        container=container,
+                        container_id=container_id,
                     )
                 )
-        try:
-            rows.append(
-                PublishedPortContainerObservationV2(
-                    compose_project=raw["compose_project"],
-                    service=raw["service"],
-                    container=str(raw["container"]).lstrip("/"),
-                    container_id=str(raw["container_id"]).removeprefix("sha256:"),
-                    image_id=raw["image_id"],
-                    image_reference=raw["image_reference"],
-                    listeners=tuple(
-                        sorted(
-                            listeners,
-                            key=lambda item: (
-                                item.container_port,
-                                str(item.host_ip),
-                                item.host_port,
-                                item.protocol,
-                            ),
+                continue
+            listeners: list[PublishedPortObservedListenerV1] = []
+            for port_spec, bindings in (raw["ports"] or {}).items():
+                container_port_text, separator, protocol = port_spec.partition("/")
+                if not separator or protocol not in {"tcp", "udp"}:
+                    _refuse(f"unsupported observed port key {port_spec!r}")
+                for binding in bindings or ():
+                    if set(binding) != {"HostIp", "HostPort"}:
+                        _refuse("observed port binding contains an unapproved field")
+                    listeners.append(
+                        PublishedPortObservedListenerV1(
+                            container_port=int(container_port_text),
+                            host_ip=ip_address(binding["HostIp"]),
+                            host_port=int(binding["HostPort"]),
+                            protocol=protocol,
                         )
-                    ),
-                )
+                    )
+            if target is not None:
+                _refuse("exactly one running target service container is required")
+            target = PublishedPortContainerObservationV2(
+                compose_project=raw["compose_project"],
+                service=raw["service"],
+                container=container,
+                container_id=container_id,
+                image_id=raw["image_id"],
+                image_reference=raw["image_reference"],
+                listeners=tuple(
+                    sorted(
+                        listeners,
+                        key=lambda item: (
+                            item.container_port,
+                            str(item.host_ip),
+                            item.host_port,
+                            item.protocol,
+                        ),
+                    )
+                ),
             )
         except ValidationError as error:
             raise ReconcileV2Error(
                 f"invalid container observation at line {line_number}: {error}"
             ) from error
-    if not rows:
-        _refuse("the compose project has no observed containers")
-    rows.sort(key=lambda item: (item.service, item.container, item.container_id))
-    if len({(row.service, row.container) for row in rows}) != len(rows):
+    if target is None:
+        _refuse("exactly one running target service container is required")
+    non_targets.sort(key=lambda item: (item.service, item.container, item.container_id))
+    identities = [
+        (item.service, item.container, item.container_id) for item in non_targets
+    ]
+    if len(set(identities)) != len(identities):
         _refuse("container observations duplicate a compose service/container identity")
-    return tuple(rows)
+    if target.container_id in {item.container_id for item in non_targets}:
+        _refuse("the target container also appears as a non-target")
+    return target, tuple(non_targets)
 
 
 def _effective_service_projection(path: Path, service: str) -> tuple[str, str]:
@@ -241,11 +270,7 @@ def build_execution_plan(
 ) -> PublishedPortExecutionPlanV2:
     declared = plan(load_declaration(declaration_path), service, "production")
     intent = PublishedPortIntentV1.from_declared(declared)
-    observations = _normalise_container_rows(containers)
-    target_rows = tuple(row for row in observations if row.service == service)
-    if len(target_rows) != 1:
-        _refuse("exactly one running target service container is required")
-    target = target_rows[0]
+    target, non_targets = _normalise_container_rows(containers, service)
     non_port_digest, effective_image = _effective_service_projection(
         effective_compose, service
     )
@@ -266,12 +291,14 @@ def build_execution_plan(
             listeners=target.listeners,
             non_port_definition_digest=non_port_digest,
             project_containers=tuple(
-                PublishedPortProjectContainerV1(
-                    service=row.service,
-                    container=row.container,
-                    container_id=row.container_id,
+                sorted(
+                    (target.identity(), *non_targets),
+                    key=lambda item: (
+                        item.service,
+                        item.container,
+                        item.container_id,
+                    ),
                 )
-                for row in observations
             ),
         ),
     )
@@ -315,7 +342,7 @@ def build_execution_plan_from_snapshot(
         _refuse("host snapshot target coordinates differ from the plan request")
     declared = plan(load_declaration(declaration_path), service, "production")
     intent = PublishedPortIntentV1.from_declared(declared)
-    target = next(row for row in snapshot.containers if row.service == service)
+    target = snapshot.target
     if snapshot.effective_image_reference != target.image_reference:
         _refuse("snapshot effective image is not the exact running image reference")
     if snapshot.observer_digest != sha256_file(PLAN_OBSERVER):
@@ -334,14 +361,7 @@ def build_execution_plan_from_snapshot(
             target_image_digest=image_digest,
             listeners=target.listeners,
             non_port_definition_digest=snapshot.non_port_definition_digest,
-            project_containers=tuple(
-                PublishedPortProjectContainerV1(
-                    service=row.service,
-                    container=row.container,
-                    container_id=row.container_id,
-                )
-                for row in snapshot.containers
-            ),
+            project_containers=snapshot.project_containers(),
         ),
     )
     obligations = tuple(
@@ -743,13 +763,9 @@ def verify_postconditions(
     reach_paths: list[Path],
     now: datetime,
 ) -> PublishedPortPostconditionVerdictV2:
-    rows = _normalise_container_rows(containers)
-    target_rows = tuple(
-        row for row in rows if row.service == execution.plan.intent.service
+    target, non_targets = _normalise_container_rows(
+        containers, execution.plan.intent.service
     )
-    if len(target_rows) != 1:
-        _refuse("poststate must contain exactly one target container")
-    target = target_rows[0]
     before = execution.plan.prestate
     if target.container_id == before.target_container_id:
         _refuse("target container ID did not change")
@@ -763,9 +779,7 @@ def verify_postconditions(
         if row.service != execution.plan.intent.service
     }
     after_others = {
-        (row.service, row.container): row.container_id
-        for row in rows
-        if row.service != execution.plan.intent.service
+        (row.service, row.container): row.container_id for row in non_targets
     }
     if after_others != before_others:
         _refuse("one or more non-target container identities changed")

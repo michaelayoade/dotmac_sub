@@ -163,7 +163,8 @@ def collect(service: str, *, config_path: Path = CONFIG_PATH) -> dict[str, objec
         text=True,
         env=SAFE_ENV,
     )
-    containers: list[dict[str, object]] = []
+    target: dict[str, object] | None = None
+    non_targets: list[dict[str, object]] = []
     allowed = {
         "compose_project",
         "service",
@@ -180,8 +181,25 @@ def collect(service: str, *, config_path: Path = CONFIG_PATH) -> dict[str, objec
         if row["compose_project"] != config["compose_project"]:
             _fail("Docker inspect escaped the configured Compose project")
         row["container"] = str(row["container"]).lstrip("/")
+        container_id = str(row["container_id"]).removeprefix("sha256:")
+        if row["service"] != service:
+            # A non-target is never recreated here, so its image reference is
+            # deliberately dropped rather than checked: only its identity is a
+            # property this operation can promise, and requiring an immutable
+            # reference from a container nobody touches would fail PLAN for
+            # every ordinarily tag-pinned sidecar in the project.
+            non_targets.append(
+                {
+                    "service": row["service"],
+                    "container": row["container"],
+                    "container_id": container_id,
+                }
+            )
+            continue
+        if target is not None:
+            _fail("Docker observation must contain exactly one target container")
         listeners: list[dict[str, object]] = []
-        ports = row.pop("ports")
+        ports = row["ports"]
         if not isinstance(ports, dict):
             _fail("Docker inspect ports are not an object")
         for port_spec, bindings in ports.items():
@@ -212,22 +230,22 @@ def collect(service: str, *, config_path: Path = CONFIG_PATH) -> dict[str, objec
                 item["protocol"],
             )
         )
-        containers.append(
-            {
-                "compose_project": row["compose_project"],
-                "service": row["service"],
-                "container": row["container"],
-                "container_id": str(row["container_id"]).removeprefix("sha256:"),
-                "image_id": row["image_id"],
-                "image_reference": row["image_reference"],
-                "listeners": listeners,
-            }
-        )
-    containers.sort(
+        target = {
+            "compose_project": row["compose_project"],
+            "service": row["service"],
+            "container": row["container"],
+            "container_id": container_id,
+            "image_id": row["image_id"],
+            "image_reference": row["image_reference"],
+            "listeners": listeners,
+        }
+    if target is None:
+        _fail("Docker observation must contain exactly one target container")
+    if not IMAGE_REFERENCE.fullmatch(str(target["image_reference"])):
+        _fail("target container image is not immutable and digest-pinned")
+    non_targets.sort(
         key=lambda item: (item["service"], item["container"], item["container_id"])
     )
-    if len(tuple(row for row in containers if row["service"] == service)) != 1:
-        _fail("Docker observation must contain exactly one target container")
 
     effective = subprocess.run(
         [*compose, "config", "--format", "json"],
@@ -255,7 +273,8 @@ def collect(service: str, *, config_path: Path = CONFIG_PATH) -> dict[str, objec
         "non_port_projection": "DockerComposeServiceProjectionV1",
         "non_port_definition_digest": _digest(projection),
         "effective_image_reference": image,
-        "containers": containers,
+        "target": target,
+        "non_targets": non_targets,
     }
 
 
