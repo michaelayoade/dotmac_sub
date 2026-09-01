@@ -238,6 +238,7 @@ class EventType(enum.Enum):
     lead_created = "lead.created"
     lead_updated = "lead.updated"
     lead_account_converted = "lead.account_converted"
+    meta_lead_customer_match_reconciled = "meta_lead.customer_match_reconciled"
     quote_created = "quote.created"
     quote_accepted = "quote.accepted"
     quote_discount_applied = "quote.discount_applied"

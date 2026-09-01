@@ -3898,6 +3898,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_projection",
                 "communications.team_inbox_routing",
                 "integration.inbox",
+                "integration.runtime",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_maintenance",
@@ -3946,15 +3947,28 @@ DOMAIN = DomainSOT(
                             "historical repair."
                         ),
                     ),
+                    AuthorityInput(
+                        name="Meta contact profile observation",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "Account-scoped Facebook or Instagram sender profile "
+                            "retrieved for the exact conversation contact address."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_maintenance.invalid_location_repair_scope",
+                    "communications.team_inbox_maintenance.conversation_not_found",
+                    "communications.team_inbox_maintenance.profile_target_changed",
+                    "communications.team_inbox_maintenance.profile_name_missing",
                 ),
                 event_types=("team_inbox.projection_repaired.v1",),
                 projections=(
                     "repairable Inbox worklists and media projection",
                     "verified historical WhatsApp location attachment repair",
+                    "Meta contact profile repair and failed reply retry",
                 ),
             ),
         ),

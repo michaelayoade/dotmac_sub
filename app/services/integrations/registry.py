@@ -340,6 +340,7 @@ def _meta_social_manifest(
     version: str,
     include_shared_oauth: bool,
     include_auth_mode: bool,
+    include_lead_ads: bool = False,
 ) -> ConnectorManifest:
     """Build immutable Meta Social manifests for exact version/digest pins."""
     properties: dict[str, dict[str, object]] = {
@@ -392,9 +393,39 @@ def _meta_social_manifest(
             "enum": ["oauth", "individual"],
         }
         required.insert(2, "auth_mode")
+    if include_lead_ads:
+        properties["conversion_dataset_id"] = {"type": "string"}
+        properties["conversion_event_name"] = {"type": "string"}
     if include_shared_oauth:
         secrets.insert(
             0, SecretBindingManifest(name="meta_oauth_access_token", required=False)
+        )
+    if include_lead_ads:
+        secrets.append(
+            SecretBindingManifest(name="conversions_api_access_token", required=False)
+        )
+    capabilities = [
+        CapabilityManifest(
+            id="messaging.send.v1",
+            modes=(CapabilityMode.interactive, CapabilityMode.event),
+        ),
+        CapabilityManifest(
+            id="messaging.receive.v1",
+            modes=(CapabilityMode.inbound,),
+        ),
+    ]
+    if include_lead_ads:
+        capabilities.extend(
+            (
+                CapabilityManifest(
+                    id="sales.lead_capture.v1",
+                    modes=(CapabilityMode.inbound, CapabilityMode.reconcile),
+                ),
+                CapabilityManifest(
+                    id="sales.lead_conversion.send.v1",
+                    modes=(CapabilityMode.event, CapabilityMode.reconcile),
+                ),
+            )
         )
     return ConnectorManifest(
         key="meta.social",
@@ -408,16 +439,7 @@ def _meta_social_manifest(
             type=ConnectorRuntimeType.builtin_worker,
             module="app.services.integrations.connectors.meta_social_runtime",
         ),
-        capabilities=(
-            CapabilityManifest(
-                id="messaging.send.v1",
-                modes=(CapabilityMode.interactive, CapabilityMode.event),
-            ),
-            CapabilityManifest(
-                id="messaging.receive.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-        ),
+        capabilities=tuple(capabilities),
         config_schema={
             "type": "object",
             "properties": properties,
@@ -426,9 +448,19 @@ def _meta_social_manifest(
         },
         secrets=tuple(secrets),
         data_access=DataAccessManifest(
-            reads=("communications.outbound_message",),
-            emits=("communications.inbound_message_observation",),
-            classifications=("customer_contact", "message_content"),
+            reads=(
+                "communications.outbound_message",
+                *(("sales.customer_conversion",) if include_lead_ads else ()),
+            ),
+            emits=(
+                "communications.inbound_message_observation",
+                *(("sales.lead_ad_observation",) if include_lead_ads else ()),
+            ),
+            classifications=(
+                "customer_contact",
+                "message_content",
+                *(("sales_acquisition",) if include_lead_ads else ()),
+            ),
         ),
         egress=EgressManifest(hosts=("graph.facebook.com", "graph.instagram.com")),
         health=HealthManifest(operation="connection.validate.v1"),
@@ -719,9 +751,10 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         health=HealthManifest(operation="connection.validate.v1"),
     ),
     _meta_social_manifest(
-        version="1.1.0",
+        version="1.2.0",
         include_shared_oauth=True,
         include_auth_mode=True,
+        include_lead_ads=True,
     ),
     _dotmac_erp_manifest(
         version="1.2.0",
@@ -826,6 +859,11 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     # the runner no longer maps it to an action, so a 1.1.0-pinned binding for
     # it now fails closed with `capability_not_supported`.
     _dotmac_crm_manifest(version="1.1.0", include_chat_session=True),
+    _meta_social_manifest(
+        version="1.1.0",
+        include_shared_oauth=True,
+        include_auth_mode=True,
+    ),
     # The original Meta Social 1.0.0 pin did not declare the aggregate
     # auth_mode field. Production installations may retain this exact pin
     # until explicit adoption, so later manifest changes cannot rewrite it.

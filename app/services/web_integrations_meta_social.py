@@ -40,6 +40,9 @@ class MetaSocialConfigFormCommand:
     instagram_login_access_token_ref: str
     webhook_signing_secret_ref: str
     webhook_verify_token_ref: str
+    conversion_dataset_id: str = ""
+    conversion_event_name: str = "CustomerConverted"
+    conversions_api_access_token_ref: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +62,15 @@ class MetaSocialConfigPage:
     instagram_token_bound: bool
     signing_secret_bound: bool
     verify_token_bound: bool
+    conversion_dataset_id: str
+    conversion_event_name: str
+    conversion_token_bound: bool
     meta_oauth_token_ref_masked: str
     facebook_token_ref_masked: str
     instagram_token_ref_masked: str
     signing_secret_ref_masked: str
     verify_token_ref_masked: str
+    conversion_token_ref_masked: str
 
 
 def _single_installation(db: Session) -> IntegrationInstallation | None:
@@ -114,6 +121,9 @@ def build_config_page(db: Session) -> MetaSocialConfigPage:
         instagram_token_bound=projection.instagram_token_bound,
         signing_secret_bound=projection.signing_secret_bound,
         verify_token_bound=projection.verify_token_bound,
+        conversion_dataset_id=projection.conversion_dataset_id,
+        conversion_event_name=projection.conversion_event_name,
+        conversion_token_bound=projection.conversion_token_bound,
         meta_oauth_token_ref_masked=_masked(
             str(refs.get(META_OAUTH_TOKEN_BINDING) or "")
         ),
@@ -126,6 +136,9 @@ def build_config_page(db: Session) -> MetaSocialConfigPage:
         ),
         verify_token_ref_masked=_masked(
             str(refs.get(WEBHOOK_VERIFY_TOKEN_BINDING) or "")
+        ),
+        conversion_token_ref_masked=_masked(
+            str(refs.get("conversions_api_access_token") or "")
         ),
     )
 
@@ -150,6 +163,9 @@ def save_config(
             instagram_login_access_token_ref=form.instagram_login_access_token_ref,
             webhook_signing_secret_ref=form.webhook_signing_secret_ref,
             webhook_verify_token_ref=form.webhook_verify_token_ref,
+            conversion_dataset_id=form.conversion_dataset_id,
+            conversion_event_name=form.conversion_event_name,
+            conversions_api_access_token_ref=form.conversions_api_access_token_ref,
         ),
         context=context,
     )
