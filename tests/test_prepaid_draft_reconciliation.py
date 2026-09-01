@@ -507,6 +507,8 @@ def test_historical_paid_invoice_repair_accepts_same_business_day_due_anchor(
     assert preview.allocation_id == allocation.id
     assert preview.billing_period_start == current_anchor
     assert preview.billing_period_end == next_anchor
+    invoice_id = invoice.id
+    subscription_id = subscription.id
     fingerprint = preview.fingerprint
     db_session.commit()
 
@@ -517,10 +519,10 @@ def test_historical_paid_invoice_repair_accepts_same_business_day_due_anchor(
                 actor="pytest:billing-operator",
                 scope="prepaid_draft_reconciliation",
                 reason="Reviewed exact same-day paid invoice evidence",
-                idempotency_key=f"pytest-paid-anchor-boundary-{invoice.id}",
+                idempotency_key=f"pytest-paid-anchor-boundary-{invoice_id}",
             ),
-            invoice_id=invoice.id,
-            subscription_id=subscription.id,
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
             preview_fingerprint=fingerprint,
         ),
     )
