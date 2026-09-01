@@ -43,13 +43,20 @@ def _module_function_names(path: Path) -> set[str]:
 
 
 def _assigns_next_billing_at(path: Path) -> set[str]:
-    """Return enclosing function names that assign ``.next_billing_at``."""
+    """Return functions that assign the anchor through ORM or Core writes."""
     tree = _tree(path)
     offenders: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == "values"
+                and any(keyword.arg == "next_billing_at" for keyword in inner.keywords)
+            ):
+                offenders.add(node.name)
             targets: list[ast.expr] = []
             if isinstance(inner, ast.Assign):
                 targets = list(inner.targets)
