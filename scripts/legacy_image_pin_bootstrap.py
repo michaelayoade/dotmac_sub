@@ -703,7 +703,9 @@ def _parser() -> argparse.ArgumentParser:
     receipt = commands.add_parser("write-receipt")
     receipt.add_argument("--admission", required=True, type=Path)
     receipt.add_argument("--plan", required=True, type=Path)
-    receipt.add_argument("--outcome", required=True, choices=["applied", "rolled_back"])
+    receipt.add_argument(
+        "--outcome", required=True, choices=["applied", "recovered_forward"]
+    )
     receipt.add_argument("--after-container-id", required=True)
     receipt.add_argument("--image-id", required=True)
     receipt.add_argument("--recorded-at", required=True)

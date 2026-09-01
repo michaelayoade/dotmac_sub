@@ -575,13 +575,13 @@ def test_a_terminal_receipt_permanently_refuses_a_second_bootstrap(
         )
 
 
-def test_a_rollback_receipt_also_refuses_a_repeat(
+def test_a_forward_recovery_receipt_also_refuses_a_repeat(
     tmp_path: Path, plan: LegacyImagePinBootstrapPlanV1
 ) -> None:
     receipt = tmp_path / "receipt.json"
     admission = _admit(tmp_path, plan, receipt=receipt)
     bootstrap.write_receipt(
-        outcome="rolled_back",
+        outcome="recovered_forward",
         admission=admission,
         plan=plan,
         after_container_id=TARGET_AFTER,
@@ -589,7 +589,7 @@ def test_a_rollback_receipt_also_refuses_a_repeat(
         recorded_at=NOW + timedelta(minutes=5),
         receipt_path=receipt,
     )
-    with pytest.raises(bootstrap.BootstrapRefused, match="rolled_back"):
+    with pytest.raises(bootstrap.BootstrapRefused, match="recovered_forward"):
         bootstrap.require_single_use(receipt)
 
 
