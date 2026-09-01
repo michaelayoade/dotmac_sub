@@ -120,9 +120,13 @@ The owner separately repairs an already-paid unlinked document only when the
 operator supplies the exact invoice/subscription pair and the current snapshot
 proves one positive line, one active full-value allocation, one successful
 unreturned settlement, canonical taxed contract-charge equality, no credit-note
-funding, no entitlement, and no billing anchor. The Payment may fund other
-invoices; the selected allocation alone must exactly equal this invoice total.
-The settlement instant determines the WAT service period.
+funding, and no overlapping entitlement or competing document. The Payment may
+fund other invoices; the selected allocation alone must exactly equal this
+invoice total. The settlement instant determines the WAT service period. If an
+older subscription anchor is one boundary later on that same WAT service-start
+business date, the repair may use that anchor only when the invoice due instant
+exactly matches the next cadence boundary; otherwise the anchor remains manual
+review.
 
 Confirmation posts no money and never changes invoice status, balance, total,
 or allocation. A flush-only invoice participant writes missing line and period
