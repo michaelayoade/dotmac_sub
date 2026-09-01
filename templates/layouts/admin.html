@@ -859,7 +859,11 @@
             </div>
             <div class="relative z-10 mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 {% block content_container_class %}{% endblock %}">
                 {% block page_header %}{% endblock %}
-                {% set workflow_guide = admin_workflow_guidance_for_path(request.url.path) if request is defined and request and request.url else none %}
+                {% if admin_workflow_guidance_for_path is defined and request is defined and request and request.url %}
+                {% set workflow_guide = admin_workflow_guidance_for_path(request.url.path) %}
+                {% else %}
+                {% set workflow_guide = none %}
+                {% endif %}
                 {% if workflow_guide and request.url.path != '/admin/help' %}
                 <details class="mb-6 rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-950 dark:border-teal-900 dark:bg-teal-950/30 dark:text-teal-100">
                     <summary class="cursor-pointer font-semibold">How this works: {{ workflow_guide.title }}</summary>

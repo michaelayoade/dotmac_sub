@@ -300,7 +300,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Staff safety rules for customer actions",
         "All staff",
         "Avoid accidental service, billing, and access changes.",
-        ("/admin",),
+        ("/admin/dashboard",),
         "Confirm the customer and open the record that owns the action.",
         "Read previews and check billing, access, ledger, and notification effects.",
         "Enter clear reasons, verify the visible result, and record customer follow-up when needed.",
