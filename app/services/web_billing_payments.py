@@ -33,11 +33,11 @@ from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import (
     BillingAccountPaymentRefundRequest,
     BillingAccountPaymentReversalRequest,
+    ManualPaymentRecordingConfirm,
+    ManualPaymentRecordingPreviewRequest,
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
     PaymentCreate,
-    PaymentCreationConfirm,
-    PaymentCreationPreviewRequest,
     PaymentMethodCreate,
     PaymentRefundPreviewRequest,
     PaymentRefundRequest,
@@ -49,9 +49,11 @@ from app.schemas.billing import (
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import display_format, settings_spec
+from app.services import manual_payment_recording as manual_payment_recording_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.db_session_adapter import db_session_adapter
 from app.services.inclusive_date_range import InclusiveDateRange
 from app.services.list_query import (
     ListDefinition,
@@ -59,6 +61,7 @@ from app.services.list_query import (
     ListQuery,
     PageMeta,
 )
+from app.services.owner_commands import CommandContext
 from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
@@ -343,6 +346,7 @@ def build_create_payload(
     amount,
     currency: str,
     status: str | None,
+    reference: str | None,
     memo: str | None,
     invoice_id: str | None,
 ) -> PaymentCreate:
@@ -366,6 +370,7 @@ def build_create_payload(
         amount=amount,
         currency=currency.strip().upper(),
         status=PaymentStatus(status) if status else PaymentStatus.pending,
+        external_id=reference.strip() if reference and reference.strip() else None,
         memo=memo.strip() if memo else None,
         allocations=allocations,
     )
@@ -1348,6 +1353,7 @@ def _prepare_payment_create(
     invoice_id: str | None,
     collection_account_id: str | None,
     payment_method_id: str | None,
+    reference: str | None,
     memo: str | None,
 ) -> dict[str, object]:
     """Resolve adapter inputs into the canonical payment owner request."""
@@ -1381,6 +1387,7 @@ def _prepare_payment_create(
         amount=parsed_amount,
         currency=effective_currency,
         status=status,
+        reference=reference,
         memo=memo,
         invoice_id=invoice_id,
     )
@@ -1402,6 +1409,7 @@ def preview_payment_create(
     invoice_id: str | None,
     collection_account_id: str | None,
     payment_method_id: str | None,
+    reference: str | None,
     memo: str | None,
 ) -> dict[str, object]:
     prepared = _prepare_payment_create(
@@ -1413,12 +1421,13 @@ def preview_payment_create(
         invoice_id=invoice_id,
         collection_account_id=collection_account_id,
         payment_method_id=payment_method_id,
+        reference=reference,
         memo=memo,
     )
     payload = cast(PaymentCreate, prepared["payload"])
-    preview = billing_service.payments.preview_creation(
+    preview = manual_payment_recording_service.preview_manual_payment_recording(
         db,
-        PaymentCreationPreviewRequest(
+        ManualPaymentRecordingPreviewRequest(
             **payload.model_dump(),
             auto_allocate=True,
         ),
@@ -1439,11 +1448,15 @@ def process_payment_create(
     invoice_id: str | None,
     collection_account_id: str | None,
     payment_method_id: str | None,
+    reference: str | None,
     memo: str | None,
     idempotency_token: str | None = None,
     preview_fingerprint: str | None = None,
+    control_fingerprint: str | None = None,
+    duplicate_risk_acknowledged: bool = False,
+    context: CommandContext | None = None,
 ) -> dict[str, object]:
-    """Confirm a reviewed payment preview through the canonical owner."""
+    """Confirm a reviewed payment through the duplicate-control coordinator."""
     prepared = _prepare_payment_create(
         db,
         account_id=account_id,
@@ -1453,12 +1466,14 @@ def process_payment_create(
         invoice_id=invoice_id,
         collection_account_id=collection_account_id,
         payment_method_id=payment_method_id,
+        reference=reference,
         memo=memo,
     )
     payload = cast(PaymentCreate, prepared["payload"])
-    owner_key = _owner_payment_idempotency_key(idempotency_token)
+    resolved_token = idempotency_token or secrets.token_urlsafe(24)
+    owner_key = _owner_payment_idempotency_key(resolved_token)
     result = None
-    if preview_fingerprint is None:
+    if preview_fingerprint is None or control_fingerprint is None:
         replay = billing_service.payments.replay_creation_request(
             db,
             payload,
@@ -1468,24 +1483,42 @@ def process_payment_create(
         if replay is not None:
             result = replay
         else:
-            preview = billing_service.payments.preview_creation(
+            preview = manual_payment_recording_service.preview_manual_payment_recording(
                 db,
-                PaymentCreationPreviewRequest(
+                ManualPaymentRecordingPreviewRequest(
                     **payload.model_dump(),
                     auto_allocate=True,
                 ),
             )
-            preview_fingerprint = preview.fingerprint
-    if preview_fingerprint is not None and result is None:
-        result = billing_service.payments.confirm_creation(
-            db,
-            PaymentCreationConfirm(
-                **payload.model_dump(),
-                auto_allocate=True,
-                preview_fingerprint=preview_fingerprint,
-                idempotency_key=owner_key,
-            ),
+            preview_fingerprint = preview.payment_preview.fingerprint
+            control_fingerprint = preview.control_fingerprint
+    if (
+        preview_fingerprint is not None
+        and control_fingerprint is not None
+        and result is None
+    ):
+        command_context = context or CommandContext.system(
+            actor="system:admin-payment-adapter",
+            scope=manual_payment_recording_service.MANUAL_PAYMENT_RECORDING_SCOPE,
+            reason="Confirm an administrative manual payment after duplicate review.",
+            idempotency_key=owner_key,
         )
+        db_session_adapter.release_read_transaction(db)
+        recording_result = (
+            manual_payment_recording_service.confirm_manual_payment_recording(
+                db,
+                context=command_context,
+                request=ManualPaymentRecordingConfirm(
+                    **payload.model_dump(),
+                    auto_allocate=True,
+                    preview_fingerprint=preview_fingerprint,
+                    idempotency_key=owner_key,
+                    control_fingerprint=control_fingerprint,
+                    duplicate_risk_acknowledged=duplicate_risk_acknowledged,
+                ),
+            )
+        )
+        result = recording_result.payment_result
     assert result is not None
     return {
         "payment": result.payment,
@@ -1515,10 +1548,30 @@ def process_payment_create_with_audit(
     invoice_id: str | None,
     collection_account_id: str | None,
     payment_method_id: str | None,
+    reference: str | None,
     memo: str | None,
     idempotency_token: str | None = None,
     preview_fingerprint: str | None = None,
+    control_fingerprint: str | None = None,
+    duplicate_risk_acknowledged: bool = False,
 ) -> dict[str, object]:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    actor_id = str(
+        current_user.get("principal_id")
+        or current_user.get("subscriber_id")
+        or current_user.get("id")
+        or "admin"
+    )
+    resolved_token = idempotency_token or secrets.token_urlsafe(24)
+    owner_key = _owner_payment_idempotency_key(resolved_token)
+    context = CommandContext.system(
+        actor=f"user:{actor_id}",
+        scope=manual_payment_recording_service.MANUAL_PAYMENT_RECORDING_SCOPE,
+        reason="Confirm an administrative manual payment after duplicate review.",
+        idempotency_key=owner_key,
+    )
     result = process_payment_create(
         db,
         account_id=account_id,
@@ -1528,21 +1581,14 @@ def process_payment_create_with_audit(
         invoice_id=invoice_id,
         collection_account_id=collection_account_id,
         payment_method_id=payment_method_id,
+        reference=reference,
         memo=memo,
-        idempotency_token=idempotency_token,
+        idempotency_token=resolved_token,
         preview_fingerprint=preview_fingerprint,
+        control_fingerprint=control_fingerprint,
+        duplicate_risk_acknowledged=duplicate_risk_acknowledged,
+        context=context,
     )
-    payment = cast(Payment, result["payment"])
-    if not result.get("idempotent_replay"):
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="payment",
-            entity_id=str(payment.id),
-            actor_id=_actor_id(request),
-            metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
-        )
     return result
 
 

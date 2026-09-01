@@ -807,6 +807,33 @@ def test_verify_blocked_when_reference_already_verified(db_session):
     assert out["status"] == "rejected"
 
 
+def test_verify_blocked_when_reference_is_already_a_manual_payment(db_session):
+    """Proof verification cannot duplicate a payment recorded outside proofs."""
+    sub = _account(db_session)
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("5000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        external_id=" manual-bank-reference ",
+    )
+    db_session.add(payment)
+    db_session.commit()
+    proof = _submit(
+        db_session,
+        sub,
+        reference="MANUAL-BANK-REFERENCE",
+        file_path="manual-duplicate.png",
+    )
+
+    with pytest.raises(svc.PaymentProofReviewError) as exc:
+        _verify(db_session, proof["id"], verified_by="admin-1")
+
+    assert exc.value.code == "financial.payment_proofs.duplicate_transfer_reference"
+    assert exc.value.details["payment_id"] == str(payment.id)
+    assert db_session.query(Payment).filter(Payment.account_id == sub.id).count() == 1
+
+
 def test_verify_and_reject_emit_audit_events(db_session):
     from app.models.audit import AuditEvent
 

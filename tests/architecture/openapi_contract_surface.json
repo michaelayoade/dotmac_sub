@@ -16817,7 +16817,7 @@
     "header:authorization",
     "header:x-api-key"
    ],
-   "request": "38270a0532b3",
+   "request": "4ae7a69b7033",
    "responses": {
     "201": "43c096131c5b",
     "422": "a11c9d9b2af8"
@@ -16828,9 +16828,9 @@
     "header:authorization",
     "header:x-api-key"
    ],
-   "request": "fafead161866",
+   "request": "bc6675cbbcec",
    "responses": {
-    "200": "baa74896df88",
+    "200": "7f6326e7807c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19809,6 +19809,10 @@
   "MFAMethodRead": "006b381ab9f1",
   "MFAMethodType": "7eb08d5473d8",
   "MFAMethodUpdate": "1ce054d49864",
+  "ManualPaymentDuplicateRiskRead": "0c3ee512bd05",
+  "ManualPaymentRecordingConfirm": "b980a2131614",
+  "ManualPaymentRecordingPreviewRead": "ee2a17666794",
+  "ManualPaymentRecordingPreviewRequest": "511b43d8e7ca",
   "MeResponse": "ed7d1f888118",
   "MeUpdateRequest": "6d440087ae48",
   "MetricType": "69c93461a4aa",
@@ -19969,9 +19973,7 @@
   "PaymentChannelUpdate": "2887cb19ac6a",
   "PaymentCreate": "03250f7f35a3",
   "PaymentCreationAllocationEffectRead": "0a67d93a8b24",
-  "PaymentCreationConfirm": "6ba01616637b",
   "PaymentCreationPreviewRead": "b79bae168af8",
-  "PaymentCreationPreviewRequest": "2ae5952e3242",
   "PaymentInitiateRequest": "e559675b8226",
   "PaymentInitiateResponse": "a174d4f35569",
   "PaymentMethodCreate": "2bfc785da28d",
