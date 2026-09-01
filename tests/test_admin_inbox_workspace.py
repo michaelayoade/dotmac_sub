@@ -219,6 +219,9 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'role="dialog"' in Path("templates/admin/inbox/_overlays.html").read_text()
     assert "@input.debounce.300ms" in sidebar
     assert "/admin/inbox/presence" in sidebar
+    assert 'aria-describedby="inbox-availability-help"' in sidebar
+    assert 'id="inbox-availability-help" role="tooltip"' in sidebar
+    assert "mt-2 flex flex-wrap gap-1" not in sidebar
     assert (
         "Only online agents with recent presence evidence receive auto-assigned "
         "inbox conversations." in sidebar
