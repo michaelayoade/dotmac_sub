@@ -129,6 +129,55 @@ V2 remains a narrow production executor with an explicit retirement gate into
 the deployment controller path; it does not become the permanent deployment
 authority merely because the safety gates pass.
 
+## Decision amendment — 2026-09-01 (v2 seam implemented, not dispatched)
+
+The separate v2 plan/apply/deadman seam now exists. Its existence does not
+authorize a production run and is not evidence that either named service was
+reconciled.
+
+- `.github/workflows/infrastructure-reconcile-plan.yml` can produce evidence
+  only from current protected `main`, on first attempt. Its dedicated
+  `dotmac-sub-production-plan` identity must not be able to write the Docker
+  socket. Its only privileged operation is a fixed invocation of the installed
+  `published_port_plan_observer.py`; that standard-library-only observer runs
+  isolated, takes no caller-controlled path or command, accepts only a service
+  named in root-owned configuration, and emits only a safe typed snapshot.
+  The installed observer is root-owned, non-writable and byte-identical to the
+  protected source, whose digest becomes part of the execution plan.
+- `.github/workflows/infrastructure-reconcile-apply.yml` observes two distinct
+  terminal-success, first-attempt plan runs and downloads their exact artifacts.
+  The `production` environment is a separate authenticated authorization gate;
+  plan bytes never authorize apply. Under the exclusive deploy lock, apply
+  makes an immediate third plan and requires byte identity before any mutation.
+  Both self-hosted checkouts discard Git credentials, workflow values enter
+  shell only through quoted environment variables, and the selected Python,
+  Pydantic v2 and `pydantic_core` installation must be root-owned and
+  non-writable with user-site and caller `PYTHONPATH` disabled.
+- The only admitted mutation is a target-only recreate with the already-running
+  digest-pinned image and `--no-deps --no-build --pull never`. A root-owned
+  deadman bundle and persistent timer are installed, validated and armed first.
+  Signal, failure, timeout, runner death and reboot retain a rollback path to
+  the bind-variable preimage, target container and listener preimage. Every
+  privileged call uses non-interactive sudo so a missing grant refuses instead
+  of hanging inside the rollback window.
+- Success requires exact dual-family listeners, unchanged normalized non-port
+  service definition, the same image identity, every non-target container ID
+  unchanged, and exact firewall and external-client reach proofs for every
+  declared client obligation. Proof stores are independent, root-owned and not
+  writable by the apply identity; proof identities are bound by the authorized
+  admission. Missing, extra, duplicated, stale or differently bound evidence
+  refuses and leaves the deadman armed.
+
+Production dispatch remains refused until the dedicated plan identity, fixed
+observer installation and root-owned config, apply sudo surface, independent
+proof ingestion paths and collectors, environment variables, and production
+review protection have each been provisioned and measured. Those are
+deployment facts and must not be inferred from this repository.
+The test harness's fresh-process timeout and `Persistent=true` canaries carry
+the verdict **rehearsed**, never `proved-live`; only a cold-reboot observation
+on an explicitly named disposable or production host can close the live
+deadman-survival obligation.
+
 ## Invariants
 
 - No publish in `docker-compose.yml` is bare. Every one names a host address.

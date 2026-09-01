@@ -1,10 +1,10 @@
 # Reconciling an infrastructure service's published ports
 
-> **Production refused:** published-port reconcile v1 is disabled. Do not
-> dispatch the workflow or invoke the script against production, including with
-> `--plan-only`. That branch writes `.env` before restoring it, so it is not a
-> read-only plan. The workflow has only a hosted refusal job; it has no
-> production environment, self-hosted runner job or reconcile invocation.
+> **Production not yet provisioned:** published-port reconcile v1 remains
+> disabled. V2 is checked-in machinery, not permission to dispatch it. Do not
+> dispatch PLAN or APPLY until every pre-dispatch obligation below has a live
+> observation. No repository test can prove a host identity, sudo rule,
+> environment reviewer, firewall collector, or external vantage exists.
 
 `scripts/reconcile_published_ports.sh` is the retained v1 implementation for
 non-production rehearsal only. Declared intent lives in
@@ -54,11 +54,22 @@ that.
 
 ## Production status and v2 admission
 
-The **Reconcile infrastructure published ports** workflow is intentionally
-disabled. Its sole job is a GitHub-hosted refusal. No production job or script
-invocation remains in the workflow, so GitHub cannot request the production
-environment or self-hosted runner. The script also refuses a production
-argument before reading `.env` or calling Docker.
+The retained v1 **Reconcile infrastructure published ports** workflow is
+intentionally disabled. V2 uses two different workflows and authority
+surfaces:
+
+- **Plan infrastructure published-port reconciliation** observes current
+  protected `main` and the host through a dedicated read-only plan identity.
+  That identity has no writable Docker socket and only one fixed sudo rule: an
+  installed, isolated, root-owned observer whose bytes must match this exact
+  source. The observer takes a service name from a root-owned allowlist and no
+  caller-controlled path. It reduces resolved Compose in memory so neither
+  resolved secrets nor container environment values enter artifacts or logs.
+- **Apply authorized infrastructure published-port reconciliation** first
+  observes two distinct successful first-attempt plan runs. The production
+  environment approval is the separate authorization. Under the deploy lock,
+  the host is planned a third time and byte equality is required before the
+  root deadman is armed and before `.env` changes.
 
 The v1 CLI emits canonical `PublishedPortIntentV1`, which is declared intent
 only. A full `PublishedPortPlanV1` binds intent to immutable source identity and
@@ -67,7 +78,7 @@ run and artifact to the plan and prestate digests. Receipts are evidence, not
 authorization; authenticated initiator identity and production-environment
 approval remain separate authority.
 
-Production stays refused until a separately reviewed v2 provides:
+V2 enforces:
 
 - two distinct first-attempt terminal-success read-only plan runs with
   byte-identical canonical decision bytes;
@@ -81,7 +92,65 @@ Production stays refused until a separately reviewed v2 provides:
 - normalized non-port service-definition equivalence plus proof that every
   non-target container ID is unchanged.
 
+It additionally refuses a pull, build or dependency recreate; reuses the exact
+running image ID and digest-pinned reference; proves both listener families;
+and requires exact, independently sourced firewall and client-reach receipts
+for every `(socket, required_client)` pair.
+
 No current run or receipt satisfies those gates. Do not dispatch production.
+
+### Pre-dispatch obligations
+
+Every row is a measured host or GitHub fact, not a repository default:
+
+1. Register a dedicated runner carrying `dotmac-sub-production-plan`. Its user
+   must not be able to write `/var/run/docker.sock`, belong to a Docker-capable
+   group, or hold general sudo.
+2. Install `scripts/published_port_plan_observer.py` at
+   `/usr/local/libexec/dotmac-published-port-plan-observer`, root-owned and not
+   group/world writable. Its `#!/usr/bin/python3 -I` isolation is load-bearing.
+   Grant sudo only for the two fixed `collect --service postgres-local` and
+   `collect --service freeradius` argv vectors.
+3. Create canonical, root-owned, non-writable
+   `/etc/dotmac/published-port-plan-observer.json` with schema
+   `PublishedPortObserverConfigV1`, target `dotmac-sub-prod`, project
+   `dotmac_sub`, an absolute root-owned Docker binary, the measured deploy/env/
+   Compose paths, and the sorted two-service allowlist. No workflow supplies a
+   path to the observer.
+4. On the APPLY runner, grant only the exact install/systemd/deadman operations
+   in `scripts/reconcile_published_ports_v2.sh`, all through non-interactive
+   `sudo -n`; retain Docker access there because this is the separately
+   authorized mutating identity. Confirm the production environment has
+   required reviewers and cannot self-approve.
+5. Set `PUBLISHED_PORT_RECONCILE_V2_ENABLED=true`, `PRODUCTION_DEPLOY_DIR`,
+   `PUBLISHED_PORT_RECONCILE_PYTHON_BIN`,
+   `PUBLISHED_PORT_FIREWALL_PROOF_DIR`,
+   `PUBLISHED_PORT_CLIENT_PROOF_DIR`,
+   `PUBLISHED_PORT_FIREWALL_VERIFIER_IDENTITY`, and
+   `PUBLISHED_PORT_CLIENT_COLLECTOR_IDENTITY` in their appropriate repository/
+   environment scopes. The Python coordinate must resolve to an absolute,
+   root-owned, non-group/world-writable interpreter whose isolated environment
+   contains root-owned, non-group/world-writable Pydantic v2 and
+   `pydantic_core`. The two proof identities must be different.
+6. Provision two different root-owned proof stores, readable but not writable
+   by APPLY. Provision the firewall verifier and an actual required-client
+   vantage to write canonical receipts under the operation ID. The target host
+   cannot mint its own reachability proof.
+7. Prove the deadman timer survives a runner process kill and a reboot in the
+   fake harness or an explicitly named disposable host before a maintenance
+   window. Then produce two fresh PLAN runs. Review the canonical digest and
+   open a distinct APPLY dispatch only inside the approved window.
+
+The checked-in fake reboot/process-loss canary is `rehearsed` evidence only.
+It proves a fresh process can consume the persisted root-state shape and take
+the timeout rollback path; it does not label a systemd unit on a real boot as
+`proved-live`. Record that separate cold-reboot observation before production.
+
+For `postgres-local`, the exact obligation is TCP `9001 -> 5432` for
+`75.119.157.91/32`. For `freeradius`, the exact obligations are UDP
+1812/1813/1822/1823 for both `160.119.127.0/24` and
+`102.220.189.0/24`. The declaration remains the source; these sentences are
+review coordinates, not a second configuration list.
 
 ## Non-production rehearsal
 
