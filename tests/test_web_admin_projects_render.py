@@ -121,6 +121,7 @@ def test_render_project_detail_with_stages(db_session, base_context, fiber_proje
     html = _render("admin/projects/project_detail.html", base_context, context)
     assert "Fiber Installation Stages" in html
     assert "Project Plan" in html
+    assert "Create Work Order" in html
     assert work_order.public_id in html
     attachment_input = html.split(
         'data-testid="project-comment-attachments"', maxsplit=1
@@ -232,7 +233,8 @@ def test_render_tasks_pages(db_session, base_context, fiber_project):
     list_ctx["assigned"] = ""
     html = _render("admin/projects/tasks.html", base_context, list_ctx)
     assert "Render task" in html
-    assert "Create Work Order" in html
+    assert "Field Work" not in html
+    assert "Create Work Order" not in html
 
     work_order = web_dispatch_work_orders.create_from_form(
         db_session,
@@ -334,8 +336,42 @@ def test_task_list_renders_open_and_many_labels(
 
     html = _render("admin/projects/tasks.html", base_context, context)
 
-    assert "Open Work Order" in html
-    assert "View 2 Work Orders" in html
+    assert "Field Work" not in html
+    assert "Open Work Order" not in html
+    assert "View 2 Work Orders" not in html
+
+
+def test_render_project_detail_task_actions_and_terminal_lock(
+    db_session, base_context, fiber_project
+):
+    task = project_tasks.create(
+        db_session,
+        ProjectTaskCreate(project_id=fiber_project.id, title="Project card task"),
+    )
+    context = web_projects.build_project_detail_context(
+        db_session, project=fiber_project, can_read_work_orders=True
+    )
+    html = _render("admin/projects/project_detail.html", base_context, context)
+
+    assert "Project card task" in html
+    assert f"project_task_id={task.id}" in html
+    assert "Create Work Order" in html
+
+    fiber_project.status = "completed"
+    db_session.commit()
+    locked_context = web_projects.build_project_detail_context(
+        db_session, project=fiber_project, can_read_work_orders=True
+    )
+    locked_html = _render(
+        "admin/projects/project_detail.html",
+        base_context,
+        locked_context,
+    )
+
+    assert "Project is completed; only status changes remain available." in locked_html
+    assert "Completed projects cannot create field work" in locked_html
+    assert 'action="/admin/projects/' in locked_html
+    assert "/status" in locked_html
 
 
 def test_render_template_admin_pages(db_session, base_context):

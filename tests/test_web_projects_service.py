@@ -417,6 +417,77 @@ class TestDetailContext:
             via_task.public_id,
         }
 
+    def test_project_detail_exposes_create_work_order_action_for_each_task(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+        first = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="First field task"),
+        )
+        second = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Second field task"),
+        )
+        web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-existing-task-work",
+                "subscriber_id": str(subscriber.id),
+                "project_task_id": str(first.id),
+                "title": "Existing task work",
+                "status": "scheduled",
+            },
+        )
+
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=True
+        )
+
+        projected = context["task_work_order_create_projections"]
+        assert set(projected) == {str(first.id), str(second.id)}
+        assert projected[str(first.id)].action.label == "Create Work Order"
+        assert projected[str(first.id)].action.allowed is True
+        assert projected[str(first.id)].action_url.endswith(
+            f"project_task_id={first.id}"
+        )
+        assert projected[str(second.id)].action.label == "Create Work Order"
+        assert projected[str(second.id)].action_url.endswith(
+            f"project_task_id={second.id}"
+        )
+
+    def test_terminal_project_locks_work_order_create_actions(
+        self, db_session, subscriber
+    ):
+        project = _create_project(
+            db_session,
+            subscriber,
+            status=ProjectStatus.completed.value,
+        )
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Locked task"),
+        )
+
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=True
+        )
+        detail_context = web_projects.build_task_detail_context(
+            db_session, task=task, can_read_work_orders=True
+        )
+
+        assert context["project_actions_locked"] is True
+        assert context["project_actions_locked_reason"] == (
+            "Project is completed; only status changes remain available."
+        )
+        create_action = context["task_work_order_create_projections"][
+            str(task.id)
+        ].action
+        assert create_action.allowed is False
+        assert create_action.reason == "Completed projects cannot create field work"
+        assert detail_context["create_work_order_action"].allowed is False
+        assert detail_context["work_order_create_url"] is None
+
     def test_project_detail_field_work_is_hidden_without_dispatch_read(
         self, db_session, subscriber
     ):
