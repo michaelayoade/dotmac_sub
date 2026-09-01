@@ -293,7 +293,7 @@ app/web/customer/quotes.py
 app/web/customer/referrals.py
 app/web/customer/routes.py
 #
-# --- alembic: 71 files ---
+# --- alembic: 72 files ---
 alembic/versions/131_add_crm_subscriber_id.py
 alembic/versions/132_radius_session_observability.py
 alembic/versions/149_crm_sync_failures.py
@@ -354,6 +354,7 @@ alembic/versions/477_quote_send_permission.py
 alembic/versions/503_reconcile_ticket_portal_visibility.py
 alembic/versions/516_material_request_erp_submission.py
 alembic/versions/569_retire_crm_chat_authority.py
+alembic/versions/570_ai_intake_customer_response_timeout.py
 alembic/versions/squashed_schema.sql
 alembic/versions_archive/799a0ecebdd4_initial_schema.py
 alembic/versions_archive/cb18f1a3d6c9_add_inventory_item_to_crm_quote_line_items.py
@@ -760,4 +761,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 710 files
+# TOTAL: 711 files

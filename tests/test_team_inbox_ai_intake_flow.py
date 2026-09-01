@@ -1941,6 +1941,8 @@ def test_policy_activation_rejects_missing_active_intent_mapping(db_session):
 
 
 def _recover_ai_timeouts(db_session, *, now: datetime):
+    if db_session.in_transaction():
+        db_session.commit()
     return team_inbox_maintenance.recover_stale_ai_intake(
         db_session,
         team_inbox_maintenance.RecoverStaleAiIntakeCommand(
@@ -2391,7 +2393,7 @@ def test_failed_follow_up_delivery_does_not_enter_customer_wait(
         )
 
     monkeypatch.setattr(
-        ai_conversation_intake.team_inbox_outbound,
+        team_inbox_outbound,
         "send_ai_intake_follow_up",
         _suppressed_follow_up,
     )
