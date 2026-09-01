@@ -1,0 +1,123 @@
+name: Plan infrastructure published-port reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected-main SHA to inspect
+        required: true
+        type: string
+      service:
+        description: One declared infrastructure service
+        required: true
+        type: choice
+        options:
+          - postgres-local
+          - freeradius
+      target_server_name:
+        description: Explicit production target
+        required: true
+        type: string
+      change_reference:
+        description: Reviewed incident/change reference
+        required: true
+        type: string
+      reason:
+        description: Why the published-port reconcile is requested
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  admit_read_only_plan:
+    name: Require exact protected main for read-only planning
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      protected_sha: ${{ steps.main.outputs.protected_sha }}
+    steps:
+      - name: Refuse disabled, rerun, mutable, or wrong-target dispatch
+        env:
+          ENABLED: ${{ vars.PUBLISHED_PORT_RECONCILE_V2_ENABLED }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ inputs.target_server_name }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$ENABLED" = "true"
+          test "$RUN_ATTEMPT" = "1"
+          test "$EVENT_REF" = "refs/heads/main"
+          test "$TARGET" = "dotmac-sub-prod"
+          test "$SOURCE_SHA" = "$EVENT_SHA"
+          case "$SOURCE_SHA" in
+            *[!0-9a-f]*|'') exit 1 ;;
+          esac
+          test "${#SOURCE_SHA}" -eq 40
+
+      - name: Observe current protected-main head
+        id: main
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          script: |
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: "main",
+            });
+            const protectedSha = branch.data.commit.sha;
+            if (protectedSha !== process.env.SOURCE_SHA || !branch.data.protected) {
+              core.setFailed("source_sha is not the current protected main head");
+              return;
+            }
+            core.setOutput("protected_sha", protectedSha);
+
+  plan:
+    name: Read production state and emit canonical plan
+    needs: admit_read_only_plan
+    # This identity has no Docker-socket write and only the fixed observer sudo rule.
+    runs-on: [self-hosted, linux, x64, dotmac-sub-production-plan]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact protected source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.admit_read_only_plan.outputs.protected_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Produce read-only plan
+        env:
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+          PYTHON_BIN: ${{ vars.PUBLISHED_PORT_RECONCILE_PYTHON_BIN }}
+          OUTPUT_DIR: ${{ runner.temp }}/published-port-plan
+          SERVICE: ${{ inputs.service }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET_SERVER_NAME: ${{ inputs.target_server_name }}
+          CHANGE_REFERENCE: ${{ inputs.change_reference }}
+          REASON: ${{ inputs.reason }}
+          PLAN_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \
+            bash scripts/reconcile_published_ports_v2.sh plan \
+              --service "$SERVICE" \
+              --source-sha "$SOURCE_SHA" \
+              --target-server-name "$TARGET_SERVER_NAME" \
+              --change-reference "$CHANGE_REFERENCE" \
+              --reason "$REASON" \
+              --run-id "$PLAN_RUN_ID" \
+              --output-dir "$OUTPUT_DIR"
+
+      - name: Upload canonical plan and artifact receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: published-port-plan-v1-${{ inputs.service }}-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/published-port-plan/
+          if-no-files-found: error
+          retention-days: 1
