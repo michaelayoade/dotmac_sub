@@ -1,0 +1,594 @@
+"""Wire contracts for the structurally single-use legacy image-pin bootstrap.
+
+WHY A SEPARATE FAMILY OF CONTRACTS EXISTS
+=========================================
+
+The steady-state published-port reconcile (v2) requires the service it is
+about to recreate to already carry an immutable ``name@sha256:...`` reference.
+That requirement is correct and is NOT relaxed here: a mutable tag can resolve
+to different bytes between the moment a plan is made and the moment a container
+is recreated, so a tag plus an image ID is not admissible PLAN evidence.
+
+But ``postgres-local`` is currently tag-pinned, so v2 can never take its own
+first step.  This module owns the one-time bootstrap that carries the service
+from the legacy tag to the exact digest of the bytes ALREADY RUNNING, so that
+ordinary v2 PLAN/APPLY becomes possible afterwards.
+
+Two properties keep that from becoming a hole in the steady-state rule:
+
+*   These are a DIFFERENT schema family.  A ``LegacyImagePinBootstrapSnapshotV1``
+    cannot be handed to the v2 planner, which reads only
+    ``PublishedPortHostSnapshotV2``; the strict contracts refuse each other's
+    bytes.  The tag is admissible here and nowhere else.
+*   The bootstrap is structurally single-use.  It admits only the exact legacy
+    prestate, and a terminal root-owned receipt permanently refuses a second
+    run.  See ``LegacyImagePinBootstrapReceiptV1``.
+
+The digest is taken from the RUNNING image's own registry digest and is proved
+to resolve locally to the running image ID.  It is never resolved by asking a
+registry what the mutable tag means now -- that could name a NEWER image, and
+adopting it would silently schedule an upgrade inside a containment change.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timedelta
+from typing import Annotated, Literal, Self
+
+from pydantic import (
+    Field,
+    IPvAnyAddress,
+    IPvAnyNetwork,
+    StringConstraints,
+    model_validator,
+)
+
+from scripts.published_port_contracts import (
+    ContainerId,
+    GitSha,
+    NonEmpty,
+    PublishedPortObservedListenerV1,
+    PublishedPortProjectContainerV1,
+    Sha256Digest,
+    StrictContract,
+    _require_utc,
+)
+
+BOOTSTRAP_SNAPSHOT_SCHEMA = "LegacyImagePinBootstrapSnapshotV1"
+BOOTSTRAP_PLAN_SCHEMA = "LegacyImagePinBootstrapPlanV1"
+BOOTSTRAP_ADMISSION_SCHEMA = "LegacyImagePinBootstrapAdmissionV1"
+BOOTSTRAP_DEADMAN_SCHEMA = "LegacyImagePinBootstrapDeadmanStateV1"
+BOOTSTRAP_RECEIPT_SCHEMA = "LegacyImagePinBootstrapReceiptV1"
+BOOTSTRAP_OPERATION_SCHEMA = "LegacyImagePinBootstrapOperationV1"
+BOOTSTRAP_RESOLUTION_SCHEMA = "LegacyImagePinLocalResolutionV1"
+
+BOOTSTRAP_PLAN_WORKFLOW = ".github/workflows/legacy-image-pin-bootstrap-plan.yml"
+BOOTSTRAP_APPLY_WORKFLOW = ".github/workflows/legacy-image-pin-bootstrap-apply.yml"
+PROTECTED_REF = "refs/heads/main"
+
+# The one physical production host this bootstrap may ever touch. Michael named
+# it explicitly; binding it here means a plan built for any other machine is
+# refused by the contract rather than by an operator's memory.
+PRODUCTION_HOST = "94.72.107.76"
+PRODUCTION_LOGIN = "root@94.72.107.76"
+PRODUCTION_SERVER_NAME = "dotmac-sub-prod"
+
+# The only service in scope. FreeRADIUS is deliberately excluded: it gets the
+# same generic facility later, with its own digest, plans, proofs and window.
+BOOTSTRAP_SERVICE = "postgres-local"
+
+# The declared IPv4 wildcard. Binding every IPv4 address is DELIBERATE and is
+# the corrected state, not the defect: the standby streams WAL from another
+# host, so loopback is unavailable, and exposure is source-restricted to that
+# one address by a host DOCKER-USER rule. The defect being corrected is the
+# UNDECLARED second listener on [::], which no rule in that chain can reach.
+DECLARED_IPV4_WILDCARD = "0.0.0.0"  # noqa: S104
+DECLARED_HOST_PORT = 9001
+DECLARED_CONTAINER_PORT = 5432
+
+# A mutable tag reference: a name, a ':' tag, and explicitly NO '@sha256:'.
+# This is the only contract family in the repository that admits one at all.
+LegacyImageTag = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[a-z0-9]+(?:[._\-/][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9._\-]{0,127}$"
+    ),
+]
+ImageDigestReference = Annotated[
+    str, StringConstraints(pattern=r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+]
+BootstrapOperationId = Annotated[
+    str, StringConstraints(pattern=r"^imagepin-[a-z0-9-]+-[1-9][0-9]*$")
+]
+
+
+def _repository_of(reference: str) -> str:
+    """The repository name, with the tag or digest removed."""
+
+    if "@" in reference:
+        return reference.rsplit("@", 1)[0]
+    return reference.rsplit(":", 1)[0]
+
+
+class LegacyImagePinLocalResolutionV1(StrictContract):
+    """Proof that the desired digest names the bytes that are already running.
+
+    This is the measurement Michael made load-bearing: ``docker image inspect
+    <desired digest>`` must resolve, on the target host and with no pull, to
+    the SAME image ID the running container reports.  If it does not, the
+    bootstrap stops rather than adopting whatever digest the mutable tag
+    currently points at.
+
+    The resolved image ID is deliberately NOT required to equal the digest in
+    the reference.  Whether those coincide is a property of the host's image
+    store -- with containerd they are the same manifest digest, with the
+    classic store they are the config digest and the manifest digest and they
+    differ -- and encoding one store's accident would make the contract refuse
+    a correct host.
+    """
+
+    schema_id: Literal["LegacyImagePinLocalResolutionV1"] = Field(
+        default=BOOTSTRAP_RESOLUTION_SCHEMA, alias="schema"
+    )
+    reference: ImageDigestReference
+    resolved_image_id: Sha256Digest
+    running_image_id: Sha256Digest
+    pulled: Literal[False] = False
+
+    @model_validator(mode="after")
+    def resolution_binds_the_running_bytes(self) -> Self:
+        if self.resolved_image_id != self.running_image_id:
+            raise ValueError(
+                "the desired digest does not resolve to the running image ID"
+            )
+        return self
+
+
+class LegacyImagePinBootstrapSnapshotV1(StrictContract):
+    """Safe output of the root-owned, read-only bootstrap observer.
+
+    Distinct from ``PublishedPortHostSnapshotV2`` so that it can never be fed
+    to the steady-state planner: this is the only snapshot type in the tree
+    whose target may carry a mutable tag.
+    """
+
+    schema_id: Literal["LegacyImagePinBootstrapSnapshotV1"] = Field(
+        default=BOOTSTRAP_SNAPSHOT_SCHEMA, alias="schema"
+    )
+    target_server_name: Literal["dotmac-sub-prod"] = PRODUCTION_SERVER_NAME
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+    observer_digest: Sha256Digest
+    legacy_image_reference: LegacyImageTag
+    desired_image_reference: ImageDigestReference
+    resolution: LegacyImagePinLocalResolutionV1
+    target_container_id: ContainerId
+    target_image_id: Sha256Digest
+    listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
+    non_port_projection: Literal["DockerComposeServiceProjectionV1"] = (
+        "DockerComposeServiceProjectionV1"
+    )
+    non_port_definition_digest: Sha256Digest
+    image_free_definition_digest: Sha256Digest
+    effective_image_reference: LegacyImageTag
+    non_targets: tuple[PublishedPortProjectContainerV1, ...]
+
+    @model_validator(mode="after")
+    def prestate_is_the_exact_legacy_shape(self) -> Self:
+        if _repository_of(self.legacy_image_reference) != _repository_of(
+            self.desired_image_reference
+        ):
+            raise ValueError(
+                "the desired digest must name the same repository as the legacy tag"
+            )
+        if self.effective_image_reference != self.legacy_image_reference:
+            raise ValueError(
+                "effective Compose image is not the exact observed legacy tag"
+            )
+        if self.resolution.reference != self.desired_image_reference:
+            raise ValueError("the local resolution names another image reference")
+        if self.resolution.running_image_id != self.target_image_id:
+            raise ValueError("the local resolution names another running image")
+        listener_keys = tuple(
+            (row.container_port, str(row.host_ip), row.host_port, row.protocol)
+            for row in self.listeners
+        )
+        if listener_keys != tuple(sorted(set(listener_keys))):
+            raise ValueError("observed listeners must be unique and sorted")
+        non_target_keys = tuple(
+            (row.service, row.container, row.container_id) for row in self.non_targets
+        )
+        if non_target_keys != tuple(sorted(set(non_target_keys))):
+            raise ValueError("snapshot non-targets must be unique and sorted")
+        if any(row.service == self.service for row in self.non_targets):
+            raise ValueError("the target service may not appear among non-targets")
+        if self.target_container_id in {row.container_id for row in self.non_targets}:
+            raise ValueError("the target container may not appear among non-targets")
+        return self
+
+
+class LegacyImagePinBootstrapOperationV1(StrictContract):
+    """Exactly what the bootstrap is permitted to mutate, and nothing else."""
+
+    schema_id: Literal["LegacyImagePinBootstrapOperationV1"] = Field(
+        default=BOOTSTRAP_OPERATION_SCHEMA, alias="schema"
+    )
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+    bind_env: Literal["PG_LOCAL_BIND"] = "PG_LOCAL_BIND"
+    desired_bind: Literal["0.0.0.0:"] = "0.0.0.0:"
+    host_port: Literal[9001] = 9001
+    container_port: Literal[5432] = 5432
+    protocol: Literal["tcp"] = "tcp"
+    desired_image_reference: ImageDigestReference
+    recreate_flags: tuple[str, ...] = (
+        "--no-deps",
+        "--no-build",
+        "--pull",
+        "never",
+        "--force-recreate",
+    )
+
+    @model_validator(mode="after")
+    def the_recreate_can_never_resolve_or_widen(self) -> Self:
+        if self.recreate_flags != (
+            "--no-deps",
+            "--no-build",
+            "--pull",
+            "never",
+            "--force-recreate",
+        ):
+            raise ValueError("the bootstrap recreate flags are fixed")
+        return self
+
+
+class LegacyImagePinBootstrapPlanV1(StrictContract):
+    """The immutable protected-main decision for the one-time image pin.
+
+    Every coordinate the eventual maintenance window needs is bound here, so
+    that APPLY can compare a freshly re-observed prestate against the plan
+    byte for byte rather than re-deriving anything under the lock.
+    """
+
+    schema_id: Literal["LegacyImagePinBootstrapPlanV1"] = Field(
+        default=BOOTSTRAP_PLAN_SCHEMA, alias="schema"
+    )
+    repository: Literal["michaelayoade/dotmac_sub"] = "michaelayoade/dotmac_sub"
+    workflow: Literal[".github/workflows/legacy-image-pin-bootstrap-plan.yml"] = (
+        BOOTSTRAP_PLAN_WORKFLOW
+    )
+    protected_ref: Literal["refs/heads/main"] = PROTECTED_REF
+    source_sha: GitSha
+    production_host: Literal["94.72.107.76"] = PRODUCTION_HOST
+    production_login: Literal["root@94.72.107.76"] = PRODUCTION_LOGIN
+    target_server_name: Literal["dotmac-sub-prod"] = PRODUCTION_SERVER_NAME
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+
+    change_reference: NonEmpty
+    reason: NonEmpty
+    declaration_digest: Sha256Digest
+    compose_digest: Sha256Digest
+    observer_digest: Sha256Digest
+
+    legacy_image_reference: LegacyImageTag
+    observed_image_id: Sha256Digest
+    desired_image_reference: ImageDigestReference
+    resolution: LegacyImagePinLocalResolutionV1
+
+    target_container_id: ContainerId
+    current_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
+    desired_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
+    replication_client: IPvAnyNetwork
+    non_port_definition_digest: Sha256Digest
+    image_free_definition_digest: Sha256Digest
+    non_target_containers: tuple[PublishedPortProjectContainerV1, ...] = Field(
+        min_length=1
+    )
+    operation: LegacyImagePinBootstrapOperationV1
+    planned_at: datetime
+    expires_at: datetime
+
+    @model_validator(mode="after")
+    def the_transition_is_exactly_the_declared_one(self) -> Self:
+        _require_utc(self.planned_at, "planned_at")
+        _require_utc(self.expires_at, "expires_at")
+        if self.expires_at <= self.planned_at:
+            raise ValueError("plan expiry must follow planning")
+        if self.expires_at - self.planned_at > timedelta(hours=1):
+            raise ValueError("plan freshness may not exceed one hour")
+        if self.operation.desired_image_reference != self.desired_image_reference:
+            raise ValueError("the operation names another image reference")
+        if self.resolution.reference != self.desired_image_reference:
+            raise ValueError("the resolution names another image reference")
+        if self.resolution.running_image_id != self.observed_image_id:
+            raise ValueError("the resolution names another running image")
+        if _repository_of(self.legacy_image_reference) != _repository_of(
+            self.desired_image_reference
+        ):
+            raise ValueError(
+                "the desired digest must name the same repository as the legacy tag"
+            )
+        if str(self.replication_client) != "75.119.157.91/32":
+            raise ValueError("the declared replication obligation differs")
+
+        # The prestate is the dual-family publish that this change exists to
+        # correct: both a v4 and a v6 listener on the declared socket.
+        current = tuple(
+            (row.container_port, str(row.host_ip), row.host_port, row.protocol)
+            for row in self.current_listeners
+        )
+        if current != tuple(sorted(set(current))):
+            raise ValueError("current listeners must be unique and sorted")
+        if current != (
+            (
+                DECLARED_CONTAINER_PORT,
+                DECLARED_IPV4_WILDCARD,
+                DECLARED_HOST_PORT,
+                "tcp",
+            ),
+            (DECLARED_CONTAINER_PORT, "::", DECLARED_HOST_PORT, "tcp"),
+        ):
+            raise ValueError(
+                "the bootstrap admits only the observed dual-family prestate"
+            )
+        desired = tuple(
+            (row.container_port, str(row.host_ip), row.host_port, row.protocol)
+            for row in self.desired_listeners
+        )
+        if desired != (
+            (
+                DECLARED_CONTAINER_PORT,
+                DECLARED_IPV4_WILDCARD,
+                DECLARED_HOST_PORT,
+                "tcp",
+            ),
+        ):
+            raise ValueError("the bootstrap desires exactly one IPv4 listener")
+
+        keys = tuple(
+            (row.service, row.container, row.container_id)
+            for row in self.non_target_containers
+        )
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("the non-target map must be unique and sorted")
+        if any(row.service == self.service for row in self.non_target_containers):
+            raise ValueError("the target service may not appear among non-targets")
+        if self.target_container_id in {
+            row.container_id for row in self.non_target_containers
+        }:
+            raise ValueError("the target container may not appear among non-targets")
+        return self
+
+    def operation_digest(self) -> str:
+        return self.operation.canonical_digest()
+
+    def prestate_key(self) -> str:
+        """The exact legacy prestate this plan admits, as one digest.
+
+        APPLY re-observes the host and recomputes this; a post-bootstrap host
+        cannot produce it, which is one half of "structurally single-use".
+        """
+
+        return _prestate_key(
+            legacy_image_reference=self.legacy_image_reference,
+            observed_image_id=self.observed_image_id,
+            target_container_id=self.target_container_id,
+            non_port_definition_digest=self.non_port_definition_digest,
+        )
+
+    def desired_ipv4_address(self) -> IPvAnyAddress:
+        return self.desired_listeners[0].host_ip
+
+
+def _prestate_key(
+    *,
+    legacy_image_reference: str,
+    observed_image_id: str,
+    target_container_id: str,
+    non_port_definition_digest: str,
+) -> str:
+    material = "\n".join(
+        (
+            "LegacyImagePinPrestateV1",
+            legacy_image_reference,
+            observed_image_id,
+            target_container_id,
+            non_port_definition_digest,
+        )
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(material).hexdigest()}"
+
+
+class LegacyImagePinBootstrapAdmissionV1(StrictContract):
+    """Authority produced only from two distinct byte-identical plan runs."""
+
+    schema_id: Literal["LegacyImagePinBootstrapAdmissionV1"] = Field(
+        default=BOOTSTRAP_ADMISSION_SCHEMA, alias="schema"
+    )
+    repository: Literal["michaelayoade/dotmac_sub"] = "michaelayoade/dotmac_sub"
+    workflow: Literal[".github/workflows/legacy-image-pin-bootstrap-apply.yml"] = (
+        BOOTSTRAP_APPLY_WORKFLOW
+    )
+    protected_ref: Literal["refs/heads/main"] = PROTECTED_REF
+    source_sha: GitSha
+    apply_run_id: int = Field(gt=0)
+    operation_id: BootstrapOperationId
+    plan_digest: Sha256Digest
+    operation_digest: Sha256Digest
+    prestate_key: Sha256Digest
+    plan_run_ids: tuple[int, int]
+    artifact_receipt_digests: tuple[Sha256Digest, Sha256Digest]
+    firewall_verifier_identity: NonEmpty
+    client_collector_identity: NonEmpty
+    admitted_at: datetime
+    expires_at: datetime
+
+    @model_validator(mode="after")
+    def admission_is_coherent(self) -> Self:
+        _require_utc(self.admitted_at, "admitted_at")
+        _require_utc(self.expires_at, "expires_at")
+        if self.expires_at <= self.admitted_at:
+            raise ValueError("admission expiry must follow admission")
+        if self.expires_at - self.admitted_at > timedelta(minutes=30):
+            raise ValueError("admission may not remain live for over 30 minutes")
+        if len(set(self.plan_run_ids)) != 2:
+            raise ValueError("two distinct plan run IDs are required")
+        if self.plan_run_ids != tuple(sorted(self.plan_run_ids)):
+            raise ValueError("plan runs must be sorted by run ID")
+        if len(set(self.artifact_receipt_digests)) != 2:
+            raise ValueError("two distinct artifact receipts are required")
+        if self.operation_id != f"imagepin-{BOOTSTRAP_SERVICE}-{self.apply_run_id}":
+            raise ValueError("operation ID must bind the service and apply run ID")
+        if self.firewall_verifier_identity == self.client_collector_identity:
+            raise ValueError(
+                "firewall policy and external reach must have independent identities"
+            )
+        return self
+
+
+class LegacyImagePinBootstrapDeadmanStateV1(StrictContract):
+    """Root-local rollback state for the bootstrap.
+
+    It differs from the steady-state deadman in one load-bearing way: the
+    reference the container is EXPECTED to carry after a rollback is the
+    desired DIGEST, not the legacy tag it had before.  Rolling back restores
+    the listener preimage and keeps the immutable reference, because reverting
+    to the tag would put the service back where ordinary v2 PLAN/APPLY cannot
+    reach it -- and the whole point of the bootstrap is to make that retry
+    possible.  The bytes are unchanged either way, which is why keeping the
+    pin is safe: ``before_image_id`` must still hold after the rollback.
+    """
+
+    schema_id: Literal["LegacyImagePinBootstrapDeadmanStateV1"] = Field(
+        default=BOOTSTRAP_DEADMAN_SCHEMA, alias="schema"
+    )
+    operation_id: BootstrapOperationId
+    plan_digest: Sha256Digest
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+    deploy_dir: NonEmpty
+    env_file: NonEmpty
+    docker_bin: NonEmpty
+    compose_files: tuple[NonEmpty, ...] = Field(min_length=1)
+    retained_image_reference: ImageDigestReference
+    before_image_id: Sha256Digest
+    bind_env: Literal["PG_LOCAL_BIND"] = "PG_LOCAL_BIND"
+    bind_was_present: bool
+    bind_preimage: str
+    before_container_id: ContainerId
+    before_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(min_length=1)
+    deadline: datetime
+    state: Literal["armed", "rolled_back", "disarmed"] = "armed"
+    state_reason: str | None = None
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def state_is_safe_and_canonical(self) -> Self:
+        _require_utc(self.deadline, "deadline")
+        _require_utc(self.updated_at, "updated_at")
+        for field in (self.deploy_dir, self.env_file, self.docker_bin):
+            if not field.startswith("/"):
+                raise ValueError("deadman paths must be absolute")
+        if any(not path.startswith("/") for path in self.compose_files):
+            raise ValueError("deadman compose paths must be absolute")
+        if not self.bind_was_present and self.bind_preimage:
+            raise ValueError("an absent bind variable has no prior value")
+        keys = tuple(
+            (row.container_port, str(row.host_ip), row.host_port, row.protocol)
+            for row in self.before_listeners
+        )
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("deadman listeners must be unique and sorted")
+        if self.state == "armed" and self.state_reason is not None:
+            raise ValueError("an armed deadman has no terminal reason")
+        if self.state != "armed" and not self.state_reason:
+            raise ValueError("a terminal deadman state requires a reason")
+        return self
+
+
+class LegacyImagePinBootstrapReceiptV1(StrictContract):
+    """The terminal, root-owned record that this bootstrap has happened.
+
+    This object IS the single-use mechanism.  It is written under the
+    deployment lock to a fixed root-owned path, and its mere presence refuses
+    a second bootstrap -- whether the first one succeeded or was rolled back.
+    A rolled-back bootstrap has already achieved the durable half of its
+    purpose (the immutable reference is retained), so repeating it would be
+    both unnecessary and a second unreviewed recreate.
+    """
+
+    schema_id: Literal["LegacyImagePinBootstrapReceiptV1"] = Field(
+        default=BOOTSTRAP_RECEIPT_SCHEMA, alias="schema"
+    )
+    outcome: Literal["applied", "rolled_back"]
+    operation_id: BootstrapOperationId
+    source_sha: GitSha
+    apply_run_id: int = Field(gt=0)
+    target_server_name: Literal["dotmac-sub-prod"] = PRODUCTION_SERVER_NAME
+    service: Literal["postgres-local"] = BOOTSTRAP_SERVICE
+    plan_digest: Sha256Digest
+    operation_digest: Sha256Digest
+    prestate_key: Sha256Digest
+    legacy_image_reference: LegacyImageTag
+    retained_image_reference: ImageDigestReference
+    before_container_id: ContainerId
+    after_container_id: ContainerId
+    image_id: Sha256Digest
+    recorded_at: datetime
+
+    @model_validator(mode="after")
+    def a_receipt_records_a_real_recreate(self) -> Self:
+        _require_utc(self.recorded_at, "recorded_at")
+        if self.before_container_id == self.after_container_id:
+            raise ValueError("a bootstrap receipt requires a recreated container")
+        return self
+
+
+class LegacyImagePinPostconditionVerdictV1(StrictContract):
+    """Every success proof required before the bootstrap deadman may disarm."""
+
+    schema_id: Literal["LegacyImagePinPostconditionVerdictV1"] = Field(
+        default="LegacyImagePinPostconditionVerdictV1", alias="schema"
+    )
+    operation_id: BootstrapOperationId
+    source_sha: GitSha
+    plan_digest: Sha256Digest
+    apply_run_id: int = Field(gt=0)
+    before_target_container_id: ContainerId
+    after_target_container_id: ContainerId
+    image_id: Sha256Digest
+    effective_image_reference: ImageDigestReference
+    observed_listeners: tuple[PublishedPortObservedListenerV1, ...] = Field(
+        min_length=1
+    )
+    image_free_definition_digest: Sha256Digest
+    unchanged_non_target_container_digest: Sha256Digest
+    replication_state: Literal["streaming"] = "streaming"
+    firewall_proof_digest: Sha256Digest
+    client_reach_proof_digest: Sha256Digest
+    unauthorized_vantage_refused: Literal[True] = True
+    positive_control_observed: Literal[True] = True
+    verified_at: datetime
+    verdict: Literal["bootstrap_postconditions_proved"] = (
+        "bootstrap_postconditions_proved"
+    )
+
+    @model_validator(mode="after")
+    def a_successful_recreate_is_observed(self) -> Self:
+        _require_utc(self.verified_at, "verified_at")
+        if self.before_target_container_id == self.after_target_container_id:
+            raise ValueError("target container ID did not change")
+        observed = tuple(
+            (row.container_port, str(row.host_ip), row.host_port, row.protocol)
+            for row in self.observed_listeners
+        )
+        if observed != (
+            (
+                DECLARED_CONTAINER_PORT,
+                DECLARED_IPV4_WILDCARD,
+                DECLARED_HOST_PORT,
+                "tcp",
+            ),
+        ):
+            raise ValueError(
+                "the bootstrap requires exactly one IPv4 listener afterwards"
+            )
+        return self

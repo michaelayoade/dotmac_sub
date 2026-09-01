@@ -82,7 +82,10 @@ def _listener_rows(*, include_ipv6: bool, container_id: str) -> list[dict[str, o
             "container": "/dotmac_sub_app",
             "container_id": APP_ID,
             "image_id": f"sha256:{'6' * 64}",
-            "image_reference": f"ghcr.io/dotmac/sub@sha256:{'7' * 64}",
+            # Deliberately a MUTABLE TAG. A non-target is never recreated, so
+            # its provenance is not this operation's promise and must not be
+            # able to block a target-only operation.
+            "image_reference": "ghcr.io/dotmac/sub:1.2.3",
             "ports": {},
         },
         {
@@ -272,7 +275,13 @@ def test_root_observer_emits_only_safe_snapshot_and_read_only_docker_calls(
     )
     assert snapshot.service == "freeradius"
     assert snapshot.observer_digest.startswith("sha256:")
-    assert len(snapshot.containers) == 2
+    assert snapshot.target.service == "freeradius"
+    assert snapshot.target.image_reference == IMAGE_REFERENCE
+    assert tuple(row.service for row in snapshot.non_targets) == ("app",)
+    # The non-target's mutable tag is not merely tolerated: after the split it
+    # has nowhere to be recorded at all.
+    assert "1.2.3" not in snapshot.canonical_bytes().decode()
+    assert len(snapshot.project_containers()) == 2
     assert all("Env" not in json.dumps(row) for row in snapshot.model_dump(mode="json"))
     assert any(command[-2:] == ["ps", "-q"] for command in calls)
     assert any(command[:2] == ["/usr/bin/docker", "inspect"] for command in calls)
