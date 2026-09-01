@@ -1215,12 +1215,17 @@ def _upsert_access_credential(
     username: str,
     plain_password: str | None = None,
     radius_profile_id: str | None = None,
+    subscription_id: UUID | None = None,
 ) -> None:
     normalized_username = str(username or "").strip()
     same_username_query = db.query(AccessCredential).filter(
         AccessCredential.subscriber_id == subscriber_id,
         AccessCredential.username == normalized_username,
     )
+    if subscription_id is not None:
+        same_username_query = same_username_query.filter(
+            AccessCredential.subscription_id == subscription_id
+        )
     credential = (
         same_username_query.filter(AccessCredential.is_active.is_(True))
         .order_by(AccessCredential.created_at.desc())
@@ -1230,7 +1235,20 @@ def _upsert_access_credential(
         credential = same_username_query.order_by(
             AccessCredential.created_at.desc()
         ).first()
-    if credential is None:
+    if credential is None and subscription_id is not None:
+        credential = (
+            db.query(AccessCredential)
+            .filter(
+                AccessCredential.subscriber_id == subscriber_id,
+                AccessCredential.subscription_id == subscription_id,
+            )
+            .order_by(
+                AccessCredential.is_active.desc(),
+                AccessCredential.created_at.desc(),
+            )
+            .first()
+        )
+    if credential is None and subscription_id is None:
         credential = (
             db.query(AccessCredential)
             .filter(AccessCredential.subscriber_id == subscriber_id)
@@ -1282,6 +1300,7 @@ def _upsert_access_credential(
     db.add(
         AccessCredential(
             subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
             username=normalized_username,
             secret_hash=secret_hash,
             is_active=True,
@@ -1311,6 +1330,28 @@ def _current_access_credential(
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscriber_uuid)
         .order_by(AccessCredential.created_at.desc())
+        .first()
+    )
+
+
+def _subscription_access_credential(
+    db: Session,
+    *,
+    subscriber_id: UUID,
+    subscription_id: UUID,
+) -> AccessCredential | None:
+    """Return only the credential explicitly owned by one subscription."""
+
+    return (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_id,
+            AccessCredential.subscription_id == subscription_id,
+        )
+        .order_by(
+            AccessCredential.is_active.desc(),
+            AccessCredential.created_at.desc(),
+        )
         .first()
     )
 
@@ -4516,18 +4557,22 @@ def create_subscription_with_audit(
 
     Returns the created subscription ORM object.
     """
-    activate_immediately, generate_invoice, send_welcome_email = (
-        apply_create_quick_options(payload_data, form)
+    _, generate_invoice, send_welcome_email = apply_create_quick_options(
+        payload_data, form
     )
     created = create_subscription(db, payload_data)
 
     subscriber = db.get(Subscriber, created.subscriber_id)
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
-        existing_credential = _current_access_credential(db, created.subscriber_id)
-        if not existing_credential and (
-            activate_immediately
-            or str(getattr(created, "status", "") or "").strip().lower() == "active"
+        existing_credential = _subscription_access_credential(
+            db,
+            subscriber_id=created.subscriber_id,
+            subscription_id=created.id,
+        )
+        if (
+            not existing_credential
+            and str(getattr(created, "status", "") or "").strip().lower() == "active"
         ):
             try:
                 from app.services.pppoe_credentials import (
@@ -4540,9 +4585,12 @@ def create_subscription_with_audit(
                     radius_profile_id=str(created.radius_profile_id)
                     if created.radius_profile_id
                     else None,
+                    subscription_id=str(created.id),
                 )
-                existing_credential = _current_access_credential(
-                    db, created.subscriber_id
+                existing_credential = _subscription_access_credential(
+                    db,
+                    subscriber_id=created.subscriber_id,
+                    subscription_id=created.id,
                 )
             except Exception:
                 logger.warning(
@@ -4557,8 +4605,11 @@ def create_subscription_with_audit(
             explicit_login
             or str(getattr(existing_credential, "username", "") or "").strip()
             or str(created.login or "").strip()
-            or ("" if pppoe_auto_generate else generated_login)
         )
+        if not selected_login and not pppoe_auto_generate:
+            other_credential = _current_access_credential(db, created.subscriber_id)
+            if other_credential is None:
+                selected_login = generated_login
         explicit_password = str(form.get("service_password") or "").strip()
         selected_password = explicit_password or (
             None
@@ -4638,7 +4689,10 @@ def create_subscription_with_audit(
             quantity=selected_ip_addon_quantity,
         )
 
-    if subscriber:
+    # Pending creation stages subscription intent only. Credential creation and
+    # binding belong to activation; touching a subscriber-level fallback here
+    # can silently re-profile a different live service.
+    if subscriber and selected_login and created.status == SubscriptionStatus.active:
         try:
             _upsert_access_credential(
                 db,
@@ -4648,6 +4702,7 @@ def create_subscription_with_audit(
                 radius_profile_id=str(created.radius_profile_id)
                 if created.radius_profile_id
                 else None,
+                subscription_id=created.id,
             )
         except ValueError:
             db.rollback()

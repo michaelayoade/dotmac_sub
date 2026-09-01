@@ -18,6 +18,7 @@ from app.models.catalog import (
     BillingMode,
     NasDevice,
     PriceType,
+    RadiusProfile,
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
@@ -1218,6 +1219,66 @@ def test_create_subscription_with_audit_uses_requested_free_ipv4(
     )
     assert assignment.ipv4_address is not None
     assert assignment.ipv4_address.address == "10.80.0.5"
+
+
+def test_pending_subscription_create_does_not_mutate_live_service_credential(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    live_profile = RadiusProfile(name="Live profile", is_active=True)
+    pending_profile = RadiusProfile(name="Pending profile", is_active=True)
+    db_session.add_all([live_profile, pending_profile])
+    db_session.flush()
+    live_subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        radius_profile_id=live_profile.id,
+        login="live-service-login",
+    )
+    db_session.add(live_subscription)
+    db_session.flush()
+    live_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=live_subscription.id,
+        username="live-service-login",
+        secret_hash=auth_flow_service.hash_service_secret("LivePass123"),
+        radius_profile_id=live_profile.id,
+        is_active=True,
+    )
+    db_session.add(live_credential)
+    db_session.commit()
+    original_username = live_credential.username
+    original_secret = live_credential.secret_hash
+    original_profile_id = live_credential.radius_profile_id
+
+    created = web_catalog_subscriptions_service.create_subscription_with_audit(
+        db_session,
+        {
+            "account_id": subscriber.id,
+            "offer_id": catalog_offer.id,
+            "status": SubscriptionStatus.pending,
+            "radius_profile_id": pending_profile.id,
+        },
+        FormData([]),
+        None,
+        None,
+    )
+
+    db_session.refresh(live_credential)
+    assert created.status == SubscriptionStatus.pending
+    assert live_credential.subscription_id == live_subscription.id
+    assert live_credential.username == original_username
+    assert live_credential.secret_hash == original_secret
+    assert live_credential.radius_profile_id == original_profile_id
+    assert (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.subscription_id == created.id)
+        .count()
+        == 0
+    )
 
 
 def test_replace_subscription_ipv4_uses_ipam_owner_without_billing(

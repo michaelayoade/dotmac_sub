@@ -324,12 +324,11 @@ def _auto_generate_pppoe(
         raise RuntimeError(
             f"PPPoE credential is required before activating subscription {subscription.id}."
         )
-    # Keep subscription.login in sync with the credential actually minted. The
-    # canonical and sequence-fallback paths can yield different usernames, so we
-    # bind login to the real credential rather than re-deriving it (which would
-    # leave login empty/stale for non-canonical subscriber numbers).
-    if not str(subscription.login or "").strip():
-        subscription.login = active_credential.username
+    # Keep subscription.login in sync with the credential actually bound. The
+    # canonical and sequence-fallback paths can yield different usernames, and
+    # a staged login may have become unavailable before activation. The exact
+    # credential identity wins over stale create-form intent.
+    subscription.login = active_credential.username
 
 
 def _resolve_offer_radius_profile_id(db: Session, offer_id: str | None):
