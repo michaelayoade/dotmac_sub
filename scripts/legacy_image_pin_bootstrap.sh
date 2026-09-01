@@ -243,7 +243,8 @@ probe_replication() {
        sudo -n "${DOCKER_BIN}" exec "${target}" pg_isready -U postgres >/dev/null 2>&1; then
       observed="$(sudo -n "${DOCKER_BIN}" exec "${target}" psql -U postgres -tAc \
         "select client_addr || ' ' || state from pg_stat_replication \
-         where state = 'streaming'" 2>/dev/null || true)"
+         where state = 'streaming' and client_addr = '75.119.157.91' limit 1" \
+        2>/dev/null | head -n 1 || true)"
       [[ -z "${observed}" ]] || break
     fi
     (( $(date +%s) < wait_deadline )) ||
