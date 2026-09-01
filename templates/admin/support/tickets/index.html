@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import action_button, icon_plus, icon_filter %}
+{% from "components/ui/macros.html" import icon_plus, icon_filter %}
 {% block title %}Support Tickets{% endblock %}
 
 {% block content %}
@@ -52,7 +52,11 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3m-9 3a3 3 0 10-3-3"/></svg>
             Assignment Rules
             </a>
-            {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'primary', 'accent', 'sm') }}
+            <a href="/admin/support/tickets/new"
+               class="inline-flex items-center gap-1.5 rounded-lg border border-primary-600 bg-primary-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-primary-600 dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-offset-slate-900">
+            <span class="h-4 w-4">{{ icon_plus() }}</span>
+            New Ticket
+            </a>
         </div>
     </div>
 
