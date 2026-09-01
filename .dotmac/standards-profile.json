@@ -135,7 +135,7 @@
         "path": "tests/test_integration_meta_social.py",
         "symbol": "test_typed_facade_returns_sanitized_outcome",
         "category": "outbound_transport",
-        "fingerprint": "da26118627024438b99b7d12c0404b12db39c72e7dd40c57515659f458cddfd2"
+        "fingerprint": "fc7bb83c3ed15b6a49fa08d1d7991abaed40008d6704adb24afb268e64d96670"
       },
       {
         "path": "tests/test_meta_oauth.py",
@@ -159,7 +159,7 @@
         "path": "tests/test_team_inbox_meta_social_webhook.py",
         "symbol": "<module>",
         "category": "provider_credential",
-        "fingerprint": "5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb"
+        "fingerprint": "2cfb33c493921333d14bb1a84b0426ad12e15e535a8f752d0add3ff9e9d33002"
       },
       {
         "path": "tests/test_team_inbox_smtp_runtime.py",
