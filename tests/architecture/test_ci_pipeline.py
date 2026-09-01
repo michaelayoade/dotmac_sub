@@ -366,7 +366,9 @@ def test_tests_is_the_stable_aggregate_for_unit_and_architecture_results() -> No
     )
     assert "UNIT_RESULT: ${{ needs.unit-shards.result }}" in aggregate
     assert "ARCHITECTURE_RESULT: ${{ needs.architecture.result }}" in aggregate
-    assert "WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}" in aggregate
+    assert (
+        "WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}" in aggregate
+    )
     assert 'test "$UNIT_RESULT" = "success"' in aggregate
     assert 'test "$ARCHITECTURE_RESULT" = "success"' in aggregate
     assert 'test "$WORKFLOW_GUIDANCE_RESULT" = "success"' in aggregate
