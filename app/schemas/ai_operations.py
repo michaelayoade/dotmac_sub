@@ -88,6 +88,7 @@ class AiIntakeConfigUpsert(BaseModel):
     allow_followup_questions: bool = True
     max_clarification_turns: int = Field(default=2, ge=0, le=5)
     escalate_after_minutes: int = Field(default=5, ge=1, le=1440)
+    customer_response_timeout_minutes: int = Field(default=5, ge=1, le=1440)
     exclude_campaign_attribution: bool = True
     fallback_team_id: UUID | None = None
     instructions: str | None = Field(default=None, max_length=2000)

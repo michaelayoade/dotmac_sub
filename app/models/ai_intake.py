@@ -48,6 +48,9 @@ class AiIntakeConfig(Base):
     escalate_after_minutes: Mapped[int] = mapped_column(
         Integer, default=5, nullable=False
     )
+    customer_response_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, default=5, nullable=False
+    )
     exclude_campaign_attribution: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
@@ -197,6 +200,11 @@ class AiIntakeSession(Base):
             postgresql_where=text("completed_at IS NULL"),
         ),
         Index("ix_ai_intake_sessions_state", "state", "expires_at"),
+        Index(
+            "ix_ai_intake_sessions_customer_wait",
+            "state",
+            "customer_wait_expires_at",
+        ),
         CheckConstraint(
             "state IN ('eligible', 'welcome_pending', 'collecting_intent', "
             "'awaiting_customer', 'classified', 'handoff_requested', 'completed', "
@@ -244,6 +252,12 @@ class AiIntakeSession(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     takeover_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    customer_wait_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    customer_wait_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )

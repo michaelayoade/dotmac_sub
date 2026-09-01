@@ -3934,7 +3934,11 @@ DOMAIN = DomainSOT(
                         name="AI intake recovery state",
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Bounded classifying or awaiting-follow-up state and configured fallback deadline.",
+                        source=(
+                            "Expired AI awaiting-customer session deadline, "
+                            "customer-reply race evidence, and configured fallback or "
+                            "mapped destination team."
+                        ),
                     ),
                     AuthorityInput(
                         name="verified WhatsApp webhook repair evidence",
@@ -3950,6 +3954,7 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_maintenance.invalid_location_repair_scope",
+                    "communications.team_inbox_maintenance.ai_intake_timeout_handoff_failed",
                 ),
                 event_types=("team_inbox.projection_repaired.v1",),
                 projections=(

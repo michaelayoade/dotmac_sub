@@ -153,6 +153,7 @@ class ResolvedAiIntakeConfig:
     allow_follow_up_questions: bool
     max_follow_up_turns: int
     escalate_after_minutes: int
+    customer_response_timeout_minutes: int
     exclude_campaign_attribution: bool
     fallback_team_id: UUID | None
     instructions: str | None
@@ -201,6 +202,7 @@ class AiIntakeConfigOutcome:
     allow_followup_questions: bool
     max_clarification_turns: int
     escalate_after_minutes: int
+    customer_response_timeout_minutes: int
     exclude_campaign_attribution: bool
     fallback_team_id: UUID | None
     instructions: str | None
@@ -294,6 +296,7 @@ def _config_outcome(
         allow_followup_questions=bool(row.allow_followup_questions),
         max_clarification_turns=int(row.max_clarification_turns),
         escalate_after_minutes=int(row.escalate_after_minutes),
+        customer_response_timeout_minutes=int(row.customer_response_timeout_minutes),
         exclude_campaign_attribution=bool(row.exclude_campaign_attribution),
         fallback_team_id=row.fallback_team_id,
         instructions=row.instructions,
@@ -432,6 +435,7 @@ def _upsert_config_locked(
         row.allow_followup_questions,
         row.max_clarification_turns,
         row.escalate_after_minutes,
+        row.customer_response_timeout_minutes,
         row.exclude_campaign_attribution,
         row.fallback_team_id,
         row.instructions,
@@ -444,6 +448,7 @@ def _upsert_config_locked(
     row.allow_followup_questions = policy.allow_followup_questions
     row.max_clarification_turns = policy.max_clarification_turns
     row.escalate_after_minutes = policy.escalate_after_minutes
+    row.customer_response_timeout_minutes = policy.customer_response_timeout_minutes
     row.exclude_campaign_attribution = policy.exclude_campaign_attribution
     row.fallback_team_id = policy.fallback_team_id
     row.instructions = policy.instructions
@@ -456,6 +461,7 @@ def _upsert_config_locked(
         row.allow_followup_questions,
         row.max_clarification_turns,
         row.escalate_after_minutes,
+        row.customer_response_timeout_minutes,
         row.exclude_campaign_attribution,
         row.fallback_team_id,
         row.instructions,
@@ -685,6 +691,13 @@ def _resolved_config(row: AiIntakeConfig) -> ResolvedAiIntakeConfig:
         raise AiIntakeConfigurationError(
             "AI intake escalation must be at least one minute"
         )
+    customer_timeout_minutes = int(
+        row.customer_response_timeout_minutes or escalation_minutes or 5
+    )
+    if customer_timeout_minutes < 1:
+        raise AiIntakeConfigurationError(
+            "AI intake customer-response timeout must be at least one minute"
+        )
     instructions = str(row.instructions or "").strip() or None
     if instructions and len(instructions) > MAX_INSTRUCTIONS_CHARS:
         raise AiIntakeConfigurationError("AI intake instructions are too long")
@@ -713,6 +726,7 @@ def _resolved_config(row: AiIntakeConfig) -> ResolvedAiIntakeConfig:
         allow_follow_up_questions=bool(row.allow_followup_questions),
         max_follow_up_turns=max_turns,
         escalate_after_minutes=escalation_minutes,
+        customer_response_timeout_minutes=customer_timeout_minutes,
         exclude_campaign_attribution=bool(row.exclude_campaign_attribution),
         fallback_team_id=row.fallback_team_id,
         instructions=instructions,
@@ -1298,7 +1312,12 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
             requires_follow_up=True,
             follow_up_question=question,
         )
-        due_at = datetime.now(UTC) + timedelta(minutes=config.escalate_after_minutes)
+        timeout_minutes = (
+            config.customer_response_timeout_minutes
+            or config.escalate_after_minutes
+            or 5
+        )
+        due_at = datetime.now(UTC) + timedelta(minutes=timeout_minutes)
         outcome = _outcome(
             started=started,
             status=AiIntakeStatus.awaiting_follow_up,
