@@ -5233,7 +5233,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=(
             "Please find attached the NCC complaints report for the last "
             "{lookback_days} day(s).\nRows included: {row_count}.\n"
-            "Rows not yet filable: {not_filable_count}.\n"
             "Download: {download_url}"
         ),
     ),

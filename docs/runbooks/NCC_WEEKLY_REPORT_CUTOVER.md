@@ -179,8 +179,9 @@ Checks that stop the cutover if they fail:
 - `primary_recipient_configured` is `true` — an empty `to` yields the
   `missing_recipient` decision and no report is ever produced.
 - `body_template_sha256` matches the body intended to go out. Only these
-  placeholders are permitted: `download_url`, `lookback_days`,
-  `not_filable_count`, `report_date`, `row_count`.
+  placeholders are permitted in regulator-facing email: `download_url`,
+  `lookback_days`, `report_date`, `row_count`. The internal
+  `not_filable_count` run metric must not appear in the NCC email body.
 - `timezone` is `"Africa/Lagos"` and `local_time` is the intended send time.
 
 Keep `crm-ncc.json` in a protected local location. It contains recipient
@@ -316,7 +317,7 @@ For the first production Tuesday, record all of:
 - [ ] its `notifications` row `status = 'delivered'`, `sent_at` populated
 - [ ] exactly one `communication_intents` row with
       `dedupe_key = 'ncc-weekly:<date>'`
-- [ ] one `ncc.weekly_report_queued` audit row, `is_success = true`
+- [ ] one `ncc.weekly_report_queued` audit row, `is_success = true`, only when `not_filable_count = 0`
 - [ ] artifact downloaded, SHA-256 recorded and matching `artifact_sha256`
 - [ ] `row_count` plausible against the manual complaints export
 - [ ] the recipient confirms receipt out of band
