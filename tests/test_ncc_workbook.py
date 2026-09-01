@@ -34,7 +34,7 @@ def _valid_record() -> dict[str, str]:
         "Email": "ada@example.com",
         "Age": "34",
         "Gender": "Female",
-        "created date time": "2026-07-01 09:00:00 UTC",
+        "created date time": "01/07/2026 09:00:00",
         "Subject": "Unexplained deduction",
         "Category": "Billing",
         "category code (auto)": "A",
@@ -79,6 +79,10 @@ def test_lookup_sheet_is_hidden_and_backs_the_validation_formulas():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
     archive = _workbook_parts(content)
     workbook = archive.read("xl/workbook.xml").decode()
+    assert (
+        '<bookViews><workbookView firstSheet="1" activeTab="1"/></bookViews>'
+        in workbook
+    )
     assert '<sheet name="Lookups" sheetId="1" state="hidden"' in workbook
     assert '<sheet name="Data Entry" sheetId="2"' in workbook
     assert 'name="NCC_CATEGORIES"' in workbook
@@ -219,7 +223,7 @@ def test_resolved_record_with_its_conditional_fields_passes():
         _valid_record(),
         Status="Resolved",
         **{
-            "Resolved date": "2026-07-02 10:00:00 UTC",
+            "Resolved date": "02/07/2026 10:00:00",
             "Resolved within SLA": "Yes",
             "Resolution Note": "Refund applied to the account.",
         },
@@ -350,7 +354,7 @@ def test_template_export_rows_uses_the_validated_template_headers():
 
     assert list(rows[0]) == ncc_workbook.TEMPLATE_COLUMNS
     assert rows[0]["MSISDN *"] == "2348031234567"
-    assert rows[0]["created_date_time *"] == "2026-07-01 09:00:00 UTC"
+    assert rows[0]["created_date_time *"] == "01/07/2026 09:00:00"
     assert rows[0]["Ticket_ID *"] == "DOTMAC-20260701-1234"
     assert "_status_variant" not in rows[0]
 
@@ -372,7 +376,7 @@ def test_excel_column_letters_roll_over_past_z():
 
 
 def test_excel_serial_matches_the_1899_epoch():
-    serial = ncc_workbook.excel_serial_from_display_timestamp("2026-07-01 00:00:00 UTC")
+    serial = ncc_workbook.excel_serial_from_display_timestamp("01/07/2026 00:00:00")
     assert serial == 46204.0
     assert ncc_workbook.excel_serial_from_display_timestamp("not a date") is None
     assert ncc_workbook.excel_serial_from_display_timestamp("") is None
