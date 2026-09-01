@@ -1890,7 +1890,7 @@ DOMAIN = DomainSOT(
                 concerns=(
                     ConcernContract(
                         name="Admin workflow guidance projection",
-                        role=OwnerRole.PROJECTION_WRITER,
+                        role=OwnerRole.POLICY,
                         input_names=("Admin workflow guidance registry",),
                     ),
                 ),
@@ -1912,18 +1912,6 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(),
                     mapping_owner="Help Center route adapter and Jinja presentation boundary",
-                ),
-                projections=(
-                    ProjectionContract(
-                        name="Admin Help Center guidance projection",
-                        input_names=("Admin workflow guidance registry",),
-                        writer="ui.admin_workflow_guidance",
-                        freshness="Current at application deploy revision.",
-                        stale_behavior="No cached guidance is served; the deployed registry is rendered directly.",
-                        drift_signal="workflow_guidance_gate and guidance contract tests detect Admin workflow changes without guidance evidence.",
-                        rebuild_operation="Redeploy the reviewed application revision containing the registry.",
-                        repair_owner="ui.admin_workflow_guidance",
-                    ),
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.CUT_OVER,

@@ -361,12 +361,15 @@ def test_tests_is_the_stable_aggregate_for_unit_and_architecture_results() -> No
 
     assert "    name: Tests\n" in aggregate
     assert (
-        "needs: [changes, python-environment, unit-shards, architecture]" in aggregate
+        "needs: [changes, python-environment, unit-shards, architecture, workflow-guidance]"
+        in aggregate
     )
     assert "UNIT_RESULT: ${{ needs.unit-shards.result }}" in aggregate
     assert "ARCHITECTURE_RESULT: ${{ needs.architecture.result }}" in aggregate
+    assert "WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}" in aggregate
     assert 'test "$UNIT_RESULT" = "success"' in aggregate
     assert 'test "$ARCHITECTURE_RESULT" = "success"' in aggregate
+    assert 'test "$WORKFLOW_GUIDANCE_RESULT" = "success"' in aggregate
 
 
 def test_ci_change_classifier_fetches_missing_comparison_base() -> None:
