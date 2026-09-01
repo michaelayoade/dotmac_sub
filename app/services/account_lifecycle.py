@@ -121,7 +121,7 @@ def stage_subscription_billing_anchor(
     subscription: Subscription,
     command: BillingAnchorProjectionCommand,
 ) -> bool:
-    """Canonical, flush-only writer for ``Subscription.next_billing_at``."""
+    """Canonical transactional writer for ``Subscription.next_billing_at``."""
 
     if subscription.id != command.subscription_id:
         raise BillingAnchorProjectionError("Billing-anchor subscription mismatch")
@@ -135,7 +135,10 @@ def stage_subscription_billing_anchor(
     locked = db.scalar(
         select(Subscription)
         .where(Subscription.id == command.subscription_id)
-        .with_for_update()
+        # The projection changes no subscription key. PostgreSQL FOR KEY SHARE
+        # keeps foreign-key inserts such as bandwidth samples moving while the
+        # owner transaction stages this non-key anchor projection.
+        .with_for_update(read=True, key_share=True)
     )
     if locked is None:
         raise BillingAnchorProjectionError("Subscription not found")
@@ -171,7 +174,6 @@ def stage_subscription_billing_anchor(
             "next_billing_at": target.isoformat(),
         },
     )
-    db.flush()
     return True
 
 

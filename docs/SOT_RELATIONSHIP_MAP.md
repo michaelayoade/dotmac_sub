@@ -1133,6 +1133,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `ui.network_explorer_projection` | network explorer subject inspector projection | `resolver` | network inventory identity ← `network.identity`<br>customer network path view ← `ui.customer_network_path_projection`<br>binary device operation verdict ← `network.device_state`<br>effective RF signal ← `network.radio_signal`<br>topological audience cohorts ← `network.outage_impact`<br>live incident scope state ← `network.outage_lifecycle`<br>semantic status presentation vocabulary ← `ui.status_presentation` | `read_only` | `native` | network operations UI | `docs/designs/NETWORK_EXPLORER.md`<br>`docs/designs/CUSTOMER_NETWORK_PATH.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_network_explorer.py`<br>`tests/architecture/test_thin_wrappers.py` |
 | `ui.network_explorer_projection` | network path coverage and drift projection | `resolver` | per-subscription path gap classification ← `network.access_path`<br>forwarding declaration evidence states ← `network.forwarding_topology`<br>network inventory identity ← `network.identity`<br>unmatched-radio review queue state ← `support.ticket_lifecycle`<br>semantic status presentation vocabulary ← `ui.status_presentation` | `read_only` | `native` | network operations UI | `docs/designs/NETWORK_EXPLORER.md`<br>`docs/designs/CUSTOMER_NETWORK_PATH.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_network_explorer.py`<br>`tests/architecture/test_thin_wrappers.py` |
 | `ui.network_device_status_presentation` | network device worklist lifecycle-aware status presentation | `resolver` | binary device operational verdict ← `network.device_state`<br>monitoring admission lifecycle ← `network.monitoring_inventory`<br>core device retirement lifecycle ← `network.core_device_archive` | `read_only` | `complete` | network operations UI | `docs/designs/CORE_DEVICE_ARCHIVE.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_status_presentation.py`<br>`tests/test_device_projection_views.py`<br>`tests/architecture/test_binary_device_operational_lifecycle.py`<br>`tests/architecture/test_core_device_archive_boundary.py`<br>`tests/playwright/e2e/test_core_device_archive.py` |
+| `ui.admin_workflow_guidance` | Admin workflow guidance projection | `policy` | Admin workflow guidance registry ← `ui.admin_workflow_guidance` | `not_applicable` | `cut_over` | platform UI | `docs/designs/ADMIN_WORKFLOW_GUIDANCE.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_admin_workflow_guidance.py`<br>`tests/architecture/test_sot_registry_integrity.py` |
 | `sales.capture` | provider-neutral Party-first Lead capture command | `application_coordinator` | validated lead-capture contract ← `sales.capture`<br>canonical Party identity state ← `party.registry`<br>canonical Lead lifecycle state ← `sales.lead_lifecycle` | `owner_managed` | `complete` | sales operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md`<br>`tests/test_lead_capture_webhook.py`<br>`tests/test_fiber_inquiry_webhook.py`<br>`tests/test_sales_capture_account_conversion.py`<br>`tests/architecture/test_service_http_boundary.py` |
 | `sales.capture` | source-interaction idempotency and collision decision | `policy` | validated lead-capture contract ← `sales.capture`<br>immutable captured origin evidence ← `sales.lead_lifecycle` | `owner_managed` | `complete` | sales operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md`<br>`tests/test_lead_capture_webhook.py`<br>`tests/test_fiber_inquiry_webhook.py`<br>`tests/test_sales_capture_account_conversion.py`<br>`tests/architecture/test_service_http_boundary.py` |
 | `sales.capture` | verified integration receipt to Lead consequence | `application_coordinator` | verified integration receipt ← `integration.inbox`<br>validated lead-capture contract ← `sales.capture`<br>canonical Party identity state ← `party.registry`<br>canonical Lead lifecycle state ← `sales.lead_lifecycle` | `owner_managed` | `complete` | sales operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md`<br>`tests/test_lead_capture_webhook.py`<br>`tests/test_fiber_inquiry_webhook.py`<br>`tests/test_sales_capture_account_conversion.py`<br>`tests/architecture/test_service_http_boundary.py` |
@@ -2131,8 +2132,10 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `access.subscription_lifecycle.stage_subscription_billing_anchor` is the only
   physical writer. Every deciding owner submits a typed source, evidence
   reference, expected previous value, and aware target; the writer locks the
-  subscription, rejects stale compare-and-set requests, and permits retraction
-  only for named coverage/review/service-extension authorities.
+  subscription with `FOR NO KEY UPDATE`, which serializes anchor writers
+  without conflicting with foreign-key `KEY SHARE` observations, rejects stale
+  compare-and-set requests, and permits retraction only for named
+  coverage/review/service-extension authorities.
   An active subscription must carry both `start_at` and `next_billing_at`.
   Catalog construction materializes those values, persists a pending baseline,
   and asks the lifecycle owner to activate in the same transaction. Revision
@@ -2179,7 +2182,8 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   leave the coverage union and the anchor follows the evidence down. `payment.refunded` and `payment.reversed` reach the same owner through
   `PrepaidRenewalHandler`. The accumulated drift cohort (an active
   `ServiceEntitlement` ending after `next_billing_at`, or an absent anchor with
-  exact entitlement evidence) is repaired by the owner's idempotent,
+  exact entitlement evidence) is repaired to the later of active entitlement
+  coverage and any applied `ServiceExtensionEntry` grant end by the owner's idempotent,
   fingerprint-bound
   `preview_stale_prepaid_billing_anchor_repair` /
   `apply_stale_prepaid_billing_anchor_repair` pair, driven by
@@ -3416,6 +3420,12 @@ database transaction. Per-subscription/period invoice-line keys repair partial
 work on retry. `BillingRun` is authoritative operational evidence; the
 post-status `AuditEvent` is a rebuildable projection and cannot reverse
 already-created invoices.
+
+The scheduled adapter invokes the billing owner's bounded transient-database
+retry path. It rolls back and backs off only for PostgreSQL serialization
+failure (`40001`), deadlock (`40P01`), lock-unavailable (`55P03`), or an
+invalidated connection. Validation and ordinary integrity failures propagate
+without retry.
 
 Migration record:
 

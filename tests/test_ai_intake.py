@@ -63,6 +63,7 @@ def _config(db_session, **overrides) -> AiIntakeConfig:
         "allow_followup_questions": True,
         "max_clarification_turns": 1,
         "escalate_after_minutes": 5,
+        "customer_response_timeout_minutes": 5,
         "exclude_campaign_attribution": True,
         "department_mappings": [],
         "metadata_": {},

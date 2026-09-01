@@ -108,6 +108,7 @@ DEFAULT_WELCOME_MESSAGE = (
 )
 DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 10
 DEFAULT_QUEUE_HEARTBEAT_MINUTES = 30
+DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES = 5
 DEFAULT_QUEUE_TEMPLATES = {
     "initial": (
         "All our agents are currently engaged. You are number {position} in the "
@@ -1378,6 +1379,10 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         and isinstance(editable_version.escalation_rules, dict)
         else {}
     )
+    escalation_rules.setdefault(
+        "customer_response_timeout_minutes",
+        _customer_response_timeout_minutes(escalation_rules),
+    )
     queue_templates = (
         dict(editable_version.queue_templates or {})
         if editable_version is not None
@@ -1529,6 +1534,192 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
     return max(minimum, min(parsed, maximum))
 
 
+def _customer_response_timeout_minutes(
+    rules: Mapping[str, object] | None,
+) -> int:
+    source = dict(rules or {})
+    raw_value = source.get("customer_response_timeout_minutes")
+    if raw_value is None:
+        raw_value = source.get("escalate_after_minutes")
+    return _bounded_int(
+        raw_value,
+        default=DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES,
+        minimum=1,
+        maximum=1440,
+    )
+
+
+def configured_customer_response_timeout_minutes(
+    db: Session,
+    *,
+    channel_type: str,
+    provider: str,
+    account_scope: str,
+) -> int:
+    """Return the editable policy timeout for admin form omission fallback."""
+
+    channel = _normalize_text(channel_type, field="channel", limit=40)
+    normalized_provider = _normalize_text(provider, field="provider", limit=80)
+    normalized_scope = _normalize_text(account_scope, field="account scope", limit=160)
+    policy = (
+        db.query(AiIntakePolicy)
+        .filter(
+            AiIntakePolicy.scope_key
+            == _provider_scope_key(normalized_provider, normalized_scope)
+        )
+        .filter(AiIntakePolicy.channel_type == channel)
+        .filter(AiIntakePolicy.provider == normalized_provider)
+        .filter(AiIntakePolicy.account_scope == normalized_scope)
+        .one_or_none()
+    )
+    if policy is None:
+        return DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES
+    editable_version = (
+        db.get(AiIntakePolicyVersion, policy.active_version_id)
+        if policy.active_version_id is not None
+        else None
+    )
+    draft = (
+        db.query(AiIntakePolicyVersion)
+        .filter(AiIntakePolicyVersion.policy_id == policy.id)
+        .filter(AiIntakePolicyVersion.status == "draft")
+        .order_by(AiIntakePolicyVersion.version_number.desc())
+        .first()
+    )
+    editable_version = draft or editable_version
+    rules = (
+        editable_version.escalation_rules
+        if editable_version is not None
+        and isinstance(editable_version.escalation_rules, Mapping)
+        else None
+    )
+    return _customer_response_timeout_minutes(rules)
+
+
+def _session_customer_response_timeout_minutes(
+    session: AiIntakeSession,
+    *,
+    version: AiIntakePolicyVersion | None = None,
+) -> int:
+    if version is not None and isinstance(version.escalation_rules, Mapping):
+        return _customer_response_timeout_minutes(version.escalation_rules)
+    metadata = dict(session.metadata_ or {})
+    return _bounded_int(
+        metadata.get("customer_response_timeout_minutes"),
+        default=DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES,
+        minimum=1,
+        maximum=1440,
+    )
+
+
+def record_customer_wait(
+    session: AiIntakeSession,
+    *,
+    version: AiIntakePolicyVersion | None = None,
+    inbound_message_id: UUID | None = None,
+    reason: str,
+    now: datetime | None = None,
+) -> datetime:
+    started_at = (now or datetime.now(UTC)).astimezone(UTC)
+    timeout_minutes = _session_customer_response_timeout_minutes(
+        session, version=version
+    )
+    expires_at = started_at + timedelta(minutes=timeout_minutes)
+    session.customer_wait_started_at = started_at
+    session.customer_wait_expires_at = expires_at
+    metadata = dict(session.metadata_ or {})
+    metadata.update(
+        {
+            "customer_wait_started_at": started_at.isoformat(),
+            "customer_wait_expires_at": expires_at.isoformat(),
+            "customer_response_timeout_minutes": timeout_minutes,
+            "customer_wait_reason": reason,
+        }
+    )
+    if inbound_message_id is not None:
+        metadata["customer_wait_inbound_message_id"] = str(inbound_message_id)
+    session.metadata_ = metadata
+    logger.info(
+        "ai intake customer wait deadline recorded",
+        extra={
+            "event": "ai_intake_customer_wait_deadline_recorded",
+            "session_id": str(session.id),
+            "conversation_id": str(session.conversation_id),
+            "inbound_message_id": str(inbound_message_id)
+            if inbound_message_id is not None
+            else None,
+            "customer_wait_started_at": started_at.isoformat(),
+            "customer_wait_expires_at": expires_at.isoformat(),
+            "timeout_minutes": timeout_minutes,
+            "reason": reason,
+        },
+    )
+    return expires_at
+
+
+def clear_customer_wait(
+    session: AiIntakeSession,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> None:
+    had_wait = bool(
+        session.customer_wait_started_at or session.customer_wait_expires_at
+    )
+    session.customer_wait_started_at = None
+    session.customer_wait_expires_at = None
+    metadata = dict(session.metadata_ or {})
+    for key in (
+        "customer_wait_started_at",
+        "customer_wait_expires_at",
+        "customer_wait_reason",
+        "customer_wait_inbound_message_id",
+    ):
+        metadata.pop(key, None)
+    metadata["customer_wait_cleared_reason"] = reason
+    metadata["customer_wait_cleared_at"] = (now or datetime.now(UTC)).isoformat()
+    session.metadata_ = metadata
+    if had_wait:
+        logger.info(
+            "ai intake customer wait cleared",
+            extra={
+                "event": "ai_intake_customer_wait_cleared",
+                "session_id": str(session.id),
+                "conversation_id": str(session.conversation_id),
+                "reason": reason,
+            },
+        )
+
+
+def mark_inbound_processed(
+    session: AiIntakeSession,
+    *,
+    inbound_message_id: UUID,
+    generation_attempt_id: UUID | None = None,
+) -> None:
+    metadata = dict(session.metadata_ or {})
+    metadata[f"processed_inbound:{inbound_message_id}"] = True
+    if generation_attempt_id is not None:
+        metadata["last_generation_attempt_id"] = str(generation_attempt_id)
+    session.metadata_ = metadata
+
+    logger.info(
+        "ai intake inbound turn completed",
+        extra={
+            "event": "ai_intake_inbound_turn_completed",
+            "session_id": str(session.id),
+            "conversation_id": str(session.conversation_id),
+            "inbound_message_id": str(inbound_message_id),
+            "generation_attempt_id": str(generation_attempt_id)
+            if generation_attempt_id is not None
+            else None,
+            "turn_count": session.turn_count,
+            "is_initial_turn": session.turn_count <= 1,
+            "session_state": session.state,
+        },
+    )
+
+
 def _bounded_float(
     value: object, *, default: float, minimum: float, maximum: float
 ) -> float:
@@ -1615,6 +1806,9 @@ def _sync_active_policy_to_legacy_config(
                     minimum=1,
                     maximum=1440,
                 ),
+                customer_response_timeout_minutes=(
+                    _customer_response_timeout_minutes(escalation_rules)
+                ),
                 exclude_campaign_attribution=bool(
                     escalation_rules.get("exclude_campaign_attribution", True)
                 ),
@@ -1664,6 +1858,9 @@ def _sync_active_policy_to_legacy_config(
             default=DEFAULT_QUEUE_HEARTBEAT_MINUTES,
             minimum=5,
             maximum=240,
+        ),
+        "customer_response_timeout_minutes": _customer_response_timeout_minutes(
+            escalation_rules
         ),
         "conversational_engine_enabled": bool(
             version_metadata.get("conversational_engine_enabled")
@@ -1944,6 +2141,11 @@ def ensure_policy_version_from_legacy_config(
         "max_turns": int(config.max_clarification_turns or 1) + 1,
         "confidence_threshold": float(config.confidence_threshold),
         "max_intake_duration_minutes": int(config.escalate_after_minutes or 5),
+        "customer_response_timeout_minutes": int(
+            config.customer_response_timeout_minutes
+            or config.escalate_after_minutes
+            or DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES
+        ),
         "data_cleanup_enabled": bool(metadata.get("data_cleanup_enabled") or False),
     }
 
@@ -2113,6 +2315,12 @@ def ensure_session_for_outcome(
         # classification can produce a clarification question or handoff.
         state = "welcome_pending"
         policy_metadata = dict(policy.metadata_ or {})
+        timeout_minutes = _bounded_int(
+            policy_metadata.get("customer_response_timeout_minutes"),
+            default=DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES,
+            minimum=1,
+            maximum=1440,
+        )
         session = AiIntakeSession(
             conversation_id=conversation.id,
             policy_id=policy.id,
@@ -2135,7 +2343,11 @@ def ensure_session_for_outcome(
                     (policy.metadata_ or {}).get("max_intake_duration_minutes") or 10
                 )
             ),
-            metadata_={"ai_handling": True, "created_from": "team_inbox_receive"},
+            metadata_={
+                "ai_handling": True,
+                "created_from": "team_inbox_receive",
+                "customer_response_timeout_minutes": timeout_minutes,
+            },
         )
         db.add(session)
     session.policy_id = policy.id
@@ -2239,6 +2451,7 @@ def mark_handoff_requested(
 ) -> None:
     session.state = "handoff_requested"
     session.handoff_requested_at = datetime.now(UTC)
+    clear_customer_wait(session, reason="handoff_requested")
     metadata = dict(session.metadata_ or {})
     metadata["destination_team_id"] = (
         str(destination_team_id) if destination_team_id else None
@@ -2249,6 +2462,7 @@ def mark_handoff_requested(
 def complete_session(session: AiIntakeSession, *, state: str = "completed") -> None:
     if state not in TERMINAL_SESSION_STATES:
         raise ValueError("AI intake terminal state is invalid")
+    clear_customer_wait(session, reason=state)
     session.state = state
     now = datetime.now(UTC)
     session.completed_at = now
@@ -2409,74 +2623,37 @@ def _process_one_session(
                 else None,
                 error_code=delivery.reason,
             )
-            if delivery.kind == "queued":
-                session.state = "collecting_intent"
-                inbound_metadata = (
-                    dict(inbound.metadata_ or {})
-                    if isinstance(inbound.metadata_, Mapping)
-                    else {}
-                )
-                saved_follow_up_required = str(
-                    inbound_metadata.get("ai_intake_status") or ""
-                ) == AiIntakeStatus.awaiting_follow_up.value and bool(
-                    inbound_metadata.get("ai_intake_requires_follow_up")
-                )
-                if saved_follow_up_required:
-                    saved_question = " ".join(
-                        str(
-                            inbound_metadata.get("ai_intake_follow_up_question") or ""
-                        ).split()
-                    )
-                    if not saved_question:
-                        saved_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
-                    follow_up_delivery = team_inbox_outbound.send_ai_intake_follow_up(
-                        db,
-                        conversation=conversation,
-                        payload=team_inbox_outbound.AiIntakeFollowUpPayload(
-                            question=saved_question,
-                            inbound_message_id=inbound.id,
-                            config_id=session.legacy_config_id,
-                            follow_up_count=session.turn_count,
-                            session_id=session.id,
-                            policy_id=session.policy_id,
-                            policy_version_id=session.policy_version_id,
-                            display_name=session.display_name,
-                        ),
-                    )
-                    logger.info(
-                        "ai intake saved follow-up delivery resolved",
-                        extra={
-                            "event": "ai_intake_saved_follow_up_delivery_resolved",
-                            "conversation_id": str(conversation.id),
-                            "session_id": str(session.id),
-                            "inbound_message_id": str(inbound.id),
-                            "delivery_kind": follow_up_delivery.kind,
-                            "delivery_reason": follow_up_delivery.reason,
-                            "outbound_message_id": follow_up_delivery.message_id,
-                        },
-                    )
-                    if follow_up_delivery.kind == "queued":
-                        session.state = "awaiting_customer"
-                        session_metadata = dict(session.metadata_ or {})
-                        session_metadata[f"processed_inbound:{inbound.id}"] = True
-                        session.metadata_ = session_metadata
-                        transition_conversation_status(
-                            db,
-                            conversation=conversation,
-                            status=InboxConversationStatus.pending,
-                            reason=(
-                                team_inbox_status.InboxStatusReason.ai_awaiting_clarification
-                            ),
-                            source_id=f"ai-intake-follow-up:{session.id}:{inbound.id}",
-                        )
+            logger.info(
+                "ai intake welcome delivery resolved",
+                extra={
+                    "event": "ai_intake_welcome_delivery_resolved",
+                    "conversation_id": str(conversation.id),
+                    "session_id": str(session.id),
+                    "inbound_message_id": str(inbound.id),
+                    "delivery_kind": delivery.kind,
+                    "delivery_reason": delivery.reason,
+                    "outbound_message_id": delivery.message_id,
+                },
+            )
+            if delivery.kind != "queued":
+                session.state = "failed"
+                complete_session(session, state="failed")
                 mark_conversation_ai_metadata(
-                    conversation, session=session, active=True
+                    conversation, session=session, active=False
                 )
                 return True
-            session.state = "failed"
-            complete_session(session, state="failed")
-            mark_conversation_ai_metadata(conversation, session=session, active=False)
-            return True
+            session.state = "collecting_intent"
+        mark_conversation_ai_metadata(conversation, session=session, active=True)
+        logger.info(
+            "ai intake initial inbound selected as turn one",
+            extra={
+                "event": "ai_intake_initial_turn_selected",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "session_state": session.state,
+            },
+        )
     cleanup_only = session.state == "handoff_requested"
     cleanup_open = _process_data_cleanup_turn(
         db,
@@ -2494,6 +2671,20 @@ def _process_one_session(
     processed_key = f"processed_inbound:{inbound.id}"
     if dict(session.metadata_ or {}).get(processed_key):
         return False
+    was_awaiting_customer = session.state == "awaiting_customer"
+    if was_awaiting_customer:
+        clear_customer_wait(session, reason="customer_response")
+        session.state = "collecting_intent"
+        mark_conversation_ai_metadata(conversation, session=session, active=True)
+        logger.info(
+            "ai intake customer response resumed session",
+            extra={
+                "event": "ai_intake_customer_response_resumed",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+            },
+        )
     recent_rows = (
         db.query(InboxMessage)
         .filter(InboxMessage.conversation_id == conversation.id)
@@ -2526,7 +2717,7 @@ def _process_one_session(
         created_conversation=True,
         active_ai_session=True,
         has_active_assignment=False,
-        awaiting_follow_up=session.state == "awaiting_customer",
+        awaiting_follow_up=was_awaiting_customer,
         follow_up_count=session.turn_count,
     )
     outcome = ai_intake.classify_message(db, request)
@@ -2555,9 +2746,12 @@ def _process_one_session(
         error_code=outcome.reason.value,
     )
     session_metadata = dict(session.metadata_ or {})
-    session_metadata[processed_key] = True
     session_metadata["last_generation_attempt_id"] = str(generation.id)
     session.metadata_ = session_metadata
+    engine_forced_handoff = False
+    engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
+        None
+    )
     if outcome.status == AiIntakeStatus.awaiting_follow_up:
         delivery_question = " ".join(
             str(
@@ -2611,21 +2805,57 @@ def _process_one_session(
         intake_metadata["follow_up_delivery_reason"] = delivery.reason
         conversation_metadata["ai_intake"] = intake_metadata
         conversation.metadata_ = conversation_metadata
-        session.state = "awaiting_customer"
-        transition_conversation_status(
-            db,
-            conversation=conversation,
-            status=InboxConversationStatus.pending,
-            reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
-            source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
+        if delivery.kind == "queued":
+            session.state = "awaiting_customer"
+            record_customer_wait(
+                session,
+                version=version,
+                inbound_message_id=inbound.id,
+                reason="awaiting_customer",
+            )
+            transition_conversation_status(
+                db,
+                conversation=conversation,
+                status=InboxConversationStatus.pending,
+                reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
+                source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
+            )
+            mark_conversation_ai_metadata(conversation, session=session, active=True)
+            mark_inbound_processed(
+                session,
+                inbound_message_id=inbound.id,
+                generation_attempt_id=generation.id,
+            )
+            return True
+        metadata["ai_intake_engine_action"] = "handoff"
+        metadata["ai_intake_engine_reason"] = "follow_up_delivery_failed"
+        metadata["ai_intake_status"] = "escalated"
+        metadata["ai_intake_escalation_reason"] = "follow_up_delivery_failed"
+        inbound.metadata_ = metadata
+        logger.warning(
+            "AI intake follow-up delivery failed; escalating",
+            extra={
+                "event": "ai_intake_follow_up_delivery_failed",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "delivery_kind": delivery.kind,
+                "delivery_reason": delivery.reason,
+            },
         )
-        mark_conversation_ai_metadata(conversation, session=session, active=True)
-        return True
+        engine_forced_handoff = True
+        engine_handoff_state = ai_intake_conversation_engine.ConversationalState.load(
+            conversation=conversation,
+            session=session,
+        )
+        engine_handoff_state.escalation_reason = "follow_up_delivery_failed"
+        engine_handoff_state.handoff_status = "requested"
+        if outcome.classification is not None:
+            engine_handoff_state.current_intent = outcome.classification.intent.value
+            engine_handoff_state.category = outcome.classification.category.value
+            engine_handoff_state.confidence = outcome.classification.confidence
+        ai_intake_conversation_engine.persist_state(session, engine_handoff_state)
 
-    engine_forced_handoff = False
-    engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
-        None
-    )
     version_metadata = (
         dict(version.metadata_ or {})
         if version is not None and isinstance(version.metadata_, Mapping)
@@ -2645,7 +2875,7 @@ def _process_one_session(
             else {}
         )
         engine_enabled = bool(legacy_metadata.get("conversational_engine_enabled"))
-    if engine_enabled:
+    if engine_enabled and not engine_forced_handoff:
         engine_name = "composable_v1"
         if ai_intake_graph.langgraph_engine_enabled(version):
             requested_engine_name = ai_intake_graph.LANGGRAPH_ENGINE_MODE
@@ -2743,16 +2973,68 @@ def _process_one_session(
             generation.outbound_message_id = (
                 UUID(delivery.message_id) if delivery.message_id else None
             )
-            session.state = "awaiting_customer"
-            transition_conversation_status(
-                db,
-                conversation=conversation,
-                status=InboxConversationStatus.pending,
-                reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
-                source_id=f"ai-intake-conversation:{session.id}:{inbound.id}",
+            logger.info(
+                "ai intake response delivery resolved",
+                extra={
+                    "event": "ai_intake_response_delivery_resolved",
+                    "conversation_id": str(conversation.id),
+                    "session_id": str(session.id),
+                    "inbound_message_id": str(inbound.id),
+                    "delivery_kind": delivery.kind,
+                    "delivery_reason": delivery.reason,
+                    "outbound_message_id": delivery.message_id,
+                },
             )
-            mark_conversation_ai_metadata(conversation, session=session, active=True)
-            return True
+            conversation_metadata = dict(conversation.metadata_ or {})
+            intake_metadata = dict(conversation_metadata.get("ai_intake") or {})
+            intake_metadata["response_delivery_status"] = delivery.kind
+            intake_metadata["response_delivery_reason"] = delivery.reason
+            conversation_metadata["ai_intake"] = intake_metadata
+            conversation.metadata_ = conversation_metadata
+            if delivery.kind == "queued":
+                session.state = "awaiting_customer"
+                record_customer_wait(
+                    session,
+                    version=version,
+                    inbound_message_id=inbound.id,
+                    reason="conversation_response",
+                )
+                transition_conversation_status(
+                    db,
+                    conversation=conversation,
+                    status=InboxConversationStatus.pending,
+                    reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
+                    source_id=f"ai-intake-conversation:{session.id}:{inbound.id}",
+                )
+                mark_conversation_ai_metadata(
+                    conversation, session=session, active=True
+                )
+                mark_inbound_processed(
+                    session,
+                    inbound_message_id=inbound.id,
+                    generation_attempt_id=generation.id,
+                )
+                return True
+            metadata["ai_intake_engine_action"] = "handoff"
+            metadata["ai_intake_engine_reason"] = "response_delivery_failed"
+            metadata["ai_intake_status"] = "escalated"
+            metadata["ai_intake_escalation_reason"] = "response_delivery_failed"
+            inbound.metadata_ = metadata
+            logger.warning(
+                "AI intake response delivery failed; escalating",
+                extra={
+                    "event": "ai_intake_response_delivery_failed",
+                    "conversation_id": str(conversation.id),
+                    "session_id": str(session.id),
+                    "inbound_message_id": str(inbound.id),
+                    "delivery_kind": delivery.kind,
+                    "delivery_reason": delivery.reason,
+                },
+            )
+            engine_forced_handoff = True
+            engine_handoff_state = decision.state
+            engine_handoff_state.escalation_reason = "response_delivery_failed"
+            engine_handoff_state.handoff_status = "requested"
         if decision.action == "handoff":
             metadata["ai_intake_status"] = "classified"
             inbound.metadata_ = metadata
@@ -2770,10 +3052,15 @@ def _process_one_session(
                 )
             engine_forced_handoff = True
             engine_handoff_state = decision.state
-        elif decision.action != "continue_classifier":
+        elif not engine_forced_handoff and decision.action != "continue_classifier":
             session.state = "failed"
             complete_session(session, state="failed")
             mark_conversation_ai_metadata(conversation, session=session, active=False)
+            mark_inbound_processed(
+                session,
+                inbound_message_id=inbound.id,
+                generation_attempt_id=generation.id,
+            )
             return True
     follow_up_question = (
         outcome.classification.follow_up_question
@@ -2839,16 +3126,56 @@ def _process_one_session(
         intake_metadata["follow_up_delivery_reason"] = delivery.reason
         conversation_metadata["ai_intake"] = intake_metadata
         conversation.metadata_ = conversation_metadata
-        session.state = "awaiting_customer"
-        transition_conversation_status(
-            db,
-            conversation=conversation,
-            status=InboxConversationStatus.pending,
-            reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
-            source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
+        if delivery.kind == "queued":
+            session.state = "awaiting_customer"
+            record_customer_wait(
+                session,
+                version=version,
+                inbound_message_id=inbound.id,
+                reason="awaiting_customer",
+            )
+            transition_conversation_status(
+                db,
+                conversation=conversation,
+                status=InboxConversationStatus.pending,
+                reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
+                source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
+            )
+            mark_conversation_ai_metadata(conversation, session=session, active=True)
+            mark_inbound_processed(
+                session,
+                inbound_message_id=inbound.id,
+                generation_attempt_id=generation.id,
+            )
+            return True
+        metadata["ai_intake_engine_action"] = "handoff"
+        metadata["ai_intake_engine_reason"] = "follow_up_delivery_failed"
+        metadata["ai_intake_status"] = "escalated"
+        metadata["ai_intake_escalation_reason"] = "follow_up_delivery_failed"
+        inbound.metadata_ = metadata
+        logger.warning(
+            "AI intake follow-up delivery failed; escalating",
+            extra={
+                "event": "ai_intake_follow_up_delivery_failed",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "delivery_kind": delivery.kind,
+                "delivery_reason": delivery.reason,
+            },
         )
-        mark_conversation_ai_metadata(conversation, session=session, active=True)
-        return True
+        engine_forced_handoff = True
+        engine_handoff_state = ai_intake_conversation_engine.ConversationalState.load(
+            conversation=conversation,
+            session=session,
+        )
+        engine_handoff_state.escalation_reason = "follow_up_delivery_failed"
+        engine_handoff_state.handoff_status = "requested"
+        if outcome.classification is not None:
+            engine_handoff_state.current_intent = outcome.classification.intent.value
+            engine_handoff_state.category = outcome.classification.category.value
+            engine_handoff_state.confidence = outcome.classification.confidence
+        ai_intake_conversation_engine.persist_state(session, engine_handoff_state)
     if has_human_takeover(db, conversation):
         logger.info(
             "ai intake stopped by human takeover",
@@ -2963,6 +3290,11 @@ def _process_one_session(
         session.state = "fallback_escalated"
         complete_session(session, state="fallback_escalated")
         mark_conversation_ai_metadata(conversation, session=session, active=False)
+    mark_inbound_processed(
+        session,
+        inbound_message_id=inbound.id,
+        generation_attempt_id=generation.id,
+    )
     return True
 
 

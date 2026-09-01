@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import column, event, select
+from sqlalchemy.dialects import postgresql
 
 from app.api import analytics as analytics_api
 from app.models.notification import Notification
@@ -816,6 +817,30 @@ def test_agent_performance_analytics_without_sla_keeps_current_metrics(db_sessio
     assert page.summary.sla_configured is False
     assert page.rows[0].first_response_sla_seconds is None
     assert page.rows[0].resolution_sla_seconds is None
+
+
+def test_team_sla_expression_casts_empty_threshold_for_postgres():
+    expr = team_inbox_metrics._team_sla_expression(column("service_team_id"), {})
+    statement = select(
+        expr.is_not(None).label("has_sla"),
+        (column("duration_seconds") > expr).label("breached"),
+    )
+
+    compiled = statement.compile(dialect=postgresql.dialect(paramstyle="numeric"))
+
+    assert "CAST(:1 AS INTEGER) IS NOT NULL" in str(compiled)
+    assert "duration_seconds > CAST(:1 AS INTEGER)" in str(compiled)
+
+
+def test_team_sla_expression_casts_default_for_postgres():
+    expr = team_inbox_metrics._team_sla_expression(
+        column("service_team_id"), {uuid4(): 600}
+    )
+    statement = select(expr.is_not(None).label("has_sla"))
+
+    compiled = statement.compile(dialect=postgresql.dialect(paramstyle="numeric"))
+
+    assert "ELSE CAST(:3 AS INTEGER)" in str(compiled)
 
 
 def test_agent_performance_analytics_returns_sla_met_and_breached_counts(db_session):

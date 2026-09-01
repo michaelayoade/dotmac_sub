@@ -67,6 +67,7 @@ def _config_read(config) -> AiIntakeConfigRead:
         allow_followup_questions=config.allow_followup_questions,
         max_clarification_turns=config.max_clarification_turns,
         escalate_after_minutes=config.escalate_after_minutes,
+        customer_response_timeout_minutes=config.customer_response_timeout_minutes,
         exclude_campaign_attribution=config.exclude_campaign_attribution,
         fallback_team_id=config.fallback_team_id,
         instructions=config.instructions,

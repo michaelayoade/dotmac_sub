@@ -51,7 +51,10 @@ DOMAIN = DomainSOT(
                 "write the access-state projection. Subscription creation enters "
                 "active state through this owner, and every service-period, grant, "
                 "settlement, and reviewed-repair decision submits a typed, locked "
-                "compare-and-set billing-anchor projection to its one writer."
+                "compare-and-set billing-anchor projection to its one writer. "
+                "That non-key projection uses a PostgreSQL NO KEY UPDATE lock: "
+                "competing anchor writers serialize without blocking KEY SHARE "
+                "foreign-key checks from concurrent observations."
             ),
         ),
         SOTService(

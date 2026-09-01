@@ -1502,9 +1502,12 @@ class Subscriptions(ListResponseMixin):
         status = subscription.status
         start_at = _ensure_utc(data.get("start_at", subscription.start_at))
         end_at = _ensure_utc(data.get("end_at", subscription.end_at))
-        next_billing_at = _ensure_utc(
-            data.get("next_billing_at", subscription.next_billing_at)
-        )
+        # Generic edits never own the billing-anchor projection. Creation may
+        # materialize the initial anchor, while later lifecycle, renewal,
+        # reconciliation, and repair owners stage evidence-backed changes
+        # through ``stage_subscription_billing_anchor``. An omitted field must
+        # therefore preserve the stored value exactly.
+        next_billing_at = _ensure_utc(subscription.next_billing_at)
         canceled_at = _ensure_utc(data.get("canceled_at", subscription.canceled_at))
         reference_at = start_at or datetime.now(UTC)
         if offer_version_id:
@@ -1536,44 +1539,6 @@ class Subscriptions(ListResponseMixin):
             # subscription start time if it was previously unset.
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
-        # Service-change cadence transition (SOT): an explicit billing_cycle in
-        # the update becomes the new owned cadence; otherwise keep the sub's own.
-        cadence_override = data.get("billing_cycle", subscription.billing_cycle)
-        cadence_changing = (
-            "billing_cycle" in data
-            and data["billing_cycle"] != subscription.billing_cycle
-        )
-        if status == SubscriptionStatus.active and start_at:
-            cycle = _resolve_billing_cycle(
-                db,
-                offer_id,
-                str(offer_version_id) if offer_version_id else None,
-                override=cadence_override,
-            )
-            existing_next = _ensure_utc(data.get("next_billing_at") or next_billing_at)
-            now = datetime.now(UTC)
-            # Recompute next_billing_at when:
-            # 1. Not provided in form data, OR
-            # 2. Resuming from suspension, OR
-            # 3. The existing value is more than 60 days in the past (stale migration data)
-            stale = existing_next and (now - existing_next).days > 60
-            resuming = previous_status == SubscriptionStatus.suspended
-            # A pure cadence change re-anchors on the NEXT cycle: keep the current
-            # next_billing_at so the in-flight period bills as scheduled; the new
-            # cadence applies when the biller next advances the anchor.
-            if (
-                (offer_changing or cadence_changing)
-                and previous_status == SubscriptionStatus.active
-                and existing_next
-                and "next_billing_at" not in data
-                and not stale
-            ):
-                data["next_billing_at"] = existing_next
-            elif "next_billing_at" not in data or resuming or stale:
-                billing_anchor = now if (resuming or stale) else start_at
-                data["next_billing_at"] = _compute_next_billing_at(
-                    billing_anchor, cycle
-                )
         if start_at and "end_at" not in data:
             term = data.get("contract_term", subscription.contract_term)
             term_changing = (

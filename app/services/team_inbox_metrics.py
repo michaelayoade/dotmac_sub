@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement, SQLColumnExpression
 from sqlalchemy.sql.selectable import CTE
+from sqlalchemy.sql.type_api import TypeEngine
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
@@ -1807,11 +1808,15 @@ def _team_sla_expression(
 ) -> ColumnElement[int | None]:
     """Build a portable SQL expression for per-team SLA thresholds."""
 
+    nullable_integer = type_cast(TypeEngine[int | None], Integer())
     if not thresholds:
-        return literal(None)
+        return cast(literal(None), nullable_integer)
     return case(
-        *((team_column == team_id, seconds) for team_id, seconds in thresholds.items()),
-        else_=None,
+        *(
+            (team_column == team_id, literal(seconds, type_=Integer()))
+            for team_id, seconds in thresholds.items()
+        ),
+        else_=cast(literal(None), nullable_integer),
     )
 
 

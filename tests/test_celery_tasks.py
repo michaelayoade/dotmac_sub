@@ -32,7 +32,7 @@ class TestBillingTask:
             ):
                 with patch(
                     "app.services.billing.scheduled.billing_automation_service."
-                    "run_invoice_cycle",
+                    "run_invoice_cycle_with_retry",
                     return_value={"subscriptions_billed": 1, "errors": 0},
                 ) as mock_run:
                     from app.tasks.billing import run_invoice_cycle
@@ -58,7 +58,7 @@ class TestBillingTask:
             ):
                 with patch(
                     "app.services.billing.scheduled.billing_automation_service."
-                    "run_invoice_cycle",
+                    "run_invoice_cycle_with_retry",
                     side_effect=Exception("Billing error"),
                 ):
                     from app.tasks.billing import run_invoice_cycle

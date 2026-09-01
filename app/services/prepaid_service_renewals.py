@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import NoReturn
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -1687,11 +1687,13 @@ _STALE_BILLING_ANCHOR_REPAIR_ACTION = "repair_stale_prepaid_billing_anchor"
 
 @dataclass(frozen=True, slots=True)
 class StaleBillingAnchorCandidate:
-    """One subscription whose anchor diverges from exact funded coverage."""
+    """One entitlement-backed anchor that diverges from exact coverage."""
 
     subscription_id: UUID
     account_id: UUID
     current_next_billing_at: datetime | None
+    entitlement_coverage_end: datetime
+    extension_coverage_end: datetime | None
     coverage_end: datetime
 
     @property
@@ -1734,18 +1736,45 @@ def _stale_billing_anchor_candidates(
     subscription_ids: Sequence[UUID] = (),
     include_unsupported_leads: bool = False,
 ) -> tuple[tuple[StaleBillingAnchorCandidate, ...], bool]:
-    coverage = (
+    entitlement_coverage = (
         select(
             ServiceEntitlement.subscription_id.label("subscription_id"),
-            func.max(ServiceEntitlement.ends_at).label("coverage_end"),
+            func.max(ServiceEntitlement.ends_at).label("entitlement_end"),
         )
         .where(ServiceEntitlement.status == ServiceEntitlementStatus.active)
         .group_by(ServiceEntitlement.subscription_id)
         .subquery()
     )
+    extension_coverage = (
+        select(
+            ServiceExtensionEntry.subscription_id.label("subscription_id"),
+            func.max(ServiceExtensionEntry.grant_ends_at).label("extension_end"),
+        )
+        .join(
+            ServiceExtension,
+            ServiceExtension.id == ServiceExtensionEntry.extension_id,
+        )
+        .where(
+            ServiceExtension.status == ServiceExtensionStatus.applied,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+        )
+        .group_by(ServiceExtensionEntry.subscription_id)
+        .subquery()
+    )
+    # Discovery remains entitlement-backed: extension-only projection drift is
+    # reconciled by financial.service_extensions. Once this owner repairs a
+    # funded-entitlement candidate, however, the target must respect the full
+    # authoritative coverage union and may not stop below a later applied grant.
+    coverage_end = case(
+        (
+            extension_coverage.c.extension_end > entitlement_coverage.c.entitlement_end,
+            extension_coverage.c.extension_end,
+        ),
+        else_=entitlement_coverage.c.entitlement_end,
+    ).label("coverage_end")
     lagging_or_absent = or_(
         Subscription.next_billing_at.is_(None),
-        coverage.c.coverage_end > Subscription.next_billing_at,
+        coverage_end > Subscription.next_billing_at,
     )
     # Pulling an anchor backwards is intentionally narrower than advancing it.
     # An applied service extension is exact coverage owned by another service;
@@ -1764,9 +1793,9 @@ def _stale_billing_anchor_candidates(
         )
         .exists()
     )
-    unsupported_lead = (
-        coverage.c.coverage_end < Subscription.next_billing_at
-    ) & ~applied_extension_exists
+    unsupported_lead = (coverage_end < Subscription.next_billing_at) & (
+        ~applied_extension_exists
+    )
     candidate_predicate = (
         or_(lagging_or_absent, unsupported_lead)
         if include_unsupported_leads
@@ -1777,9 +1806,18 @@ def _stale_billing_anchor_candidates(
             Subscription.id,
             Subscription.subscriber_id,
             Subscription.next_billing_at,
-            coverage.c.coverage_end,
+            entitlement_coverage.c.entitlement_end,
+            extension_coverage.c.extension_end,
+            coverage_end,
         )
-        .join(coverage, coverage.c.subscription_id == Subscription.id)
+        .join(
+            entitlement_coverage,
+            entitlement_coverage.c.subscription_id == Subscription.id,
+        )
+        .outerjoin(
+            extension_coverage,
+            extension_coverage.c.subscription_id == Subscription.id,
+        )
         .where(
             Subscription.status == SubscriptionStatus.active,
             Subscription.billing_mode == BillingMode.prepaid,
@@ -1796,7 +1834,9 @@ def _stale_billing_anchor_candidates(
             subscription_id=row[0],
             account_id=row[1],
             current_next_billing_at=_utc(row[2]) if row[2] is not None else None,
-            coverage_end=_utc(row[3]),
+            entitlement_coverage_end=_utc(row[3]),
+            extension_coverage_end=_utc(row[4]) if row[4] is not None else None,
+            coverage_end=_utc(row[5]),
         )
         for row in rows[:limit]
     )
@@ -1809,6 +1849,8 @@ def _stale_billing_anchor_fingerprint(
     material = "|".join(
         f"{item.subscription_id}:"
         f"{item.current_next_billing_at.isoformat() if item.current_next_billing_at else 'NULL'}:"
+        f"{item.entitlement_coverage_end.isoformat()}:"
+        f"{item.extension_coverage_end.isoformat() if item.extension_coverage_end else 'NULL'}:"
         f"{item.coverage_end.isoformat()}"
         for item in candidates
     )
@@ -1824,14 +1866,16 @@ def preview_stale_prepaid_billing_anchor_repair(
     subscription_ids: Sequence[UUID] = (),
     include_unsupported_leads: bool = False,
 ) -> StaleBillingAnchorRepairPreview:
-    """Report subscriptions whose anchor diverges from exact funded coverage.
+    """Report subscriptions whose anchor diverges from authoritative coverage.
 
     This includes the pre-existing drift cohort created while the
     payment-allocation path committed entitlements without ever reaching this
     owner, plus active prepaid subscriptions whose anchor is NULL while an
-    active entitlement proves the exact paid-through boundary. No anchor is
+    active entitlement proves the exact paid-through boundary. For every
+    entitlement-backed candidate, the target is the later of active funded
+    entitlement coverage and any applied service-extension grant. No anchor is
     inferred from mutable catalog cadence, subscription creation, or current
-    time; NULL rows without exact coverage evidence remain review stock.
+    time; NULL rows without exact entitlement evidence remain review stock.
 
     Leads are excluded by default because they may represent coverage owned by
     another service. ``include_unsupported_leads`` is accepted only for an
@@ -1870,14 +1914,15 @@ def apply_stale_prepaid_billing_anchor_repair(
     reason: str,
     commit: bool = True,
 ) -> StaleBillingAnchorRepairResult:
-    """Align every previewed anchor to its exact funded coverage end.
+    """Align every previewed anchor to its authoritative coverage-union end.
 
     Idempotent by construction and by reservation. The write is a pure
-    recomputation from surviving entitlement evidence, so a repaired row leaves
-    the cohort permanently and a replay of the same candidate is a no-op that
-    reuses its existing idempotency reservation and audit evidence. A candidate
-    whose coverage changed between preview and apply is skipped, never guessed
-    at, and shows up in the next preview.
+    recomputation from surviving entitlement and applied service-extension
+    evidence, so a repaired row leaves the cohort permanently and a replay of
+    the same candidate is a no-op that reuses its existing idempotency
+    reservation and audit evidence. A candidate whose coverage changed between
+    preview and apply is skipped, never guessed at, and shows up in the next
+    preview.
     """
 
     if not actor.strip() or not reason.strip():
@@ -1912,6 +1957,8 @@ def apply_stale_prepaid_billing_anchor_repair(
         fresh = current[0]
         if (
             fresh.current_next_billing_at != candidate.current_next_billing_at
+            or fresh.entitlement_coverage_end != candidate.entitlement_coverage_end
+            or fresh.extension_coverage_end != candidate.extension_coverage_end
             or fresh.coverage_end != candidate.coverage_end
         ):
             skipped_changed += 1
@@ -1973,6 +2020,14 @@ def apply_stale_prepaid_billing_anchor_repair(
                         else None
                     ),
                     "repaired_next_billing_at": candidate.coverage_end.isoformat(),
+                    "entitlement_coverage_end": (
+                        candidate.entitlement_coverage_end.isoformat()
+                    ),
+                    "extension_coverage_end": (
+                        candidate.extension_coverage_end.isoformat()
+                        if candidate.extension_coverage_end
+                        else None
+                    ),
                     "drift_seconds": (
                         str(int(candidate.drift.total_seconds()))
                         if candidate.drift is not None
