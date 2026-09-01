@@ -91,8 +91,8 @@ def test_lookup_sheet_is_hidden_and_backs_the_validation_formulas():
 
     sheet2 = archive.read("xl/worksheets/sheet2.xml").decode()
     assert "NCC_CATEGORIES" in sheet2
-    assert 'INDIRECT("CAT_"&amp;$J4)' in sheet2
-    assert 'INDIRECT(SUBSTITUTE($Y4," ","_"))' in sheet2
+    assert 'INDIRECT("CAT_"&amp;$J2)' in sheet2
+    assert 'INDIRECT(SUBSTITUTE($Y2," ","_"))' in sheet2
     assert "<dataValidations count=" in sheet2
 
     # The validated template splits its lists two ways: the long, formula-driven
@@ -111,11 +111,13 @@ def test_required_dropdown_columns_disallow_blank():
     sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
     status_letter = ncc_workbook._TEMPLATE_COLUMN_LETTERS["Status *"]
     validation = re.search(
-        rf'<dataValidation type="list" allowBlank="(\d)"[^>]*sqref="{status_letter}4:',
+        rf'<dataValidation type="list"[^>]*sqref="{status_letter}2:{status_letter}16001"',
         sheet2,
     )
     assert validation, "Status column has no list validation"
-    assert validation.group(1) == "0", "Status is required — it must not allow blank"
+    assert "allowBlank" not in validation.group(0), (
+        "Status is required; omitted allowBlank is Excel's false/default state"
+    )
 
 
 def test_workbook_headers_match_the_validated_ncc_template():
@@ -124,7 +126,8 @@ def test_workbook_headers_match_the_validated_ncc_template():
 
     for column in ncc_workbook.TEMPLATE_COLUMNS:
         assert f">{column}<" in sheet2
-    assert '<row r="4">' in sheet2
+    assert '<row r="2">' in sheet2
+    assert '<dimension ref="A1:AC15001"/>' in sheet2
 
 
 def test_age_gets_a_custom_range_validation():
@@ -138,7 +141,34 @@ def test_age_gets_a_custom_range_validation():
 def test_validation_extends_beyond_the_data_so_pasted_rows_stay_constrained():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
     sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
-    assert re.search(r'sqref="[A-Z]+4:[A-Z]+1048576"', sheet2)
+    assert '<dataValidations count="17">' in sheet2
+    assert 'sqref="B2:C16001 M2:M16001"' in sheet2
+    assert 'sqref="P2:P16001 T2:T16001"' in sheet2
+    assert 'sqref="AB2:AB16001"' in sheet2
+    assert not re.search(r'sqref="A2:A16001"', sheet2)
+    assert not re.search(r'sqref="[A-Z]+4:[A-Z]+1048576"', sheet2)
+
+
+def test_workbook_uses_latest_template_data_entry_shell():
+    record = dict(
+        _valid_record(),
+        Status="Resolved",
+        **{
+            "Resolved date": "02/07/2026 10:00:00",
+            "Resolved within SLA": "Yes",
+            "Resolution Note": "Refund applied to the account.",
+            "user notes datetime": "02/07/2026 10:05:00",
+        },
+    )
+    content = ncc_workbook.build_workbook([record], ncc_workbook.COLUMNS)
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+
+    assert "<autoFilter" not in sheet2
+    assert 'topLeftCell="A2"' in sheet2
+    assert '<c r="G2" s="4"><v>46204.375</v></c>' in sheet2
+    assert '<c r="P2" s="4"><v>46205.4166667</v></c>' in sheet2
+    assert '<c r="J2" s="9" t="str"><f>IF($I2=' in sheet2
+    assert '<c r="L2" s="9" t="str"><f>IF($K2=' in sheet2
 
 
 def test_row_shading_follows_validation_outcome():
@@ -291,14 +321,17 @@ def test_validation_rejects_test_data_in_names():
     assert "First Name must not contain test data" in status
 
 
-def test_validation_accepts_na_placeholders_for_age_and_gender():
+def test_validation_rejects_na_placeholders_for_age_and_gender():
     record = dict(_valid_record(), Age="N/A", Gender="N/A")
-    assert ncc_workbook.validation_status(record) == "[OK] All validations passed"
+    status = ncc_workbook.validation_status(record)
+    assert "Age must be a whole number from 13 to 150" in status
+    assert "Gender must be Female or Male" in status
 
 
 def test_validation_rejects_out_of_range_age():
-    assert "Age must be N/A or a whole number" in ncc_workbook.validation_status(
-        dict(_valid_record(), Age="9")
+    assert (
+        "Age must be a whole number from 13 to 150"
+        in ncc_workbook.validation_status(dict(_valid_record(), Age="9"))
     )
 
 
