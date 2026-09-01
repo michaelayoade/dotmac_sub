@@ -4,9 +4,11 @@ Sub's auth layer hands services a plain ``auth`` dict (principal_id, roles,
 scopes). The workqueue turns that into a :class:`WorkqueuePrincipal` once, up
 front, so providers and the aggregator never re-query the RBAC tables per item.
 
-Permission keys are deliberately reused from the support domain (the workqueue
-is a *view* over tickets/conversations/work orders — it grants no new access),
-so no new RBAC seed rows are required.
+The queue entry and inline-action gates deliberately reuse support-domain
+permissions because the workqueue is a view over source-owned records. Audience
+widening is separate authority: the RBAC catalog exposes explicit, assignable
+team and organization audience permissions, and no non-admin role receives
+either one by default.
 """
 
 from __future__ import annotations

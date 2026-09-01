@@ -280,6 +280,16 @@ DEFAULT_PERMISSIONS = [
     ("support:ticket:update", "Update tickets"),
     ("support:ticket:delete", "Delete tickets"),
     ("support:ticket:assign", "Assign tickets"),
+    (
+        "workqueue:audience:team",
+        "View Workqueue items for teams where the user is a queue lead or "
+        "accountable manager",
+    ),
+    (
+        "workqueue:audience:org",
+        "View all Workqueue items across the organization regardless of team, "
+        "region, or assignment",
+    ),
     ("support:inbox:self_assign", "Assign inbox conversations to yourself"),
     ("support:automation:read", "View ticket automation rules"),
     ("support:automation:write", "Manage ticket automation rules"),
