@@ -19,7 +19,7 @@ def _module_function(path: Path, function_name: str) -> ast.FunctionDef:
     )
 
 
-def test_anchor_writer_uses_foreign_key_compatible_row_lock() -> None:
+def test_anchor_writer_uses_atomic_compare_and_set_without_a_row_lock() -> None:
     writer = _module_function(
         ACCOUNT_LIFECYCLE,
         "stage_subscription_billing_anchor",
@@ -32,17 +32,22 @@ def test_anchor_writer_uses_foreign_key_compatible_row_lock() -> None:
         and node.func.attr == "with_for_update"
     ]
 
-    assert len(lock_calls) == 1
-    key_share = next(
-        (
-            keyword.value
-            for keyword in lock_calls[0].keywords
-            if keyword.arg == "key_share"
-        ),
-        None,
-    )
-    assert isinstance(key_share, ast.Constant)
-    assert key_share.value is True
+    assert lock_calls == []
+
+    called_names = {
+        node.func.id
+        for node in ast.walk(writer)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(writer)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "update" in called_names
+    assert "is_not_distinct_from" in called_attributes
+    assert "returning" in called_attributes
 
 
 def test_scheduled_invoice_cycle_uses_the_retry_entrypoint() -> None:

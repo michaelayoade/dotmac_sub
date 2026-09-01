@@ -42,7 +42,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.catalog import (
     BillingMode,
@@ -132,38 +133,60 @@ def stage_subscription_billing_anchor(
     if not command.evidence_ref.strip():
         raise BillingAnchorProjectionError("Billing-anchor evidence_ref is required")
 
-    locked = db.scalar(
-        select(Subscription)
-        .where(Subscription.id == command.subscription_id)
-        # The projection changes no subscription key, so FOR NO KEY UPDATE is
-        # the strongest lock required. It still serializes competing anchor
-        # writers while remaining compatible with the KEY SHARE lock taken by
-        # concurrent foreign-key inserts such as bandwidth samples.
-        .with_for_update(key_share=True)
-    )
-    if locked is None:
-        raise BillingAnchorProjectionError("Subscription not found")
-    subscription = locked
-    current = _aware_utc(subscription.next_billing_at)
     expected = _aware_utc(command.expected_previous)
     target = _aware_utc(command.target)
-    if current != expected:
-        raise BillingAnchorProjectionError(
-            "Billing anchor changed after the projection was derived"
-        )
     assert target is not None
     if (
-        current is not None
-        and target < current
+        expected is not None
+        and target < expected
         and command.source not in _RETRACTION_SOURCES
     ):
         raise BillingAnchorProjectionError(
             f"{command.source.value} cannot retract the billing anchor"
         )
-    if current == target:
+
+    if expected == target:
+        observed = db.execute(
+            select(Subscription.id, Subscription.next_billing_at).where(
+                Subscription.id == command.subscription_id
+            )
+        ).one_or_none()
+        if observed is None:
+            raise BillingAnchorProjectionError("Subscription not found")
+        if _aware_utc(observed.next_billing_at) != expected:
+            raise BillingAnchorProjectionError(
+                "Billing anchor changed after the projection was derived"
+            )
         return False
 
-    subscription.next_billing_at = target
+    # A single compare-and-set UPDATE is the serialization boundary. An
+    # explicit row lock followed by an ORM flush can leave PostgreSQL holding a
+    # lock that blocks the KEY SHARE acquired by high-volume foreign-key
+    # inserts (for example bandwidth samples). This statement updates no key,
+    # so PostgreSQL uses its FK-compatible NO KEY UPDATE row lock while the
+    # expected-value predicate makes competing anchor writers fail closed.
+    updated_id = db.execute(
+        update(Subscription)
+        .where(Subscription.id == command.subscription_id)
+        .where(Subscription.next_billing_at.is_not_distinct_from(expected))
+        .values(next_billing_at=target)
+        .returning(Subscription.id)
+        .execution_options(synchronize_session=False)
+    ).scalar_one_or_none()
+    if updated_id is None:
+        observed = db.execute(
+            select(Subscription.id, Subscription.next_billing_at).where(
+                Subscription.id == command.subscription_id
+            )
+        ).one_or_none()
+        if observed is None:
+            raise BillingAnchorProjectionError("Subscription not found")
+        raise BillingAnchorProjectionError(
+            "Billing anchor changed after the projection was derived"
+        )
+
+    set_committed_value(subscription, "next_billing_at", target)
+    db.expire(subscription, ["updated_at"])
     logger.info(
         "subscription_billing_anchor_projected",
         extra={
@@ -171,7 +194,7 @@ def stage_subscription_billing_anchor(
             "subscription_id": str(subscription.id),
             "source": command.source.value,
             "evidence_ref": command.evidence_ref,
-            "previous_next_billing_at": current.isoformat() if current else None,
+            "previous_next_billing_at": expected.isoformat() if expected else None,
             "next_billing_at": target.isoformat(),
         },
     )
