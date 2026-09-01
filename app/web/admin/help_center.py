@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import admin_workflow_guidance
 from app.services.auth_dependencies import require_permission
 from app.web.templates import templates
 
@@ -22,6 +23,8 @@ class HelpArticle:
     title: str
     summary: str
     steps: tuple[str, ...]
+    audience: str = ""
+    notes: tuple[str, ...] = ()
 
     @property
     def slug(self) -> str:
@@ -34,7 +37,9 @@ def _article_matches(article: HelpArticle, *, query: str, category: str) -> bool
         not query
         or query in article.title.casefold()
         or query in article.summary.casefold()
+        or query in article.audience.casefold()
         or any(query in step.casefold() for step in article.steps)
+        or any(query in note.casefold() for note in article.notes)
     )
 
 
@@ -130,6 +135,20 @@ ARTICLES = (
             "Attach a screenshot without unnecessary customer data.",
         ),
     ),
+)
+
+# The workflow-guidance registry is the authoritative Help Center content.
+# ``HelpArticle`` is the typed presentation shape consumed by the existing UI.
+ARTICLES = tuple(
+    HelpArticle(
+        category=guide.category,
+        title=guide.title,
+        summary=guide.purpose,
+        steps=guide.steps,
+        audience=guide.audience,
+        notes=guide.notes,
+    )
+    for guide in admin_workflow_guidance.all_guidance()
 )
 
 
