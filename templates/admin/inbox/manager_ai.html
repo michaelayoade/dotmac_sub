@@ -28,7 +28,7 @@
     <p role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">{{ state.error }}</p>
     {% endif %}
 
-    <form method="post" action="/admin/inbox/manager-ai" class="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <form method="post" action="/admin/inbox/manager-ai" x-data='{ period: {{ state.period | tojson }} }' class="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "components/forms/csrf_input.html" %}
         <div class="grid gap-4 sm:grid-cols-3">
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Analysis scope
@@ -39,25 +39,37 @@
             </select>
         </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Period
-            <select name="period" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="period" x-model="period" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 {% for value, label in [('today', 'Today'), ('yesterday', 'Yesterday'), ('last_7_days', 'Last 7 Days'), ('last_30_days', 'Last 30 Days'), ('custom', 'Custom range')] %}
                 <option value="{{ value }}" {% if state.period == value %}selected{% endif %}>{{ label }}</option>
                 {% endfor %}
             </select>
         </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Channel
-            <input name="channel_type" value="{{ state.channel_type }}" placeholder="All channels" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="channel_type" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All channels</option>
+                {% for option in state.channel_options %}
+                <option value="{{ option.value }}" {% if state.channel_type == option.value %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        </div>
+        <div x-show="period === 'custom'" x-cloak class="grid gap-4 sm:grid-cols-2">
+        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom start
+            <input type="date" name="custom_start" value="{{ state.custom_start }}" x-bind:disabled="period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom end
+            <input type="date" name="custom_end" value="{{ state.custom_end }}" x-bind:disabled="period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
         </label>
         </div>
         <div class="grid gap-4 sm:grid-cols-3">
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom start
-            <input type="date" name="custom_start" value="{{ state.custom_start }}" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-        </label>
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom end
-            <input type="date" name="custom_end" value="{{ state.custom_end }}" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-        </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Current status
-            <input name="status" value="{{ state.status_filter }}" placeholder="All statuses" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="status" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All statuses</option>
+                {% for option in state.status_options %}
+                <option value="{{ option.value }}" {% if state.status_filter == option.value %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+            </select>
         </label>
         </div>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Conversation

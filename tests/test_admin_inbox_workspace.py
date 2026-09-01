@@ -124,6 +124,19 @@ def test_inbox_workspace_templates_compile():
         assert environment.get_template(template_name) is not None
 
 
+def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert '<select name="channel_type"' in template
+    assert '<input name="channel_type"' not in template
+    assert "state.channel_options" in template
+    assert '<select name="status"' in template
+    assert '<input name="status"' not in template
+    assert "state.status_options" in template
+    assert "x-show=\"period === 'custom'\"" in template
+    assert template.count("x-bind:disabled=\"period !== 'custom'\"") == 2
+
+
 @pytest.mark.parametrize(
     ("page", "total_items", "previous_page", "next_page"),
     (
@@ -206,6 +219,12 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'role="dialog"' in Path("templates/admin/inbox/_overlays.html").read_text()
     assert "@input.debounce.300ms" in sidebar
     assert "/admin/inbox/presence" in sidebar
+    assert 'aria-describedby="inbox-availability-help"' in sidebar
+    assert 'id="inbox-availability-help" role="tooltip"' in sidebar
+    assert (
+        'class="mt-2 flex flex-wrap gap-1" aria-label="Inbox availability"'
+        not in sidebar
+    )
     assert (
         "Only online agents with recent presence evidence receive auto-assigned "
         "inbox conversations." in sidebar
