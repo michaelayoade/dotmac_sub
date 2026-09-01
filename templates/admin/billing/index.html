@@ -89,7 +89,7 @@
 
     {# ═══ KPI Cards (4 in a row) ═══ #}
     {% set period_labels = {"this_month": "This Month", "last_month": "Last Month", "this_quarter": "This Quarter", "this_year": "Year to Date", "all": "All Time"} %}
-    <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <section data-testid="billing-kpis" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {{ stats_card("Payments", stats.payments_amount_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.payments_amount|default(0))), icon_credit_card(), "emerald", "teal", href="/admin/billing/payments") }}
         {{ stats_card("Paid Invoices", stats.total_revenue_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.total_revenue|default(0))), icon_invoice(), "teal", "emerald", href="/admin/billing/invoices?status=paid") }}
         {{ stats_card("Unpaid", stats.unpaid_invoices_amount_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.unpaid_invoices_amount|default(0))), icon_invoice(), "amber", "orange", href="/admin/billing/invoices?status=unpaid") }}
