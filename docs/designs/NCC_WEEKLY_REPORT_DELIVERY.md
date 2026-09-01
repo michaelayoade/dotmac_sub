@@ -69,8 +69,7 @@ dependency.
 A failed artifact or intent is recorded on the occurrence with a bounded
 failure code. The savepoint removes any partial artifact/notification work,
 while the owner transaction preserves durable failure evidence. The next
-five-minute poll retries the same Tuesday occurrence. Once queued, subsequent
-polls return `already_queued` and cannot replace the preserved artifact.
+five-minute poll retries the same Tuesday occurrence. If the resolved workbook has any non-filing-ready rows, the occurrence records a failed decision and no artifact or notification is queued. Once a fully filable workbook is queued, subsequent polls return `already_queued` and cannot replace the preserved artifact.
 
 The exact queued workbook can be downloaded from the run history. Both email
 attachment resolution and operator download verify the stored SHA-256 digest;

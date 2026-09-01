@@ -260,7 +260,7 @@ def _display_timestamp(value: datetime | None) -> str:
     normalized = _as_utc(value)
     if normalized is None or normalized > datetime.now(UTC):
         return ""
-    return normalized.strftime("%d-%m-%Y %H:%M:%S")
+    return normalized.strftime("%d/%m/%Y %H:%M:%S")
 
 
 def _clean_long_text(value: object) -> str:

@@ -1695,13 +1695,13 @@ _DATA_ENTRY_LAST_ROW = 1048576
 
 
 def excel_serial_from_display_timestamp(value: str) -> float | None:
-    """ "YYYY-MM-DD HH:MM:SS UTC" → Excel serial. Excel's epoch is 1899-12-30
+    """ "DD/MM/YYYY HH:MM:SS" -> Excel serial. Excel's epoch is 1899-12-30
     (its 1900 leap-year bug baked in)."""
     cleaned = " ".join((value or "").strip().split())
     if not cleaned:
         return None
     try:
-        timestamp = datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S UTC").replace(
+        timestamp = datetime.strptime(cleaned, "%d/%m/%Y %H:%M:%S").replace(
             tzinfo=UTC
         )
     except ValueError:
@@ -2024,6 +2024,7 @@ def _defined_names_xml() -> str:
 def _workbook_xml() -> str:
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <bookViews><workbookView firstSheet="1" activeTab="1"/></bookViews>
   <sheets>
     <sheet name="Lookups" sheetId="1" state="hidden" r:id="rId1"/>
     <sheet name="Data Entry" sheetId="2" r:id="rId2"/>
