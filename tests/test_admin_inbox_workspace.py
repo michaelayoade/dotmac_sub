@@ -155,6 +155,7 @@ def test_manager_ai_modes_limit_filters_and_require_conversation():
     assert "x-show=\"mode === 'recent_queue'\"" in template
     assert "x-bind:required=\"mode === 'conversation'\"" in template
     assert "x-bind:disabled=\"mode !== 'conversation'\"" in template
+    assert "Select a conversation to analyze." in template
     assert "Analysis scope" not in template
 
 
