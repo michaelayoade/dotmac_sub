@@ -549,7 +549,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
+        "access.subscription_lifecycle",
+        "customer.accounts",
         "financial.access_resolution",
+        "financial.billing_profile",
         "customer.financial_position",
         "financial.grace_policy",
     )
