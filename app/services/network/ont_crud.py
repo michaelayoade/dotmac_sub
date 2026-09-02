@@ -109,6 +109,7 @@ class OntUnits(CRUDManager[OntUnit]):
         order_dir: str = "asc",
         limit: int = 100,
         offset: int = 0,
+        include_inactive: bool = False,
     ) -> tuple[Sequence[OntUnit], int]:
         """Advanced ONT query with multi-dimensional filtering.
 
@@ -173,7 +174,12 @@ class OntUnits(CRUDManager[OntUnit]):
         if zone_id:
             stmt = stmt.where(OntUnit.zone_id == coerce_uuid(zone_id))
 
-        stmt = apply_active_state(stmt, OntUnit.is_active, is_active)
+        stmt = apply_active_state(
+            stmt,
+            OntUnit.is_active,
+            is_active,
+            default_active=not include_inactive,
+        )
 
         from app.models.network import OntAuthorizationStatus
 

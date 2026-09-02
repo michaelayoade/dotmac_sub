@@ -2858,6 +2858,56 @@ def test_onts_list_defaults_to_all_authorization_states_and_clamps_page(db_sessi
     assert len(payload["onts"]) == 1
 
 
+def test_onts_list_default_status_includes_inactive_rows_and_filters_explicit_status(
+    db_session,
+):
+    active = OntUnit(serial_number="ONT-STATUS-ACTIVE", is_active=True)
+    inactive = OntUnit(serial_number="ONT-STATUS-INACTIVE", is_active=False)
+    db_session.add_all([active, inactive])
+    db_session.commit()
+
+    default_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        per_page=50,
+    )
+    assert default_payload["status_filter"] == "all"
+    assert default_payload["pagination"]["total"] == 2
+    assert {ont.serial_number for ont in default_payload["onts"]} == {
+        "ONT-STATUS-ACTIVE",
+        "ONT-STATUS-INACTIVE",
+    }
+    assert default_payload["stats"]["total_onts"] == 2
+
+    invalid_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        status="retired",
+        per_page=50,
+    )
+    assert invalid_payload["status_filter"] == "all"
+    assert invalid_payload["pagination"]["total"] == 2
+
+    active_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        status="active",
+        per_page=50,
+    )
+    assert active_payload["pagination"]["total"] == 1
+    assert [ont.serial_number for ont in active_payload["onts"]] == [
+        "ONT-STATUS-ACTIVE"
+    ]
+    assert active_payload["stats"]["total_onts"] == 1
+
+    inactive_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        status="inactive",
+        per_page=50,
+    )
+    assert inactive_payload["pagination"]["total"] == 1
+    assert [ont.serial_number for ont in inactive_payload["onts"]] == [
+        "ONT-STATUS-INACTIVE"
+    ]
+    assert inactive_payload["stats"]["total_onts"] == 1
+
 def test_onts_diagnostics_view_runs_one_inventory_query(db_session, monkeypatch):
     db_session.add(
         OntUnit(

@@ -1574,6 +1574,8 @@ def onts_list_page_data(
 
     # Determine is_active from status filter
     status_filter = (status or "all").strip().lower()
+    if status_filter not in {"all", "active", "inactive"}:
+        status_filter = "all"
     is_active: bool | None = None
     if status_filter == "active":
         is_active = True
@@ -1611,6 +1613,7 @@ def onts_list_page_data(
                 vendor=vendor,
                 search=search,
                 is_active=is_active,
+                include_inactive=status_filter == "all",
                 order_by=query_order_by,
                 order_dir=query_order_dir,
                 limit=per_page,
@@ -1744,7 +1747,11 @@ def onts_list_page_data(
 
     # Summary counts use the binary owner outcome; verification remains out of band.
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
-    stats_filters = [OntUnit.is_active.is_(True)]
+    stats_filters: list[Any] = []
+    if is_active is True:
+        stats_filters.append(OntUnit.is_active.is_(True))
+    elif is_active is False:
+        stats_filters.append(OntUnit.is_active.is_(False))
     if olt_id:
         stats_filters.append(OntUnit.olt_device_id == olt_id)
 
