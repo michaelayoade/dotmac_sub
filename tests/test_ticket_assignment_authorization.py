@@ -276,7 +276,7 @@ def _load_migration(filename: str):
 def test_rbac_contract_grants_update_roles_except_project_management_office():
     technical_support = _load_migration("186_seed_technical_support_role.py")
     project = _load_migration("193_role_scope_cleanup_project_role.py")
-    support_assignment = _load_migration("572_ticket_assignment_role_grants.py")
+    support_assignment = _load_migration("573_ticket_assignment_role_grants.py")
 
     assert "support:ticket:assign" in technical_support.PERMISSION_KEYS
     assert "support:ticket:update" in technical_support.PERMISSION_KEYS

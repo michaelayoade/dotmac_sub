@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _load_migration():
     path = (
-        PROJECT_ROOT / "alembic" / "versions" / "572_ticket_assignment_role_grants.py"
+        PROJECT_ROOT / "alembic" / "versions" / "573_ticket_assignment_role_grants.py"
     )
     spec = importlib.util.spec_from_file_location("ticket_assignment_role_grants", path)
     assert spec is not None and spec.loader is not None

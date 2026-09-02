@@ -1,7 +1,7 @@
 """Grant ticket assignment to ticket-update roles except Project Management.
 
-Revision ID: 572_ticket_assignment_role_grants
-Revises: 571_seed_workqueue_audience_permissions
+Revision ID: 573_ticket_assignment_role_grants
+Revises: 572_erp_staff_access_restrictions
 Create Date: 2026-09-02
 
 The permission already exists. This migration reconciles every active role
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "572_ticket_assignment_role_grants"
+revision: str = "573_ticket_assignment_role_grants"
 down_revision: str | None = "572_erp_staff_access_restrictions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
