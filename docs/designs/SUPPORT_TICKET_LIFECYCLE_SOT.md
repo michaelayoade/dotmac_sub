@@ -122,13 +122,15 @@ requires both the existing update permission and `support:ticket:assign`.
 Permission inheritance remains additive: a person who receives the assignment
 permission through any active role may assign.
 
-The checked-in `support` and `Technical support` roles receive the assignment
-permission. The checked-in `customer_experience_manager` role retains
-`support:ticket:update` and does not receive `support:ticket:assign`; the
-read-only `Project` role receives neither. No migration names a production
-"Project Manager" role because no such authoritative role exists in the
-repository: a custom deployment role must be reconciled by its exact identity,
-not by a business-logic role-name check.
+Every active role that already holds `support:ticket:update` receives the
+assignment permission during RBAC reconciliation except the authoritative
+`project_management_office` role. The checked-in
+`customer_experience_manager`, `support`, and `Technical support` roles can
+therefore assign; the read-only `Project` role receives neither permission.
+The exclusion is migration policy only and is not hard-coded into ticket
+business logic. Permission inheritance remains additive, so a Project
+Management Office user who holds another role granting assignment can still
+assign through that other role.
 
 Automation has the same separation:
 

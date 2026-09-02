@@ -540,6 +540,7 @@ ROLE_PERMISSIONS = {
         "reseller:read",
         "support:ticket:read",
         "support:ticket:update",
+        "support:ticket:assign",
         "support:inbox:self_assign",
         "reports:ncc:read",
         "reports:ncc:export",

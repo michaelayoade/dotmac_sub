@@ -49,7 +49,8 @@ def test_ticket_assignment_role_grants_are_idempotent_and_bounded() -> None:
     )
     metadata.create_all(engine)
 
-    permission_id = str(uuid4())
+    assign_permission_id = str(uuid4())
+    update_permission_id = str(uuid4())
     role_ids = {
         name: str(uuid4())
         for name in (
@@ -57,22 +58,55 @@ def test_ticket_assignment_role_grants_are_idempotent_and_bounded() -> None:
             "Technical support",
             "Project",
             "customer_experience_manager",
+            "project_management_office",
+            "update_free_role",
         )
     }
     with engine.begin() as connection:
         connection.execute(
             permissions.insert(),
-            {
-                "id": permission_id,
-                "key": migration.PERMISSION_KEY,
-                "is_active": True,
-            },
+            [
+                {
+                    "id": assign_permission_id,
+                    "key": migration.ASSIGN_PERMISSION_KEY,
+                    "is_active": True,
+                },
+                {
+                    "id": update_permission_id,
+                    "key": migration.UPDATE_PERMISSION_KEY,
+                    "is_active": True,
+                },
+            ],
         )
         connection.execute(
             roles.insert(),
             [
                 {"id": role_id, "name": name, "is_active": True}
                 for name, role_id in role_ids.items()
+            ],
+        )
+        update_role_names = {
+            "support",
+            "Technical support",
+            "customer_experience_manager",
+            "project_management_office",
+        }
+        connection.execute(
+            role_permissions.insert(),
+            [
+                {
+                    "id": str(uuid4()),
+                    "role_id": role_ids[name],
+                    "permission_id": update_permission_id,
+                }
+                for name in update_role_names
+            ]
+            + [
+                {
+                    "id": str(uuid4()),
+                    "role_id": role_ids["project_management_office"],
+                    "permission_id": assign_permission_id,
+                }
             ],
         )
 
@@ -84,8 +118,12 @@ def test_ticket_assignment_role_grants_are_idempotent_and_bounded() -> None:
             connection.execute(
                 sa.select(roles.c.name)
                 .join(role_permissions, role_permissions.c.role_id == roles.c.id)
-                .where(role_permissions.c.permission_id == permission_id)
+                .where(role_permissions.c.permission_id == assign_permission_id)
             ).scalars()
         )
 
-    assert granted_names == {"support", "Technical support"}
+    assert granted_names == {
+        "support",
+        "Technical support",
+        "customer_experience_manager",
+    }
