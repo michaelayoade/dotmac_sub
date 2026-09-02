@@ -127,14 +127,76 @@ def test_inbox_workspace_templates_compile():
 def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
     template = Path("templates/admin/inbox/manager_ai.html").read_text()
 
-    assert '<select name="channel_type"' in template
+    assert 'role="tablist" aria-label="Analysis mode"' in template
+    assert "selectMode(nextMode)" in template
+    assert 'name="mode" x-bind:value="mode"' in template
+    assert (
+        'x-bind:action="`/admin/inbox/manager-ai?mode=${encodeURIComponent(mode)}`"'
+        in template
+    )
+    assert 'name="channel_type" x-bind:disabled="mode !== \'period\'"' in template
     assert '<input name="channel_type"' not in template
     assert "state.channel_options" in template
-    assert '<select name="status"' in template
+    assert 'name="status" x-bind:disabled="mode !== \'period\'"' in template
     assert '<input name="status"' not in template
     assert "state.status_options" in template
     assert "x-show=\"period === 'custom'\"" in template
-    assert template.count("x-bind:disabled=\"period !== 'custom'\"") == 2
+    assert (
+        template.count("x-bind:disabled=\"mode !== 'period' || period !== 'custom'\"")
+        == 2
+    )
+
+
+def test_manager_ai_modes_limit_filters_and_require_conversation():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert "x-show=\"mode === 'period'\"" in template
+    assert "x-show=\"mode === 'conversation'\"" in template
+    assert "x-show=\"mode === 'recent_queue'\"" in template
+    assert "x-bind:required=\"mode === 'conversation'\"" in template
+    assert "x-bind:disabled=\"mode !== 'conversation'\"" in template
+    assert "Select a conversation to analyze." in template
+    assert "Analysis scope" not in template
+
+
+def test_manager_ai_submit_button_reflects_availability_and_pending_state():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert (
+        "{% set ai_available = state.provider_enabled and state.generation_enabled %}"
+        in template
+    )
+    assert "submitting: false" in template
+    assert "aiAvailable: {{ ai_available | tojson }}" in template
+    assert (
+        '@submit="if (!aiAvailable) { $event.preventDefault(); return; } submitting = true"'
+        in template
+    )
+    assert 'x-bind:disabled="submitting || !aiAvailable"' in template
+    assert 'x-bind:aria-busy="submitting.toString()"' in template
+    assert (
+        '{% if not ai_available %}disabled aria-describedby="manager-ai-unavailable"{% endif %}'
+        in template
+    )
+    assert "AI generation is off." in template
+    assert "AI provider is disabled." in template
+    assert "Asking..." in template
+
+
+def test_manager_ai_answer_renderer_formats_markdown_without_trusting_html():
+    from app.web.templates import render_manager_ai_answer
+
+    rendered = render_manager_ai_answer(
+        "**Urgency:** High\n\n- Confirm outage duration\n- <script>alert(1)</script>"
+    )
+
+    assert "<strong>Urgency:</strong> High" in rendered
+    assert (
+        '<ul class="mb-4 list-disc space-y-1 pl-5"><li>Confirm outage duration</li>'
+        in rendered
+    )
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "<script>" not in rendered
 
 
 @pytest.mark.parametrize(

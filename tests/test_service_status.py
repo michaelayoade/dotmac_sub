@@ -18,14 +18,19 @@ from app.models.billing import (
     ServiceEntitlement,
     ServiceEntitlementStatus,
 )
-from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate
 from app.schemas.service_status import ServiceStatusActionKind
 from app.services import billing as billing_service
 from app.services.collections.grace_policy import resolve_grace_decision
-from app.services.service_status import build_service_status
+from app.services.service_status import (
+    SubscriptionEndDriftQuery,
+    SubscriptionEndDriftRepairClass,
+    build_service_status,
+    build_subscription_end_drift_report,
+)
 from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 
@@ -387,6 +392,129 @@ def test_ended_subscriptions_are_excluded(db_session, subscriber_account, subscr
     assert resp.services == []
 
 
+def test_past_ended_disabled_sibling_cannot_override_healthy_active_service(
+    db_session, subscriber_account, subscription
+):
+    as_of = datetime.now(UTC)
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.start_at = as_of - timedelta(days=30)
+    historical = Subscription(
+        subscriber_id=subscriber_account.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.postpaid,
+        start_at=as_of - timedelta(days=90),
+        end_at=as_of - timedelta(days=60),
+    )
+    db_session.add(historical)
+    db_session.commit()
+
+    resp = build_service_status(
+        db_session,
+        subscriber_account.id,
+        as_of=as_of,
+    )
+
+    assert [item.subscription_id for item in resp.services] == [subscription.id]
+    assert resp.services[0].reason == "ok"
+    assert resp.services[0].usable is True
+    assert resp.primary_action is None
+
+    first_report = build_subscription_end_drift_report(
+        db_session,
+        query=SubscriptionEndDriftQuery(
+            subscriber_id=subscriber_account.id,
+            as_of=as_of,
+        ),
+    )
+    second_report = build_subscription_end_drift_report(
+        db_session,
+        query=SubscriptionEndDriftQuery(
+            subscriber_id=subscriber_account.id,
+            as_of=as_of,
+        ),
+    )
+    assert first_report == second_report
+    assert first_report.fingerprint.startswith("sha256:")
+    assert [item.subscription_id for item in first_report.items] == [historical.id]
+    assert (
+        first_report.items[0].repair_class
+        == SubscriptionEndDriftRepairClass.single_newer_active_replacement
+    )
+
+
+def test_subscription_end_drift_report_fails_closed_on_ambiguous_replacements(
+    db_session, subscriber_account, subscription
+):
+    as_of = datetime.now(UTC)
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.start_at = as_of - timedelta(days=20)
+    historical = Subscription(
+        subscriber_id=subscriber_account.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.postpaid,
+        start_at=as_of - timedelta(days=90),
+        end_at=as_of - timedelta(days=60),
+    )
+    second_active = Subscription(
+        subscriber_id=subscriber_account.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        start_at=as_of - timedelta(days=10),
+    )
+    db_session.add_all([historical, second_active])
+    db_session.commit()
+
+    report = build_subscription_end_drift_report(
+        db_session,
+        query=SubscriptionEndDriftQuery(
+            subscriber_id=subscriber_account.id,
+            as_of=as_of,
+        ),
+    )
+
+    item = next(row for row in report.items if row.subscription_id == historical.id)
+    assert item.newer_active_replacement_ids == tuple(
+        sorted((subscription.id, second_active.id), key=str)
+    )
+    assert (
+        item.repair_class
+        == SubscriptionEndDriftRepairClass.ambiguous_newer_active_replacements
+    )
+
+
+def test_current_disabled_service_without_past_end_keeps_support_warning(
+    db_session, subscriber_account, subscription
+):
+    as_of = datetime.now(UTC)
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
+    subscription.status = SubscriptionStatus.disabled
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.end_at = None
+    db_session.commit()
+
+    resp = build_service_status(
+        db_session,
+        subscriber_account.id,
+        as_of=as_of,
+    )
+
+    assert [item.subscription_id for item in resp.services] == [subscription.id]
+    assert resp.services[0].reason == "suspended"
+    assert resp.services[0].action is not None
+    assert resp.services[0].action.kind == ServiceStatusActionKind.contact_support
+    assert "unavailable" in resp.services[0].action.message
+    assert resp.primary_action == resp.services[0].action
+
+
 def test_overdue_lock_offers_exact_payment_that_restores_service(
     db_session, subscriber_account, subscription
 ):
@@ -460,6 +588,28 @@ def test_manual_suspension_never_claims_payment_will_restore_service(
     assert action.amount is None
     assert action.restores_service is False
     assert "payment cannot clear" in action.message
+    assert resp.primary_action == action
+
+
+def test_fup_lock_keeps_usage_action(db_session, subscriber_account, subscription):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.suspended
+    subscription.billing_mode = BillingMode.postpaid
+    _add_lock(
+        db_session,
+        subscriber_account,
+        subscription,
+        EnforcementReason.fup,
+    )
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    action = resp.services[0].action
+    assert resp.services[0].reason == "fair_usage"
+    assert action is not None
+    assert action.kind == ServiceStatusActionKind.view_usage
+    assert action.restores_service is False
     assert resp.primary_action == action
 
 

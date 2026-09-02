@@ -38,3 +38,14 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
             ),
         )
     )
+
+
+def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
+    guide = guidance_for_path("/admin/support/tickets/123")
+
+    assert guide is not None
+    assert guide.id == "support-tickets"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "ordinary ticket editing" in content
+    assert "ticket-assignment permission" in content
+    assert "can still edit ordinary ticket details" in content

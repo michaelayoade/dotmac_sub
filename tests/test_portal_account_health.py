@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,12 +12,18 @@ from sqlalchemy import event
 
 from app.api import me as me_api
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode, CatalogOffer, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    CatalogOffer,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
 from app.schemas.portal_account_health import PortalAccountHealthRead
+from app.services import catalog as catalog_service
 from app.services import portal_account_health
 from app.services.portal_account_health import build_portal_account_health
 from app.web.customer.branding import get_customer_templates
@@ -182,6 +188,49 @@ def test_portal_account_health_has_an_explicit_single_service_query_budget(
 
     assert len(health.services) == 1
     assert statements <= 28, f"Account Health used {statements} SQL statements"
+
+
+def test_account_health_uses_service_status_operational_cohort_and_keeps_history(
+    db_session, subscriber_account, subscription
+):
+    as_of = datetime.now(UTC)
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.start_at = as_of - timedelta(days=30)
+    historical = Subscription(
+        subscriber_id=subscriber_account.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.postpaid,
+        start_at=as_of - timedelta(days=90),
+        end_at=as_of - timedelta(days=60),
+    )
+    db_session.add(historical)
+    db_session.commit()
+
+    health = build_portal_account_health(
+        db_session,
+        subscriber_account.id,
+        as_of=as_of,
+    )
+
+    assert [item.subscription_id for item in health.services] == [subscription.id]
+    assert health.primary_action is None
+    history_ids = {
+        item.id
+        for item in catalog_service.subscriptions.list(
+            db=db_session,
+            subscriber_id=str(subscriber_account.id),
+            offer_id=None,
+            status=None,
+            order_by="created_at",
+            order_dir="desc",
+            limit=200,
+            offset=0,
+        )
+    }
+    assert history_ids == {subscription.id, historical.id}
 
 
 def test_portal_templates_share_owner_projection_and_remove_generic_balance():

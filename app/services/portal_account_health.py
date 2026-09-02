@@ -43,8 +43,9 @@ from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
 from app.services.service_status import (
+    OperationalSubscriptionCohort,
     build_service_status,
-    list_current_service_subscriptions,
+    resolve_operational_subscription_cohort,
 )
 from app.services.status_presentation import (
     access_session_status_presentation,
@@ -311,16 +312,25 @@ def _financial_health(db: Session, account: Subscriber) -> PortalFinancialHealth
 
 
 def _status_items(
-    db: Session, account_id: UUID
+    db: Session,
+    account_id: UUID,
+    *,
+    as_of: datetime,
+    cohort: OperationalSubscriptionCohort,
 ) -> tuple[dict[UUID, ServiceStatusItem], ServiceStatusAction | None, datetime]:
     try:
-        response = build_service_status(db, str(account_id))
+        response = build_service_status(
+            db,
+            account_id,
+            as_of=as_of,
+            cohort=cohort,
+        )
     except (DomainError, PrepaidFundingBaselineMissingError, ValueError) as exc:
         logger.warning(
             "portal_service_status_unavailable",
             extra={"account_id": str(account_id), "error_type": type(exc).__name__},
         )
-        return {}, None, datetime.now(UTC)
+        return {}, None, as_of
     return (
         {item.subscription_id: item for item in response.services},
         response.primary_action,
@@ -533,17 +543,30 @@ def _pending_service_changes(
 def build_portal_account_health(
     db: Session,
     account_id: UUID,
+    *,
+    as_of: datetime | None = None,
 ) -> PortalAccountHealth:
     """Build the shared first-viewport projection for one exact account."""
+    evaluated_at = as_of or datetime.now(UTC)
     resolved_account_id = coerce_uuid(account_id)
     account = db.get(Subscriber, resolved_account_id)
     if account is None:
         raise ValueError(f"Subscriber {resolved_account_id} was not found")
 
-    subscriptions = list_current_service_subscriptions(db, str(resolved_account_id))
+    cohort = resolve_operational_subscription_cohort(
+        db,
+        subscriber_id=resolved_account_id,
+        as_of=evaluated_at,
+    )
+    subscriptions = list(cohort.subscriptions)
     sessions = subscription_session_snapshots(db, subscriptions)
     pending_changes = _pending_service_changes(db, subscriptions)
-    status_items, primary_action, as_of = _status_items(db, resolved_account_id)
+    status_items, primary_action, evaluated_at = _status_items(
+        db,
+        resolved_account_id,
+        as_of=evaluated_at,
+        cohort=cohort,
+    )
     service_rows = tuple(
         _service_health(
             db,
@@ -567,5 +590,5 @@ def build_portal_account_health(
         services=service_rows,
         primary_action=primary_action,
         customer_primary_action_url=_customer_action_url(primary_action),
-        as_of=as_of,
+        as_of=evaluated_at,
     )

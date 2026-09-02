@@ -204,6 +204,7 @@
             </div>
             {% endif %}
 
+            {% if can_assign_ticket %}
             <div class="lg:col-span-2 rounded-2xl border border-slate-200 p-4 dark:border-slate-600">
                 <label class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Technicians / User Group</label>
                 <input type="text" x-model="assigneeSearch" placeholder="Type at least 2 characters to search technicians..." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -253,6 +254,7 @@
                 </select>
             </div>
             {{ people_select('technician_person_id', staff_options, prefill.technician_person_id, 'Primary Technician') }}
+            {% endif %}
 
             <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Priority</label>

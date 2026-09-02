@@ -113,6 +113,41 @@ def test_assignment_and_automation_policies_do_not_write_ticket_lifecycle() -> N
     assert "auto_assign_ticket(" in assignment
 
 
+def test_ticket_assignment_authorization_is_owned_and_typed() -> None:
+    lifecycle = _source("app/services/support.py")
+    contract = SERVICES_BY_NAME["support.ticket_lifecycle"].contract
+
+    assert contract is not None
+    assignment = next(
+        concern
+        for concern in contract.concerns
+        if concern.name == "ticket team and person assignment"
+    )
+    assert "ticket assignment authorization evidence" in assignment.input_names
+    assert (
+        "auth.permission_gate"
+        in SERVICES_BY_NAME["support.ticket_lifecycle"].depends_on
+    )
+    assert "class TicketAssignmentAuthorization:" in lifecycle
+    assert 'TICKET_ASSIGN_PERMISSION = "support:ticket:assign"' in lifecycle
+    assert '"ticket_assignment_permission_required"' in lifecycle
+
+
+def test_system_ticket_assignment_authorization_has_bounded_callers() -> None:
+    allowed = {
+        "app/services/conversation_ticket_handoff.py",
+        "app/services/crm_portal.py",
+        "app/services/support.py",
+    }
+    for path in (ROOT / "app").rglob("*.py"):
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in allowed:
+            continue
+        assert "TicketAssignmentAuthorization.system_policy(" not in path.read_text(
+            encoding="utf-8"
+        ), relative
+
+
 def test_portal_ticket_routing_stays_in_configuration_and_lifecycle_owners() -> None:
     configuration = _source("app/services/support_ticket_settings.py")
     lifecycle = _source("app/services/support.py")
@@ -250,9 +285,13 @@ def test_unmatched_radio_creation_delegates_to_silent_ticket_participant() -> No
 
 def test_ticket_work_order_field_results_cannot_close_ticket() -> None:
     source = _source("app/services/ticket_work_order_handoff.py")
+    dispatch = _source("app/api/dispatch.py")
     assert "execute_owner_command(" in source
     assert "support:ticket:update" in source
     assert "operations:dispatch:write" in source
+    assert "support:ticket:assign" not in source
+    assert 'require_permission("operations:dispatch:write")' in dispatch
+    assert "support:ticket:assign" not in dispatch
     assert "ticket.status =" not in source
     assert "transition_ticket_status" not in source
 

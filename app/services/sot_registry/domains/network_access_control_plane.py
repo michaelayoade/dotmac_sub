@@ -54,7 +54,11 @@ DOMAIN = DomainSOT(
                 "compare-and-set billing-anchor projection to its one writer. "
                 "That non-key projection uses a PostgreSQL NO KEY UPDATE lock: "
                 "competing anchor writers serialize without blocking KEY SHARE "
-                "foreign-key checks from concurrent observations."
+                "foreign-key checks from concurrent observations. The typed "
+                "operationally-current customer-health cohort policy lives in "
+                "subscription_lifecycle_policy: a disabled or stopped service is "
+                "historical only after its explicit end instant has passed. This "
+                "read classification never transitions lifecycle state."
             ),
         ),
         SOTService(
