@@ -114,7 +114,7 @@
     {% if state.answer %}
     <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Answer</h2>
-        <div class="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-slate-200">{{ state.answer }}</div>
+        <div class="manager-ai-answer mt-4 text-sm leading-6 text-slate-700 dark:text-slate-200">{{ state.answer | render_manager_ai_answer }}</div>
     </section>
     {% endif %}
 </div>

@@ -161,6 +161,22 @@ def test_manager_ai_submit_button_reflects_availability_and_pending_state():
     assert "Asking..." in template
 
 
+def test_manager_ai_answer_renderer_formats_markdown_without_trusting_html():
+    from app.web.templates import render_manager_ai_answer
+
+    rendered = render_manager_ai_answer(
+        "**Urgency:** High\n\n- Confirm outage duration\n- <script>alert(1)</script>"
+    )
+
+    assert "<strong>Urgency:</strong> High" in rendered
+    assert (
+        '<ul class="mb-4 list-disc space-y-1 pl-5"><li>Confirm outage duration</li>'
+        in rendered
+    )
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "<script>" not in rendered
+
+
 @pytest.mark.parametrize(
     ("page", "total_items", "previous_page", "next_page"),
     (
