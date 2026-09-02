@@ -281,9 +281,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/support",),
         "Check existing tickets before creating a new one.",
         "Link the customer and relevant subscription, invoice, payment, proof, or network facts.",
+        "Use ordinary ticket editing for status, priority, description, and other non-assignment details.",
+        "Assign or reassign an engineer, manager, service team, or additional assignee only when you have ticket-assignment permission.",
         "Update the ticket after completing related admin work.",
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
+            "Staff without ticket-assignment permission can still edit ordinary ticket details; assignment controls are not shown to them.",
         ),
     ),
     _guide(
