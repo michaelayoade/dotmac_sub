@@ -21,7 +21,7 @@ from app.schemas.erp_staff_access_webhook import (
 )
 from app.services import auth_cache, staff_provisioning
 from app.services import system_user_assignments as assignment_service
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.integrations.backoffice_contracts import (
     ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
@@ -189,8 +189,7 @@ def _stage_audit(
         action=action,
         entity_type="system_user",
         entity_id=str(user_id),
-        actor_type=actor_type,
-        actor_id=actor_id,
+        actor=AuditActor(actor_type=actor_type, actor_id=actor_id),
         request_id=str(context.correlation_id),
         status_code=status_code,
         is_success=is_success,
@@ -639,12 +638,12 @@ def reconcile_staff_access_snapshot(
             )
             applied += int(outcome.applied)
             ignored += int(not outcome.applied)
-        for event in command.account_statuses:
+        for account_event in command.account_statuses:
             outcome = _apply_account_status_in_transaction(
                 db,
                 command=ApplyAccountStatusCommand(
                     context=command.context,
-                    event=event,
+                    event=account_event,
                     delivery_id=None,
                 ),
                 actor_type=actor_type,
@@ -728,8 +727,7 @@ def audit_denied_write(
         action="auth.erp_staff_leave_write_denied",
         entity_type="system_user",
         entity_id=principal_id,
-        actor_type=AuditActorType.user,
-        actor_id=principal_id,
+        actor=AuditActor.user(principal_id),
         request_id=request_id,
         status_code=403,
         is_success=False,
@@ -738,4 +736,43 @@ def audit_denied_write(
             "permission_key": permission_key,
             "source_system": restriction.source_system,
         },
+    )
+
+
+def record_denied_write(
+    db: Session,
+    *,
+    auth: dict[str, object],
+    restriction: ErpStaffLeaveRestriction,
+    request_id: str | None,
+    permission_key: str,
+) -> None:
+    audit_denied_write(
+        db,
+        auth=auth,
+        restriction=restriction,
+        request_id=request_id,
+        permission_key=permission_key,
+    )
+    db.commit()
+
+
+def record_staff_access_webhook_rejection(
+    db: Session,
+    *,
+    action: str,
+    installation_id: UUID,
+    capability_binding_id: UUID,
+    status_code: int,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    record_audit_event(
+        db,
+        action=action,
+        entity_type="integration_capability_binding",
+        entity_id=str(capability_binding_id),
+        actor=AuditActor.service(str(installation_id)),
+        status_code=status_code,
+        is_success=False,
+        metadata=metadata or {},
     )

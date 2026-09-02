@@ -22,6 +22,7 @@ from app.schemas.erp_staff_access_webhook import (
     ErpStaffLeaveRestrictionEvent,
 )
 from app.services import auth_dependencies, erp_staff_access
+from app.services.domain_errors import DomainError
 from app.services.integrations.backoffice_contracts import (
     ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
     ERP_STAFF_ACCESS_WEBHOOK_CAPABILITY,
@@ -217,6 +218,27 @@ def test_duplicate_leave_event_is_noop_and_expiry_is_data_driven(db_session) -> 
     )
 
 
+def test_missing_erp_to_selfcare_mapping_fails_closed(db_session) -> None:
+    missing_user_id = uuid4()
+    event = ErpStaffLeaveRestrictionEvent(
+        event_id=f"event-missing-{missing_user_id}",
+        restriction_id=f"leave-missing-{missing_user_id}",
+        erp_employee_id=f"erp-employee-{missing_user_id}",
+        system_user_id=missing_user_id,
+        effective_from=datetime(2026, 1, 10, tzinfo=UTC),
+        effective_until=datetime(2026, 1, 15, tzinfo=UTC),
+        status="active",
+        version=1,
+        updated_at=datetime(2026, 1, 10, 9, tzinfo=UTC),
+    )
+
+    with pytest.raises(DomainError) as exc_info:
+        _apply_leave(db_session, event)
+
+    assert exc_info.value.code == "mapping_not_found"
+    assert db_session.query(ErpStaffLeaveRestriction).count() == 0
+
+
 def test_permission_guard_blocks_mutations_but_preserves_reads_and_rbac(
     db_session,
 ) -> None:
@@ -228,11 +250,12 @@ def test_permission_guard_blocks_mutations_but_preserves_reads_and_rbac(
         SystemUserPermission(system_user_id=user.id, permission_id=permission.id)
     )
     db_session.commit()
+    now = datetime.now(UTC)
     event = _leave_event(
         user,
         version=1,
-        start=datetime(2026, 1, 10, tzinfo=UTC),
-        end=datetime(2026, 1, 20, tzinfo=UTC),
+        start=now - timedelta(days=1),
+        end=now + timedelta(days=1),
     )
     _apply_leave(db_session, event)
     guard = auth_dependencies.require_permission("support:ticket:write")
@@ -305,13 +328,14 @@ def test_method_permission_preserves_post_read_search_routes(db_session) -> None
         SystemUserPermission(system_user_id=user.id, permission_id=read_perm.id)
     )
     db_session.commit()
+    now = datetime.now(UTC)
     _apply_leave(
         db_session,
         _leave_event(
             user,
             version=1,
-            start=datetime(2026, 1, 10, tzinfo=UTC),
-            end=datetime(2026, 1, 20, tzinfo=UTC),
+            start=now - timedelta(days=1),
+            end=now + timedelta(days=1),
         ),
     )
     guard = auth_dependencies.require_method_permission(
@@ -427,6 +451,7 @@ def test_reconciliation_repairs_missed_staff_access_events(db_session) -> None:
         end=datetime(2026, 1, 15, tzinfo=UTC),
     )
     account = _account_event(user, version=1, status="inactive")
+    db_session.commit()
 
     outcome = erp_staff_access.reconcile_staff_access_snapshot(
         db_session,

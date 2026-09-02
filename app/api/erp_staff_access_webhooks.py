@@ -9,13 +9,11 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.audit import AuditActorType
 from app.schemas.erp_staff_access_webhook import (
     ErpStaffAccessReceipt,
     ErpStaffAccessWebhook,
 )
 from app.services import erp_staff_access
-from app.services.audit_adapter import stage_audit_event
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.integrations import inbox as integration_inbox
@@ -41,18 +39,14 @@ def _audit_rejection(
     status_code: int,
     metadata: dict[str, object] | None = None,
 ) -> None:
-    stage_audit_event(
+    erp_staff_access.record_staff_access_webhook_rejection(
         db,
         action=action,
-        entity_type="integration_capability_binding",
-        entity_id=str(capability_binding_id),
-        actor_type=AuditActorType.service,
-        actor_id=str(installation_id),
+        installation_id=installation_id,
+        capability_binding_id=capability_binding_id,
         status_code=status_code,
-        is_success=False,
         metadata=metadata or {},
     )
-    db.commit()
 
 
 @router.post("/{capability_binding_id}", response_model=ErpStaffAccessReceipt)
