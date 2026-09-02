@@ -15,6 +15,7 @@ from app.models.team_inbox import (
     InboxConversationAssignment,
     InboxConversationStatus,
 )
+from app.services import support as support_service
 from app.services.owner_commands import CommandContext
 from app.services.workqueue import WorkqueuePrincipal
 from app.services.workqueue.aggregator import build_workqueue
@@ -29,13 +30,18 @@ from app.services.workqueue.types import ActionKind, ItemKind
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 
-def _principal(system_user_id: UUID) -> WorkqueuePrincipal:
+def _principal(
+    system_user_id: UUID,
+    *,
+    can_assign_tickets: bool = True,
+) -> WorkqueuePrincipal:
     return WorkqueuePrincipal(
         person_id=system_user_id,
         roles=frozenset(),
         scopes=frozenset(),
         can_view=True,
         can_act=True,
+        can_assign_tickets=can_assign_tickets,
     )
 
 
@@ -131,6 +137,43 @@ def test_ticket_claim_delegates_to_ticket_owner_and_replays(db_session):
         .count()
         == 1
     )
+
+
+def test_ticket_claim_requires_ticket_assignment_permission(db_session):
+    actor_id = uuid4()
+    team = _team_member(db_session, actor_id)
+    ticket = Ticket(
+        title="Assignment permission",
+        status=TicketStatus.open.value,
+        priority="normal",
+        service_team_id=team.id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    principal = _principal(actor_id, can_assign_tickets=False)
+    command = WorkqueueActionCommand(
+        context=_context(actor_id),
+        principal=principal,
+        item_kind=ItemKind.ticket,
+        item_id=ticket.id,
+        action=ActionKind.claim,
+        state_fingerprint=_fingerprint(
+            db_session,
+            principal,
+            item_kind=ItemKind.ticket,
+            item_id=ticket.id,
+            action=ActionKind.claim,
+        ),
+    )
+
+    with pytest.raises(
+        support_service.SupportTicketError,
+        match="Ticket assignment requires additional permission",
+    ) as exc:
+        execute_action(db_session, command)
+
+    assert exc.value.code == "ticket_assignment_permission_required"
+    assert db_session.get(Ticket, ticket.id).assigned_to_person_id is None
 
 
 def test_ticket_complete_is_atomic_and_replays_after_item_leaves_queue(db_session):

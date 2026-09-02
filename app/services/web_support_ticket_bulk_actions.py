@@ -43,6 +43,9 @@ def build_support_ticket_bulk_action_contract(
     contract = SUPPORT_TICKET_BULK_ACTION_DEFINITION.project(
         authorized_permissions=authorized_permissions
     ).as_dict()
+    contract["can_assign_ticket"] = bool(
+        auth and has_permission(auth, db, "support:ticket:assign")
+    )
     actions = contract["actions"]
     assert isinstance(actions, list)
     for action in actions:

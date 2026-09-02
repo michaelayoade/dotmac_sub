@@ -102,7 +102,7 @@
                         {% for value in all_priorities %}<option value="{{ value }}">{{ value|replace('_', ' ')|title }}</option>{% endfor %}
                     </select>
                 </label>
-                <label class="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                <label x-show="contract.can_assign_ticket" x-cloak class="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200">
                     <span>Primary assignee</span>
                     <select x-model="form.assigned_to_person_id" @change="invalidatePreview()"
                             class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800">

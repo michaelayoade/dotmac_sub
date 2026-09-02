@@ -524,6 +524,7 @@ ROLE_PERMISSIONS = {
         "operations:service_team:read",
         "support:ticket:create",
         "support:ticket:update",
+        "support:ticket:assign",
         "support:inbox:self_assign",
         "support:automation:read",
         "support:automation:write",
