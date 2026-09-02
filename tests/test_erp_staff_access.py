@@ -235,7 +235,7 @@ def test_missing_erp_to_selfcare_mapping_fails_closed(db_session) -> None:
     with pytest.raises(DomainError) as exc_info:
         _apply_leave(db_session, event)
 
-    assert exc_info.value.code == "mapping_not_found"
+    assert exc_info.value.code == "auth.erp_staff_access.mapping_not_found"
     assert db_session.query(ErpStaffLeaveRestriction).count() == 0
 
 
