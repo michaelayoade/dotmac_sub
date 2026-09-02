@@ -480,6 +480,11 @@ def handle_ticket_create(
                 channel=TicketChannel.web,
             ),
             actor_id=None,
+            assignment_authorization=(
+                support_service.TicketAssignmentAuthorization.system_policy(
+                    owner="support.ticket_configuration.portal_team_routing"
+                )
+            ),
             # The ticket is already durable before event delivery. Do not make
             # the customer wait for a broker or third-party integration; the
             # scheduled event dispatcher drains this outbox record.
