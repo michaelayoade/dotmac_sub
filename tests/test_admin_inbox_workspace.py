@@ -137,6 +137,30 @@ def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
     assert template.count("x-bind:disabled=\"period !== 'custom'\"") == 2
 
 
+def test_manager_ai_submit_button_reflects_availability_and_pending_state():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert (
+        "{% set ai_available = state.provider_enabled and state.generation_enabled %}"
+        in template
+    )
+    assert "submitting: false" in template
+    assert "aiAvailable: {{ ai_available | tojson }}" in template
+    assert (
+        '@submit="if (!aiAvailable) { $event.preventDefault(); return; } submitting = true"'
+        in template
+    )
+    assert 'x-bind:disabled="submitting || !aiAvailable"' in template
+    assert 'x-bind:aria-busy="submitting.toString()"' in template
+    assert (
+        '{% if not ai_available %}disabled aria-describedby="manager-ai-unavailable"{% endif %}'
+        in template
+    )
+    assert "AI generation is off." in template
+    assert "AI provider is disabled." in template
+    assert "Asking..." in template
+
+
 @pytest.mark.parametrize(
     ("page", "total_items", "previous_page", "next_page"),
     (
