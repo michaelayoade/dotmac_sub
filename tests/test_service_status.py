@@ -494,6 +494,8 @@ def test_current_disabled_service_without_past_end_keeps_support_warning(
 ):
     as_of = datetime.now(UTC)
     subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
     subscription.status = SubscriptionStatus.disabled
     subscription.billing_mode = BillingMode.postpaid
     subscription.end_at = None
