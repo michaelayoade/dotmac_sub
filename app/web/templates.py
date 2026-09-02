@@ -151,7 +151,7 @@ def render_manager_ai_answer(value: str | None) -> Markup:
     close_list()
     # Every dynamic fragment is escaped above; only the static tags/classes are
     # marked safe for Jinja.
-    return Markup("".join(rendered))  # noqa: S704
+    return Markup("".join(rendered))  # noqa: S704  # nosec B704
 
 
 # Register filters
