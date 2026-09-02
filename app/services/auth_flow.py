@@ -2392,5 +2392,7 @@ def validate_active_session(
         principal = db.get(Subscriber, active_id)
     if not principal:
         return None
+    if principal_type == "system_user" and not getattr(principal, "is_active", False):
+        return None
 
     return session, principal, principal_type

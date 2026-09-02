@@ -202,7 +202,11 @@ def require_web_auth(
 STAFF_PRINCIPAL_TYPES = frozenset({"system_user"})
 
 
-def require_admin_web_auth(auth: dict = Depends(require_web_auth)) -> dict:
+def require_admin_web_auth(
+    request: Request = None,  # type: ignore[assignment]
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(_get_db),
+) -> dict:
     """Require an authenticated *staff* principal for admin web routes.
 
     ``require_web_auth`` already guarantees the request is authenticated (and
@@ -216,6 +220,26 @@ def require_admin_web_auth(auth: dict = Depends(require_web_auth)) -> dict:
         raise HTTPException(
             status_code=403,
             detail="Administrator access is required for this area.",
+        )
+    from app.services import erp_staff_access
+
+    restriction = (
+        erp_staff_access.staff_write_restricted(db, auth, method=request.method)
+        if request is not None
+        else None
+    )
+    if restriction is not None:
+        erp_staff_access.audit_denied_write(
+            db,
+            auth=auth,
+            restriction=restriction,
+            request_id=str(request.headers.get("x-request-id") or "") or None,
+            permission_key="admin:web",
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="Staff leave restriction permits read-only access.",
         )
     return auth
 

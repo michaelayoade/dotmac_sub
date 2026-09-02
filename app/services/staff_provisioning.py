@@ -738,6 +738,49 @@ def close_principal_access(db: Session, user_id: UUID) -> tuple[int, int]:
     return credentials, _revoke_active_sessions(db, user_id)
 
 
+def reconcile_active_local_login_credential(
+    db: Session,
+    *,
+    user_id: UUID,
+    email: str,
+) -> tuple[int, bool, bool]:
+    """Flush-only active-account credential convergence for coordinators.
+
+    Activation restores only the canonical local login credential, matching
+    ``set_staff_account_active``. It deliberately does not reactivate every
+    credential mechanism that deactivation closed.
+    """
+
+    normalized_email = _normalize_email(email)
+    _ensure_login_identity_available(db, user_id=user_id, email=normalized_email)
+    credentials = _locked_local_credentials(db, user_id)
+    if len(credentials) > 1:
+        raise _error(
+            "credential_ambiguous",
+            "Staff account has multiple local login credentials.",
+            user_id=str(user_id),
+            credential_count=len(credentials),
+        )
+    credential_created = not credentials
+    credential = (
+        _create_placeholder_local_credential(
+            db,
+            user_id=user_id,
+            email=normalized_email,
+            is_active=True,
+        )
+        if credential_created
+        else credentials[0]
+    )
+    credential_reconciled = credential.username != normalized_email
+    if credential_reconciled:
+        credential.username = normalized_email
+    credential_changes = int(credential_created or not credential.is_active)
+    credential.is_active = True
+    db.flush()
+    return credential_changes, credential_created, credential_reconciled
+
+
 def _revoke_active_sessions(db: Session, user_id: UUID) -> int:
     now = datetime.now(UTC)
     return int(

@@ -16,6 +16,7 @@ from app.services.sot_manifest import (
     SOTService,
     TransactionContract,
     TransactionMode,
+    owner_command_boundary_error_codes,
 )
 from app.services.sot_registry.model import DomainSOT
 
@@ -1861,6 +1862,205 @@ DOMAIN = DomainSOT(
                     "tests/test_staff_login_identity_admin.py",
                     "tests/test_staff_login_identity_reconciliation_script.py",
                     "tests/architecture/test_staff_provisioning_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="auth.erp_staff_access",
+            module="app.services.erp_staff_access",
+            owns=(
+                "ERP staff leave restriction projection",
+                "ERP staff account-status projection",
+                "ERP staff access reconciliation",
+            ),
+            depends_on=(
+                "auth.staff_provisioning",
+                "auth.permission_gate",
+                "auth.system_user_assignments",
+                "observability.audit_log",
+            ),
+            notes=(
+                "ERP remains the external authority for leave and employee "
+                "account status. Sub stores an idempotent local projection and "
+                "enforces temporary read-only staff writes locally without "
+                "rewriting permanent roles or permissions."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="ERP staff leave restriction projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "signed ERP staff leave restriction event",
+                            "canonical staff identity and credential state",
+                        ),
+                        canonical_writer="auth.erp_staff_access",
+                    ),
+                    ConcernContract(
+                        name="ERP staff account-status projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "signed ERP staff account-status event",
+                            "canonical staff identity and credential state",
+                        ),
+                        canonical_writer="auth.erp_staff_access",
+                    ),
+                    ConcernContract(
+                        name="ERP staff access reconciliation",
+                        role=OwnerRole.RECONCILER,
+                        input_names=(
+                            "authoritative ERP staff access snapshot",
+                            "local ERP staff access projections",
+                            "canonical staff identity and credential state",
+                        ),
+                        canonical_writer="auth.erp_staff_access",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="signed ERP staff leave restriction event",
+                        owner="external:dotmac_erp",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "HMAC-verified erp.staff_access.webhook.v1 payload "
+                            "with event_id, restriction_id, employee mapping, "
+                            "effective bounds, status, version, and updated_at"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="signed ERP staff account-status event",
+                        owner="external:dotmac_erp",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "HMAC-verified erp.staff_access.webhook.v1 account "
+                            "status payload with employee mapping, desired "
+                            "status, version, updated_at, and reason evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authoritative ERP staff access snapshot",
+                        owner="external:dotmac_erp",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "Current ERP staff leave/account-status snapshot "
+                            "used by reconciliation; historical replay is not "
+                            "a source of truth."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="local ERP staff access projections",
+                        owner="auth.erp_staff_access",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "erp_staff_leave_restrictions and "
+                            "erp_staff_account_status_projections"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff identity and credential state",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="system_users and staff-bound user_credentials",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Webhook and reconciliation adapters enter one "
+                        "execute_owner_command call on a transaction-free "
+                        "session; projection, source-aware staff active-state "
+                        "changes, credential/session closure, audit, and auth "
+                        "cache invalidation commit atomically."
+                    ),
+                    locking=(
+                        "Projection rows and the mapped SystemUser are selected "
+                        "FOR UPDATE. Database uniqueness on source/restriction "
+                        "and source/employee keys arbitrates concurrent delivery."
+                    ),
+                    idempotency=(
+                        "Delivery idempotency is recorded by integration.inbox; "
+                        "projection state additionally rejects older versions "
+                        "and treats duplicate same-version state as a no-op."
+                    ),
+                    retries=(
+                        "Transient adapter or database failure retries the whole "
+                        "delivery after rollback. Mapping conflicts and "
+                        "same-version divergent state fail closed for review."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.erp_staff_access.invalid_command",
+                        "auth.erp_staff_access.mapping_not_found",
+                        "auth.erp_staff_access.mapping_conflict",
+                        "auth.erp_staff_access.version_conflict",
+                        "auth.system_user_assignments.last_admin_required",
+                        "auth.staff_provisioning.identity_conflict",
+                        "auth.staff_provisioning.credential_ambiguous",
+                        *owner_command_boundary_error_codes("auth.erp_staff_access"),
+                    ),
+                    mapping_owner="app.api.erp_staff_access_webhooks",
+                    fail_closed_on=(
+                        "invalid authorization evidence",
+                        "missing or conflicting ERP-to-Selfcare mapping",
+                        "same-version divergent state",
+                        "final active admin deactivation",
+                        "credential identity conflict",
+                        "active caller transaction",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "staff.leave_restriction.received",
+                        "staff.leave_restriction.updated",
+                        "staff.leave_restriction.cancelled",
+                        "staff.account_status.inactive",
+                        "staff.account_status.active",
+                    ),
+                    schema_version=1,
+                    delivery_owner="integration.inbox",
+                    compatibility=(
+                        "The local projection is additive and does not change "
+                        "permanent role, permission, or API-key contracts."
+                    ),
+                    replay=(
+                        "Inbox duplicate delivery returns the recorded "
+                        "consequence; projection monotonic versions prevent "
+                        "old events from restoring stale leave windows or "
+                        "reactivating cancelled restrictions."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="ERP staff leave restriction projection",
+                        input_names=("signed ERP staff leave restriction event",),
+                        writer="auth.erp_staff_access",
+                        freshness="current after latest accepted ERP version",
+                        stale_behavior="older versions are audited and ignored",
+                        drift_signal="reconciliation snapshot differs by version",
+                        rebuild_operation="reconcile_staff_access_snapshot",
+                        repair_owner="auth.erp_staff_access",
+                    ),
+                    ProjectionContract(
+                        name="ERP staff account-status projection",
+                        input_names=("signed ERP staff account-status event",),
+                        writer="auth.erp_staff_access",
+                        freshness="current after latest accepted ERP version",
+                        stale_behavior="older versions are audited and ignored",
+                        drift_signal="reconciliation snapshot differs by version",
+                        rebuild_operation="reconcile_staff_access_snapshot",
+                        repair_owner="auth.erp_staff_access",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.erp_staff_access",
+                ),
+                steward="platform security",
+                design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                test_refs=(
+                    "tests/test_erp_staff_access.py",
+                    "tests/test_erp_staff_access_webhook.py",
                 ),
             ),
         ),
