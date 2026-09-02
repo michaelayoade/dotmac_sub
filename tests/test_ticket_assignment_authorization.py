@@ -273,7 +273,7 @@ def _load_migration(filename: str):
     return module
 
 
-def test_rbac_contract_keeps_project_roles_unassigned_and_technical_support_enabled():
+def test_rbac_contract_grants_update_roles_except_project_management_office():
     technical_support = _load_migration("186_seed_technical_support_role.py")
     project = _load_migration("193_role_scope_cleanup_project_role.py")
     support_assignment = _load_migration("572_ticket_assignment_role_grants.py")
@@ -282,11 +282,11 @@ def test_rbac_contract_keeps_project_roles_unassigned_and_technical_support_enab
     assert "support:ticket:update" in technical_support.PERMISSION_KEYS
     assert "support:ticket:assign" not in project.PERMISSIONS
     assert "support:ticket:update" not in project.PERMISSIONS
-    assert support_assignment.ROLE_NAMES == ("support", "Technical support")
+    assert support_assignment.EXCLUDED_ROLE_NAME == "project_management_office"
     assert "support:ticket:assign" in seed_rbac.ROLE_PERMISSIONS["support"]
     assert (
         "support:ticket:assign"
-        not in seed_rbac.ROLE_PERMISSIONS["customer_experience_manager"]
+        in seed_rbac.ROLE_PERMISSIONS["customer_experience_manager"]
     )
     assert (
         "support:ticket:update"
