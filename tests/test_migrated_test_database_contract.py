@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "572_erp_staff_access_restrictions",
+            "572_ticket_assignment_role_grants",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",
