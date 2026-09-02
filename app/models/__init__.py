@@ -290,6 +290,10 @@ from app.models.erp_billing_export import (  # noqa: F401
     ErpExportStatus,
 )
 from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
+from app.models.erp_staff_access import (  # noqa: F401
+    ErpStaffAccountStatusProjection,
+    ErpStaffLeaveRestriction,
+)
 from app.models.event_store import (  # noqa: F401
     EventHandlerAttempt,
     EventStatus,

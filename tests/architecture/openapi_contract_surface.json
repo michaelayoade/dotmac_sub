@@ -18519,6 +18519,16 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/webhooks/erp-staff-access/{capability_binding_id}": {
+   "params": [
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "6cfc0f329950",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/webhooks/fiber-inquiry/{capability_binding_id}": {
    "params": [
     "path:capability_binding_id!"
@@ -19288,6 +19298,7 @@
   "ElevationRead": "3ca3d8f2a410",
   "ErpDepartmentReference": "5ce6be19bec1",
   "ErpMaterialStatusReceipt": "dea085458884",
+  "ErpStaffAccessReceipt": "b87b89d22096",
   "ErrorDetail": "baaa77850daa",
   "ErrorResponse": "9a1634f1cfc4",
   "EtaUpdateCreate": "3b90f58a7082",

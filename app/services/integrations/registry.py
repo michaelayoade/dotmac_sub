@@ -39,6 +39,7 @@ def _dotmac_erp_manifest(
     version: str,
     include_workforce_attendance: bool,
     include_material_webhook: bool = False,
+    include_staff_access: bool = False,
 ) -> ConnectorManifest:
     capabilities = [
         CapabilityManifest(
@@ -82,6 +83,19 @@ def _dotmac_erp_manifest(
                 modes=(CapabilityMode.inbound,),
             )
         )
+    if include_staff_access:
+        capabilities.extend(
+            (
+                CapabilityManifest(
+                    id="erp.staff_access.webhook.v1",
+                    modes=(CapabilityMode.inbound,),
+                ),
+                CapabilityManifest(
+                    id="erp.staff_access.reconcile.v1",
+                    modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
+                ),
+            )
+        )
     properties: dict[str, object] = {
         "base_url": {"type": "string"},
         "timeout_seconds": {"type": "integer"},
@@ -114,6 +128,9 @@ def _dotmac_erp_manifest(
     if include_workforce_attendance:
         reads.extend(("workforce.attendance_state", "workforce.browser_location"))
         classifications.extend(("workforce", "location"))
+    if include_staff_access:
+        reads.extend(("staff.leave_restriction_state", "staff.account_status_state"))
+        classifications.append("staff_identity")
     return ConnectorManifest(
         key="dotmac.erp",
         name="DotMac ERP",
@@ -136,7 +153,7 @@ def _dotmac_erp_manifest(
             SecretBindingManifest(name="service_credentials"),
             *(
                 (SecretBindingManifest(name="webhook_signing_secret"),)
-                if include_material_webhook
+                if include_material_webhook or include_staff_access
                 else ()
             ),
         ),
@@ -757,9 +774,10 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         include_lead_ads=True,
     ),
     _dotmac_erp_manifest(
-        version="1.2.0",
+        version="1.3.0",
         include_workforce_attendance=True,
         include_material_webhook=True,
+        include_staff_access=True,
     ),
     _paystack_manifest(
         version="1.0.1",
@@ -841,6 +859,11 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
 _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     _dotmac_integrator_manifest(version="1.0.0", include_settlement=False),
     _whatsapp_manifest(version="1.0.0", include_phone_number_id=False),
+    _dotmac_erp_manifest(
+        version="1.2.0",
+        include_workforce_attendance=True,
+        include_material_webhook=True,
+    ),
     _dotmac_erp_manifest(version="1.1.0", include_workforce_attendance=True),
     # ERP 1.0.0 remains executable while installations explicitly adopt the
     # workforce attendance capability introduced in 1.1.0.
