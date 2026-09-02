@@ -141,6 +141,8 @@ def test_teammate_picker_shows_capacity_and_disables_full_agents():
     assert "agent.max_concurrent_conversations" in CONVERSATION
     assert "agent.assignment_eligible" in CONVERSATION
     assert "Capacity full" in CONVERSATION
+    assert "Auto-assign available teammate" in CONVERSATION
+    assert "Leave teammate blank to auto-assign the selected team." in CONVERSATION
     assert "Full or unavailable agents cannot be selected." in CONVERSATION
 
 

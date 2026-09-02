@@ -31,6 +31,7 @@ from starlette.datastructures import UploadFile
 from app.db import get_db
 from app.models.team_inbox import InboxConversation
 from app.services import (
+    team_inbox_assignment,
     team_inbox_commands,
     team_inbox_filters,
     team_inbox_projection,
@@ -82,6 +83,48 @@ def test_start_conversation_passes_selected_subscriber_to_owner(db_session):
 
     assert response.status_code == 303
     assert start.call_args.kwargs["subscriber_id"] == str(selected_subscriber_id)
+
+
+def test_assign_route_auto_assigns_selected_team_when_teammate_blank(db_session):
+    conversation_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    assigned_id = uuid.uuid4()
+    outcome = team_inbox_assignment.InboxAssignmentResult(
+        kind="assigned",
+        service_team_id=str(team_id),
+        assigned_person_id=str(assigned_id),
+    )
+    with (
+        patch(
+            "app.web.admin.inbox.team_inbox_assignment.escalate_conversation_committed",
+            return_value=outcome,
+        ) as escalate,
+        patch("app.web.admin.inbox.team_inbox_commands.assign_conversation") as assign,
+        patch("app.web.admin.inbox._prepare_mutation"),
+        patch("app.web.admin.inbox._actor_id_from_request", return_value=str(actor_id)),
+    ):
+        response = _client(db_session).post(
+            f"/inbox/{conversation_id}/assign",
+            data={
+                "service_team_id": str(team_id),
+                "person_id": "",
+                "reason": "Escalated from the inbox workspace",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "status=success" in response.headers["location"]
+    assign.assert_not_called()
+    escalate.assert_called_once()
+    assert escalate.call_args.kwargs == {
+        "conversation_id": conversation_id,
+        "service_team_id": str(team_id),
+        "auto_assign": True,
+        "assigned_by_person_id": str(actor_id),
+        "reason": "Escalated from the inbox workspace",
+    }
 
 
 def test_merge_contact_conflict_returns_operator_facing_409(db_session):
