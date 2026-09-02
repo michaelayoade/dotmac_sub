@@ -54,7 +54,7 @@
             <select name="period" x-model="period" x-bind:disabled="mode !== 'period'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 {% for value, label in [('today', 'Today'), ('yesterday', 'Yesterday'), ('last_7_days', 'Last 7 Days'), ('last_30_days', 'Last 30 Days'), ('custom', 'Custom range')] %}
                 <option value="{{ value }}" {% if state.period == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
+            {% endfor %}
             </select>
         </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Channel
@@ -64,6 +64,7 @@
                 <option value="{{ option.value }}" {% if state.channel_type == option.value %}selected{% endif %}>{{ option.label }}</option>
                 {% endfor %}
             </select>
+            <span class="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">Select a conversation to analyze.</span>
         </label>
         </div>
         <div x-show="period === 'custom'" x-cloak class="grid gap-4 sm:grid-cols-2">
