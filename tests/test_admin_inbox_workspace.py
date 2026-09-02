@@ -127,14 +127,35 @@ def test_inbox_workspace_templates_compile():
 def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
     template = Path("templates/admin/inbox/manager_ai.html").read_text()
 
-    assert '<select name="channel_type"' in template
+    assert 'role="tablist" aria-label="Analysis mode"' in template
+    assert "selectMode(nextMode)" in template
+    assert 'name="mode" x-bind:value="mode"' in template
+    assert (
+        'x-bind:action="`/admin/inbox/manager-ai?mode=${encodeURIComponent(mode)}`"'
+        in template
+    )
+    assert 'name="channel_type" x-bind:disabled="mode !== \'period\'"' in template
     assert '<input name="channel_type"' not in template
     assert "state.channel_options" in template
-    assert '<select name="status"' in template
+    assert 'name="status" x-bind:disabled="mode !== \'period\'"' in template
     assert '<input name="status"' not in template
     assert "state.status_options" in template
     assert "x-show=\"period === 'custom'\"" in template
-    assert template.count("x-bind:disabled=\"period !== 'custom'\"") == 2
+    assert (
+        template.count("x-bind:disabled=\"mode !== 'period' || period !== 'custom'\"")
+        == 2
+    )
+
+
+def test_manager_ai_modes_limit_filters_and_require_conversation():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert "x-show=\"mode === 'period'\"" in template
+    assert "x-show=\"mode === 'conversation'\"" in template
+    assert "x-show=\"mode === 'recent_queue'\"" in template
+    assert "x-bind:required=\"mode === 'conversation'\"" in template
+    assert "x-bind:disabled=\"mode !== 'conversation'\"" in template
+    assert "Analysis scope" not in template
 
 
 def test_manager_ai_submit_button_reflects_availability_and_pending_state():

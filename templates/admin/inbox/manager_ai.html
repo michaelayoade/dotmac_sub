@@ -29,7 +29,7 @@
     {% endif %}
 
     {% set ai_available = state.provider_enabled and state.generation_enabled %}
-    <form method="post" action="/admin/inbox/manager-ai" x-data='{ period: {{ state.period | tojson }}, submitting: false, aiAvailable: {{ ai_available | tojson }} }' @submit="if (!aiAvailable) { $event.preventDefault(); return; } submitting = true" class="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <form method="post" action="/admin/inbox/manager-ai" x-data='{ mode: {{ state.mode | tojson }}, period: {{ state.period | tojson }}, submitting: false, aiAvailable: {{ ai_available | tojson }}, selectMode(nextMode) { mode = nextMode; const url = new URL(window.location.href); url.searchParams.set("mode", nextMode); window.history.replaceState({}, "", url); } }' x-bind:action="`/admin/inbox/manager-ai?mode=${encodeURIComponent(mode)}`" @submit="if (!aiAvailable) { $event.preventDefault(); return; } submitting = true" class="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "components/forms/csrf_input.html" %}
         {% if not ai_available %}
         <p id="manager-ai-unavailable" role="status" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
@@ -40,23 +40,25 @@
             {% endif %}
         </p>
         {% endif %}
+        <input type="hidden" name="mode" x-bind:value="mode">
+        <div class="border-b border-slate-200 dark:border-slate-700" role="tablist" aria-label="Analysis mode">
+            <div class="flex flex-wrap gap-1" role="presentation">
+                <button type="button" id="manager-ai-tab-conversation" role="tab" aria-controls="manager-ai-conversation" x-bind:aria-selected="(mode === 'conversation').toString()" @click="selectMode('conversation')" x-bind:class="mode === 'conversation' ? 'border-amber-500 text-amber-700 dark:text-amber-300' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200'" class="min-h-11 border-b-2 px-3 text-sm font-semibold">Conversation</button>
+                <button type="button" id="manager-ai-tab-recent-queue" role="tab" aria-controls="manager-ai-recent-queue" x-bind:aria-selected="(mode === 'recent_queue').toString()" @click="selectMode('recent_queue')" x-bind:class="mode === 'recent_queue' ? 'border-amber-500 text-amber-700 dark:text-amber-300' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200'" class="min-h-11 border-b-2 px-3 text-sm font-semibold">Recent Queue</button>
+                <button type="button" id="manager-ai-tab-period" role="tab" aria-controls="manager-ai-period" x-bind:aria-selected="(mode === 'period').toString()" @click="selectMode('period')" x-bind:class="mode === 'period' ? 'border-amber-500 text-amber-700 dark:text-amber-300' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200'" class="min-h-11 border-b-2 px-3 text-sm font-semibold">Period Review</button>
+            </div>
+        </div>
+        <div x-show="mode === 'period'" x-cloak id="manager-ai-period" role="tabpanel" aria-labelledby="manager-ai-tab-period" class="space-y-4">
         <div class="grid gap-4 sm:grid-cols-3">
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Analysis scope
-            <select name="mode" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="conversation" {% if state.mode == 'conversation' %}selected{% endif %}>Conversation</option>
-                <option value="recent_queue" {% if state.mode == 'recent_queue' %}selected{% endif %}>Recent Queue</option>
-                <option value="period" {% if state.mode == 'period' %}selected{% endif %}>Period Review</option>
-            </select>
-        </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Period
-            <select name="period" x-model="period" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="period" x-model="period" x-bind:disabled="mode !== 'period'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 {% for value, label in [('today', 'Today'), ('yesterday', 'Yesterday'), ('last_7_days', 'Last 7 Days'), ('last_30_days', 'Last 30 Days'), ('custom', 'Custom range')] %}
                 <option value="{{ value }}" {% if state.period == value %}selected{% endif %}>{{ label }}</option>
                 {% endfor %}
             </select>
         </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Channel
-            <select name="channel_type" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="channel_type" x-bind:disabled="mode !== 'period'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All channels</option>
                 {% for option in state.channel_options %}
                 <option value="{{ option.value }}" {% if state.channel_type == option.value %}selected{% endif %}>{{ option.label }}</option>
@@ -66,15 +68,15 @@
         </div>
         <div x-show="period === 'custom'" x-cloak class="grid gap-4 sm:grid-cols-2">
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom start
-            <input type="date" name="custom_start" value="{{ state.custom_start }}" x-bind:disabled="period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input type="date" name="custom_start" value="{{ state.custom_start }}" x-bind:disabled="mode !== 'period' || period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
         </label>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Custom end
-            <input type="date" name="custom_end" value="{{ state.custom_end }}" x-bind:disabled="period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input type="date" name="custom_end" value="{{ state.custom_end }}" x-bind:disabled="mode !== 'period' || period !== 'custom'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
         </label>
         </div>
         <div class="grid gap-4 sm:grid-cols-3">
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Current status
-            <select name="status" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="status" x-bind:disabled="mode !== 'period'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All statuses</option>
                 {% for option in state.status_options %}
                 <option value="{{ option.value }}" {% if state.status_filter == option.value %}selected{% endif %}>{{ option.label }}</option>
@@ -82,9 +84,11 @@
             </select>
         </label>
         </div>
+        </div>
+        <div x-show="mode === 'conversation'" x-cloak id="manager-ai-conversation" role="tabpanel" aria-labelledby="manager-ai-tab-conversation">
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Conversation
-            <select name="conversation_id" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">Recent inbox overview</option>
+            <select name="conversation_id" x-bind:required="mode === 'conversation'" x-bind:disabled="mode !== 'conversation'" class="mt-1 block h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select a conversation</option>
                 {% for conversation in state.conversations %}
                 <option value="{{ conversation.id }}" {% if state.selected_conversation_id == conversation.id %}selected{% endif %}>
                     {{ conversation.label }} - {{ conversation.status | title }} - {{ conversation.channel_type | replace("_", " ") | title }}
@@ -92,6 +96,8 @@
                 {% endfor %}
             </select>
         </label>
+        </div>
+        <div x-show="mode === 'recent_queue'" x-cloak id="manager-ai-recent-queue" role="tabpanel" aria-labelledby="manager-ai-tab-recent-queue" class="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:bg-slate-700/50 dark:text-slate-300">Review the most recent inbox conversations.</div>
         <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Question
             <textarea name="question" rows="5" maxlength="2000" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="What is this customer asking for, what is missing, and what should a manager watch?">{{ state.question }}</textarea>
         </label>
