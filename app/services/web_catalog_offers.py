@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
@@ -74,6 +75,12 @@ PLAN_KIND_IP_ADDRESS = "ip_address"
 PLAN_KIND_DEVICE_REPLACEMENT = "device_replacement"
 PLAN_KINDS = [PLAN_KIND_STANDARD, PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT]
 IP_BLOCK_SIZES = ["/32", "/30", "/29", "/28", "/27", "/26", "/25", "/24"]
+
+
+def _enum_form_value(value: object) -> object:
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 def parse_offer_description_metadata(
@@ -661,14 +668,14 @@ def offer_edit_form_data(
         "id": offer.id,
         "name": offer.name,
         "code": offer.code or "",
-        "service_type": offer.service_type,
-        "access_type": offer.access_type,
-        "price_basis": offer.price_basis,
-        "billing_cycle": offer.billing_cycle,
+        "service_type": _enum_form_value(offer.service_type),
+        "access_type": _enum_form_value(offer.access_type),
+        "price_basis": _enum_form_value(offer.price_basis),
+        "billing_cycle": _enum_form_value(offer.billing_cycle),
         "billing_mode": offer.billing_mode.value
         if offer.billing_mode
         else BillingMode.prepaid.value,
-        "contract_term": offer.contract_term,
+        "contract_term": _enum_form_value(offer.contract_term),
         "region_zone_id": offer.region_zone_id or "",
         "usage_allowance_id": offer.usage_allowance_id or "",
         "sla_profile_id": offer.sla_profile_id or "",
@@ -698,7 +705,7 @@ def offer_edit_form_data(
         "prepaid_period": offer.prepaid_period or "",
         "plan_family": offer.plan_family or "",
         "allowed_change_plan_ids": offer.allowed_change_plan_ids or "",
-        "status": offer.status,
+        "status": _enum_form_value(offer.status),
         "description": offer.description or "",
         "is_active": offer.is_active,
         "plan_kind": PLAN_KIND_STANDARD,
