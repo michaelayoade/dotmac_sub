@@ -9,8 +9,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.services.nas._mikrotik import MikrotikLiveBandwidthTarget
-from app.services.network import live_bandwidth_observations as owner
 from app.services.network import identity as network_identity
+from app.services.network import live_bandwidth_observations as owner
 
 
 class _Session:
