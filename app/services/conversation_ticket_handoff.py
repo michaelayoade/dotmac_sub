@@ -288,11 +288,6 @@ def _issue_ticket(
             created_by_person_id=actor_uuid,
         ),
         actor_id=str(actor_uuid),
-        assignment_authorization=(
-            support_service.TicketAssignmentAuthorization.system_policy(
-                owner="communications.conversation_ticket_handoff"
-            )
-        ),
         origin_conversation_id=conversation.id,
     )
 

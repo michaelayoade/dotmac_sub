@@ -26,7 +26,6 @@ from app.services.workqueue.types import AUDIENCE_RANK, WorkqueueAudience
 WORKQUEUE_VIEW_PERMISSION = "support:ticket:read"
 #: Taking an inline action (snooze/claim/complete) on an item.
 WORKQUEUE_ACT_PERMISSION = "support:ticket:update"
-WORKQUEUE_TICKET_ASSIGN_PERMISSION = "support:ticket:assign"
 
 #: RBAC scopes that may widen audience only when operational team scope agrees.
 AUDIENCE_TEAM_SCOPE = "workqueue:audience:team"
@@ -48,7 +47,6 @@ class WorkqueuePrincipal:
     scopes: frozenset[str]
     can_view: bool
     can_act: bool
-    can_assign_tickets: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -82,11 +80,6 @@ def principal_from_auth(db: Session, auth: dict) -> WorkqueuePrincipal:
         scopes=_normalize(auth.get("scopes")),
         can_view=has_permission(auth, db, WORKQUEUE_VIEW_PERMISSION),
         can_act=has_permission(auth, db, WORKQUEUE_ACT_PERMISSION),
-        can_assign_tickets=has_permission(
-            auth,
-            db,
-            WORKQUEUE_TICKET_ASSIGN_PERMISSION,
-        ),
     )
 
 

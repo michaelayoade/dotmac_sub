@@ -102,36 +102,25 @@ Assignment is split deliberately:
   its locked round-robin cursor; it returns an immutable `AssignmentResult`;
 - the Ticket owner rechecks and applies the proposed team/person consequence.
 
-Authorization is split from ordinary editing at the same owner boundary.
-`support:ticket:update` admits ordinary human changes such as status, priority,
-description, and other non-assignment fields. An explicit human change to
+Assignment is part of the ordinary ticket lifecycle update authority.
+`support:ticket:update` admits human changes to status, priority, description,
 `assigned_to_person_id`, `technician_person_id`,
 `ticket_manager_person_id`, the legacy `site_coordinator_person_id`,
-`service_team_id`, or `assignee_person_ids` additionally requires
-`support:ticket:assign`. Creation remains available without that permission
-when no assignment is explicitly selected. The lifecycle owner consumes typed
-assignment-authorization evidence and fails closed, so a forged adapter request
-or direct service call cannot bypass the distinction. Adapters only resolve
-RBAC evidence and map the owner's domain error to their transport.
+`service_team_id`, and `assignee_person_ids`. Ticket creation may also carry an
+initial assignment under the existing `support:ticket:create` gate. Adapters do
+not resolve a separate assignment permission, and the lifecycle owner does not
+consume assignment-specific authorization evidence.
 
 Automatic assignment recommendations are observations or proposals, not
-writes and not impersonated human authorization. The ticket lifecycle owner
-may apply an accepted proposal as a named system-policy consequence inside its
-root command. Manual auto-assignment is still a human assignment action and
-requires both the existing update permission and `support:ticket:assign`.
-Permission inheritance remains additive: a person who receives the assignment
-permission through any active role may assign.
+writes from the rule engine. The ticket lifecycle owner may apply an accepted
+proposal inside its root command, and manual auto-assignment is an ordinary
+human ticket update action guarded by `support:ticket:update`.
 
-Every active role that already holds `support:ticket:update` receives the
-assignment permission during RBAC reconciliation except the authoritative
-`project_management_office` role. The checked-in
-`customer_experience_manager`, `support`, and `Technical support` roles can
-therefore assign; the read-only `Project` role receives neither permission.
-The exclusion is migration policy only and is not hard-coded into ticket
-business logic. Permission inheritance remains additive, so a Project
-Management Office user who holds another role granting assignment can still
-assign through that other role.
-
+The retired `support:ticket:assign` permission is removed from current RBAC
+seed data and cleaned from deployed grant tables by migration. Historical
+migrations may still mention it because they preserve the already-applied
+schema history, but current code no longer creates, grants, checks, or depends
+on that permission.
 Automation has the same separation:
 
 - `support.ticket_automation_rule_configuration` owns typed automation rules;

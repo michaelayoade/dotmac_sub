@@ -438,7 +438,6 @@ DOMAIN = DomainSOT(
                 "ticket audit official timeline and transactional events",
             ),
             depends_on=(
-                "auth.permission_gate",
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
                 "support.ticket_assignment_evaluation",
@@ -467,16 +466,6 @@ DOMAIN = DomainSOT(
                             input_names=(
                                 "typed ticket command",
                                 "canonical ticket state",
-                                *(
-                                    ("ticket assignment authorization evidence",)
-                                    if name
-                                    in {
-                                        "ticket lifecycle mutations",
-                                        "ticket creation and identity",
-                                        "ticket team and person assignment",
-                                    }
-                                    else ()
-                                ),
                                 "ticket configuration",
                                 "portal team-routing resolution",
                                 "customer identity evidence",
@@ -563,16 +552,6 @@ DOMAIN = DomainSOT(
                             "TicketCommentMention, TicketLink, TicketMerge, "
                             "relation-backed merged disposition, TicketAccessToken, and "
                             "transactional audit/event rows"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="ticket assignment authorization evidence",
-                        owner="auth.permission_gate",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "typed support:ticket:assign evidence for explicit human "
-                            "assignment changes, or named system-policy provenance for "
-                            "owner-applied automatic assignment"
                         ),
                     ),
                     AuthorityInput(
@@ -709,7 +688,6 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_invalid",
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
-                        "ticket_assignment_permission_required",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -721,7 +699,6 @@ DOMAIN = DomainSOT(
                         "ambiguous customer identity",
                         "merged source",
                         "inactive confirmation capability",
-                        "missing assignment authorization evidence for an explicit change",
                     ),
                 ),
                 events=EventContract(

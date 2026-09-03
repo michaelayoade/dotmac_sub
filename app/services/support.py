@@ -103,66 +103,6 @@ class SupportTicketError(DomainError):
     """Transport-neutral failure from the canonical Ticket owner."""
 
 
-TICKET_ASSIGN_PERMISSION = "support:ticket:assign"
-_ASSIGNMENT_FIELDS = frozenset(
-    {
-        "assigned_to_person_id",
-        "technician_person_id",
-        "ticket_manager_person_id",
-        "site_coordinator_person_id",
-        "service_team_id",
-        "assignee_person_ids",
-    }
-)
-
-
-class TicketAssignmentAuthorizationSource(str, Enum):
-    """Provenance for assignment authority presented to the Ticket owner."""
-
-    human = "human"
-    system_policy = "system_policy"
-
-
-@dataclass(frozen=True, slots=True)
-class TicketAssignmentAuthorization:
-    """Typed assignment authorization evidence at the lifecycle boundary.
-
-    Human callers carry only permissions resolved by the RBAC owner. Trusted
-    system policies use the separate provenance so automatic routing remains a
-    deliberate owner consequence rather than impersonating a human principal.
-    """
-
-    source: TicketAssignmentAuthorizationSource
-    permissions: frozenset[str] = frozenset()
-    policy_owner: str | None = None
-
-    @classmethod
-    def human(cls, *, can_assign: bool) -> TicketAssignmentAuthorization:
-        return cls(
-            source=TicketAssignmentAuthorizationSource.human,
-            permissions=(
-                frozenset({TICKET_ASSIGN_PERMISSION}) if can_assign else frozenset()
-            ),
-        )
-
-    @classmethod
-    def system_policy(cls, *, owner: str) -> TicketAssignmentAuthorization:
-        normalized_owner = owner.strip()
-        if not normalized_owner:
-            raise ValueError("Ticket assignment policy owner is required")
-        return cls(
-            source=TicketAssignmentAuthorizationSource.system_policy,
-            policy_owner=normalized_owner,
-        )
-
-    @property
-    def allows_assignment(self) -> bool:
-        return (
-            self.source is TicketAssignmentAuthorizationSource.system_policy
-            or TICKET_ASSIGN_PERMISSION in self.permissions
-        )
-
-
 class TicketCreationRoutingMode(str, Enum):
     """Select how the lifecycle owner establishes team routing at creation."""
 
@@ -231,51 +171,6 @@ class TicketCommentAttachmentRepairOutcome:
 
 def _ticket_error(code: str, message: str, **details: object) -> SupportTicketError:
     return SupportTicketError(code=code, message=message, details=details)
-
-
-def _require_ticket_assignment_authorization(
-    authorization: TicketAssignmentAuthorization | None,
-    *,
-    changed_fields: Sequence[str],
-) -> None:
-    fields = tuple(sorted(set(changed_fields)))
-    if not fields or (authorization is not None and authorization.allows_assignment):
-        return
-    raise _ticket_error(
-        "ticket_assignment_permission_required",
-        "Ticket assignment requires additional permission.",
-        permission=TICKET_ASSIGN_PERMISSION,
-        assignment_fields=fields,
-    )
-
-
-def _explicit_create_assignment_fields(payload: TicketCreate) -> tuple[str, ...]:
-    return tuple(
-        field
-        for field in _ASSIGNMENT_FIELDS
-        if (
-            bool(payload.assignee_person_ids)
-            if field == "assignee_person_ids"
-            else getattr(payload, field) is not None
-        )
-    )
-
-
-def _changed_update_assignment_fields(
-    ticket: Ticket,
-    payload: TicketUpdate,
-) -> tuple[str, ...]:
-    changed: list[str] = []
-    supplied = payload.model_fields_set & _ASSIGNMENT_FIELDS
-    for field in supplied:
-        if field == "assignee_person_ids":
-            requested = set(payload.assignee_person_ids or ())
-            current = {row.person_id for row in ticket.assignees if row.person_id}
-            if requested != current:
-                changed.append(field)
-        elif getattr(payload, field) != getattr(ticket, field):
-            changed.append(field)
-    return tuple(changed)
 
 
 def _command_idempotency_key(request: object | None) -> str | None:
@@ -2473,7 +2368,6 @@ class Tickets:
         actor_id: str | None = None,
         request: object | None = None,
         *,
-        assignment_authorization: TicketAssignmentAuthorization | None = None,
         origin_conversation_id: UUID | None = None,
         dispatch_event_after_commit: bool = True,
         routing_mode: TicketCreationRoutingMode = (
@@ -2501,10 +2395,6 @@ class Tickets:
                 "invalid_ticket_creation_mode",
                 "Silent internal tickets cannot request customer acknowledgement.",
             )
-        _require_ticket_assignment_authorization(
-            assignment_authorization,
-            changed_fields=_explicit_create_assignment_fields(payload),
-        )
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = parse_ticket_status(
@@ -2657,7 +2547,6 @@ class Tickets:
         actor_id: str | None = None,
         request: object | None = None,
         *,
-        assignment_authorization: TicketAssignmentAuthorization | None = None,
         origin_conversation_id: UUID | None = None,
         dispatch_event_after_commit: bool = True,
         routing_mode: TicketCreationRoutingMode = (
@@ -2674,7 +2563,6 @@ class Tickets:
             payload,
             actor_id=actor_id,
             request=request,
-            assignment_authorization=assignment_authorization,
             origin_conversation_id=origin_conversation_id,
             dispatch_event_after_commit=dispatch_event_after_commit,
             routing_mode=routing_mode,
@@ -2713,9 +2601,6 @@ class Tickets:
             db,
             payload,
             actor_id=source.value,
-            assignment_authorization=TicketAssignmentAuthorization.system_policy(
-                owner="support.ticket_lifecycle.internal_operational_creation"
-            ),
             routing_mode=TicketCreationRoutingMode.preserve_requested_team,
             acknowledgement_mode=TicketCreationAcknowledgementMode.none,
             consequence_mode=TicketCreationConsequenceMode.silent_internal,
@@ -3596,15 +3481,9 @@ class Tickets:
         payload: TicketUpdate,
         actor_id: str | None = None,
         request=None,
-        *,
-        assignment_authorization: TicketAssignmentAuthorization | None = None,
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
         _ensure_not_merged_source(ticket)
-        _require_ticket_assignment_authorization(
-            assignment_authorization,
-            changed_fields=_changed_update_assignment_fields(ticket, payload),
-        )
         previous_assignment_user_ids = Tickets._assignment_user_ids(db, ticket)
         previous_tags = tuple(str(tag) for tag in (ticket.tags or ()))
 
@@ -3803,8 +3682,6 @@ class Tickets:
         payload: TicketBulkUpdateRequest,
         actor_id: str | None = None,
         request=None,
-        *,
-        assignment_authorization: TicketAssignmentAuthorization | None = None,
     ) -> list[Ticket]:
         prepared: list[tuple[str, TicketUpdate]] = []
         for item in payload.items:
@@ -3833,7 +3710,6 @@ class Tickets:
                 update,
                 actor_id=actor_id,
                 request=request,
-                assignment_authorization=assignment_authorization,
             )
             for ticket_id, update in prepared
         ]
@@ -3857,13 +3733,7 @@ class Tickets:
         ticket_id: str,
         actor_id: str | None = None,
         request=None,
-        *,
-        assignment_authorization: TicketAssignmentAuthorization | None = None,
     ) -> dict[str, Any]:
-        _require_ticket_assignment_authorization(
-            assignment_authorization,
-            changed_fields=("manual_auto_assign",),
-        )
         ticket = Tickets.get(db, ticket_id)
         _ensure_not_merged_source(ticket)
         previous_assignment_user_ids = Tickets._assignment_user_ids(db, ticket)
