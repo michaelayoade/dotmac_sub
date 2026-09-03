@@ -8,7 +8,6 @@ from fastapi import HTTPException
 
 from app.api import workqueue as workqueue_api
 from app.schemas.workqueue import WorkqueueSnoozeCreate
-from app.services import support as support_service
 from app.services.workqueue import WorkqueuePrincipal
 from app.services.workqueue.commands import (
     WorkqueueActionError,
@@ -113,11 +112,11 @@ def test_clear_snooze_api_maps_owner_scope_error(monkeypatch):
     assert error.value.detail == "Item is outside native team scope"
 
 
-def test_workqueue_api_maps_ticket_assignment_denial_to_forbidden():
+def test_workqueue_api_maps_permission_denial_to_forbidden():
     error = workqueue_api._map_action_error(
-        support_service.SupportTicketError(
-            code="ticket_assignment_permission_required",
-            message="Ticket assignment requires additional permission.",
+        WorkqueueActionError(
+            code="permission_denied",
+            message="You do not have permission to change this workqueue item.",
         )
     )
 

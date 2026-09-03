@@ -279,7 +279,6 @@ DEFAULT_PERMISSIONS = [
     ("support:ticket:create", "Create tickets"),
     ("support:ticket:update", "Update tickets"),
     ("support:ticket:delete", "Delete tickets"),
-    ("support:ticket:assign", "Assign tickets"),
     (
         "workqueue:audience:team",
         "View Workqueue items for teams where the user is a queue lead or "
@@ -524,7 +523,6 @@ ROLE_PERMISSIONS = {
         "operations:service_team:read",
         "support:ticket:create",
         "support:ticket:update",
-        "support:ticket:assign",
         "support:inbox:self_assign",
         "support:automation:read",
         "support:automation:write",
@@ -540,7 +538,6 @@ ROLE_PERMISSIONS = {
         "reseller:read",
         "support:ticket:read",
         "support:ticket:update",
-        "support:ticket:assign",
         "support:inbox:self_assign",
         "reports:ncc:read",
         "reports:ncc:export",

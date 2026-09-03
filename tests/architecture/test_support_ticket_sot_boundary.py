@@ -113,7 +113,7 @@ def test_assignment_and_automation_policies_do_not_write_ticket_lifecycle() -> N
     assert "auto_assign_ticket(" in assignment
 
 
-def test_ticket_assignment_authorization_is_owned_and_typed() -> None:
+def test_ticket_assignment_uses_ticket_update_authority() -> None:
     lifecycle = _source("app/services/support.py")
     contract = SERVICES_BY_NAME["support.ticket_lifecycle"].contract
 
@@ -123,29 +123,15 @@ def test_ticket_assignment_authorization_is_owned_and_typed() -> None:
         for concern in contract.concerns
         if concern.name == "ticket team and person assignment"
     )
-    assert "ticket assignment authorization evidence" in assignment.input_names
+    assert "typed ticket command" in assignment.input_names
+    assert "ticket assignment authorization evidence" not in assignment.input_names
     assert (
         "auth.permission_gate"
-        in SERVICES_BY_NAME["support.ticket_lifecycle"].depends_on
+        not in SERVICES_BY_NAME["support.ticket_lifecycle"].depends_on
     )
-    assert "class TicketAssignmentAuthorization:" in lifecycle
-    assert 'TICKET_ASSIGN_PERMISSION = "support:ticket:assign"' in lifecycle
-    assert '"ticket_assignment_permission_required"' in lifecycle
-
-
-def test_system_ticket_assignment_authorization_has_bounded_callers() -> None:
-    allowed = {
-        "app/services/conversation_ticket_handoff.py",
-        "app/services/crm_portal.py",
-        "app/services/support.py",
-    }
-    for path in (ROOT / "app").rglob("*.py"):
-        relative = path.relative_to(ROOT).as_posix()
-        if relative in allowed:
-            continue
-        assert "TicketAssignmentAuthorization.system_policy(" not in path.read_text(
-            encoding="utf-8"
-        ), relative
+    assert "class TicketAssignmentAuthorization:" not in lifecycle
+    assert "TICKET_ASSIGN_PERMISSION" not in lifecycle
+    assert "ticket_assignment_permission_required" not in lifecycle
 
 
 def test_portal_ticket_routing_stays_in_configuration_and_lifecycle_owners() -> None:

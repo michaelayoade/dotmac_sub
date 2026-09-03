@@ -243,8 +243,6 @@ def execute_support_ticket_bulk_update(
     *,
     actor_id: str | None,
     request=None,
-    assignment_authorization: support_service.TicketAssignmentAuthorization
-    | None = None,
 ) -> dict[str, object]:
     """Execute one confirmed update through the canonical ticket mutation owner."""
 
@@ -275,7 +273,6 @@ def execute_support_ticket_bulk_update(
             items=items,
             actor_id=actor_id,
             request=request,
-            assignment_authorization=assignment_authorization,
         )
         if items
         else []
@@ -304,7 +301,6 @@ def _execute_bulk_owner(
     items: list[TicketBulkUpdateItem],
     actor_id: str | None,
     request,
-    assignment_authorization: support_service.TicketAssignmentAuthorization | None,
 ):
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.bulk_update(
@@ -312,5 +308,4 @@ def _execute_bulk_owner(
         TicketBulkUpdateRequest(items=items),
         actor_id=actor_id,
         request=request,
-        assignment_authorization=assignment_authorization,
     )

@@ -36,7 +36,7 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.support import TicketAssignmentAuthorization, Tickets
+from app.services.support import Tickets
 from app.services.workqueue import snooze as snooze_service
 from app.services.workqueue.aggregator import build_workqueue
 from app.services.workqueue.permissions import (
@@ -412,9 +412,6 @@ def _apply_action(
                     assignee_person_ids=[command.principal.person_id],
                 ),
                 actor_id=str(command.principal.person_id),
-                assignment_authorization=TicketAssignmentAuthorization.human(
-                    can_assign=command.principal.can_assign_tickets
-                ),
             )
             assigned_id = ticket.assigned_to_person_id
         elif command.item_kind is ItemKind.conversation:

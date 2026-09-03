@@ -46,7 +46,6 @@ from app.services import (
     ticket_work_order_handoff,
 )
 from app.services.auth_dependencies import (
-    has_permission,
     require_permission,
     require_user_auth,
 )
@@ -62,27 +61,9 @@ def _actor_id(auth: dict) -> str | None:
     return str(principal) if principal else None
 
 
-def _assignment_authorization(
-    auth: dict,
-    db: Session,
-) -> support_service.TicketAssignmentAuthorization:
-    return support_service.TicketAssignmentAuthorization.human(
-        can_assign=has_permission(
-            auth,
-            db,
-            support_service.TICKET_ASSIGN_PERMISSION,
-        )
-    )
-
-
 def _ticket_http_error(exc: support_service.SupportTicketError) -> HTTPException:
-    status_code = (
-        status.HTTP_403_FORBIDDEN
-        if exc.code == "ticket_assignment_permission_required"
-        else status.HTTP_400_BAD_REQUEST
-    )
     return HTTPException(
-        status_code=status_code,
+        status_code=status.HTTP_400_BAD_REQUEST,
         detail={"code": exc.code, "message": exc.message, **exc.details},
     )
 
@@ -105,7 +86,6 @@ def create_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    assignment_authorization = _assignment_authorization(auth, db)
     db_session_adapter.release_read_transaction(db)
     try:
         return support_service.tickets.create(
@@ -113,7 +93,6 @@ def create_ticket(
             payload,
             actor_id=_actor_id(auth),
             request=None,
-            assignment_authorization=assignment_authorization,
         )
     except support_service.SupportTicketError as exc:
         raise _ticket_http_error(exc) from exc
@@ -297,7 +276,6 @@ def update_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    assignment_authorization = _assignment_authorization(auth, db)
     db_session_adapter.release_read_transaction(db)
     try:
         return support_service.tickets.update(
@@ -306,7 +284,6 @@ def update_ticket(
             payload,
             actor_id=_actor_id(auth),
             request=None,
-            assignment_authorization=assignment_authorization,
         )
     except support_service.SupportTicketError as exc:
         raise _ticket_http_error(exc) from exc
@@ -336,7 +313,6 @@ def bulk_update_tickets(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    assignment_authorization = _assignment_authorization(auth, db)
     db_session_adapter.release_read_transaction(db)
     try:
         items = support_service.tickets.bulk_update(
@@ -344,7 +320,6 @@ def bulk_update_tickets(
             payload,
             actor_id=_actor_id(auth),
             request=None,
-            assignment_authorization=assignment_authorization,
         )
     except support_service.SupportTicketError as exc:
         raise _ticket_http_error(exc) from exc
@@ -355,13 +330,11 @@ def bulk_update_tickets(
     "/tickets/{ticket_id}/auto-assign",
     dependencies=[
         Depends(require_permission("support:ticket:update")),
-        Depends(require_permission("support:ticket:assign")),
     ],
 )
 def manual_auto_assign(
     ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
 ):
-    assignment_authorization = _assignment_authorization(auth, db)
     db_session_adapter.release_read_transaction(db)
     try:
         return support_service.tickets.manual_auto_assign(
@@ -369,7 +342,6 @@ def manual_auto_assign(
             str(ticket_id),
             actor_id=_actor_id(auth),
             request=None,
-            assignment_authorization=assignment_authorization,
         )
     except support_service.SupportTicketError as exc:
         raise _ticket_http_error(exc) from exc

@@ -76,11 +76,7 @@ def _command_context(
 
 
 def _map_action_error(exc: DomainError) -> HTTPException:
-    if (
-        exc.code == "ticket_assignment_permission_required"
-        or exc.code.endswith("permission_denied")
-        or exc.code.endswith("item_out_of_scope")
-    ):
+    if exc.code.endswith("permission_denied") or exc.code.endswith("item_out_of_scope"):
         return HTTPException(status_code=403, detail=exc.message)
     if exc.code.endswith("item_not_found"):
         return HTTPException(status_code=404, detail=exc.message)
