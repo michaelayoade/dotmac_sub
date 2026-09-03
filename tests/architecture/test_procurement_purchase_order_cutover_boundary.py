@@ -30,10 +30,12 @@ def test_historical_po_staging_has_one_registered_owner_boundary():
         / "integration_control_plane.py"
     ).read_text(encoding="utf-8")
 
-    concern = "Selfcare purchase-order ownership cutover and reconciled backfill"
+    concern = "Selfcare procurement ERP ownership cutover and reconciled PO backfill"
     assert owner.count("execute_owner_command(") == 1
     assert "outbox.enqueue(" in owner
     assert "isolate=False" in owner
+    assert "FieldErpSyncFlow.purchase_order" in owner
+    assert "FieldErpSyncFlow.purchase_invoice" in owner
     assert ".commit(" not in owner
     assert ".rollback(" not in owner
     assert concern in owner

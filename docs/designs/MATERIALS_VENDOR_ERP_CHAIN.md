@@ -74,14 +74,17 @@ best-effort enqueue whose only trace was a metadata breadcrumb.
   `vendor_purchase_invoice_erp_tax_profile` so ERP applies the same purchase
   invoice tax profile operators select when invoicing manually from a PO.
 - Purchase-order origination cuts over once, atomically. The bounded typed
-  cutover command locks the `purchase_order` ownership row and every explicitly
-  reviewed installation/vendor target, verifies the approved quote anchor and a
-  fresh unique ERP supplier observation, changes only those provider bindings,
-  assigns the flow to Selfcare, and stages stable `po-ip-{installation_id}`
-  outbox rows with one audit record. Any invalid target rolls back the complete
-  batch. ERP delivery occurs only after commit. Historical approvals are never
-  replayed through the ordinary quote-approval hook; operators must use the
-  reviewed procedure in `docs/runbooks/PURCHASE_ORDER_ERP_CUTOVER.md`.
+  cutover command locks the `purchase_order` and `purchase_invoice` ownership
+  rows plus every explicitly reviewed installation/vendor target, verifies the
+  approved quote anchor and a fresh unique ERP supplier observation, changes
+  only those provider bindings, assigns both flows to Selfcare, and stages stable
+  `po-ip-{installation_id}` outbox rows with one audit record. Any invalid target
+  rolls back the complete batch. ERP delivery occurs only after commit. Once an
+  ERP PO reference exists, the existing project-completion consumer queues its
+  approved vendor invoice; the repair owner recovers eligible completions whose
+  event was receipted before cutover. Historical quote approvals are never
+  replayed through the ordinary approval hook; operators must use the reviewed
+  procedure in `docs/runbooks/PURCHASE_ORDER_ERP_CUTOVER.md`.
 - The material-request detail page shows the current single-writer owner,
   durable outbox state, attempt count, last error, ERP reference, and observed
   outcome. Pending deliveries retry automatically with their stable

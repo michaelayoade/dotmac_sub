@@ -53,8 +53,8 @@ def _verification(value: str) -> VerifiedErpSupplierBinding:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Atomically assign purchase-order ownership to Selfcare and stage "
-            "an explicitly ERP-reconciled historical batch."
+            "Atomically assign purchase-order and purchase-invoice ownership to "
+            "Selfcare and stage an explicitly ERP-reconciled historical PO batch."
         )
     )
     parser.add_argument("--apply", action="store_true")
@@ -120,6 +120,7 @@ def main() -> int:
                 "command_id": str(outcome.command_id),
                 "outbox_event_ids": [str(value) for value in outcome.outbox_event_ids],
                 "owner": outcome.owner.value,
+                "owned_flows": [value.value for value in outcome.owned_flows],
                 "replayed": outcome.replayed,
                 "target_count": outcome.target_count,
                 "vendor_binding_count": outcome.vendor_binding_count,

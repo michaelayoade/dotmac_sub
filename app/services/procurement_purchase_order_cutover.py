@@ -1,10 +1,11 @@
 """Atomic purchase-order source cutover and reconciled historical staging.
 
-This is the only public writer allowed to move the purchase-order flow from CRM
-to Selfcare while staging explicitly reconciled historical quote approvals.  It
-never calls ERP in-transaction.  An operator first verifies each supplier in
-ERP and supplies the exact provider reference plus a fingerprint of the
-currently stored source reference.  Delivery remains the durable outbox's job.
+This is the only public writer allowed to move the purchase-order flow from its
+pre-cutover owner to Selfcare while staging explicitly reconciled historical
+quote approvals. It never calls ERP in-transaction. An operator first verifies
+each supplier in ERP and supplies the exact provider reference plus a
+fingerprint of the currently stored source reference. Delivery remains the
+durable outbox's job.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.audit import AuditEvent
 from app.models.field_erp_sync import (
+    PRE_CUTOVER_SYNC_FLOW_OWNER,
     FieldErpSyncEvent,
     FieldErpSyncFlow,
     SyncFlowOwner,
@@ -37,11 +39,15 @@ from app.services.owner_commands import (
 )
 
 OWNER = "integration.procurement_purchase_order_cutover"
-CONCERN = "Selfcare purchase-order ownership cutover and reconciled backfill"
+CONCERN = "Selfcare procurement ERP ownership cutover and reconciled PO backfill"
 ACTION = "procurement.purchase_order_cutover"
 ENTITY_TYPE = "procurement_purchase_order_cutover"
 MAX_TARGETS = 100
 MAX_VERIFICATION_AGE = timedelta(hours=24)
+CUTOVER_FLOWS = (
+    FieldErpSyncFlow.purchase_invoice,
+    FieldErpSyncFlow.purchase_order,
+)
 
 _CUTOVER_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
@@ -86,6 +92,7 @@ class PurchaseOrderCutoverOutcome:
     vendor_binding_count: int
     outbox_event_ids: tuple[UUID, ...]
     owner: SyncFlowOwner
+    owned_flows: tuple[FieldErpSyncFlow, ...]
     replayed: bool
 
 
@@ -195,6 +202,7 @@ def _replayed_outcome(
         vendor_binding_count=len(command.supplier_verifications),
         outbox_event_ids=tuple(item.id for item in events),
         owner=SyncFlowOwner.sub,
+        owned_flows=CUTOVER_FLOWS,
         replayed=True,
     )
 
@@ -205,15 +213,25 @@ def _execute_cutover(
     command: PurchaseOrderCutoverCommand,
     now: datetime,
 ) -> PurchaseOrderCutoverOutcome:
-    ownership = db.scalar(
-        select(SyncFlowOwnership)
-        .where(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_order.value)
-        .with_for_update()
+    ownership_rows = tuple(
+        db.scalars(
+            select(SyncFlowOwnership)
+            .where(
+                SyncFlowOwnership.flow.in_(tuple(flow.value for flow in CUTOVER_FLOWS))
+            )
+            .order_by(SyncFlowOwnership.flow)
+            .with_for_update()
+        )
     )
-    if ownership is None:
+    ownership_by_flow = {row.flow: row for row in ownership_rows}
+    missing_flows = [
+        flow.value for flow in CUTOVER_FLOWS if flow.value not in ownership_by_flow
+    ]
+    if missing_flows:
         raise _error(
             "missing_flow_ownership",
-            "The purchase-order flow has no explicit ownership row.",
+            "A procurement flow has no explicit ownership row.",
+            missing_flows=missing_flows,
         )
 
     digest = _target_digest(command)
@@ -227,11 +245,16 @@ def _execute_cutover(
         return _replayed_outcome(
             db, command=command, audit=existing_audit, digest=digest
         )
-    if ownership.owner != SyncFlowOwner.crm.value:
+    invalid_owners = {
+        flow.value: ownership_by_flow[flow.value].owner
+        for flow in CUTOVER_FLOWS
+        if ownership_by_flow[flow.value].owner != PRE_CUTOVER_SYNC_FLOW_OWNER
+    }
+    if invalid_owners:
         raise _error(
             "invalid_flow_owner",
-            "A new cutover requires CRM to be the recorded purchase-order owner.",
-            owner=ownership.owner,
+            "A new cutover requires the pre-cutover procurement flow owners.",
+            owners=invalid_owners,
         )
 
     target_by_id = {item.installation_project_id: item for item in command.targets}
@@ -386,9 +409,10 @@ def _execute_cutover(
                 reason=reason,
             )
 
-    ownership.owner = SyncFlowOwner.sub.value
-    ownership.updated_at = now
-    ownership.updated_by = f"procurement-cutover:{command.context.command_id}"
+    for ownership in ownership_rows:
+        ownership.owner = SyncFlowOwner.sub.value
+        ownership.updated_at = now
+        ownership.updated_by = f"procurement-cutover:{command.context.command_id}"
     db.flush()
 
     events: list[FieldErpSyncEvent] = []
@@ -444,8 +468,12 @@ def _execute_cutover(
                     str(item.vendor_id): item.method.value
                     for item in command.supplier_verifications
                 },
-                "previous_owner": SyncFlowOwner.crm.value,
-                "new_owner": SyncFlowOwner.sub.value,
+                "previous_owners": {
+                    flow.value: PRE_CUTOVER_SYNC_FLOW_OWNER for flow in CUTOVER_FLOWS
+                },
+                "new_owners": {
+                    flow.value: SyncFlowOwner.sub.value for flow in CUTOVER_FLOWS
+                },
             },
         ),
     )
@@ -456,6 +484,7 @@ def _execute_cutover(
         vendor_binding_count=len(vendors),
         outbox_event_ids=tuple(item.id for item in events),
         owner=SyncFlowOwner.sub,
+        owned_flows=CUTOVER_FLOWS,
         replayed=False,
     )
 
@@ -479,6 +508,7 @@ def cut_over_purchase_order_origination(
 
 
 __all__ = [
+    "CUTOVER_FLOWS",
     "MAX_TARGETS",
     "ProcurementPurchaseOrderCutoverError",
     "PurchaseOrderBackfillTarget",

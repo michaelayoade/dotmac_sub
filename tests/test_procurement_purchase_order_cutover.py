@@ -10,6 +10,7 @@ import pytest
 import app.models  # noqa: F401
 from app.models.audit import AuditEvent
 from app.models.field_erp_sync import (
+    PRE_CUTOVER_SYNC_FLOW_OWNER,
     FieldErpSyncEvent,
     FieldErpSyncFlow,
     SyncFlowOwner,
@@ -51,8 +52,8 @@ def _approved_install(db_session) -> tuple[UUID, UUID, UUID, str]:
     )
     vendor = Vendor(
         name="Verified supplier",
-        supplier_system=SyncFlowOwner.crm.value,
-        supplier_reference=f"crm-{uuid4()}",
+        supplier_system=PRE_CUTOVER_SYNC_FLOW_OWNER,
+        supplier_reference=f"legacy-{uuid4()}",
     )
     db_session.add_all((project, vendor))
     db_session.flush()
@@ -86,10 +87,16 @@ def _approved_install(db_session) -> tuple[UUID, UUID, UUID, str]:
         )
     )
     installation.approved_quote_id = quote.id
-    db_session.add(
-        SyncFlowOwnership(
-            flow=FieldErpSyncFlow.purchase_order.value,
-            owner=SyncFlowOwner.crm.value,
+    db_session.add_all(
+        (
+            SyncFlowOwnership(
+                flow=FieldErpSyncFlow.purchase_invoice.value,
+                owner=PRE_CUTOVER_SYNC_FLOW_OWNER,
+            ),
+            SyncFlowOwnership(
+                flow=FieldErpSyncFlow.purchase_order.value,
+                owner=PRE_CUTOVER_SYNC_FLOW_OWNER,
+            ),
         )
     )
     installation_id = installation.id
@@ -150,26 +157,35 @@ def test_cutover_atomically_binds_vendor_flips_owner_and_stages_outbox(db_sessio
     outcome = cut_over_purchase_order_origination(db_session, command=command)
 
     assert outcome.owner is SyncFlowOwner.sub
+    assert outcome.owned_flows == (
+        FieldErpSyncFlow.purchase_invoice,
+        FieldErpSyncFlow.purchase_order,
+    )
     assert outcome.target_count == 1
     assert outcome.vendor_binding_count == 1
     assert outcome.replayed is False
     assert not db_session.in_transaction()
 
     refreshed_vendor = db_session.get(Vendor, vendor_id)
-    ownership = db_session.query(SyncFlowOwnership).one()
+    ownership_rows = db_session.query(SyncFlowOwnership).all()
     event = db_session.query(FieldErpSyncEvent).one()
     audit = db_session.query(AuditEvent).filter(AuditEvent.action == ACTION).one()
     assert refreshed_vendor.supplier_system == "dotmac_erp"
     assert refreshed_vendor.supplier_reference == "ERP-SUP-001"
     assert refreshed_vendor.code == "ERP-SUP-001"
-    assert ownership.owner == SyncFlowOwner.sub.value
-    assert ownership.updated_by == f"procurement-cutover:{command.context.command_id}"
+    assert {row.owner for row in ownership_rows} == {SyncFlowOwner.sub.value}
+    assert {row.updated_by for row in ownership_rows} == {
+        f"procurement-cutover:{command.context.command_id}"
+    }
     assert event.id == outcome.outbox_event_ids[0]
     assert event.idempotency_key == f"po-ip-{installation_id}"
     assert event.payload["source_quote_id"] == str(quote_id)
     assert event.payload["vendor_erp_id"] == "ERP-SUP-001"
     assert audit.request_id == str(command.context.command_id)
-    assert audit.details["new_owner"] == SyncFlowOwner.sub.value
+    assert audit.details["new_owners"] == {
+        FieldErpSyncFlow.purchase_invoice.value: SyncFlowOwner.sub.value,
+        FieldErpSyncFlow.purchase_order.value: SyncFlowOwner.sub.value,
+    }
 
 
 def test_cutover_replays_same_command_without_duplicate_rows(db_session):
@@ -205,10 +221,10 @@ def test_cutover_rolls_back_everything_when_supplier_verification_is_stale(db_se
     assert exc_info.value.code.endswith(".stale_supplier_verification")
     assert not db_session.in_transaction()
     refreshed_vendor = db_session.get(Vendor, vendor_id)
-    ownership = db_session.query(SyncFlowOwnership).one()
-    assert refreshed_vendor.supplier_system == SyncFlowOwner.crm.value
+    ownership_rows = db_session.query(SyncFlowOwnership).all()
+    assert refreshed_vendor.supplier_system == PRE_CUTOVER_SYNC_FLOW_OWNER
     assert refreshed_vendor.supplier_reference == original_reference
-    assert ownership.owner == SyncFlowOwner.crm.value
+    assert {row.owner for row in ownership_rows} == {PRE_CUTOVER_SYNC_FLOW_OWNER}
     assert db_session.query(FieldErpSyncEvent).count() == 0
     assert db_session.query(AuditEvent).filter(AuditEvent.action == ACTION).count() == 0
 
@@ -234,5 +250,7 @@ def test_cutover_rolls_back_when_approved_quote_anchor_changed(db_session):
         cut_over_purchase_order_origination(db_session, command=changed_command)
 
     assert exc_info.value.code.endswith(".target_changed")
-    assert db_session.query(SyncFlowOwnership).one().owner == SyncFlowOwner.crm.value
+    assert {row.owner for row in db_session.query(SyncFlowOwnership).all()} == {
+        PRE_CUTOVER_SYNC_FLOW_OWNER
+    }
     assert db_session.query(FieldErpSyncEvent).count() == 0

@@ -1712,7 +1712,9 @@ DOMAIN = DomainSOT(
         SOTService(
             name="integration.procurement_purchase_order_cutover",
             module="app.services.procurement_purchase_order_cutover",
-            owns=("Selfcare purchase-order ownership cutover and reconciled backfill",),
+            owns=(
+                "Selfcare procurement ERP ownership cutover and reconciled PO backfill",
+            ),
             depends_on=(
                 "integration.backoffice_adapter",
                 "observability.audit_log",
@@ -1722,22 +1724,22 @@ DOMAIN = DomainSOT(
             notes=(
                 "One bounded operator command atomically revalidates exact approved "
                 "quote/vendor anchors, records fresh ERP supplier verification, moves "
-                "the single-writer guard from CRM to Selfcare, and stages stable PO "
+                "the PO and invoice single-writer guards to Selfcare, and stages stable PO "
                 "outbox intents. It never calls ERP inside the transaction."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name=(
-                            "Selfcare purchase-order ownership cutover and reconciled "
-                            "backfill"
+                            "Selfcare procurement ERP ownership cutover and reconciled "
+                            "PO backfill"
                         ),
                         role=OwnerRole.APPLICATION_COORDINATOR,
                         input_names=(
                             "canonical approved vendor quote targets",
                             "fresh verified ERP supplier bindings",
-                            "purchase-order single-writer control",
-                            "purchase-order cutover command evidence",
+                            "procurement single-writer controls",
+                            "procurement cutover command evidence",
                         ),
                     ),
                 ),
@@ -1762,16 +1764,17 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
-                        name="purchase-order single-writer control",
+                        name="procurement single-writer controls",
                         owner="control.settings_spec",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "the locked sync_flow_ownership.purchase_order row, which "
-                            "must name CRM before first cutover and Selfcare afterward"
+                            "the locked purchase_order and purchase_invoice ownership "
+                            "rows, which must name the seeded owner before first "
+                            "cutover and Selfcare afterward"
                         ),
                     ),
                     AuthorityInput(
-                        name="purchase-order cutover command evidence",
+                        name="procurement cutover command evidence",
                         owner=("integration.procurement_purchase_order_cutover"),
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
@@ -1783,13 +1786,15 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.COORDINATOR_MANAGED,
                     boundary=(
-                        "One owner command locks ownership, installation projects, and "
-                        "vendors; it commits verified supplier bindings, the owner flip, "
-                        "outbox rows, and audit evidence atomically."
+                        "One owner command locks both procurement ownership rows, "
+                        "installation projects, and vendors; it commits verified "
+                        "supplier bindings, both owner flips, PO outbox rows, and audit "
+                        "evidence atomically."
                     ),
                     locking=(
-                        "Lock purchase-order ownership first, then installation projects "
-                        "and vendors in UUID order before revalidating every target."
+                        "Lock purchase-order and purchase-invoice ownership in flow order, "
+                        "then installation projects and vendors in UUID order before "
+                        "revalidating every target."
                     ),
                     idempotency=(
                         "The command UUID and target digest arbitrate replay; po-ip-{id} "
@@ -1872,7 +1877,7 @@ DOMAIN = DomainSOT(
                     ),
                     retryable_codes=(),
                     fail_closed_on=(
-                        "CRM is not the recorded owner for a new cutover",
+                        "the seeded owner is not recorded for a new cutover",
                         "missing, stale, changed, duplicate, or ambiguous supplier evidence",
                         "changed approved quote or vendor anchor",
                         "existing procurement identity or mismatched outbox payload",
@@ -1881,7 +1886,7 @@ DOMAIN = DomainSOT(
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.CUTOVER_READY,
-                    old_owner="CRM purchase-order sender and CRM supplier provenance",
+                    old_owner="retired procurement sender and supplier provenance",
                     new_owner=("integration.procurement_purchase_order_cutover"),
                     verification=(
                         "Exact ERP supplier reconciliation, zero Selfcare/ERP source-ID "
@@ -1889,14 +1894,15 @@ DOMAIN = DomainSOT(
                         "staging outbox acceptance."
                     ),
                     cutover_gate=(
-                        "The ERP Sub PO endpoint is deployed, every included vendor has "
-                        "one fresh active ERP identity, CRM's endpoint is retired, and "
-                        "the exact historical target batch has no ERP correlation."
+                        "The ERP Sub PO and purchase-invoice endpoints are deployed, every "
+                        "included vendor has one fresh active ERP identity, the old "
+                        "endpoints are retired, and the exact historical target batch has "
+                        "no ERP correlation."
                     ),
                     fallback_retirement=(
-                        "CRM remains unable to deliver after its ERP route retirement; "
-                        "the owner row prevents Selfcare delivery rollback without an "
-                        "explicit forward-fix operation."
+                        "The retired sender remains unable to deliver; the two owner rows "
+                        "prevent Selfcare delivery rollback without an explicit "
+                        "forward-fix operation."
                     ),
                 ),
                 steward="vendor finance integrations",
