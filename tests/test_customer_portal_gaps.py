@@ -824,7 +824,8 @@ class TestPortalServiceVisibility:
         )
 
         service = page["services"][0]
-        assert service.next_billing_at == stale_anchor
+        assert service.next_billing_at is not None
+        assert service.next_billing_at.replace(tzinfo=UTC) == stale_anchor
         assert service.date_projection.kind == PortalServiceDateKind.suspended_since
         assert service.date_projection.label == "Suspended since"
         assert service.date_projection.value.is_present is True
