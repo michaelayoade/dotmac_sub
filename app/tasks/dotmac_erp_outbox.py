@@ -208,16 +208,16 @@ def reconcile_erp_staff_access(self) -> dict[str, object]:
                 )
 
             leave_events = tuple(
-                event
+                leave_event
                 for item in leave_page.items
                 if isinstance(item, ErpStaffLeaveRestrictionProjection)
-                if (event := item.to_owner_event()) is not None
+                if (leave_event := item.to_owner_event()) is not None
             )
             account_events = tuple(
-                event
+                account_event
                 for item in account_page.items
                 if isinstance(item, ErpStaffAccountStatusProjection)
-                if (event := item.to_owner_event()) is not None
+                if (account_event := item.to_owner_event()) is not None
             )
             unmapped = (
                 len(leave_page.items)
