@@ -48,4 +48,4 @@ def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     content = " ".join((*guide.steps, *guide.notes)).lower()
     assert "ordinary ticket editing" in content
     assert "ticket-update authority" in content
-    assert "can still edit ordinary ticket details" in content
+    assert "assignment details" in content
