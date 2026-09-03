@@ -2,7 +2,9 @@
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, TypedDict
 from uuid import UUID, uuid4
@@ -20,7 +22,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    CatalogOffer,
+    OfferVersion,
+    Subscription,
+    SubscriptionStatus,
+)
+from app.models.enforcement_lock import EnforcementLock
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.usage import RadiusAccountingSession, UsageRecord
@@ -50,7 +60,13 @@ from app.services.network.ont_desired_config import (
     get_desired_config_value,
 )
 from app.services.portal_account_health import build_portal_account_health
+from app.services.prepaid_service_coverage import (
+    PrepaidCoverageStatus,
+    PrepaidServiceCoverageDecision,
+    resolve_prepaid_service_coverage,
+)
 from app.services.provisioning_lifecycle import latest_readiness
+from app.services.ui_contracts import StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +80,79 @@ _PORTAL_VISIBLE_SERVICE_STATUSES = [
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
 ]
+
+
+_PORTAL_RESTRICTED_SERVICE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.stopped,
+        SubscriptionStatus.disabled,
+    }
+)
+_PORTAL_ENDED_SERVICE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.expired,
+    }
+)
+
+
+class PortalServiceDateKind(StrEnum):
+    next_bill = "next_bill"
+    paid_through = "paid_through"
+    renewal_due = "renewal_due"
+    coverage_review = "coverage_review"
+    suspended_since = "suspended_since"
+    paused_since = "paused_since"
+    ended_on = "ended_on"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class PortalServiceDateProjection:
+    kind: PortalServiceDateKind
+    label: str
+    value: StateValue
+
+
+@dataclass(frozen=True, slots=True)
+class PortalServiceCard:
+    subscription: Subscription
+    date_projection: PortalServiceDateProjection
+
+    @property
+    def id(self) -> UUID:
+        return self.subscription.id
+
+    @property
+    def status(self) -> SubscriptionStatus:
+        return self.subscription.status
+
+    @property
+    def billing_mode(self) -> BillingMode | None:
+        return self.subscription.billing_mode
+
+    @property
+    def next_billing_at(self) -> datetime | None:
+        return self.subscription.next_billing_at
+
+    @property
+    def offer(self) -> CatalogOffer | None:
+        return self.subscription.offer
+
+    @property
+    def offer_version(self) -> OfferVersion | None:
+        return self.subscription.offer_version
+
+
+def _date_projection(
+    kind: PortalServiceDateKind,
+    label: str,
+    value: datetime | None,
+) -> PortalServiceDateProjection:
+    state = StateValue.present(value) if value is not None else StateValue.unknown()
+    return PortalServiceDateProjection(kind=kind, label=label, value=state)
 
 
 def _get_fup_status(
@@ -959,6 +1048,158 @@ def get_usage_history(db: Session, customer: dict, months: int = 12) -> dict:
     }
 
 
+def _latest_restricted_service_dates(
+    db: Session,
+    subscriptions: Sequence[Subscription],
+) -> dict[UUID, datetime]:
+    restricted_ids = [
+        subscription.id
+        for subscription in subscriptions
+        if subscription.status in _PORTAL_RESTRICTED_SERVICE_STATUSES
+    ]
+    if not restricted_ids:
+        return {}
+
+    restricted_at: dict[UUID, datetime] = {}
+    event_at = func.coalesce(
+        SubscriptionLifecycleEvent.effective_at,
+        SubscriptionLifecycleEvent.recorded_at,
+        SubscriptionLifecycleEvent.created_at,
+    )
+    lifecycle_events = db.scalars(
+        select(SubscriptionLifecycleEvent)
+        .where(
+            SubscriptionLifecycleEvent.subscription_id.in_(restricted_ids),
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.suspend,
+            SubscriptionLifecycleEvent.to_status.in_(
+                tuple(_PORTAL_RESTRICTED_SERVICE_STATUSES)
+            ),
+        )
+        .order_by(
+            SubscriptionLifecycleEvent.subscription_id,
+            event_at.desc(),
+            SubscriptionLifecycleEvent.id.desc(),
+        )
+    ).all()
+    for event in lifecycle_events:
+        if event.subscription_id in restricted_at:
+            continue
+        value = event.effective_at or event.recorded_at or event.created_at
+        restricted_at[event.subscription_id] = _as_utc(value) or value
+
+    active_locks = db.scalars(
+        select(EnforcementLock)
+        .where(
+            EnforcementLock.subscription_id.in_(restricted_ids),
+            EnforcementLock.is_active.is_(True),
+        )
+        .order_by(
+            EnforcementLock.subscription_id,
+            EnforcementLock.created_at.desc(),
+            EnforcementLock.id.desc(),
+        )
+    ).all()
+    for lock in active_locks:
+        if lock.subscription_id not in restricted_at:
+            restricted_at[lock.subscription_id] = (
+                _as_utc(lock.created_at) or lock.created_at
+            )
+    return restricted_at
+
+
+def _service_date_projection(
+    subscription: Subscription,
+    *,
+    prepaid_coverage: PrepaidServiceCoverageDecision | None,
+    restricted_at: datetime | None,
+) -> PortalServiceDateProjection:
+    if subscription.status in _PORTAL_ENDED_SERVICE_STATUSES:
+        ended_at = subscription.canceled_at or subscription.end_at
+        return _date_projection(
+            PortalServiceDateKind.ended_on,
+            "Ended on",
+            _as_utc(ended_at) if ended_at is not None else None,
+        )
+
+    if subscription.status in _PORTAL_RESTRICTED_SERVICE_STATUSES:
+        paused = subscription.status in {
+            SubscriptionStatus.stopped,
+            SubscriptionStatus.disabled,
+        }
+        return _date_projection(
+            PortalServiceDateKind.paused_since
+            if paused
+            else PortalServiceDateKind.suspended_since,
+            "Paused since" if paused else "Suspended since",
+            _as_utc(restricted_at) if restricted_at is not None else None,
+        )
+
+    if subscription.billing_mode == BillingMode.prepaid:
+        if (
+            prepaid_coverage is not None
+            and prepaid_coverage.status == PrepaidCoverageStatus.covered
+            and prepaid_coverage.evidence is not None
+        ):
+            return _date_projection(
+                PortalServiceDateKind.paid_through,
+                "Paid through",
+                _as_utc(prepaid_coverage.evidence.ends_at),
+            )
+        if (
+            prepaid_coverage is not None
+            and prepaid_coverage.status == PrepaidCoverageStatus.unresolved_projection
+        ):
+            return _date_projection(
+                PortalServiceDateKind.coverage_review,
+                "Coverage review",
+                None,
+            )
+        return _date_projection(
+            PortalServiceDateKind.renewal_due,
+            "Renewal due",
+            None,
+        )
+
+    return _date_projection(
+        PortalServiceDateKind.next_bill,
+        "Next bill",
+        _as_utc(subscription.next_billing_at)
+        if subscription.next_billing_at is not None
+        else None,
+    )
+
+
+def _service_cards(
+    db: Session,
+    subscriptions: Sequence[Subscription],
+    *,
+    as_of: datetime | None = None,
+) -> list[PortalServiceCard]:
+    observed_at = _as_utc(as_of or datetime.now(UTC)) or datetime.now(UTC)
+    prepaid_subscriptions = [
+        subscription
+        for subscription in subscriptions
+        if subscription.billing_mode == BillingMode.prepaid
+    ]
+    coverage = resolve_prepaid_service_coverage(
+        db,
+        prepaid_subscriptions,
+        as_of=observed_at,
+    )
+    restricted_at = _latest_restricted_service_dates(db, subscriptions)
+    return [
+        PortalServiceCard(
+            subscription=subscription,
+            date_projection=_service_date_projection(
+                subscription,
+                prepaid_coverage=coverage.get(subscription.id),
+                restricted_at=restricted_at.get(subscription.id),
+            ),
+        )
+        for subscription in subscriptions
+    ]
+
+
 def get_services_page(
     db: Session,
     customer: dict,
@@ -1015,7 +1256,7 @@ def get_services_page(
     total = db.scalar(stmt) or 0
 
     return {
-        "services": services,
+        "services": _service_cards(db, services),
         "status": status,
         "page": page,
         "per_page": per_page,

@@ -789,6 +789,92 @@ class TestPortalServiceVisibility:
         assert len(page["services"]) == 1
         assert page["services"][0].status == SubscriptionStatus.blocked
 
+    def test_services_page_suspended_prepaid_uses_suspension_evidence(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import BillingMode, SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import (
+            PortalServiceDateKind,
+            get_services_page,
+        )
+
+        stale_anchor = datetime(2025, 9, 4, tzinfo=UTC)
+        suspended_at = datetime(2026, 9, 3, 0, 1, tzinfo=UTC)
+        subscriber.billing_mode = BillingMode.prepaid
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.status = SubscriptionStatus.suspended
+        subscription.next_billing_at = stale_anchor
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=subscriber.id,
+                reason=EnforcementReason.prepaid,
+                source="test:prepaid-balance-sweep",
+                created_at=suspended_at,
+            )
+        )
+        db_session.commit()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        service = page["services"][0]
+        assert service.next_billing_at == stale_anchor
+        assert service.date_projection.kind == PortalServiceDateKind.suspended_since
+        assert service.date_projection.label == "Suspended since"
+        assert service.date_projection.value.is_present is True
+        assert service.date_projection.value.value == suspended_at
+
+    def test_services_page_active_prepaid_uses_exact_coverage_end(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import timedelta
+        from decimal import Decimal
+
+        from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+        from app.models.catalog import BillingMode, SubscriptionStatus
+        from app.services.customer_portal_flow_services import (
+            PortalServiceDateKind,
+            get_services_page,
+        )
+
+        now = datetime.now(UTC)
+        coverage_end = now + timedelta(days=29)
+        subscriber.billing_mode = BillingMode.prepaid
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.status = SubscriptionStatus.active
+        subscription.next_billing_at = datetime(2025, 9, 4, tzinfo=UTC)
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber.id,
+                subscription_id=subscription.id,
+                starts_at=now - timedelta(days=1),
+                ends_at=coverage_end,
+                amount_funded=Decimal("430000.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+            )
+        )
+        db_session.commit()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        service = page["services"][0]
+        assert service.date_projection.kind == PortalServiceDateKind.paid_through
+        assert service.date_projection.label == "Paid through"
+        assert service.date_projection.value.is_present is True
+        assert service.date_projection.value.value == coverage_end
+
     def test_services_page_eager_loads_template_relationships(
         self, db_session, subscription, subscriber
     ) -> None:
@@ -807,7 +893,7 @@ class TestPortalServiceVisibility:
 
         assert page["services"]
         service = page["services"][0]
-        unloaded = sa_inspect(service).unloaded
+        unloaded = sa_inspect(service.subscription).unloaded
         assert "offer" not in unloaded
         assert "offer_version" not in unloaded
 
