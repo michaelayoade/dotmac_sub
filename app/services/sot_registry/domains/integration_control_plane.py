@@ -1553,6 +1553,211 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="integration.procurement_purchase_order_cutover",
+            module="app.services.procurement_purchase_order_cutover",
+            owns=("Selfcare purchase-order ownership cutover and reconciled backfill",),
+            depends_on=(
+                "integration.backoffice_adapter",
+                "observability.audit_log",
+                "operations.vendor_project_records",
+                "control.settings_spec",
+            ),
+            notes=(
+                "One bounded operator command atomically revalidates exact approved "
+                "quote/vendor anchors, records fresh ERP supplier verification, moves "
+                "the single-writer guard from CRM to Selfcare, and stages stable PO "
+                "outbox intents. It never calls ERP inside the transaction."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "Selfcare purchase-order ownership cutover and reconciled "
+                            "backfill"
+                        ),
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "canonical approved vendor quote targets",
+                            "fresh verified ERP supplier bindings",
+                            "purchase-order single-writer control",
+                            "purchase-order cutover command evidence",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical approved vendor quote targets",
+                        owner="operations.vendor_project_records",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "locked InstallationProject, approved ProjectQuote, vendor, "
+                            "and positive active quote-line records"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="fresh verified ERP supplier bindings",
+                        owner="external:dotmac_erp",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "operator-reviewed unique active ERP supplier identity, "
+                            "provider reference, match method, verification timestamp, "
+                            "and fingerprint of the current Selfcare source reference"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="purchase-order single-writer control",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "the locked sync_flow_ownership.purchase_order row, which "
+                            "must name CRM before first cutover and Selfcare afterward"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="purchase-order cutover command evidence",
+                        owner=("integration.procurement_purchase_order_cutover"),
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed command, actor, reason, production scope, exact target "
+                            "triples, command UUID, and stable idempotency key"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "One owner command locks ownership, installation projects, and "
+                        "vendors; it commits verified supplier bindings, the owner flip, "
+                        "outbox rows, and audit evidence atomically."
+                    ),
+                    locking=(
+                        "Lock purchase-order ownership first, then installation projects "
+                        "and vendors in UUID order before revalidating every target."
+                    ),
+                    idempotency=(
+                        "The command UUID and target digest arbitrate replay; po-ip-{id} "
+                        "uniquely deduplicates each staged ERP purchase order."
+                    ),
+                    retries=(
+                        "Validation failures are terminal. Database concurrency failures "
+                        "retry the whole command with the same UUID and evidence. ERP "
+                        "transport retries occur only after commit through the outbox."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "integration.procurement_purchase_order_cutover"
+                        ),
+                        "integration.procurement_purchase_order_cutover.invalid_batch",
+                        "integration.procurement_purchase_order_cutover.duplicate_target",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "duplicate_supplier_verification"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "invalid_idempotency_key"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "idempotency_conflict"
+                        ),
+                        "integration.procurement_purchase_order_cutover.replay_drift",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "missing_flow_ownership"
+                        ),
+                        "integration.procurement_purchase_order_cutover.invalid_flow_owner",
+                        "integration.procurement_purchase_order_cutover.target_not_found",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "supplier_verification_scope_mismatch"
+                        ),
+                        "integration.procurement_purchase_order_cutover.vendor_not_found",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "supplier_verification_mismatch"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "invalid_supplier_verification_time"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "stale_supplier_verification"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "invalid_erp_supplier_reference"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "erp_supplier_reference_conflict"
+                        ),
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "erp_supplier_code_conflict"
+                        ),
+                        "integration.procurement_purchase_order_cutover.target_changed",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "existing_procurement_reference"
+                        ),
+                        "integration.procurement_purchase_order_cutover.ineligible_target",
+                        (
+                            "integration.procurement_purchase_order_cutover."
+                            "existing_outbox_payload_mismatch"
+                        ),
+                    ),
+                    mapping_owner=(
+                        "scripts.procurement.cutover_purchase_orders operator adapter"
+                    ),
+                    retryable_codes=(),
+                    fail_closed_on=(
+                        "CRM is not the recorded owner for a new cutover",
+                        "missing, stale, changed, duplicate, or ambiguous supplier evidence",
+                        "changed approved quote or vendor anchor",
+                        "existing procurement identity or mismatched outbox payload",
+                        "any ineligible target in the requested batch",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUTOVER_READY,
+                    old_owner="CRM purchase-order sender and CRM supplier provenance",
+                    new_owner=("integration.procurement_purchase_order_cutover"),
+                    verification=(
+                        "Exact ERP supplier reconciliation, zero Selfcare/ERP source-ID "
+                        "correlations, focused command tests, architecture guards, and "
+                        "staging outbox acceptance."
+                    ),
+                    cutover_gate=(
+                        "The ERP Sub PO endpoint is deployed, every included vendor has "
+                        "one fresh active ERP identity, CRM's endpoint is retired, and "
+                        "the exact historical target batch has no ERP correlation."
+                    ),
+                    fallback_retirement=(
+                        "CRM remains unable to deliver after its ERP route retirement; "
+                        "the owner row prevents Selfcare delivery rollback without an "
+                        "explicit forward-fix operation."
+                    ),
+                ),
+                steward="vendor finance integrations",
+                design_refs=(
+                    "docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md",
+                    "docs/runbooks/PURCHASE_ORDER_ERP_CUTOVER.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_procurement_purchase_order_cutover.py",
+                    (
+                        "tests/architecture/"
+                        "test_procurement_purchase_order_cutover_boundary.py"
+                    ),
+                ),
+            ),
+        ),
+        SOTService(
             name="integration.dotmac_erp_payables_adapter",
             module="app.services.dotmac_erp.purchase_invoice_sync",
             owns=(
