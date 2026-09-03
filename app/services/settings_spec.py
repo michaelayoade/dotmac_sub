@@ -2132,6 +2132,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="invoice_pdf_payment_presentment",
+        env_var="BILLING_INVOICE_PDF_PAYMENT_PRESENTMENT",
+        value_type=SettingValueType.string,
+        default="bank_account",
+        allowed={"bank_account", "paystack", "both"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="Invoice PDF Payment Presentment",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="minimum_balance",
         env_var="BILLING_MINIMUM_BALANCE",
         value_type=SettingValueType.string,

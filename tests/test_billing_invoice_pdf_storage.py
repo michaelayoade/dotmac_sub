@@ -344,10 +344,7 @@ def test_invoice_detail_context_includes_bank_details(db_session, subscriber_acc
     }
 
 
-def test_render_invoice_outputs_paystack_checkout_link(db_session, subscriber_account):
-    invoice = _invoice(db_session, subscriber_account)
-    # Collection accounts are intentionally irrelevant to customer invoice PDFs:
-    # invoices now direct customers to the current Paystack checkout hand-off.
+def _add_invoice_collection_account(db_session):
     db_session.add(
         CollectionAccount(
             name="Dotmac Bank Invoice Account",
@@ -363,14 +360,75 @@ def test_render_invoice_outputs_paystack_checkout_link(db_session, subscriber_ac
     )
     db_session.commit()
 
+
+def _set_invoice_pdf_payment_presentment(db_session, value: str):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="invoice_pdf_payment_presentment",
+            value_text=value,
+            value_type=SettingValueType.string,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+
+def test_render_invoice_outputs_bank_account_by_default(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_invoice_collection_account(db_session)
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+    text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
+
+    expected_url = f"https://selfcare.dotmac.io/pay/invoices/{invoice.id}"
+    assert "Bank transfer" in html
+    assert "0123456789" in html
+    assert "Pay with Paystack" not in html
+    assert expected_url not in html
+    assert "Bank Details:" in text_lines
+    assert "Account Number: 0123456789" in text_lines
+    assert "Pay with Paystack:" not in text_lines
+    assert expected_url not in text_lines
+
+
+def test_render_invoice_outputs_paystack_only_when_configured(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_invoice_collection_account(db_session)
+    _set_invoice_pdf_payment_presentment(db_session, "paystack")
+
     html = pdf_service._render_invoice_html(invoice, db_session)
     text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
 
     expected_url = f"https://selfcare.dotmac.io/pay/invoices/{invoice.id}"
     assert "Pay with Paystack" in html
     assert expected_url in html
-    assert "Bank Details" not in html
+    assert "Bank transfer" not in html
     assert "0123456789" not in html
+    assert "Pay with Paystack:" in text_lines
+    assert expected_url in text_lines
+    assert "Bank Details:" not in text_lines
+
+
+def test_render_invoice_outputs_bank_account_and_paystack_when_configured(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_invoice_collection_account(db_session)
+    _set_invoice_pdf_payment_presentment(db_session, "both")
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+    text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
+
+    expected_url = f"https://selfcare.dotmac.io/pay/invoices/{invoice.id}"
+    assert "Bank transfer" in html
+    assert "0123456789" in html
+    assert "Pay with Paystack" in html
+    assert expected_url in html
+    assert "Bank Details:" in text_lines
+    assert "Account Number: 0123456789" in text_lines
     assert "Pay with Paystack:" in text_lines
     assert expected_url in text_lines
 
@@ -419,6 +477,35 @@ def test_text_fallback_uses_ngn_and_truncates_with_marker(
         line.encode("latin-1")
     pdf_bytes = pdf_service._build_simple_pdf(lines)
     assert pdf_bytes.startswith(b"%PDF-")
+
+
+def test_invoice_pdf_payment_presentment_change_makes_export_stale(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    completed_at = datetime.now(UTC) + timedelta(minutes=1)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="invoice_pdf_payment_presentment",
+            value_text="both",
+            value_type=SettingValueType.string,
+            is_active=True,
+            updated_at=completed_at + timedelta(minutes=1),
+        )
+    )
+    export = InvoicePdfExport(
+        invoice_id=invoice.id,
+        status=InvoicePdfExportStatus.completed,
+        requested_by_id=subscriber_account.id,
+        completed_at=completed_at,
+        created_at=completed_at,
+        updated_at=completed_at,
+    )
+    db_session.add(export)
+    db_session.commit()
+
+    assert pdf_service._is_export_fresh(invoice, export, db=db_session) is False
 
 
 def test_pil_fallback_renders_currency_and_truncation_marker(
