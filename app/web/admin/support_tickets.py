@@ -86,22 +86,6 @@ def _actor_id(request: Request) -> str | None:
     return str(value) if value else None
 
 
-def _assignment_authorization(
-    request: Request,
-) -> support_service.TicketAssignmentAuthorization:
-    return support_service.TicketAssignmentAuthorization.human(
-        can_assign=can(request, "support:ticket:assign")
-    )
-
-
-def _bulk_requests_assignment(data: dict) -> bool:
-    updates = data.get("updates")
-    return isinstance(updates, dict) and updates.get("assigned_to_person_id") not in (
-        None,
-        "",
-    )
-
-
 def _ticket_attachment_response(record: StoredFile) -> StreamingResponse:
     try:
         stream = file_uploads.stream_file(record)
@@ -281,8 +265,6 @@ def tickets_bulk_preview(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
-    if _bulk_requests_assignment(data) and not can(request, "support:ticket:assign"):
-        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         preview = support_ticket_bulk_service.preview_support_ticket_bulk_update(
             db, data
@@ -301,21 +283,16 @@ def tickets_bulk_update(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
-    if _bulk_requests_assignment(data) and not can(request, "support:ticket:assign"):
-        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         return support_ticket_bulk_service.execute_support_ticket_bulk_update(
             db,
             data,
             actor_id=_actor_id(request),
             request=request,
-            assignment_authorization=_assignment_authorization(request),
         )
     except HTTPException:
         raise
     except support_service.SupportTicketError as exc:
-        if exc.code == "ticket_assignment_permission_required":
-            raise HTTPException(status_code=403, detail=exc.message) from exc
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -332,7 +309,7 @@ def ticket_new(request: Request, db: Session = Depends(get_db)):
         support_web_service.build_ticket_form_context(
             db,
             query_params=request.query_params,
-            can_assign_ticket=can(request, "support:ticket:assign"),
+            can_assign_ticket=True,
         )
     )
     context.update({"page_title": "New Ticket", "form_mode": "create", "ticket": None})
@@ -353,7 +330,7 @@ def ticket_edit_page(
             db,
             query_params=request.query_params,
             ticket_lookup=ticket_lookup,
-            can_assign_ticket=can(request, "support:ticket:assign"),
+            can_assign_ticket=True,
         )
     )
     return templates.TemplateResponse("admin/support/tickets/new.html", context)
@@ -403,7 +380,6 @@ def ticket_create(
             actor_id=actor_id,
             attachments=attachments,
             duplicate_override=duplicate_confirmed,
-            assignment_authorization=_assignment_authorization(request),
             title=title,
             description=description,
             publish_description=publish_description,
@@ -453,7 +429,7 @@ def ticket_create(
                     "tags": tags or "",
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
-                can_assign_ticket=can(request, "support:ticket:assign"),
+                can_assign_ticket=True,
             )
         )
         context.update(
@@ -503,7 +479,7 @@ def ticket_create(
                     "tags": tags or "",
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
-                can_assign_ticket=can(request, "support:ticket:assign"),
+                can_assign_ticket=True,
             )
         )
         context.update(
@@ -521,16 +497,10 @@ def ticket_create(
             }
         )
         response_status = (
-            403
-            if isinstance(exc, support_service.SupportTicketError)
-            and exc.code == "ticket_assignment_permission_required"
-            else (
-                413
-                if isinstance(exc, support_web_service.TicketAttachmentValidationError)
-                and exc.kind
-                is support_web_service.TicketAttachmentValidationKind.too_large
-                else 400
-            )
+            413
+            if isinstance(exc, support_web_service.TicketAttachmentValidationError)
+            and exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
+            else 400
         )
         return templates.TemplateResponse(
             "admin/support/tickets/new.html", context, status_code=response_status
@@ -551,7 +521,7 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             ticket_lookup=ticket_lookup,
             actor_id=_actor_id(request),
             can_read_material_requests=can(request, "operations:material_request:read"),
-            can_assign_ticket=can(request, "support:ticket:assign"),
+            can_assign_ticket=True,
         )
     )
     context["handoff_notice"] = request.query_params.get("handoff_notice")
@@ -709,25 +679,12 @@ def ticket_edit(
     assignee_person_ids: list[str] = Form(default=[]),
     db: Session = Depends(get_db),
 ):
-    can_assign_ticket = can(request, "support:ticket:assign")
-    assignment_fields_submitted = can_assign_ticket or any(
-        value not in (None, "", [])
-        for value in (
-            technician_person_id,
-            ticket_manager_person_id,
-            site_coordinator_person_id,
-            service_team_id,
-            assignee_person_ids,
-        )
-    )
     try:
         support_web_service.update_ticket_from_form(
             db,
             request=request,
             ticket_id=str(ticket_id),
             actor_id=_actor_id(request),
-            assignment_authorization=_assignment_authorization(request),
-            assignment_fields_submitted=assignment_fields_submitted,
             title=title,
             description=description,
             publish_description=publish_description,
@@ -747,10 +704,6 @@ def ticket_edit(
             service_team_id=service_team_id,
             assignee_person_ids=assignee_person_ids,
         )
-    except support_service.SupportTicketError as exc:
-        if exc.code == "ticket_assignment_permission_required":
-            raise HTTPException(status_code=403, detail=exc.message) from exc
-        raise
     except support_web_service.WebSupportTicketInputError as exc:
         query = urlencode({"action_error": exc.message})
         return RedirectResponse(
@@ -795,7 +748,7 @@ def ticket_add_comment(
                 can_read_material_requests=can(
                     request, "operations:material_request:read"
                 ),
-                can_assign_ticket=can(request, "support:ticket:assign"),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = exc.message
@@ -843,7 +796,6 @@ def ticket_edit_comment(
     response_class=HTMLResponse,
     dependencies=[
         Depends(require_permission("support:ticket:update")),
-        Depends(require_permission("support:ticket:assign")),
     ],
 )
 def ticket_auto_assign(
@@ -854,7 +806,6 @@ def ticket_auto_assign(
         request=request,
         ticket_id=str(ticket_id),
         actor_id=_actor_id(request),
-        assignment_authorization=_assignment_authorization(request),
     )
     changes = result.get("changes") if isinstance(result, dict) else None
     if result.get("matched") and changes:
@@ -901,7 +852,7 @@ def ticket_link(
             support_web_service.build_ticket_detail_context(
                 db,
                 ticket_lookup=str(ticket_id),
-                can_assign_ticket=can(request, "support:ticket:assign"),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = str(exc)
@@ -939,7 +890,7 @@ def ticket_merge(
             support_web_service.build_ticket_detail_context(
                 db,
                 ticket_lookup=str(ticket_id),
-                can_assign_ticket=can(request, "support:ticket:assign"),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = str(exc)
@@ -967,7 +918,6 @@ def ticket_quick_status(
             ticket_id=str(ticket_id),
             actor_id=_actor_id(request),
             fields={"status": status},
-            assignment_authorization=_assignment_authorization(request),
         )
     except support_web_service.WebSupportTicketInputError as exc:
         query = urlencode({"action_error": exc.message})
@@ -982,7 +932,6 @@ def ticket_quick_status(
     response_class=HTMLResponse,
     dependencies=[
         Depends(require_permission("support:ticket:update")),
-        Depends(require_permission("support:ticket:assign")),
     ],
 )
 def ticket_quick_assign(
@@ -1000,7 +949,6 @@ def ticket_quick_assign(
         ticket_id=str(ticket_id),
         actor_id=_actor_id(request),
         fields=fields,
-        assignment_authorization=_assignment_authorization(request),
     )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 

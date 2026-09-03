@@ -70,14 +70,6 @@ def _system_user(**overrides) -> SystemUser:
     )
 
 
-def _assignment_authorization():
-    return support_service.TicketAssignmentAuthorization.human(can_assign=True)
-
-
-def _system_assignment_policy(owner: str):
-    return support_service.TicketAssignmentAuthorization.system_policy(owner=owner)
-
-
 def _enable_support_ticket_notifications(db_session) -> None:
     db_session.add(
         DomainSetting(
@@ -324,9 +316,6 @@ def test_ticket_create_preserves_requested_team_or_unassigned_routing(
             region="north",
             service_team_id=requested_team.id,
         ),
-        assignment_authorization=_system_assignment_policy(
-            "support.ticket_configuration.portal_team_routing"
-        ),
         routing_mode=support_service.TicketCreationRoutingMode.preserve_requested_team,
     )
     intentionally_unassigned = support_service.tickets.create(
@@ -439,7 +428,6 @@ def test_ticket_update_deduplicates_manual_and_auto_assignee(db_session, monkeyp
         db_session,
         str(ticket.id),
         TicketUpdate(assignee_person_ids=[assignee_id]),
-        assignment_authorization=_assignment_authorization(),
     )
 
     assignees = (
@@ -955,7 +943,6 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
             assignee_person_ids=[subscriber.id],
         ),
         actor_id=str(subscriber.id),
-        assignment_authorization=_assignment_authorization(),
     )
     target = support_service.tickets.create(
         db_session,
@@ -1062,7 +1049,6 @@ def test_assignment_notifications_send_push_and_email_without_legacy_toggle(
             ticket_manager_person_id=manager.id,
         ),
         actor_id=str(subscriber.id),
-        assignment_authorization=_assignment_authorization(),
     )
 
     support_service.tickets.update(
@@ -1122,7 +1108,6 @@ def test_ticket_assignments_accept_system_user_ids(db_session, subscriber):
             assignee_person_ids=[assignee.id],
         ),
         actor_id=str(subscriber.id),
-        assignment_authorization=_assignment_authorization(),
     )
 
     db_session.refresh(ticket)
@@ -1240,7 +1225,6 @@ def test_customer_reply_emails_each_active_assignee_once(db_session, subscriber)
             assignee_person_ids=[assignee.id],
         ),
         actor_id=str(subscriber.id),
-        assignment_authorization=_assignment_authorization(),
     )
 
     support_service.tickets.create_comment(
@@ -1320,7 +1304,6 @@ def test_staff_comment_does_not_email_ticket_assignees(db_session, subscriber):
             assigned_to_person_id=assignee.id,
         ),
         actor_id=str(subscriber.id),
-        assignment_authorization=_assignment_authorization(),
     )
 
     support_service.tickets.create_comment(

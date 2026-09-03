@@ -643,7 +643,7 @@ def build_ticket_form_context(
     *,
     query_params: Mapping[str, object] | None = None,
     ticket: Ticket | None = None,
-    can_assign_ticket: bool = False,
+    can_assign_ticket: bool = True,
 ) -> dict:
     params = query_params or {}
     status_options = support_ticket_settings_service.list_status_options(db)
@@ -793,7 +793,7 @@ def build_ticket_edit_page_context(
     *,
     query_params: Mapping[str, object] | None,
     ticket_lookup: str,
-    can_assign_ticket: bool = False,
+    can_assign_ticket: bool = True,
 ) -> dict:
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
     context = build_ticket_form_context(
@@ -952,8 +952,6 @@ def create_ticket_from_form(
     actor_id: str | None,
     attachments: list,
     duplicate_override: bool = False,
-    assignment_authorization: support_service.TicketAssignmentAuthorization
-    | None = None,
     **form,
 ) -> Ticket:
     """Create a support ticket from web form values and attach uploaded files.
@@ -993,7 +991,6 @@ def create_ticket_from_form(
         payload,
         actor_id=actor_id,
         request=request,
-        assignment_authorization=assignment_authorization,
         acknowledgement_mode=(
             support_service.TicketCreationAcknowledgementMode.customer_email
         ),
@@ -1016,8 +1013,6 @@ def update_ticket_from_form(
     request,
     ticket_id: str,
     actor_id: str | None,
-    assignment_authorization: support_service.TicketAssignmentAuthorization
-    | None = None,
     assignment_fields_submitted: bool = True,
     **form,
 ):
@@ -1039,7 +1034,6 @@ def update_ticket_from_form(
         payload,
         actor_id=actor_id,
         request=request,
-        assignment_authorization=assignment_authorization,
     )
 
 
@@ -1050,8 +1044,6 @@ def quick_update_ticket(
     ticket_id: str,
     actor_id: str | None,
     fields: dict,
-    assignment_authorization: support_service.TicketAssignmentAuthorization
-    | None = None,
 ):
     """Apply a small set of fields to a ticket (status, technician, etc.).
 
@@ -1111,7 +1103,6 @@ def quick_update_ticket(
         payload,
         actor_id=actor_id,
         request=request,
-        assignment_authorization=assignment_authorization,
     )
 
 
@@ -1237,8 +1228,6 @@ def auto_assign_ticket(
     request,
     ticket_id: str,
     actor_id: str | None,
-    assignment_authorization: support_service.TicketAssignmentAuthorization
-    | None = None,
 ):
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.manual_auto_assign(
@@ -1246,7 +1235,6 @@ def auto_assign_ticket(
         ticket_id,
         actor_id=actor_id,
         request=request,
-        assignment_authorization=assignment_authorization,
     )
 
 
@@ -1800,7 +1788,7 @@ def build_ticket_detail_context(
     ticket_lookup: str,
     actor_id: str | None = None,
     can_read_material_requests: bool = False,
-    can_assign_ticket: bool = False,
+    can_assign_ticket: bool = True,
 ) -> dict:
     from uuid import uuid4
 
