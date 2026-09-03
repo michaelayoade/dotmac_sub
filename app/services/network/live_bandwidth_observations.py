@@ -198,16 +198,24 @@ def _release_direct_probe(
 
 
 def _probe_observation(raw: Mapping[str, object]) -> LiveBandwidthProbeObservation:
+    def observation_float(value: object) -> float:
+        if not isinstance(value, (int, float, str)):
+            return 0.0
+        try:
+            return float(value or 0)
+        except ValueError:
+            return 0.0
+
     return LiveBandwidthProbeObservation(
         online=bool(raw.get("online", False)),
         available=bool(raw.get("available", True)),
         nas_device_id=UUID(str(raw["nas_device_id"])),
         nas_device_name=str(raw.get("nas_device_name") or "Unknown NAS"),
         timestamp=datetime.fromisoformat(str(raw["timestamp"])),
-        current_rx_bps=float(raw.get("current_rx_bps") or 0),
-        current_tx_bps=float(raw.get("current_tx_bps") or 0),
-        download_bps=float(raw.get("download_bps") or 0),
-        upload_bps=float(raw.get("upload_bps") or 0),
+        current_rx_bps=observation_float(raw.get("current_rx_bps")),
+        current_tx_bps=observation_float(raw.get("current_tx_bps")),
+        download_bps=observation_float(raw.get("download_bps")),
+        upload_bps=observation_float(raw.get("upload_bps")),
         error=str(raw["error"]) if raw.get("error") else None,
     )
 
