@@ -166,7 +166,7 @@ def test_current_rbac_contract_does_not_seed_dedicated_assignment_permission():
     assert cleanup.down_revision == "573_ticket_assignment_role_grants"
     assert cleanup.ASSIGN_PERMISSION_KEY == "support:ticket:assign"
     assert all(
-        key != "support:ticket:assign" for key, _label in seed_rbac.PERMISSION_DEFS
+        key != "support:ticket:assign" for key, _label in seed_rbac.DEFAULT_PERMISSIONS
     )
     assert all(
         "support:ticket:assign" not in permissions

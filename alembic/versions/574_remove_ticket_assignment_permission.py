@@ -12,6 +12,7 @@ were introduced for the split assignment policy.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -70,15 +71,19 @@ def downgrade() -> None:
     permission_id = _permission_id(bind, ASSIGN_PERMISSION_KEY)
     if permission_id is None:
         permission_id = str(uuid4())
+        now = datetime.now(UTC)
         bind.execute(
             sa.text(
-                "INSERT INTO permissions (id, key, description, is_active) "
-                "VALUES (:id, :key, :description, true)"
+                "INSERT INTO permissions ("
+                "id, key, description, is_active, is_ui_assignable, "
+                "created_at, updated_at"
+                ") VALUES (:id, :key, :description, true, true, :now, :now)"
             ),
             {
                 "id": permission_id,
                 "key": ASSIGN_PERMISSION_KEY,
                 "description": "Assign tickets",
+                "now": now,
             },
         )
 

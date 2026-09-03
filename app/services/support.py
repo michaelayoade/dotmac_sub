@@ -13,6 +13,7 @@ from functools import wraps
 from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import false, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -3745,7 +3746,7 @@ class Tickets:
             entity_type="support_ticket",
             entity_id=str(ticket.id),
             actor_id=actor_id,
-            metadata={"result": result},
+            metadata={"result": jsonable_encoder(result)},
         )
         Tickets._queue_notifications_for_assignments(
             db,
