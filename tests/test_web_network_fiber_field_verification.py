@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.orm import Session
 
 from app.services import web_network_fiber_field_verification as service
+from app.services.admin_workflow_guidance import guidance_for_path
 from app.services.list_query import PageMeta
 from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
@@ -122,6 +123,7 @@ def test_field_worklist_template_renders_the_typed_page_projection():
         autoescape=True,
     )
     environment.globals["can"] = _deny_permissions
+    environment.globals["admin_workflow_guidance_for_path"] = guidance_for_path
 
     html = environment.get_template(
         "admin/network/fiber/field_verification_worklist.html"
