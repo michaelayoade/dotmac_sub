@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from app.services.dotmac_erp.client import (
@@ -19,6 +19,7 @@ from app.services.integrations.backoffice_contracts import (
     ERP_OPERATIONAL_SYNC_CAPABILITY,
     ERP_OUTBOX_CAPABILITY,
     ERP_REGULATORY_CAPABILITY,
+    ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
     ERP_STATUS_CAPABILITY,
     WORKFORCE_ATTENDANCE_PUNCH_CAPABILITY,
     WORKFORCE_ATTENDANCE_READ_CAPABILITY,
@@ -273,6 +274,15 @@ class DotmacErpRunner:
                 return client.get_ncc_financials(**params)
             if action == "get_ncc_staff_headcount":
                 return client.get_ncc_staff_headcount()
+        elif capability_id == ERP_STAFF_ACCESS_RECONCILE_CAPABILITY:
+            if action == "read_staff_access_projection":
+                entity = str(params["entity"])
+                if entity not in {"leave_restriction", "account_status"}:
+                    raise ValueError("unsupported staff access projection entity")
+                return client.get_staff_access_projection(
+                    entity=cast(Literal["leave_restriction", "account_status"], entity),
+                    limit=int(params.get("limit") or 500),
+                )
         elif capability_id == WORKFORCE_ATTENDANCE_READ_CAPABILITY:
             if action == "attendance_today":
                 return client.get_attendance_today(

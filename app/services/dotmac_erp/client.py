@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection
+from typing import Literal
 
 import httpx
 from dotmac_integration_client import IntegrationHttpClient
@@ -303,6 +304,20 @@ class DotMacERPClient:
             expected_status_codes=expected_status_codes,
         )
         return result if isinstance(result, dict) else {}
+
+    def get_staff_access_projection(
+        self,
+        *,
+        entity: Literal["leave_restriction", "account_status"],
+        limit: int = 500,
+    ) -> dict:
+        """Read one complete bounded ERP staff-access projection entity."""
+
+        return self.get(
+            "/api/v1/sync/sub/staff-access/projection",
+            params={"entity": entity, "limit": limit},
+            expected_status_codes={200},
+        )
 
     # ============ Workforce attendance surface ============
 

@@ -1922,8 +1922,8 @@ DOMAIN = DomainSOT(
                         owner="external:dotmac_erp",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source=(
-                            "HMAC-verified erp.staff_access.webhook.v1 payload "
-                            "with event_id, restriction_id, employee mapping, "
+                            "HMAC-verified flat staff.leave_restriction.v1 payload "
+                            "with delivery id, restriction id, employee mapping, "
                             "effective bounds, status, version, and updated_at"
                         ),
                     ),
@@ -1932,8 +1932,8 @@ DOMAIN = DomainSOT(
                         owner="external:dotmac_erp",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source=(
-                            "HMAC-verified erp.staff_access.webhook.v1 account "
-                            "status payload with employee mapping, desired "
+                            "HMAC-verified flat staff.account_status.v1 payload "
+                            "with delivery id, employee mapping, desired "
                             "status, version, updated_at, and reason evidence"
                         ),
                     ),
@@ -2057,10 +2057,14 @@ DOMAIN = DomainSOT(
                     new_owner="auth.erp_staff_access",
                 ),
                 steward="platform security",
-                design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/ERP_STAFF_ACCESS_INTEGRATION.md",
+                ),
                 test_refs=(
                     "tests/test_erp_staff_access.py",
                     "tests/test_erp_staff_access_webhook.py",
+                    "tests/test_erp_staff_access_reconciliation.py",
                 ),
             ),
         ),
