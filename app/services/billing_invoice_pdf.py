@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
@@ -154,6 +154,14 @@ def _branded_company_info(
     }
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _public_invoice_payment_url(brand: ResolvedBrand, invoice: Invoice) -> str | None:
     """Return the stable application hand-off, never a cached provider URL."""
     app_url = str(brand.app_url or "").strip().rstrip("/")
@@ -200,18 +208,6 @@ def _invoice_payment_presentment(
     return InvoicePaymentPresentment(
         mode=mode, bank_details=bank_details, payment_url=payment_url
     )
-
-
-def _invoice_pdf_payment_presentment_updated_at(db: Session) -> datetime | None:
-    stmt = (
-        select(DomainSetting.updated_at)
-        .where(DomainSetting.domain == SettingDomain.billing)
-        .where(DomainSetting.key == INVOICE_PDF_PAYMENT_PRESENTMENT_KEY)
-        .where(DomainSetting.is_active.is_(True))
-        .order_by(DomainSetting.updated_at.desc())
-        .limit(1)
-    )
-    return db.scalar(stmt)
 
 
 def _render_payment_markup(presentment: InvoicePaymentPresentment) -> str:
@@ -1059,16 +1055,21 @@ def _is_export_fresh(
 ) -> bool:
     if export.status != InvoicePdfExportStatus.completed:
         return False
-    if not export.completed_at:
+    completed_at = _as_utc(export.completed_at)
+    if completed_at is None:
         return False
-    if export.completed_at < INVOICE_PDF_TEMPLATE_REFRESHED_AT:
+    if completed_at < INVOICE_PDF_TEMPLATE_REFRESHED_AT:
         return False
     if db is not None:
-        presentment_updated_at = _invoice_pdf_payment_presentment_updated_at(db)
-        if presentment_updated_at and export.completed_at < presentment_updated_at:
+        presentment_updated_at = _as_utc(
+            settings_spec.active_setting_updated_at(
+                db, SettingDomain.billing, INVOICE_PDF_PAYMENT_PRESENTMENT_KEY
+            )
+        )
+        if presentment_updated_at and completed_at < presentment_updated_at:
             return False
-    invoice_updated = invoice.updated_at or invoice.created_at
-    if invoice_updated and export.completed_at < invoice_updated:
+    invoice_updated = _as_utc(invoice.updated_at or invoice.created_at)
+    if invoice_updated and completed_at < invoice_updated:
         return False
     return True
 
