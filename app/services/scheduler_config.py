@@ -2146,6 +2146,7 @@ def build_beat_schedule() -> dict:
             ERP_INVENTORY_CAPABILITY,
             ERP_OPERATIONAL_SYNC_CAPABILITY,
             ERP_OUTBOX_CAPABILITY,
+            ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
             ERP_STATUS_CAPABILITY,
         )
         from app.services.integrations.erp_capability import capability_enabled
@@ -2155,6 +2156,9 @@ def build_beat_schedule() -> dict:
         erp_status_enabled = capability_enabled(session, ERP_STATUS_CAPABILITY)
         erp_operational_sync_enabled = capability_enabled(
             session, ERP_OPERATIONAL_SYNC_CAPABILITY
+        )
+        erp_staff_access_reconcile_enabled = capability_enabled(
+            session, ERP_STAFF_ACCESS_RECONCILE_CAPABILITY
         )
         dotmac_erp_outbox_interval = resolve_integer(
             session, SettingDomain.integration, "dotmac_erp_outbox_interval_seconds"
@@ -2245,6 +2249,11 @@ def build_beat_schedule() -> dict:
             enabled=erp_operational_sync_enabled,
             interval_seconds=300,
         )
+        if erp_staff_access_reconcile_enabled:
+            schedule["erp_staff_access_reconcile"] = {
+                "task": "app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access",
+                "schedule": crontab(hour=3, minute=0),
+            }
 
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
