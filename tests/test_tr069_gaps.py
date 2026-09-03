@@ -20,6 +20,7 @@ from app.models.tr069 import (
     Tr069Session,
 )
 from app.schemas.tr069 import Tr069AcsServerCreate
+from app.services.admin_workflow_guidance import guidance_for_path
 from app.services.auth_dependencies import can
 from app.services.events.types import EventType
 from app.services.network.tr069_job_commands import Tr069CommandError
@@ -784,6 +785,7 @@ class TestAutoLinkOnts:
         # Rendering the full admin layout also exercises permission-gated
         # navigation, whose helper is an application template global.
         env.globals["can"] = can
+        env.globals["admin_workflow_guidance_for_path"] = guidance_for_path
         html = env.get_template("admin/network/onts/index.html").render(context)
 
         assert "UI-ACS-LAST-SEEN-001" in html
