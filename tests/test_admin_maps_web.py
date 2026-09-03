@@ -741,6 +741,23 @@ def test_map_templates_compile(template_name):
     assert web_field_maps.templates.env.get_template(template_name) is not None
 
 
+def test_vendor_routes_list_searches_all_visible_route_information():
+    source = web_field_maps.templates.env.loader.get_source(
+        web_field_maps.templates.env,
+        "admin/vendors/routes.html",
+    )[0]
+
+    assert 'id="vendor-route-search"' in source
+    assert "Search project, vendor, status, route type, or ID" in source
+    assert 'data-vendor-route-row data-project-id="{{ project.id }}"' in source
+    assert "row.textContent || ''" in source
+    assert "row.dataset.projectId || ''" in source
+    assert "syncVendorRouteSearch" in source
+    assert "No vendor routes match your search." in source
+    assert 'aria-live="polite"' in source
+    assert "event.key === 'Escape'" in source
+
+
 def test_live_map_template_exposes_street_search_and_focus_behavior():
     source = web_field_maps.templates.env.loader.get_source(
         web_field_maps.templates.env,
