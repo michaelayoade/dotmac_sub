@@ -129,6 +129,12 @@ def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
 
     assert 'role="tablist" aria-label="Analysis mode"' in template
     assert "selectMode(nextMode)" in template
+    assert "selectMode(nextMode) { this.mode = nextMode;" in template
+    assert "selectMode(nextMode) { mode = nextMode;" not in template
+    assert template.count("@click=\"selectMode('") == 3
+    assert "@click=\"selectMode('conversation')\"" in template
+    assert "@click=\"selectMode('recent_queue')\"" in template
+    assert "@click=\"selectMode('period')\"" in template
     assert 'name="mode" x-bind:value="mode"' in template
     assert (
         'x-bind:action="`/admin/inbox/manager-ai?mode=${encodeURIComponent(mode)}`"'
