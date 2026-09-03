@@ -22,16 +22,17 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import finish_read_transaction
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription
 from app.services import app_cache
 from app.services.bandwidth import live_event_payload
 from app.services.db_session_adapter import db_session_adapter
 from app.services.metrics_store import get_metrics_store
 from app.services.nas._mikrotik import (
     MikrotikLiveBandwidthTarget,
-    MikrotikLiveTargetError,
-    build_mikrotik_live_bandwidth_target,
     get_mikrotik_pppoe_live_bandwidth,
+)
+from app.services.network.identity import (
+    LiveBandwidthNetworkIdentity,
+    live_bandwidth_identity_for_subscription,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,17 +145,14 @@ class _ProbeLockClient(Protocol):
 def _authorized_subscription(
     db: Session,
     query: LiveBandwidthReadQuery,
-) -> Subscription:
-    subscription = db.get(Subscription, query.subscription_id)
-    if subscription is None:
+) -> LiveBandwidthNetworkIdentity:
+    identity = live_bandwidth_identity_for_subscription(db, query.subscription_id)
+    if identity is None:
         raise LiveBandwidthNotFound
     if "admin" in query.access.roles or query.access.principal_type == "system_user":
-        return subscription
-    if (
-        query.access.owner_id
-        and str(subscription.subscriber_id) == query.access.owner_id
-    ):
-        return subscription
+        return identity
+    if query.access.owner_id and str(identity.subscriber_id) == query.access.owner_id:
+        return identity
     raise LiveBandwidthAccessDenied
 
 
@@ -223,17 +221,10 @@ def probe_live_bandwidth(
     ] = get_mikrotik_pppoe_live_bandwidth,
 ) -> LiveBandwidthProbeObservation:
     """Run one admitted diagnostic without holding a database transaction."""
-    subscription = _authorized_subscription(db, query)
-    device = subscription.provisioning_nas_device
-    if device is None:
+    identity = _authorized_subscription(db, query)
+    target = identity.target
+    if target is None:
         raise LiveBandwidthConfigurationError
-    try:
-        target = build_mikrotik_live_bandwidth_target(
-            device,
-            login=subscription.login or "",
-        )
-    except MikrotikLiveTargetError as exc:
-        raise LiveBandwidthConfigurationError from exc
 
     # Materialization is complete. Returning the clean read transaction releases
     # its pooled connection before Redis admission or RouterOS network I/O.
