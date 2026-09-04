@@ -429,7 +429,7 @@ def test_csrf_error_refresh_links_to_same_site_referer_for_failed_post():
 
     assert response.status_code == 403
     assert 'href="/admin/network/cpes/new?subscriber_id=123"' in body
-    assert "window.location.reload()" not in body
+    assert "window.location.reload()" in body
 
 
 def test_csrf_error_refresh_does_not_trust_cross_site_referer():

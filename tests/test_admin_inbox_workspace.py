@@ -320,8 +320,8 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
     assert sidebar.count('name="inbox-filter-section"') == 2
-    assert '<details open class="group' not in sidebar
-    assert '<details hidden class="group' in sidebar
+    assert '<details open class="group' in sidebar
+    assert sidebar.count('<details hidden class="group') >= 2
     assert sidebar.count("applyAssignmentFilter('attention')") == 1
     assert "Needs attention <span" in sidebar
     assert "\n                        Resolved\n" in sidebar

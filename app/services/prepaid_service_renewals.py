@@ -1287,9 +1287,11 @@ def confirm_prepaid_service_renewal(
 
     from app.services.prepaid_draft_reconciliation import (
         FundingChangeDraftCommand,
+        preview_prepaid_draft_reconciliation,
         stage_prepaid_draft_after_funding_change,
     )
 
+    db.flush()
     settlement = stage_prepaid_draft_after_funding_change(
         db,
         FundingChangeDraftCommand(
@@ -1304,6 +1306,7 @@ def confirm_prepaid_service_renewal(
         or settlement.drafts_settled != 1
         or settlement.invoice_ids != (invoice.id,)
     ):
+        blocked_preview = preview_prepaid_draft_reconciliation(db, invoice.id)
         _error(
             "invoice_settlement_rejected",
             "Verified funding did not produce one exactly paid renewal invoice.",
@@ -1311,6 +1314,9 @@ def confirm_prepaid_service_renewal(
             drafts_found=settlement.drafts_found,
             drafts_settled=settlement.drafts_settled,
             drafts_blocked=settlement.drafts_blocked,
+            draft_disposition=blocked_preview.disposition.value,
+            draft_action=blocked_preview.recommended_action.value,
+            draft_reason=blocked_preview.reason,
         )
     evidence_result = _invoice_backed_renewal_evidence(
         db,

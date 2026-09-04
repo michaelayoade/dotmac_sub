@@ -1,7 +1,7 @@
 """Add durable support CSAT requests.
 
-Revision ID: 575_support_csat_requests
-Revises: 574_remove_ticket_assignment_permission
+Revision ID: 576_support_csat_requests
+Revises: 575_invoice_pdf_payment_presentment_paystack_default
 Create Date: 2026-09-04
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "575_support_csat_requests"
-down_revision: str | None = "574_remove_ticket_assignment_permission"
+revision: str = "576_support_csat_requests"
+down_revision: str | None = "575_invoice_pdf_payment_presentment_paystack_default"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
