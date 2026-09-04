@@ -8,10 +8,10 @@ import pytest
 from app.models.billing import (
     AccountAdjustment,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
-    LedgerEntryType,
-    LedgerSource,
     Payment,
+    PaymentAllocation,
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -20,8 +20,6 @@ from app.models.billing import (
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
-    OfferPrice,
-    PriceType,
     Subscription,
     SubscriptionStatus,
 )
@@ -47,7 +45,10 @@ from app.services.prepaid_service_renewals import (
     resolve_prepaid_settlement_period,
     run_due_prepaid_service_renewals,
 )
-from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+from tests.prepaid_funding_helpers import (
+    ensure_test_prepaid_contract,
+    materialize_test_prepaid_opening_balance,
+)
 
 
 def test_settlement_period_uses_lagos_calendar_day_before_month_arithmetic():
@@ -123,6 +124,7 @@ def _prepare(db_session, subscriber, subscription, amount="100.00"):
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("50.00"))
     db_session.commit()
     materialize_test_prepaid_opening_balance(
         db_session,
@@ -143,7 +145,7 @@ def _preview(db_session, subscription, amount="50.00"):
     )
 
 
-def test_prepaid_service_renewal_posts_exact_debit_and_entitlement(
+def test_prepaid_service_renewal_creates_paid_invoice_and_entitlement(
     db_session, subscriber, subscription
 ):
     _prepare(db_session, subscriber, subscription)
@@ -156,17 +158,27 @@ def test_prepaid_service_renewal_posts_exact_debit_and_entitlement(
     result = confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
 
-    assert result.ledger_entry.entry_type == LedgerEntryType.debit
-    assert result.ledger_entry.source == LedgerSource.adjustment
-    assert result.ledger_entry.effective_date.replace(tzinfo=UTC) == datetime(
+    assert result.invoice is not None
+    assert result.invoice_line is not None
+    assert result.invoice.status is InvoiceStatus.paid
+    assert result.invoice.total == Decimal("50.00")
+    assert result.invoice.balance_due == Decimal("0.00")
+    assert result.invoice.billing_period_start.replace(tzinfo=UTC) == datetime(
         2026, 7, 1, tzinfo=UTC
     )
-    assert result.entitlement.source_ledger_entry_id == result.ledger_entry.id
+    assert result.invoice.billing_period_end.replace(tzinfo=UTC) == datetime(
+        2026, 7, 31, tzinfo=UTC
+    )
+    assert result.entitlement.source_invoice_id == result.invoice.id
+    assert result.entitlement.source_invoice_line_id == result.invoice_line.id
     assert result.entitlement.subscription_id == subscription.id
-    assert result.adjustment.origin == "prepaid_service_renewal"
+    assert result.adjustment is None
+    assert result.ledger_entry is None
+    assert db_session.query(AccountAdjustment).count() == 0
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
     db_session.refresh(subscription)
     assert subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
@@ -212,17 +224,23 @@ def test_prepaid_service_renewal_is_idempotent(db_session, subscriber, subscript
     first = confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
     replay = confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
 
     assert replay.replayed is True
-    assert replay.ledger_entry.id == first.ledger_entry.id
-    assert db_session.query(AccountAdjustment).count() == 1
+    assert replay.invoice is not None
+    assert first.invoice is not None
+    assert replay.invoice.id == first.invoice.id
+    assert db_session.query(Invoice).count() == 1
+    assert db_session.query(InvoiceLine).count() == 1
+    assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 1
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
 
@@ -235,6 +253,7 @@ def test_prepaid_service_renewal_replay_checks_under_account_lock(
     confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
 
@@ -247,6 +266,7 @@ def test_prepaid_service_renewal_replay_checks_under_account_lock(
     replay = confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
 
@@ -266,10 +286,12 @@ def test_prepaid_service_renewal_rejects_insufficient_canonical_funding(
         confirm_prepaid_service_renewal(
             db_session,
             preview,
+            effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
             evidence_ref="pytest:reviewed-service-cycle",
         )
     assert exc.value.code.endswith("insufficient_funding")
     assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 0
 
 
 def test_prepaid_service_renewal_rejects_overlapping_entitlement(
@@ -280,6 +302,7 @@ def test_prepaid_service_renewal_rejects_overlapping_entitlement(
     confirm_prepaid_service_renewal(
         db_session,
         preview,
+        effective_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
         evidence_ref="pytest:reviewed-service-cycle",
     )
 
@@ -298,17 +321,6 @@ def _prepare_scheduled_cycle(db_session, subscriber, subscription):
     _prepare(db_session, subscriber, subscription)
     subscription.offer.billing_cycle = BillingCycle.monthly
     subscription.offer.is_active = True
-    subscription.unit_price = Decimal("50.00")
-    db_session.add(
-        OfferPrice(
-            offer_id=subscription.offer_id,
-            price_type=PriceType.recurring,
-            amount=Decimal("50.00"),
-            currency="NGN",
-            billing_cycle=BillingCycle.monthly,
-            is_active=True,
-        )
-    )
     db_session.commit()
 
 
@@ -349,7 +361,10 @@ def test_scheduled_owner_funds_current_due_cycle(db_session, subscriber, subscri
 
     assert summary["prepaid_renewals_scanned"] == 1
     assert summary["prepaid_renewals_funded"] == 1
-    assert db_session.query(AccountAdjustment).count() == 1
+    invoice = db_session.query(Invoice).one()
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 1
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
 
@@ -366,7 +381,7 @@ def _scheduled_command(run_at: datetime, *, key: str):
     )
 
 
-def test_scheduled_public_owner_stages_exact_consumption_group(
+def test_scheduled_public_owner_stages_paid_invoice_consumption_group(
     db_session, subscriber, subscription
 ):
     from app.models.customer_subledger import (
@@ -386,23 +401,22 @@ def test_scheduled_public_owner_stages_exact_consumption_group(
 
     assert summary["prepaid_renewals_funded"] == 1
     group = db_session.query(CustomerPostingGroup).one()
-    adjustment = db_session.query(AccountAdjustment).one()
+    invoice = db_session.query(Invoice).one()
     entitlement = db_session.query(ServiceEntitlement).one()
     assert group.command_kind is PostingCommandKind.prepaid_consumption
-    assert group.producer_owner == "financial.prepaid_service_renewals"
-    assert group.source_kind == "account_adjustment"
-    assert group.source_id == adjustment.id
+    assert group.producer_owner == "financial.prepaid_draft_reconciliation"
+    assert group.source_kind == "prepaid_opening_funding_consumption"
+    assert group.source_id is not None
     effects = (
         db_session.query(CustomerPositionEffect)
         .filter(CustomerPositionEffect.group_id == group.id)
         .all()
     )
     assert {effect.effect for effect in effects} == {
-        PositionEffectKind.customer_credit_consumed,
-        PositionEffectKind.prepaid_funding_reserved,
         PositionEffectKind.prepaid_funding_consumed,
     }
-    assert {effect.entitlement_id for effect in effects} == {entitlement.id}
+    assert {effect.invoice_id for effect in effects} == {invoice.id}
+    assert {effect.entitlement_id for effect in effects} == {None}
     assert {Decimal(str(effect.amount)) for effect in effects} == {Decimal("50.00")}
 
     # The same scheduled instant observes no second due period and never
@@ -414,6 +428,8 @@ def test_scheduled_public_owner_stages_exact_consumption_group(
     )
     assert replay["prepaid_renewals_funded"] == 0
     assert db_session.query(CustomerPostingGroup).count() == 1
+    assert db_session.query(Invoice).count() == 1
+    assert db_session.query(ServiceEntitlement).count() == 1
 
 
 def test_scheduled_posting_failure_rolls_back_renewal_business_result(
@@ -439,6 +455,7 @@ def test_scheduled_posting_failure_rolls_back_renewal_business_result(
         )
 
     assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
     assert db_session.query(CustomerPostingGroup).count() == 0
 
@@ -482,11 +499,15 @@ def test_funding_event_uses_owner_root_for_renewal_consumption(
 
     group = (
         db_session.query(CustomerPostingGroup)
-        .filter_by(producer_owner="financial.prepaid_service_renewals")
+        .filter_by(producer_owner="financial.account_credit_applications")
         .one()
     )
-    assert group.command_kind.value == "prepaid_consumption"
-    assert group.source_kind == "account_adjustment"
+    assert group.command_kind.value == "customer_credit_application"
+    assert group.source_kind == "payment_allocation"
+    invoice = db_session.query(Invoice).one()
+    allocation = db_session.query(PaymentAllocation).one()
+    assert invoice.status is InvoiceStatus.paid
+    assert allocation.invoice_id == invoice.id
 
 
 def test_scheduled_owner_dry_run_writes_nothing(db_session, subscriber, subscription):
@@ -500,6 +521,7 @@ def test_scheduled_owner_dry_run_writes_nothing(db_session, subscriber, subscrip
 
     assert summary["prepaid_renewals_funded"] == 1
     assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
 
@@ -523,7 +545,8 @@ def test_scheduled_owner_skips_quarantine_and_funds_verified_account(
     assert summary["prepaid_renewals_quarantined"] == 1
     assert summary["prepaid_renewals_missing_baseline"] == 0
     assert summary["prepaid_renewals_funded"] == 1
-    assert db_session.query(AccountAdjustment).count() == 1
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 1
     assert db_session.query(ServiceEntitlement).count() == 1
     db_session.refresh(excluded_subscription)
     assert excluded_subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
@@ -554,6 +577,7 @@ def test_scheduled_owner_isolates_unexpected_missing_baseline(
     assert summary["prepaid_renewals_missing_baseline"] == 1
     assert summary["prepaid_renewals_funded"] == 1
     assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
 
 
@@ -572,6 +596,7 @@ def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(
     assert summary["prepaid_renewals_missing_price"] == 1
     assert summary["prepaid_renewals_funded"] == 0
     assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(Invoice).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
 
@@ -630,6 +655,10 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
         .one()
     )
     assert event.payload["source"] == "scheduled"
+    assert event.payload["schema_version"] == 2
+    assert event.payload["invoice_id"] is not None
+    assert event.payload["ledger_entry_id"] is None
+    assert str(event.invoice_id) == event.payload["invoice_id"]
     assert event.payload["trigger_payment_id"] is None
     assert event.payload["renewed_through"] == "2026-08-01T00:00:00+00:00"
 
@@ -686,6 +715,9 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
         .one()
     )
     assert event.payload["renewed_through"] == "2026-08-20T00:00:00+00:00"
+    assert event.payload["schema_version"] == 2
+    assert event.payload["invoice_id"] is not None
+    assert str(event.invoice_id) == event.payload["invoice_id"]
 
 
 def test_funding_change_leaves_service_due_while_payable_invoice_remains(

@@ -59,3 +59,14 @@ def test_support_csat_report_guidance_is_route_specific() -> None:
     content = " ".join((*guide.steps, *guide.notes)).lower()
     assert "historical snapshots" in content
     assert "export csv" in content
+
+
+def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
+    guide = guidance_for_path("/admin/billing/payments/123")
+
+    assert guide is not None
+    assert guide.id == "payments"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "creates and pays one invoice" in content
+    assert "complete prepaid charge is unavailable" in content
+    assert "billing date is not moved" in content

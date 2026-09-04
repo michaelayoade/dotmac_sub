@@ -5250,12 +5250,12 @@ def stage_prepaid_draft_after_funding_change(
     db: Session,
     command: FundingChangeDraftCommand,
 ) -> FundingChangeDraftResult:
-    """Resolve one exact existing draft before any invoice-less renewal.
+    """Resolve one exact prepaid draft from verified account funding.
 
-    This is a flush-only participant for the existing funding-change
-    transaction. A strictly proven duplicate is voided so the current funding
-    can continue to direct renewal. Every unresolved or underfunded draft still
-    blocks that path, and multiple drafts remain for reviewed reconciliation.
+    This is a flush-only participant for a funding-change or funded-renewal
+    transaction. It settles one exactly funded draft or voids one strictly
+    proven historical duplicate. Every unresolved or underfunded draft stays
+    open, and multiple drafts remain for reviewed reconciliation.
     """
 
     account_id = command.account_id
