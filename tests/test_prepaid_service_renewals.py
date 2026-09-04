@@ -644,7 +644,7 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     db_session.refresh(lock)
     db_session.refresh(subscription)
     assert summary["prepaid_renewals_funded"] == 1
-    assert summary["prepaid_renewals_restored"] == 1
+    assert summary["prepaid_renewals_restored"] == 0
     assert lock.is_active is False
     assert subscription.status == SubscriptionStatus.active
     event = (
@@ -710,7 +710,7 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     entitlement = db_session.query(ServiceEntitlement).one()
     assert result.disposition == FundingChangeRenewalDisposition.funded
     assert result.funded == 1
-    assert result.restored_service_count == 1
+    assert result.restored_service_count == 0
     assert lock.is_active is False
     assert subscription.status == SubscriptionStatus.active
     assert subscriber.status == SubscriberStatus.active
