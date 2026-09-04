@@ -3716,8 +3716,10 @@ in forms, or rotate key material directly.
    chronology, agent reply provenance and delivery state, conversation
    lifecycle, and ticket handoff provenance. KPI links carry the matching
    server filter; resolved conversations cannot leak into an open-derived
-   drilldown. The same projection owns exact filtered pagination bounds;
-   conversation drill-down and reply refresh adapters preserve its normalized
+   drilldown. The same projection owns pagination bounds: active queues use
+   exact filtered totals, while demand-loaded historical cohorts use one page
+   plus next-page evidence to avoid a full count scan. Conversation drill-down
+   and reply refresh adapters preserve its normalized
    filter, sort, page-size, and page-number state. A confirmed reply refreshes
    through exact-message and filter-aware single-row projections, never by
    treating the browser or realtime message UUID as cached authority.
