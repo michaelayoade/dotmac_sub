@@ -29,6 +29,7 @@ from app.services.ephemeral_communication_actions import (
     STAFF_ACCOUNT_INVITE_ACTION,
     materialize_email,
 )
+from app.services.operator_tenant import provision_operator_tenant
 from app.services.owner_commands import CommandContext
 
 
@@ -46,6 +47,7 @@ def _context(key: str = "staff-owner-test") -> CommandContext:
 
 @pytest.fixture(autouse=True)
 def local_authentication_binding(db_session) -> None:
+    provision_operator_tenant(db_session)
     credential_party_binding.install_authentication_binding(
         db_session,
         credential_party_binding.AuthenticationBindingInstallation(
