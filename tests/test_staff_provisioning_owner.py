@@ -48,6 +48,8 @@ def _context(key: str = "staff-owner-test") -> CommandContext:
 @pytest.fixture(autouse=True)
 def local_authentication_binding(db_session) -> None:
     provision_operator_tenant(db_session)
+    if db_session.in_transaction():
+        db_session.rollback()
     credential_party_binding.install_authentication_binding(
         db_session,
         credential_party_binding.AuthenticationBindingInstallation(
