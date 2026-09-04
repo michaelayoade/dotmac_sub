@@ -2058,7 +2058,10 @@ def test_funding_change_voids_duplicate_then_funds_current_renewal(
     assert invoice.status is InvoiceStatus.void
     assert db_session.query(ServiceEntitlement).count() == 2
     assert db_session.query(AccountAdjustment).count() == 0
-    assert db_session.query(PaymentAllocation).count() == 1
+    assert db_session.query(PaymentAllocation).count() == 0
     renewal_invoice = db_session.query(Invoice).filter(Invoice.id != invoice.id).one()
+    consumption = db_session.query(PrepaidOpeningFundingConsumption).one()
+    assert consumption.invoice_id == renewal_invoice.id
+    assert consumption.amount == Decimal("100.00")
     assert renewal_invoice.status is InvoiceStatus.paid
     assert renewal_invoice.balance_due == Decimal("0.00")
