@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from app.models.network import AuthorizationPreset, OLTDevice, OntUnit
+from app.models.network_operation import (
+    NetworkOperation,
+    NetworkOperationStatus,
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.models.ont_autofind import OltAutofindCandidate
+from app.models.ont_commissioning import OntCommissioningIntent, OntCommissioningState
 from app.services import web_network_ont_autofind as autofind_service
 
 
@@ -546,6 +555,59 @@ def test_build_unconfigured_onts_page_data_searches_hex_serial_variants(db_sessi
     assert [entry["serial_number"] for entry in display_data["entries"]] == [
         "HWTC-C044CD9A"
     ]
+
+
+def test_build_unconfigured_onts_page_data_hides_stale_failed_commissioning_intent(
+    db_session,
+):
+    now = datetime.now(UTC)
+    olt = OLTDevice(name="OLT-Retry-Autofind", mgmt_ip="198.51.100.212", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/1",
+        serial_number="HWTC-1DA6B7D1",
+        serial_hex="485754431DA6B7D1",
+        is_active=True,
+        last_seen_at=now,
+    )
+    db_session.add(candidate)
+    db_session.flush()
+    operation = NetworkOperation(
+        operation_type=NetworkOperationType.ont_commission,
+        target_type=NetworkOperationTargetType.ont,
+        target_id=candidate.id,
+        status=NetworkOperationStatus.failed,
+        completed_at=now - timedelta(minutes=10),
+    )
+    db_session.add(operation)
+    db_session.flush()
+    intent = OntCommissioningIntent(
+        autofind_candidate_id=candidate.id,
+        latest_operation_id=operation.id,
+        olt_id=olt.id,
+        canonical_serial="HWTC1DA6B7D1",
+        fsp="0/2/1",
+        state=OntCommissioningState.failed,
+        reason="manual retry after return to inventory",
+        requested_by="test",
+        expires_at=now + timedelta(days=1),
+        failure_message=(
+            "The ONT is no longer present in live autofind on the exact target "
+            "0/2/1; no OLT write was attempted."
+        ),
+        created_at=now - timedelta(hours=1),
+        updated_at=now + timedelta(minutes=5),
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    data = autofind_service.build_unconfigured_onts_page_data(db_session)
+
+    assert data["entries"][0]["serial_number"] == "HWTC-1DA6B7D1"
+    assert data["entries"][0]["is_active"] is True
+    assert data["entries"][0]["commissioning"] is None
 
 
 def test_build_unconfigured_onts_page_data_scopes_authorization_presets(db_session):

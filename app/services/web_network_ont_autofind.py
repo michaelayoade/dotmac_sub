@@ -494,6 +494,39 @@ def refresh_autofind_from_olt_audited(
     return ok, message, stats
 
 
+def _commissioning_entry_for_candidate(
+    candidate: OltAutofindCandidate,
+    intent: object | None,
+) -> dict[str, object] | None:
+    if intent is None:
+        return None
+
+    state_value = getattr(getattr(intent, "state", None), "value", None) or getattr(
+        intent, "state", ""
+    )
+    latest_operation = getattr(intent, "latest_operation", None)
+    failed_at = (
+        getattr(latest_operation, "completed_at", None)
+        or getattr(intent, "terminal_at", None)
+        or getattr(intent, "updated_at", None)
+    )
+    if (
+        candidate.is_active
+        and state_value == "failed"
+        and failed_at is not None
+        and candidate.last_seen_at is not None
+        and candidate.last_seen_at > failed_at
+    ):
+        return None
+
+    return {
+        "id": str(intent.id),
+        "state": state_value,
+        "expires_at": intent.expires_at,
+        "failure_message": intent.failure_message,
+    }
+
+
 def build_unconfigured_onts_page_data(
     db: Session,
     *,
@@ -632,19 +665,8 @@ def build_unconfigured_onts_page_data(
                 if candidate.ont_unit_id is not None
                 else False
             ),
-            "commissioning": (
-                {
-                    "id": str(commissioning_by_candidate[str(candidate.id)].id),
-                    "state": commissioning_by_candidate[str(candidate.id)].state.value,
-                    "expires_at": commissioning_by_candidate[
-                        str(candidate.id)
-                    ].expires_at,
-                    "failure_message": commissioning_by_candidate[
-                        str(candidate.id)
-                    ].failure_message,
-                }
-                if str(candidate.id) in commissioning_by_candidate
-                else None
+            "commissioning": _commissioning_entry_for_candidate(
+                candidate, commissioning_by_candidate.get(str(candidate.id))
             ),
         }
         for candidate, olt in rows
