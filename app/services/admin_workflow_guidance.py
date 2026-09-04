@@ -290,6 +290,20 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "support-csat-report",
+        "Support",
+        "Review support CSAT",
+        "Support leads, managers",
+        "Review customer satisfaction evidence for resolved support interactions.",
+        ("/admin/reports/support-csat",),
+        "Filter by date range, rating, source, status, agent, or service team.",
+        "Open the linked ticket or inbox conversation when the rating needs operational follow-up.",
+        "Export CSV only for authorized support review or management reporting.",
+        notes=(
+            "CSAT rows are historical snapshots; do not reinterpret them from current assignment state.",
+        ),
+    ),
+    _guide(
         "customer-timeline",
         "Customer history",
         "Use the customer timeline",

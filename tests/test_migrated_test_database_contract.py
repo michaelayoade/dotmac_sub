@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "575_invoice_pdf_payment_presentment_paystack_default",
+            "575_support_csat_requests",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",

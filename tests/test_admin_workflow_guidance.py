@@ -49,3 +49,13 @@ def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     assert "ordinary ticket editing" in content
     assert "ticket-update authority" in content
     assert "assignment details" in content
+
+
+def test_support_csat_report_guidance_is_route_specific() -> None:
+    guide = guidance_for_path("/admin/reports/support-csat")
+
+    assert guide is not None
+    assert guide.id == "support-csat-report"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "historical snapshots" in content
+    assert "export csv" in content
