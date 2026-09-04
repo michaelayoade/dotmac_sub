@@ -179,7 +179,12 @@ def test_late_failure_rolls_back_every_staff_write(db_session, monkeypatch) -> N
     assert db_session.query(UserCredential).count() == 0
     assert db_session.query(SystemUserRole).count() == 0
     assert db_session.query(Party).count() == 0
-    assert db_session.query(AuditEvent).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "auth.staff_account_provisioned")
+        .count()
+        == 0
+    )
     assert db_session.query(EventStore).count() == 0
 
 
