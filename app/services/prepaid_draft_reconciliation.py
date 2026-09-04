@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import (
     AccountAdjustment,
@@ -738,7 +739,7 @@ def _reviewed_opening_funding_preview(
     source_baseline_id: UUID | None = None
     source_opening_id: UUID | None = None
     source_amount = Decimal("0.00")
-    consumed_filter = PrepaidOpeningFundingConsumption.id.is_(None)
+    consumed_filter: ColumnElement[bool] = PrepaidOpeningFundingConsumption.id.is_(None)
     approval_evidence_ref: str | None = None
     approval_actor: str | None = None
     if opening is not None and opening.legacy_position > Decimal("0.00"):
@@ -2777,7 +2778,7 @@ def _stage_opening_funding_consumption(
     baseline: PrepaidFundingBaseline | None = None
     opening: CustomerSubledgerOpeningPosition | None = None
     source_amount = Decimal("0.00")
-    consumed_filter = PrepaidOpeningFundingConsumption.id.is_(None)
+    consumed_filter: ColumnElement[bool] = PrepaidOpeningFundingConsumption.id.is_(None)
     approval_evidence_ref: str
     approval_actor: str
     if opening_position_id is not None:
