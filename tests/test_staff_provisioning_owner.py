@@ -116,6 +116,10 @@ def test_provision_commits_identity_grant_audit_and_event_together(db_session) -
     assert user.party_binding_source == "auth.staff_provisioning:erp_hr"
     assert user.party_binding_reason == "verify staff owner semantics"
     assert credential.provider == AuthProvider.local
+    assert credential.party_id == result.person_party_id
+    assert credential.authentication_binding_id is not None
+    assert credential.tenant_id is not None
+    assert credential.party_bound_at is not None
     assert credential.must_change_password is True
     assert credential.password_hash
     assert grant.source == staff_provisioning.ERP_HR_ROLE_SOURCE
@@ -279,6 +283,13 @@ def test_local_admin_create_uses_same_atomic_provisioning_boundary(
     user = db_session.get(SystemUser, result.user_id)
     assert user is not None
     assert user.person_party_id == result.person_party_id
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.system_user_id == result.user_id)
+        .one()
+    )
+    assert credential.party_id == result.person_party_id
+    assert credential.authentication_binding_id is not None
     assert user.party_binding_source == "auth.staff_provisioning:local"
     assert (
         db_session.query(AuditEvent)
