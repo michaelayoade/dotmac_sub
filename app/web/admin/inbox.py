@@ -355,8 +355,9 @@ def team_inbox_queue(
                     if is_sidebar_request
                     else team_inbox_projection.InboxQueueComposition.full_workspace
                 ),
-                # Numbered pagination requires exact filtered bounds from the
-                # projection owner, including a truthful final-page link.
+                # Ask the projection owner for pagination evidence. It keeps
+                # active queues exact and may use bounded next-page evidence
+                # for demand-loaded historical cohorts.
                 include_total_count=True,
             ),
         )

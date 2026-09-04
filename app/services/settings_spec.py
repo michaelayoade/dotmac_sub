@@ -1060,6 +1060,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
             "support_ticket_status_changed": True,
             "support_ticket_updated": False,
             "support_ticket_resolution_confirmation": True,
+            "support_csat_request": True,
             "work_order_en_route": True,
             "work_order_arrived": True,
             "work_order_complete": True,
