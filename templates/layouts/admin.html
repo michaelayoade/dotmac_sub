@@ -888,6 +888,15 @@
 {% if can(request, "attendance:self:use") %}
 <script src="/static/js/admin-attendance-reminder.js"></script>
 {% endif %}
+<script src="/static/js/session-refresh.js"></script>
+<script>
+    if (typeof initSessionRefresh === 'function') {
+        initSessionRefresh({
+            refreshUrl: "/admin/session/refresh",
+            loginUrl: "/auth/login"
+        });
+    }
+</script>
 <script src="/static/js/admin-tour.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {

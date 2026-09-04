@@ -252,7 +252,7 @@ def get_billing_config_context(db: Session) -> dict:
         "upcoming_charges_include_funded_prepaid_default": "false",
         "invoice_reminder_days": "7,1",
         "minimum_balance": "0",
-        "invoice_pdf_payment_presentment": "bank_account",
+        "invoice_pdf_payment_presentment": "paystack",
     }
     for key, value in defaults.items():
         if not billing.get(key):
@@ -379,7 +379,7 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     _normalize_choice(
         normalized,
         "invoice_pdf_payment_presentment",
-        "Invoice PDF Payment Presentment",
+        "Invoice PDF Payment Fallback",
         {"bank_account", "paystack", "both"},
     )
 
