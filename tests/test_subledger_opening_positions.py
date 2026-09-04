@@ -535,16 +535,16 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     # The reviewed source amount is the original authority-cutoff position;
     # later canonical facts remain later facts and are not folded into it.
     unrelated_blocker.splynx_customer_id = "16382"
-    db_session.add(
-        LedgerEntry(
-            account_id=unrelated_blocker_id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.other,
-            amount=Decimal("8477.75"),
-            currency="NGN",
-            memo="pytest reviewed post-cutoff credit-note effect",
-            effective_date=cutoff + timedelta(days=1),
-        )
+    blocker_intent = _intent(db_session, unrelated_blocker, provider, amount="8477.75")
+    _settle(
+        db_session,
+        intent_id=blocker_intent.id,
+        transaction=_transaction(
+            blocker_intent,
+            amount="8477.75",
+            provider_fee="0.00",
+            external_id="opening-migrated-post-cutover-deposit",
+        ),
     )
     db_session.commit()
 

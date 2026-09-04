@@ -749,13 +749,13 @@ def _reviewed_opening_funding_preview(
         Decimal("0.00"),
         round_money(authoritative - payment_funding.total_payment_backed_credit),
     )
-    # Untyped ledger credit is not opening-funding provenance. Quarantine it
-    # while still preserving separately reviewed opening funding.
-    authoritative_reviewed_opening = max(
-        Decimal("0.00"),
-        round_money(authoritative_nonpayment - payment_funding.unbacked_credit),
+    # Untyped ledger credit is not opening-funding provenance. Keep it
+    # quarantined rather than allowing it to revive an already spent baseline.
+    available = (
+        Decimal("0.00")
+        if payment_funding.unbacked_credit > Decimal("0.00")
+        else min(source_remaining, authoritative_nonpayment)
     )
-    available = min(source_remaining, authoritative_reviewed_opening)
     return ReviewedOpeningFundingPreview(
         baseline_id=baseline.id,
         approved_amount=round_money(to_decimal(baseline.amount)),
@@ -2614,6 +2614,7 @@ def preview_prepaid_draft_reconciliation(
         and opening.baseline_id is not None
         and opening.available_amount >= funding.shortfall
         and opening.authoritative_funding >= funding.invoice_remaining
+        and funding.unbacked_credit == Decimal("0.00")
     ):
         return _build_preview(
             invoice=invoice,

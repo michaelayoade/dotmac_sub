@@ -132,6 +132,7 @@ def _payment(
         account_id=account.id,
         amount=amount,
         provider_fee=provider_fee,
+        refunded_amount=Decimal("0.00"),
         currency="NGN",
         status=PaymentStatus.succeeded,
         paid_at=paid_at,

@@ -628,6 +628,10 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
             covered_subscription_ids=(subscription.id,),
         ),
     )
+    monkeypatch.setattr(
+        "app.services.account_lifecycle.emit_event",
+        lambda *_args, **_kwargs: None,
+    )
 
     summary = run_due_prepaid_service_renewals(
         db_session,
@@ -682,6 +686,10 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
             currency="NGN",
             covered_subscription_ids=(subscription.id,),
         ),
+    )
+    monkeypatch.setattr(
+        "app.services.account_lifecycle.emit_event",
+        lambda *_args, **_kwargs: None,
     )
 
     result = apply_due_prepaid_service_after_funding_change(
