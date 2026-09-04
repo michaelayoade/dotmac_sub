@@ -241,25 +241,25 @@ def test_inbox_resolution_creates_one_request_and_reresolution_creates_second(
 
     changed = team_inbox_commands.update_status(
         db_session,
-        conversation.id,
+        conversation_id=conversation.id,
         status_value=InboxConversationStatus.resolved.value,
         actor_person_id=agent_id,
     )
     repeated = team_inbox_commands.update_status(
         db_session,
-        conversation.id,
+        conversation_id=conversation.id,
         status_value=InboxConversationStatus.resolved.value,
         actor_person_id=agent_id,
     )
     team_inbox_commands.update_status(
         db_session,
-        conversation.id,
+        conversation_id=conversation.id,
         status_value=InboxConversationStatus.open.value,
         actor_person_id=agent_id,
     )
     team_inbox_commands.update_status(
         db_session,
-        conversation.id,
+        conversation_id=conversation.id,
         status_value=InboxConversationStatus.resolved.value,
         actor_person_id=agent_id,
     )

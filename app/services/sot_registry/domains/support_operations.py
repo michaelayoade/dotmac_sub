@@ -1645,9 +1645,26 @@ DOMAIN = DomainSOT(
                         "duplicate submission",
                     ),
                 ),
+                events=EventContract(
+                    event_types=(
+                        "support.csat.request_created",
+                        "support.csat.response_submitted",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 contains CSAT request identity, source/cycle identity, "
+                        "submission state, and snapshot reporting references without "
+                        "requiring legacy metadata as authority."
+                    ),
+                    replay=(
+                        "support_csat_requests rows reconstruct request creation and "
+                        "response submission history by source_type, source_id, and "
+                        "resolution_cycle_key."
+                    ),
+                ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.NATIVE,
-                    old_owner="support ticket and Team Inbox metadata.csat projections",
                     new_owner="support.csat",
                     verification="CSAT lifecycle, ownership, duplicate, report, and migration tests",
                     cutover_gate=(
