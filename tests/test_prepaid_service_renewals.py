@@ -609,6 +609,7 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
     subscriber.status = SubscriberStatus.suspended
+    subscriber.billing_enabled = True
     lock = EnforcementLock(
         subscription_id=subscription.id,
         subscriber_id=subscriber.id,
@@ -668,6 +669,7 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
     subscriber.status = SubscriberStatus.suspended
+    subscriber.billing_enabled = True
     lock = EnforcementLock(
         subscription_id=subscription.id,
         subscriber_id=subscriber.id,
