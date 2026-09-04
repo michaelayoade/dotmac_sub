@@ -18,7 +18,12 @@ from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.party import Party, PartyType
 from app.models.rbac import Role, SystemUserRole
 from app.models.system_user import SystemUser
-from app.services import auth_flow, credential_recovery, staff_provisioning
+from app.services import (
+    auth_flow,
+    credential_party_binding,
+    credential_recovery,
+    staff_provisioning,
+)
 from app.services.ephemeral_communication_actions import (
     EPHEMERAL_ACTION_METADATA_KEY,
     STAFF_ACCOUNT_INVITE_ACTION,
@@ -36,6 +41,25 @@ def _context(key: str = "staff-owner-test") -> CommandContext:
         scope=staff_provisioning.STAFF_ASSIGN_SCOPE,
         reason="verify staff owner semantics",
         idempotency_key=key,
+    )
+
+
+@pytest.fixture(autouse=True)
+def local_authentication_binding(db_session) -> None:
+    credential_party_binding.install_authentication_binding(
+        db_session,
+        credential_party_binding.AuthenticationBindingInstallation(
+            context=CommandContext.system(
+                actor="operator:test",
+                scope=credential_party_binding.AUTHENTICATION_BINDING_INSTALL_SCOPE,
+                reason="staff provisioning tests require local authentication",
+                idempotency_key="authentication-binding:local.staff-provisioning-test",
+            ),
+            binding_key="local.staff-provisioning-test",
+            mechanism_code=AuthProvider.local.value,
+            name="Staff provisioning local authentication",
+            description="Test verifier for staff local credentials",
+        ),
     )
 
 
