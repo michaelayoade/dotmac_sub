@@ -1677,7 +1677,7 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="invoice_pdf_payment_presentment",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_INVOICE_PDF_PAYMENT_PRESENTMENT", "bank_account"),
+        value_text=os.getenv("BILLING_INVOICE_PDF_PAYMENT_PRESENTMENT", "paystack"),
     )
     billing_settings.ensure_by_key(
         db,
