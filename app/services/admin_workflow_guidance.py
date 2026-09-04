@@ -242,10 +242,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/billing/payments",),
         "Confirm external payment evidence, then enter amount, currency, method, date, reference, and memo.",
         "Review the preview, duplicate-reference and duplicate-evidence warnings, allocation, and service effects before confirming.",
+        "When verified prepaid credit covers the complete renewal charge, the system creates and pays one invoice for that service period, grants the matching coverage, and updates the next billing date together.",
+        "If the complete prepaid charge is unavailable, no renewal invoice is created and the billing date is not moved.",
         "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
         notes=(
             "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
+            "Do not create a manual invoice or manually change the next billing date to imitate a prepaid renewal.",
         ),
     ),
     _guide(

@@ -49,3 +49,14 @@ def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     assert "ordinary ticket editing" in content
     assert "ticket-update authority" in content
     assert "assignment details" in content
+
+
+def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
+    guide = guidance_for_path("/admin/billing/payments/123")
+
+    assert guide is not None
+    assert guide.id == "payments"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "creates and pays one invoice" in content
+    assert "complete prepaid charge is unavailable" in content
+    assert "billing date is not moved" in content
