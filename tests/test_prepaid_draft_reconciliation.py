@@ -149,6 +149,7 @@ def _payment(
         currency="NGN",
         memo="Reviewed test payment",
         is_active=True,
+        affects_customer_position=False,
         effective_date=paid_at,
         created_at=paid_at,
     )

@@ -24,6 +24,7 @@ from app.models.catalog import (
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services.access_resolution import PrepaidFundingDecision
 from app.services.customer_financial_ledger import calculate_customer_balance
 from app.services.domain_errors import DomainError
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
@@ -603,7 +604,7 @@ def test_scheduled_owner_refuses_historical_catch_up(
 
 
 def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
-    db_session, subscriber, subscription
+    db_session, subscriber, subscription, monkeypatch
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
@@ -617,6 +618,16 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     )
     db_session.add(lock)
     db_session.commit()
+    monkeypatch.setattr(
+        "app.services.collections._core.resolve_prepaid_funding",
+        lambda _db, account, *, now=None: PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("50.00"),
+            required_balance=Decimal("0.00"),
+            currency="NGN",
+            covered_subscription_ids=(subscription.id,),
+        ),
+    )
 
     summary = run_due_prepaid_service_renewals(
         db_session,
@@ -648,7 +659,7 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
 
 
 def test_funding_change_renews_suspended_due_service_from_payment_day(
-    db_session, subscriber, subscription
+    db_session, subscriber, subscription, monkeypatch
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
@@ -662,6 +673,16 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     )
     db_session.add(lock)
     db_session.commit()
+    monkeypatch.setattr(
+        "app.services.collections._core.resolve_prepaid_funding",
+        lambda _db, account, *, now=None: PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("50.00"),
+            required_balance=Decimal("0.00"),
+            currency="NGN",
+            covered_subscription_ids=(subscription.id,),
+        ),
+    )
 
     result = apply_due_prepaid_service_after_funding_change(
         db_session,
