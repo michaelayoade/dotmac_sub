@@ -3509,6 +3509,7 @@ class Tickets:
         }
 
         data = payload.model_dump(exclude_unset=True)
+        preserve_service_team = "service_team_id" in data
         assignee_person_ids = data.pop("assignee_person_ids", None)
 
         if "status" in data and data["status"] is None:
@@ -3535,7 +3536,7 @@ class Tickets:
         if assignee_person_ids is not None:
             Tickets._replace_assignees(db, ticket, assignee_person_ids)
 
-        if Tickets._auto_assignment_enabled(db):
+        if Tickets._auto_assignment_enabled(db) and not preserve_service_team:
             Tickets._apply_auto_assignment(ticket, db)
 
         Tickets._apply_sla_policy(db, ticket, explicit_due_at="due_at" in data)
@@ -3607,7 +3608,10 @@ class Tickets:
             from app.models.support import AutomationTrigger
 
             Tickets._apply_automation_rules(
-                db, ticket, AutomationTrigger.status_changed
+                db,
+                ticket,
+                AutomationTrigger.status_changed,
+                preserve_service_team=preserve_service_team,
             )
             from app.services import sla_operational_notifications
 
@@ -3629,7 +3633,10 @@ class Tickets:
             from app.models.support import AutomationTrigger
 
             Tickets._apply_automation_rules(
-                db, ticket, AutomationTrigger.priority_changed
+                db,
+                ticket,
+                AutomationTrigger.priority_changed,
+                preserve_service_team=preserve_service_team,
             )
 
         Tickets._queue_tag_notifications(
