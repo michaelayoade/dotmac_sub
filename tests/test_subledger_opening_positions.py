@@ -23,6 +23,7 @@ from app.models.customer_subledger import (
     PositionEffectKind,
     PostingCommandKind,
 )
+from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import customer_financial_ledger
 from app.services.billing.customer_subledger import resolve_position
@@ -604,6 +605,12 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     )
     assert migrated_capture.captured_count == 1
     assert migrated_capture.positive_total == Decimal("67334.75")
+    migrated_opening = (
+        db_session.query(CustomerSubledgerOpeningPosition)
+        .filter(CustomerSubledgerOpeningPosition.account_id == unrelated_blocker_id)
+        .one()
+    )
+    assert migrated_opening.baseline_id is None
     assert verified_prepaid_funding_balance(
         db_session, unrelated_blocker_id
     ) == Decimal("75812.50")
@@ -653,6 +660,12 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     assert invoice.subtotal == Decimal("17500.00")
     assert invoice.tax_total == Decimal("1312.50")
     assert invoice.total == Decimal("18812.50")
+    consumption = db_session.query(PrepaidOpeningFundingConsumption).one()
+    assert consumption.baseline_id is None
+    assert consumption.opening_position_id == migrated_opening.id
+    assert consumption.amount == Decimal("10334.75")
+    assert consumption.invoice_id == invoice.id
+    assert consumption.approval_evidence_ref == "pytest:finance-reviewed-opening-run"
     line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
     assert line.amount == Decimal("17500.00")
     assert line.tax_rate_id == tax_rate.id
