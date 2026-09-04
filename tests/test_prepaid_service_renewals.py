@@ -121,6 +121,7 @@ def test_succeeded_payment_without_settlement_evidence_remains_retryable(
 
 
 def _prepare(db_session, subscriber, subscription, amount="100.00"):
+    subscriber.billing_mode = BillingMode.prepaid
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
