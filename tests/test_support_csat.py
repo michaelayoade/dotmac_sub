@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
+from app.api import me as customer_api
 from app.models.csat import CsatRequestStatus, CsatSourceType, SupportCsatRequest
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber
@@ -14,8 +16,8 @@ from app.models.team_inbox import (
     InboxConversationAssignment,
     InboxConversationStatus,
 )
-from app.schemas.support import TicketUpdate
-from app.services import crm_portal, support, support_csat, team_inbox_commands
+from app.schemas.support import TicketSatisfactionRequest, TicketUpdate
+from app.services import support, support_csat, team_inbox_commands
 from app.services.domain_errors import DomainError
 from app.web.admin import reports as report_routes
 
@@ -120,15 +122,15 @@ def test_customer_cannot_rate_another_customers_ticket(db_session, subscriber):
     db_session.commit()
     ticket = _close_ticket(db_session, _ticket(db_session, subscriber))
 
-    result = crm_portal.handle_ticket_rating(
-        db_session,
-        [str(other.id)],
-        str(ticket.id),
-        5,
-        comment="nope",
-    )
+    with pytest.raises(HTTPException) as exc:
+        customer_api.my_rate_ticket(
+            str(ticket.id),
+            TicketSatisfactionRequest(rating=5, comment="nope"),
+            db_session,
+            {"principal_type": "subscriber", "subscriber_id": str(other.id)},
+        )
 
-    assert result["success"] is False
+    assert exc.value.status_code == 404
     assert db_session.query(SupportCsatRequest).filter_by(rating=5).count() == 0
 
 
