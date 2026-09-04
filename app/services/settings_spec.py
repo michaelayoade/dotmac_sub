@@ -2133,10 +2133,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="invoice_pdf_payment_presentment",
         env_var="BILLING_INVOICE_PDF_PAYMENT_PRESENTMENT",
         value_type=SettingValueType.string,
-        default="bank_account",
+        default="paystack",
         allowed={"bank_account", "paystack", "both"},
         string_normalization=SettingStringNormalization.LOWERCASE,
-        label="Invoice PDF Payment Presentment",
+        label="Invoice PDF Payment Fallback",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
