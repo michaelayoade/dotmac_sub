@@ -60,7 +60,10 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Choose a work area from the sidebar.",
         "Start from Customers for a person or service, and Billing for an invoice, payment, proof, credit, or reconciliation item.",
         "Open the customer detail page for work affecting one customer.",
-        notes=("Use visible actions on the owning record; do not work from memory.",),
+        notes=(
+            "Use visible actions on the owning record; do not work from memory.",
+            "If a session-expired page appears, use Refresh page so the same Admin page reloads with a fresh token.",
+        ),
     ),
     _guide(
         "find-customer",
