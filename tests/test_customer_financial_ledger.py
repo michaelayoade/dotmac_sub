@@ -42,6 +42,7 @@ from app.services.prepaid_service_renewals import (
     preview_prepaid_service_renewal,
 )
 from tests.prepaid_funding_helpers import (
+    create_test_settled_payment_credit,
     ensure_test_prepaid_contract,
     materialize_test_prepaid_opening_balance,
 )
@@ -443,27 +444,11 @@ def test_invoice_backed_prepaid_renewal_has_one_customer_position_debit(
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("100.00"),
-        refunded_amount=Decimal("0.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
+    payment = create_test_settled_payment_credit(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
         paid_at=paid_at,
-        created_at=paid_at,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        PaymentSettlement(
-            payment_id=payment.id,
-            amount=payment.amount,
-            unallocated_amount=payment.amount,
-            prepaid_amount=Decimal("0.00"),
-            currency="NGN",
-            origin=PaymentSettlementOrigin.system,
-            idempotency_key=f"pytest:invoice-backed-renewal:{payment.id}",
-        )
     )
     db_session.commit()
     materialize_test_prepaid_opening_balance(

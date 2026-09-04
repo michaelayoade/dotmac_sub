@@ -12,8 +12,6 @@ from app.models.billing import (
     InvoiceStatus,
     Payment,
     PaymentAllocation,
-    PaymentSettlement,
-    PaymentSettlementOrigin,
     PaymentStatus,
     ServiceEntitlement,
 )
@@ -46,6 +44,7 @@ from app.services.prepaid_service_renewals import (
     run_due_prepaid_service_renewals,
 )
 from tests.prepaid_funding_helpers import (
+    create_test_settled_payment_credit,
     ensure_test_prepaid_contract,
     materialize_test_prepaid_opening_balance,
 )
@@ -467,26 +466,11 @@ def test_funding_event_uses_owner_root_for_renewal_consumption(
 
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     paid_at = datetime(2026, 7, 20, 17, 30, tzinfo=UTC)
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("50.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
+    payment = create_test_settled_payment_credit(
+        db_session,
+        subscriber.id,
+        Decimal("50.00"),
         paid_at=paid_at,
-        is_active=True,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        PaymentSettlement(
-            payment_id=payment.id,
-            amount=payment.amount,
-            unallocated_amount=payment.amount,
-            prepaid_amount=Decimal("0.00"),
-            currency=payment.currency,
-            origin=PaymentSettlementOrigin.system,
-            idempotency_key=f"pytest:settlement:{payment.id}",
-        )
     )
     db_session.commit()
 
