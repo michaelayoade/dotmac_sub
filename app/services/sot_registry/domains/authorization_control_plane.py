@@ -1924,7 +1924,8 @@ DOMAIN = DomainSOT(
                         source=(
                             "HMAC-verified flat staff.leave_restriction.v1 payload "
                             "with delivery id, restriction id, employee mapping, "
-                            "effective bounds, status, version, and updated_at"
+                            "organization timezone, effective bounds, status, "
+                            "version, and updated_at"
                         ),
                     ),
                     AuthorityInput(
@@ -1943,8 +1944,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source=(
                             "Current ERP staff leave/account-status snapshot "
-                            "used by reconciliation; historical replay is not "
-                            "a source of truth."
+                            "used by the 15-minute reconciliation repair loop; "
+                            "historical replay is not a source of truth."
                         ),
                     ),
                     AuthorityInput(
@@ -2035,7 +2036,10 @@ DOMAIN = DomainSOT(
                         name="ERP staff leave restriction projection",
                         input_names=("signed ERP staff leave restriction event",),
                         writer="auth.erp_staff_access",
-                        freshness="current after latest accepted ERP version",
+                        freshness=(
+                            "current after latest accepted ERP version or the next "
+                            "15-minute reconciliation pass"
+                        ),
                         stale_behavior="older versions are audited and ignored",
                         drift_signal="reconciliation snapshot differs by version",
                         rebuild_operation="reconcile_staff_access_snapshot",

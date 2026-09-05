@@ -2249,11 +2249,15 @@ def build_beat_schedule() -> dict:
             enabled=erp_operational_sync_enabled,
             interval_seconds=300,
         )
-        if erp_staff_access_reconcile_enabled:
-            schedule["erp_staff_access_reconcile"] = {
-                "task": "app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access",
-                "schedule": crontab(hour=3, minute=0),
-            }
+        # Webhook delivery is the fast path; this bounded repair loop makes
+        # leave enforcement recover promptly after missed hooks or deployments.
+        _sync_scheduled_task(
+            session,
+            name="erp_staff_access_reconcile",
+            task_name="app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access",
+            enabled=erp_staff_access_reconcile_enabled,
+            interval_seconds=900,
+        )
 
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
