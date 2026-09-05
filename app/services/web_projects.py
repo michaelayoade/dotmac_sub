@@ -44,6 +44,7 @@ from app.models.project import (
 )
 from app.models.ticket_workflow import SlaClock, SlaClockStatus, WorkflowEntityType
 from app.schemas.common import ListResponse
+from app.schemas.infrastructure import InfrastructureReference, InfrastructureType
 from app.schemas.project import (
     ProjectCommentCreate,
     ProjectCommentUpdate,
@@ -60,6 +61,7 @@ from app.schemas.project import (
 from app.services import (
     customer_experience_lifecycle,
     customer_search,
+    infrastructure_catalogue,
     project_filters,
     project_mentions,
     project_vendor_delivery,
@@ -1135,6 +1137,32 @@ def build_project_form_context(
             else (bool(project.is_active) if project is not None else True)
         ),
     }
+    reference = (
+        InfrastructureReference.model_validate(project.infrastructure)
+        if project is not None and project.infrastructure
+        else None
+    )
+    infrastructure_type = (
+        str(values.get("infrastructure_type") or "")
+        if form is not None
+        else (reference.type.value if reference else "")
+    )
+    infrastructure_id = (
+        str(values.get("infrastructure_id") or "")
+        if form is not None
+        else (str(reference.id) if reference else "")
+    )
+    selected_infrastructure = None
+    if infrastructure_type and infrastructure_id:
+        try:
+            reference = InfrastructureReference(
+                type=InfrastructureType(infrastructure_type), id=UUID(infrastructure_id)
+            )
+            selected_infrastructure = infrastructure_catalogue.resolve(
+                db, reference=reference, active_only=False
+            )
+        except ValueError:
+            pass
     templates = template_options(db)
     staff = staff_options(
         db,
@@ -1149,6 +1177,20 @@ def build_project_form_context(
     )
     context: dict[str, object] = {
         "prefill": prefill,
+        "infrastructure_editor": {
+            "type": infrastructure_type,
+            "id": infrastructure_id,
+            "selected": selected_infrastructure.model_dump(mode="json")
+            if selected_infrastructure
+            else None,
+        },
+        "infrastructure_error": error
+        if error and "infrastructure" in error.lower()
+        else None,
+        "infrastructure_types": [
+            (kind.value, kind.value.replace("_", " ").title())
+            for kind in InfrastructureType
+        ],
         "project": project,
         "project_templates": templates,
         "project_template_map": _project_template_map(templates),
@@ -1178,6 +1220,18 @@ def _project_payload_data(*, actor_id: str | None = None, **form) -> dict:
         "is_active": str(form.get("is_active", "true")).strip().lower()
         in {"1", "true", "yes", "on"},
     }
+    if "infrastructure_type" in form or "infrastructure_id" in form:
+        kind = str(form.get("infrastructure_type") or "").strip()
+        target = str(form.get("infrastructure_id") or "").strip()
+        if bool(kind) != bool(target):
+            raise ValueError(
+                "Choose an infrastructure result or clear the infrastructure type."
+            )
+        data["infrastructure"] = (
+            InfrastructureReference(type=InfrastructureType(kind), id=UUID(target))
+            if target
+            else None
+        )
     for key in ("code", "description", "customer_address", "project_type", "region"):
         value = str(form.get(key) or "").strip()
         if value:
@@ -1359,6 +1413,13 @@ def build_project_detail_context(
         "material_request_create_url": (
             f"/admin/operations/material-requests/new?project_id={project.id}"
         ),
+        "project_infrastructure": infrastructure_catalogue.resolve(
+            db,
+            reference=InfrastructureReference.model_validate(project.infrastructure),
+            active_only=False,
+        )
+        if project.infrastructure
+        else None,
         "vendor_delivery": project_vendor_delivery.get_project_vendor_delivery(
             db,
             project_vendor_delivery.ProjectVendorDeliveryQuery(

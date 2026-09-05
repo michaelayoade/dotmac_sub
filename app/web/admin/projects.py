@@ -25,6 +25,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.common import ListResponse
+from app.schemas.infrastructure import (
+    InfrastructureOptions,
+    InfrastructureSearch,
+    InfrastructureType,
+)
+from app.services import infrastructure_catalogue
 from app.services import web_projects as projects_web_service
 from app.services.auth_dependencies import (
     can,
@@ -67,6 +73,22 @@ router = APIRouter(
     prefix="/projects", tags=["web-admin-projects"], route_class=ProjectDomainRoute
 )
 templates = Jinja2Templates(directory="templates")
+
+
+@router.get(
+    "/infrastructure-options",
+    response_model=InfrastructureOptions,
+    dependencies=[Depends(require_any_permission("project:create", "project:update"))],
+)
+def project_infrastructure_options(
+    infrastructure_type: InfrastructureType,
+    q: str = Query("", max_length=120),
+    limit: int = Query(20, ge=1, le=20),
+    db: Session = Depends(get_db),
+) -> InfrastructureOptions:
+    return infrastructure_catalogue.search(
+        db, query=InfrastructureSearch(type=infrastructure_type, query=q, limit=limit)
+    )
 
 
 def _ctx(request: Request, db: Session, active_page: str = "projects") -> dict:

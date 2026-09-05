@@ -47,6 +47,19 @@ def test_project_guidance_explains_customer_typeahead_selection() -> None:
     assert "selected customer account" in content
 
 
+def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:
+    guide = guidance_for_path("/admin/inbox/manager-ai")
+
+    assert guide is not None
+    assert guide.id == "team-inbox"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "period review" in content
+    assert "ask ai" in content
+    assert "response under answer" in content
+    assert "html-like text remains plain text" in content
+    assert "verify ai advice" in content
+
+
 def test_workflow_change_without_guidance_update_fails_gate() -> None:
     assert validation_errors(
         (__import__("pathlib").PurePosixPath("app/web/admin/reports.py"),)
@@ -59,6 +72,16 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
             ),
         )
     )
+
+
+def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
+    for path in ("/admin/projects", "/admin/projects/new", "/admin/projects/123/edit"):
+        guide = guidance_for_path(path)
+        assert guide is not None
+        assert guide.id == "project-authoring"
+    assert "project-authoring" in {
+        guide.id for guide in search_guidance(query="cable rerun")
+    }
 
 
 def test_support_ticket_guidance_separates_editing_from_assignment() -> None:

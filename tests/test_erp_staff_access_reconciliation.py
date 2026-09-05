@@ -21,6 +21,7 @@ def _leave_page() -> ErpStaffAccessProjectionPage:
                     "person_id": "40a71f76-77f3-42a5-9721-c4db0db8cc71",
                     "selfcare_user_id": "1a999a5c-4d89-448d-9f68-bc433886529e",
                     "leave_application_id": "707ba800-00b9-4d2a-96a8-4ff5a523c822",
+                    "organization_timezone": "Africa/Lagos",
                     "effective_from": "2026-09-01",
                     "effective_until": "2026-09-03",
                     "status": "ACTIVE",
@@ -116,9 +117,9 @@ def test_reconcile_task_fetches_typed_erp_snapshot_and_enters_owner() -> None:
     release_read.assert_called_once_with(db)
     command = captured[0]
     assert command.leave_restrictions[0].effective_from.isoformat() == (
-        "2026-09-01T00:00:00+00:00"
+        "2026-08-31T23:00:00+00:00"
     )
     assert command.leave_restrictions[0].effective_until.isoformat() == (
-        "2026-09-04T00:00:00+00:00"
+        "2026-09-03T23:00:00+00:00"
     )
     assert command.account_statuses[0].account_status == "active"

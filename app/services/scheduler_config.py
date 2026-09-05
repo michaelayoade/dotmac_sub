@@ -1751,16 +1751,10 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
         )
-        # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.
-        quote_reconcile_seconds = resolve_integer(
-            session, SettingDomain.subscriber, "quote_reconcile_interval_seconds"
-        )
-        _sync_scheduled_task(
-            session,
-            name="quote_mirror_reconcile",
-            task_name="app.tasks.quotes.reconcile_quote_mirror",
-            enabled=True,
-            interval_seconds=max(quote_reconcile_seconds, 900),
+        # Keep task tombstones for old broker messages; retire every persisted alias.
+        _retire_scheduled_task(session, "app.tasks.quotes.reconcile_quote_mirror")
+        _retire_scheduled_task(
+            session, "app.tasks.quotes.refresh_quote_mirror_for_subscriber"
         )
         olt_profile_sync_enabled = control_registry.is_enabled(
             session, "network.olt_profile_sync"
@@ -2249,11 +2243,15 @@ def build_beat_schedule() -> dict:
             enabled=erp_operational_sync_enabled,
             interval_seconds=300,
         )
-        if erp_staff_access_reconcile_enabled:
-            schedule["erp_staff_access_reconcile"] = {
-                "task": "app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access",
-                "schedule": crontab(hour=3, minute=0),
-            }
+        # Webhook delivery is the fast path; this bounded repair loop makes
+        # leave enforcement recover promptly after missed hooks or deployments.
+        _sync_scheduled_task(
+            session,
+            name="erp_staff_access_reconcile",
+            task_name="app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access",
+            enabled=erp_staff_access_reconcile_enabled,
+            interval_seconds=900,
+        )
 
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no

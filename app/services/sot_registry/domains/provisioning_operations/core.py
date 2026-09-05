@@ -1175,6 +1175,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "Project and ProjectTask identity and lifecycle",
             "project customer-account eligibility",
+            "project infrastructure relationship",
             "project creation customer email consequence",
             "project and task status-change customer notification consequence",
             "project completion finance email consequence",
@@ -1198,6 +1199,7 @@ SERVICES: tuple[SOTService, ...] = (
             "communications.staff_notifications",
             "communications.nextcloud_talk_staff",
             "operations.work_order_commands",
+            "network.infrastructure_catalogue",
         ),
         notes=(
             "Customer and reseller reads consume the read-only "
@@ -1207,6 +1209,15 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="project infrastructure relationship",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical project aggregate",
+                        "native infrastructure selection",
+                    ),
+                    canonical_writer="operations.project_lifecycle",
+                ),
                 ConcernContract(
                     name="Project and ProjectTask identity and lifecycle",
                     role=OwnerRole.COMMAND_WRITER,
@@ -1333,6 +1344,12 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
+                    name="native infrastructure selection",
+                    owner="network.infrastructure_catalogue",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Typed exact inventory reference, validated before structural project link writes",
+                ),
+                AuthorityInput(
                     name="canonical project aggregate",
                     owner="operations.project_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1446,6 +1463,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "project_task.completed",
                     "project_task.dependencies_replaced",
                     "project.assignment_changed",
+                    "project.infrastructure_changed",
                 ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",

@@ -190,14 +190,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Projects",
         "Create and update projects",
         "Project managers, operations",
-        "Create project work against the correct customer account.",
+        "Create project work against the correct customer account or infrastructure.",
         ("/admin/projects",),
         "Open New Project or edit the project that owns the work.",
         "Search for an active customer by name, account ID, account number, subscriber number, or email, then choose the matching result.",
         "Clear the customer field when the project is intentionally not linked to a customer.",
+        "For Cable Rerun infrastructure work, choose the infrastructure type, enter at least two characters, and select the matching result. Check its name and location or device details.",
+        "Leave Infrastructure blank for customer-only work. A cable rerun can reference both a customer and infrastructure, or neither while planning.",
+        "Select the appropriate template, save, and check the infrastructure on the project detail page. A template enabled for vendor work and either a customer or infrastructure prepares the vendor work record.",
+        "Assign an active vendor through the vendor workflow when its work record is active and in draft.",
         "Review the project type, status, priority, team, schedule, and customer before saving.",
         notes=(
             "The visible customer label is search text; the selected customer account is the identity saved with the project.",
+            "Typing an infrastructure name alone does not select it. Changing the search clears the previous selection; use Clear infrastructure to remove it.",
+            "For an older unscoped project, review and save its infrastructure and vendor-enabled template. Do not guess the target from the project name.",
+            "Assigned or published work cannot be retargeted through ordinary project edits. A draft vendor work record cannot lose its last customer, infrastructure, or buildout reference.",
+            "Selecting infrastructure does not assign a vendor or approve a quote or payment.",
         ),
     ),
     _guide(
@@ -338,6 +346,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
         notes=(
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
+            "In Manager AI, select a Conversation or use Period Review with a period and any channel or status filters, then submit your question with Ask AI.",
+            "Read the response under Answer; emphasis and lists are formatted, while HTML-like text remains plain text. Verify AI advice against the source conversations before acting.",
         ),
     ),
     _guide(

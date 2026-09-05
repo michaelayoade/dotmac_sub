@@ -28,7 +28,6 @@ commit 5 app/tasks/ont_runtime_status.py
 commit 1 app/tasks/ont_signal_observations.py
 commit 2 app/tasks/radius.py
 commit 26 app/tasks/router_sync.py
-commit 1 app/tasks/topology_lldp.py
 commit 1 app/tasks/topology_outage.py
 commit 1 app/tasks/topology_ufiber_link.py
 commit 1 app/tasks/topology_uisp.py
@@ -74,12 +73,10 @@ rollback 2 app/tasks/ont_reconcile.py
 rollback 2 app/tasks/ont_runtime_status.py
 rollback 2 app/tasks/ont_signal_observations.py
 rollback 1 app/tasks/profile_sync.py
-rollback 2 app/tasks/quotes.py
 rollback 3 app/tasks/radius.py
 rollback 3 app/tasks/radius_health.py
 rollback 1 app/tasks/radius_population.py
 rollback 5 app/tasks/router_sync.py
-rollback 2 app/tasks/topology_lldp.py
 rollback 2 app/tasks/topology_outage.py
 rollback 2 app/tasks/topology_ufiber_link.py
 rollback 3 app/tasks/topology_uisp.py

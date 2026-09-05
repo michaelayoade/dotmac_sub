@@ -75,6 +75,20 @@ def fiber_project(db_session, subscriber):
     )
 
 
+def test_render_project_infrastructure_editor(db_session, base_context):
+    context = web_projects.build_project_form_context(db_session)
+    html = _render(
+        "admin/projects/project_form.html",
+        base_context,
+        {**context, "page_title": "New Project", "form_mode": "create"},
+    )
+    assert 'name="infrastructure_type"' in html
+    assert 'name="infrastructure_id"' in html
+    assert 'role="combobox"' in html
+    assert "/static/js/project-infrastructure-picker.js" in html
+    assert "Customer-only work can leave this blank." in html
+
+
 def _render(name: str, base: dict, extra: dict) -> str:
     context = dict(base)
     context.update(extra)
