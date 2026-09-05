@@ -37,6 +37,13 @@ retries idempotent. Each scheduled run has its own idempotency identity, so an
 unchanged ERP snapshot can still repair local drift such as an administratively
 reactivated ERP-inactive account.
 
+The shared ERP bootstrap binds every production capability before enabling the
+installation and validates each binding independently. Staff-access validation
+performs a bounded one-row projection read and reports `sub:staff_access:read`
+when ERP rejects the credential; operational-sync validation sends an empty,
+idempotent batch and reports `sub:domain:write`. A valid inventory credential
+therefore cannot mask either missing capability scope.
+
 The authoritative inputs are ERP employee rows and approved leave applications.
 Neither webhook nor reconciliation may create, approve, or infer a leave record.
 Drift is visible as task failure, a mapping/version domain error, or a local
