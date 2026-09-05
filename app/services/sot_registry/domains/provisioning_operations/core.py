@@ -1174,6 +1174,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.projects",
         owns=(
             "Project and ProjectTask identity and lifecycle",
+            "project customer-account eligibility",
             "project creation customer email consequence",
             "project and task status-change customer notification consequence",
             "project completion finance email consequence",
@@ -1191,6 +1192,7 @@ SERVICES: tuple[SOTService, ...] = (
             "auth.permission_gate",
             "auth.staff_provisioning",
             "communications.intents",
+            "customer.accounts",
             "events.dispatcher",
             "communications.notification_service",
             "communications.staff_notifications",
@@ -1213,6 +1215,15 @@ SERVICES: tuple[SOTService, ...] = (
                         "authorized project command",
                     ),
                     canonical_writer="operations.project_lifecycle",
+                ),
+                ConcernContract(
+                    name="project customer-account eligibility",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical project aggregate",
+                        "canonical customer account state",
+                        "authorized project command",
+                    ),
                 ),
                 ConcernContract(
                     name="project creation customer email consequence",
@@ -1340,6 +1351,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source="authenticated actor, scope, reason, correlation id, and idempotency key",
                 ),
                 AuthorityInput(
+                    name="canonical customer account state",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "native Subscriber UUID and active state selected for a new "
+                        "or changed Project customer relationship"
+                    ),
+                ),
+                AuthorityInput(
                     name="project assignment decision",
                     owner="operations.project_assignment_policy",
                     kind=AuthorityKind.DERIVED_PROJECTION,
@@ -1391,7 +1411,7 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only.",
-                locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order.",
+                locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order. Customer eligibility is locked and read by native Subscriber UUID inside the owner command.",
                 idempotency="CommandContext idempotency keys identify externally retryable commands; identical completed intent replays its stable typed outcome and changed-state no-ops are safe.",
                 retries="Adapters retry serialization failures, deadlocks, and lock timeouts as a complete command; validation, stale-state, authorization, and idempotency conflicts are not retryable.",
             ),
@@ -1409,6 +1429,7 @@ SERVICES: tuple[SOTService, ...] = (
                 retryable_codes=("operations.project_lifecycle.stale_state",),
                 fail_closed_on=(
                     "unknown native identity",
+                    "missing or inactive customer selected for a new or changed project relationship",
                     "stale transition evidence",
                     "ambiguous assignment target",
                     "external identifier without native relationship",

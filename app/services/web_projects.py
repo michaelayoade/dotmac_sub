@@ -43,6 +43,7 @@ from app.models.project import (
     ProjectType,
 )
 from app.models.ticket_workflow import SlaClock, SlaClockStatus, WorkflowEntityType
+from app.schemas.common import ListResponse
 from app.schemas.project import (
     ProjectCommentCreate,
     ProjectCommentUpdate,
@@ -58,6 +59,7 @@ from app.schemas.project import (
 )
 from app.services import (
     customer_experience_lifecycle,
+    customer_search,
     project_filters,
     project_mentions,
     project_vendor_delivery,
@@ -239,6 +241,94 @@ class ProjectCustomerContext:
     detail_url: str
 
 
+class ProjectCustomerOption(BaseModel):
+    """One canonical subscriber option for the project customer picker."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    label: str
+    email: str | None = None
+    account_number: str | None = None
+    subscriber_number: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCustomerSearchQuery:
+    term: str
+    limit: int = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCustomerSearchPage:
+    items: tuple[ProjectCustomerOption, ...]
+    count: int
+    limit: int
+    offset: int = 0
+
+    def as_response(self) -> ListResponse[ProjectCustomerOption]:
+        return ListResponse[ProjectCustomerOption](
+            items=list(self.items),
+            count=self.count,
+            limit=self.limit,
+            offset=self.offset,
+        )
+
+
+def _project_customer_option(
+    match: customer_search.CustomerSearchMatch,
+) -> ProjectCustomerOption:
+    identifier = match.account_number or match.subscriber_number
+    label_parts = [match.name]
+    if identifier:
+        label_parts.append(identifier)
+    if match.email:
+        label_parts.append(match.email)
+    return ProjectCustomerOption(
+        id=match.id,
+        label=" · ".join(label_parts),
+        email=match.email,
+        account_number=match.account_number,
+        subscriber_number=match.subscriber_number,
+    )
+
+
+def search_project_customers(
+    db: Session, query: ProjectCustomerSearchQuery
+) -> ProjectCustomerSearchPage:
+    """Return active customer accounts for the project authoring picker."""
+
+    term = query.term.strip()
+    if len(term) < 2 or len(term) > 120:
+        raise _projection_error(
+            "invalid_filter", "Enter between 2 and 120 characters to search customers."
+        )
+    if query.limit < 1 or query.limit > 20:
+        raise _projection_error(
+            "invalid_page", "Customer search limit must be between 1 and 20."
+        )
+    result = customer_search.query_customers(
+        db,
+        customer_search.CustomerSearchQuery(term=term, limit=query.limit),
+    )
+    items = tuple(_project_customer_option(item) for item in result.items)
+    return ProjectCustomerSearchPage(
+        items=items,
+        count=len(items),
+        limit=result.limit,
+        offset=result.offset,
+    )
+
+
+def selected_project_customer(
+    db: Session, subscriber_id: UUID | None
+) -> ProjectCustomerOption | None:
+    if subscriber_id is None:
+        return None
+    match = customer_search.get_customer_match(db, subscriber_id)
+    return _project_customer_option(match) if match is not None else None
+
+
 def query_project_list_projection(
     db: Session, query: ProjectListProjectionQuery
 ) -> ProjectListProjectionPage:
@@ -339,6 +429,18 @@ def parse_uuid_or_none(value: str | None) -> UUID | None:
         return UUID(text)
     except ValueError:
         return None
+
+
+def parse_selected_customer_uuid(value: object) -> UUID | None:
+    """Fail closed when a typeahead posts text instead of a selected UUID."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return UUID(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Select a valid customer from the search results.") from exc
 
 
 def parse_dt_or_none(value: str | None) -> datetime | None:
@@ -583,12 +685,6 @@ def staff_options(
     db: Session, include_ids: list[str] | None = None
 ) -> list[dict[str, str]]:
     return support_service.list_assignment_people(db, include_ids=include_ids or [])
-
-
-def subscriber_options(
-    db: Session, include_ids: list[str] | None = None
-) -> list[dict[str, str]]:
-    return support_service.list_people(db, include_ids=include_ids or [])
 
 
 def region_options(db: Session) -> list[str]:
@@ -1061,8 +1157,8 @@ def build_project_form_context(
         "project_priorities": [item.value for item in ProjectPriority],
         "region_options": region_options(db),
         "staff_options": staff,
-        "subscriber_options": subscriber_options(
-            db, include_ids=_non_empty_ids([prefill["subscriber_id"]])
+        "selected_customer": selected_project_customer(
+            db, parse_uuid_or_none(str(prefill["subscriber_id"]))
         ),
     }
     if error:
@@ -1086,8 +1182,10 @@ def _project_payload_data(*, actor_id: str | None = None, **form) -> dict:
         value = str(form.get(key) or "").strip()
         if value:
             data[key] = value
+    subscriber_id = parse_selected_customer_uuid(form.get("subscriber_id"))
+    if subscriber_id is not None:
+        data["subscriber_id"] = subscriber_id
     for key in (
-        "subscriber_id",
         "owner_person_id",
         "manager_person_id",
         "project_manager_person_id",
@@ -1121,6 +1219,8 @@ def update_project_from_form(
     db: Session, *, request, project_id: str, actor_id: str | None, **form
 ) -> Project:
     data = _project_payload_data(**form)
+    # A cleared customer typeahead intentionally removes the relationship.
+    data["subscriber_id"] = parse_selected_customer_uuid(form.get("subscriber_id"))
     # Template can be cleared from the edit form (CRM parity).
     data["project_template_id"] = parse_uuid_or_none(form.get("project_template_id"))
     payload = ProjectUpdate.model_validate(data)
