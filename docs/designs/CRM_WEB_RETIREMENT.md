@@ -222,7 +222,9 @@ Focused validation covers queued tasks, absent/disabled/enabled bindings,
 refusal audit, history and timestamp preservation, scheduler aliases, retirement
 copy, and native quote behavior. Do not roll back to a worker that calls the
 retired transport. Preserve migration 579 storage, its tombstones, and all
-historical quote and synchronization rows during any rollback.
+historical quote and synchronization rows during any rollback. Migration 579's
+downgrade therefore moves only the Alembic revision marker; its idempotent
+upgrade accepts the retained singleton and reasserts schedule retirement.
 
 Each slice updates the ledger, the owning design and relationship-map entries,
 the executable SOT registry when an owner changes, behavior tests, architecture

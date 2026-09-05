@@ -20,20 +20,24 @@ depends_on: str | None = None
 def upgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute("SET LOCAL statement_timeout = '30s'")
-    op.create_table(
-        "erp_operational_sync_state",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("configuration_fingerprint", sa.String(64)),
-        sa.Column("status", sa.String(24), nullable=False, server_default="ready"),
-        sa.Column("failure_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("next_attempt_at", sa.DateTime(timezone=True)),
-        sa.Column("last_attempt_at", sa.DateTime(timezone=True)),
-        sa.Column("diagnostic", sa.JSON()),
-        sa.CheckConstraint("id = 1", name="ck_erp_sync_singleton"),
-    )
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("erp_operational_sync_state"):
+        op.create_table(
+            "erp_operational_sync_state",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("configuration_fingerprint", sa.String(64)),
+            sa.Column("status", sa.String(24), nullable=False, server_default="ready"),
+            sa.Column(
+                "failure_count", sa.Integer(), nullable=False, server_default="0"
+            ),
+            sa.Column("next_attempt_at", sa.DateTime(timezone=True)),
+            sa.Column("last_attempt_at", sa.DateTime(timezone=True)),
+            sa.Column("diagnostic", sa.JSON()),
+            sa.CheckConstraint("id = 1", name="ck_erp_sync_singleton"),
+        )
     op.execute(
         "INSERT INTO erp_operational_sync_state (id, status, failure_count) "
-        "VALUES (1, 'ready', 0)"
+        "VALUES (1, 'ready', 0) ON CONFLICT (id) DO NOTHING"
     )
     op.execute("""
         UPDATE scheduled_tasks SET enabled = false
@@ -45,7 +49,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError(
-        "Forward-only retirement: preserve ERP retry evidence and retired quote schedules. "
-        "Roll back application code only after pausing ERP sync through its owner."
-    )
+    # Forward-only evidence and authority retirement: keep the retry record,
+    # historical quote data, and retired schedules. The upgrade is idempotent
+    # so migration compatibility rehearsals can move the revision marker back
+    # and forward without recreating live transport or losing evidence.
+    pass

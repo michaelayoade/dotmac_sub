@@ -139,9 +139,7 @@ def test_quote_transport_methods_are_removed_from_all_layers() -> None:
     ):
         tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
         assert not retired.intersection(
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         )
 
 
