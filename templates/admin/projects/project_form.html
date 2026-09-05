@@ -24,7 +24,7 @@
     <form method="post"
           action="{% if form_mode == 'edit' and project %}/admin/projects/{{ project.number or project.id }}/edit{% else %}/admin/projects{% endif %}"
           class="space-y-5"
-          x-data='{ templateMap: {{ project_template_map | tojson }} }'>
+          x-data='{ templateMap: {{ project_template_map | tojson }}, projectType: {{ prefill.project_type | tojson }} }'>
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
 
         <div class="grid gap-4 sm:grid-cols-2">
@@ -40,7 +40,7 @@
             </div>
             <div>
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Type</label>
-                <select name="project_type"
+                <select name="project_type" x-model="projectType"
                         x-on:change="const tpl = templateMap[$event.target.value]; if (tpl) { $refs.templateSelect.value = tpl; }"
                         class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">— None —</option>
@@ -82,6 +82,8 @@
                 </select>
             </div>
         </div>
+
+        {% include 'admin/projects/_infrastructure_picker.html' %}
 
         <div class="border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
             <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Customer</p>

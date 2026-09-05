@@ -61,6 +61,16 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
     )
 
 
+def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
+    for path in ("/admin/projects", "/admin/projects/new", "/admin/projects/123/edit"):
+        guide = guidance_for_path(path)
+        assert guide is not None
+        assert guide.id == "project-authoring"
+    assert "project-authoring" in {
+        guide.id for guide in search_guidance(query="cable rerun")
+    }
+
+
 def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     guide = guidance_for_path("/admin/support/tickets/123")
 
