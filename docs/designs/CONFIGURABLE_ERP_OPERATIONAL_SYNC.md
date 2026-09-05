@@ -63,7 +63,7 @@ not become the owner of the source project or ticket lifecycle.
 ## Durable retry admission and safe diagnostics
 
 The operational-context owner also owns the singleton erp_operational_sync_state
-row, seeded by migration 578. Before cursor selection every scheduled or manual
+row, seeded by migration 579. Before cursor selection every scheduled or manual
 run locks this row with FOR UPDATE SKIP LOCKED. A contender returns already_running
 without transport. The transaction retains the lock through response validation,
 failure recording or watermark advancement. No expiring lease permits a second
@@ -98,7 +98,7 @@ heartbeat. The durable table remains authoritative if Redis is unavailable.
 
 ## Deployment and controlled recovery
 
-1. Validate source changes and migration 578 on a non-deployment development host
+1. Validate source changes and migration 579 on a non-deployment development host
    or GitHub CI, including fresh and real predecessor migration rehearsals and
    PostgreSQL contention tests. Missing PostgreSQL or private dependencies are
    failed validation prerequisites, not permission to substitute SQLite acceptance.
@@ -108,7 +108,7 @@ heartbeat. The durable table remains authoritative if Redis is unavailable.
    named staging host, obtain staging acceptance, then authorize and deploy that
    same digest to the explicitly named production host. Do not attach latest to
    an unaccepted candidate. This source PR does not authorize deployment.
-3. Apply migration 578 before starting new workers. Its new table is additive;
+3. Apply migration 579 before starting new workers. Its new table is additive;
    no source rows, cursors, mirrors or history are changed. Stop old ERP workers
    before new admission-controlled workers send: old versions do not take this
    lock. The migration uses a five-second lock and thirty-second statement budget.

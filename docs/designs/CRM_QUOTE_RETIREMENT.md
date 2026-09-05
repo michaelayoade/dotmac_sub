@@ -5,7 +5,7 @@ retirement decision. ERP remains a separate active integration. Native Selfcare
 quote reads, authoring and payment owners retain their existing feature controls;
 this change neither enables nor disables native quoting.
 
-Migration 578 disables every persisted schedule with either retired quote task
+Migration 579 disables every persisted schedule with either retired quote task
 name, including differently named aliases. Scheduler reconciliation repeats this
 idempotently. Both task names remain broker-compatible tombstones: they return
 one typed retirement outcome without opening a session or processing subscribers.
@@ -50,4 +50,4 @@ PostgreSQL, never SQLite metadata.
 
 Do not roll back to a worker that calls the retired CRM. If another change needs
 rollback, retain the quote tombstones and schedule retirement. Preserve migration
-578 storage and all historical quote and synchronization rows.
+579 storage and all historical quote and synchronization rows.

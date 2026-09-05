@@ -57,7 +57,7 @@ SERVICES: tuple[SOTService, ...] = (
                 old_owner="live CRM quote reconciliation and command transport",
                 new_owner="sales.crm_quote_retirement",
                 verification="Retired task, history preservation, and native quote tests.",
-                cutover_gate="Migration 578 retires persisted schedules; queued tasks are tombstones.",
+                cutover_gate="Migration 579 retires persisted schedules; queued tasks are tombstones.",
                 fallback_retirement="No quote-specific CRM client or runner actions remain.",
             ),
             steward="sales operations",

@@ -2,14 +2,17 @@
 
 Expand-only storage; source rows, cursors and quote history are untouched.
 Rollback deliberately retains retry evidence and does not re-enable CRM.
+
+Revision ID: 579_erp_sync_retry
+Revises: 578_project_infrastructure
 """
 
 import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "578_erp_sync_retry"
-down_revision: str | None = "577_migrated_opening_consumption_source"
+revision: str = "579_erp_sync_retry"
+down_revision: str | None = "578_project_infrastructure"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 

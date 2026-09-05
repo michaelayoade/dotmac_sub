@@ -289,7 +289,7 @@ def _sync_operational_domains(
     if state is None:
         if db.get(ErpOperationalSyncState, 1) is None:
             raise RuntimeError(
-                "ERP sync admission state is missing; apply migration 578"
+                "ERP sync admission state is missing; apply migration 579"
             )
         return OperationalSyncRunOutcome(
             projects=0,
