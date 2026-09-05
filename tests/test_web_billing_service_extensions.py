@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.audit import AuditActorType, AuditEvent
+from app.models.catalog import SubscriptionStatus
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionAnchorBasis,
@@ -162,6 +163,8 @@ def test_customer_history_includes_pending_network_scope_from_current_topology(
     subscriber,
     subscription,
 ):
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
     extension = ServiceExtension(
         reason="Submitted network extension",
         window_start=_NOW - timedelta(hours=4),
@@ -203,6 +206,8 @@ def test_customer_history_deduplicates_finalized_subscription_entries(
     from app.schemas.catalog import SubscriptionCreate
     from app.services import catalog as catalog_service
 
+    subscription.status = SubscriptionStatus.archived
+    db_session.commit()
     second_subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
