@@ -99,6 +99,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
         ("/admin/customers/",),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
+        "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
         "Open the specific record before performing a state-changing action.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
@@ -234,6 +235,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Set the reason, dates or days, and affected customer or subscription scope.",
         "Review billing-date and access effects before confirming.",
         "Use cancellation for pending extensions and reversal for applied extensions.",
+        "Verify the request state and any recorded billing-date impact from the customer Billing tab under Extensions.",
         notes=("Do not manually edit billing dates to undo an extension.",),
     ),
     _guide(

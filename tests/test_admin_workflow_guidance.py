@@ -26,6 +26,15 @@ def test_change_plan_guide_is_searchable_and_contextual() -> None:
     assert "Subscriptions" in guidance_categories()
 
 
+def test_customer_detail_guidance_explains_service_extension_states() -> None:
+    guide = next(item for item in WORKFLOW_GUIDANCE if item.id == "customer-detail")
+
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for state in ("pending", "applied", "canceled", "reversed"):
+        assert state in content
+    assert "billing-date impact" in content
+
+
 def test_workflow_change_without_guidance_update_fails_gate() -> None:
     assert validation_errors(
         (__import__("pathlib").PurePosixPath("app/web/admin/reports.py"),)

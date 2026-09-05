@@ -637,8 +637,11 @@ def _build_admin_billing_workspace(
         and (note.total or Decimal("0.00")) > (note.applied_total or Decimal("0.00"))
     ]
     open_credit_amount = sum(
-        (note.total or Decimal("0.00")) - (note.applied_total or Decimal("0.00"))
-        for note in open_credit_notes
+        (
+            (note.total or Decimal("0.00")) - (note.applied_total or Decimal("0.00"))
+            for note in open_credit_notes
+        ),
+        Decimal("0.00"),
     )
 
     return AdminBillingWorkspace(
