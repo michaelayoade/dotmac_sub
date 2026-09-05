@@ -55,6 +55,8 @@ polled successfully. This deliberately avoids pruning a failed observer's link
 merely because its peer responded. Manual links are never mutated; upserts
 remain source-scoped. Snapshots also reject overlapping runs whose links were
 already updated, preventing stale observations from overwriting newer ones.
+An explicit timestamp check also rejects observations older than existing LLDP
+freshness, including when a newer run finished during the older run's read phase.
 
 The old session-taking API is removed. Its one-off dry-run caller now collects
 detached candidates without invoking persistence; printed counts describe

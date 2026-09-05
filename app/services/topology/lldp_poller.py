@@ -47,6 +47,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from datetime import UTC
 from typing import Literal, TypeAlias
 
 import httpx
@@ -670,12 +671,27 @@ def _reconcile(session: Session, poll: LldpPoll) -> LldpStats:
             text("LOCK TABLE network_topology_links IN SHARE ROW EXCLUSIVE MODE")
         )
     current = read_snapshot(session, query=LldpReadQuery(poll.snapshot.observed_at))
+    observed_at = poll.snapshot.observed_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    newer_observation = any(
+        link.source == SOURCE
+        and link.last_seen_at is not None
+        and (
+            link.last_seen_at
+            if link.last_seen_at.tzinfo is not None
+            else link.last_seen_at.replace(tzinfo=UTC)
+        )
+        > observed_at
+        for link in current.links
+    )
     if (
         {row.id: row for row in current.routers}
         != {row.id: row for row in poll.snapshot.routers}
         or {row.id: row for row in current.devices}
         != {row.id: row for row in poll.snapshot.devices}
         or current.links != poll.snapshot.links
+        or newer_observation
     ):
         raise DomainError(
             code="network.lldp_observations.stale_snapshot",

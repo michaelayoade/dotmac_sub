@@ -8,7 +8,7 @@ sample dicts in the real shape the fleet returns.
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -163,6 +163,29 @@ def test_failed_observer_is_not_pruned_by_successful_peer(db_session: Session) -
     assert result["routers_failed"] == 1
     assert result["pruned"] == 0
     assert len(_active_links(db_session)) == 1
+
+
+def test_older_run_cannot_overwrite_newer_observation(db_session: Session) -> None:
+    from app.services.domain_errors import DomainError
+
+    local, _ = _router_node(db_session, "Local")
+    remote = _plain(db_session, "Remote")
+    db_session.add(
+        NetworkTopologyLink(
+            source_device_id=local.id,
+            target_device_id=remote.id,
+            source=SOURCE,
+            is_active=True,
+            last_seen_at=NOW + timedelta(minutes=1),
+            metadata_={"observed_from": str(local.id)},
+        )
+    )
+    # The newer result was already visible in this older run's read snapshot.
+    # Snapshot equality alone therefore cannot protect its freshness.
+    with pytest.raises(DomainError, match="changed during collection"):
+        poll_all(db_session, read_neighbors=lambda _: [], now=NOW)
+    link = _active_links(db_session)[0]
+    assert link.last_seen_at.replace(tzinfo=UTC) == NOW + timedelta(minutes=1)
 
 
 def _router_node(db, name, mgmt_ip=None, is_active=True, network_device=True):
