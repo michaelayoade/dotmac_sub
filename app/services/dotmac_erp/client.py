@@ -267,7 +267,7 @@ class DotMacERPClient:
         self._last_request_id = request_id
         self._last_status = None
         request_headers = dict(headers or {})
-        request_headers["X-Request-ID"] = str(request_id)
+        request_headers.setdefault("X-Request-ID", str(request_id))
         try:
             return self._get_transport().request(
                 method,

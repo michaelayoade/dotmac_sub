@@ -206,6 +206,36 @@ class RouterConnectionService:
         )
 
     @classmethod
+    def execute_once(
+        cls,
+        router: Router | LldpRouter,
+        *,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> RouterResponse:
+        """Issue one REST request without resolving database-backed retry settings."""
+        timeout = httpx.Timeout(connect_timeout, read=read_timeout)
+        with cls.get_client(router, timeout=timeout) as client:
+            response = client.request(
+                method=method,
+                url=f"/rest{path}",
+                json=payload,
+            )
+            response.raise_for_status()
+            if not response.text:
+                return {}
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type.lower():
+                try:
+                    return response.json()
+                except ValueError:
+                    return response.text
+            return response.text
+
+    @classmethod
     def execute(
         cls,
         router: Router,

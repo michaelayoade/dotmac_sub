@@ -1,7 +1,7 @@
-"""Add ERP retry evidence and retire persisted CRM quote schedules.
+"""Add ERP retry evidence and retire persisted quote transport schedules.
 
 Expand-only storage; source rows, cursors and quote history are untouched.
-Rollback deliberately retains retry evidence and does not re-enable CRM.
+Rollback deliberately retains retry evidence and does not re-enable retired transport.
 
 Revision ID: 579_erp_sync_retry
 Revises: 578_project_infrastructure
@@ -31,7 +31,10 @@ def upgrade() -> None:
         sa.Column("diagnostic", sa.JSON()),
         sa.CheckConstraint("id = 1", name="ck_erp_sync_singleton"),
     )
-    op.execute("INSERT INTO erp_operational_sync_state (id) VALUES (1)")
+    op.execute(
+        "INSERT INTO erp_operational_sync_state (id, status, failure_count) "
+        "VALUES (1, 'ready', 0)"
+    )
     op.execute("""
         UPDATE scheduled_tasks SET enabled = false
         WHERE task_name IN (
@@ -43,6 +46,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     raise RuntimeError(
-        "Forward-only retirement: preserve ERP retry evidence and retired CRM schedules. "
+        "Forward-only retirement: preserve ERP retry evidence and retired quote schedules. "
         "Roll back application code only after pausing ERP sync through its owner."
     )

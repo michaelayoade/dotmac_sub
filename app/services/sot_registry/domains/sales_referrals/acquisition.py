@@ -37,7 +37,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="approved CRM retirement",
                     owner="sales.crm_quote_retirement",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="docs/designs/CRM_QUOTE_RETIREMENT.md",
+                    source="docs/designs/CRM_WEB_RETIREMENT.md",
                 ),
             ),
             transaction=TransactionContract(
@@ -61,10 +61,10 @@ SERVICES: tuple[SOTService, ...] = (
                 fallback_retirement="No quote-specific CRM client or runner actions remain.",
             ),
             steward="sales operations",
-            design_refs=("docs/designs/CRM_QUOTE_RETIREMENT.md",),
+            design_refs=("docs/designs/CRM_WEB_RETIREMENT.md",),
             test_refs=(
                 "tests/test_quotes_mirror.py",
-                "tests/architecture/test_crm_quote_retirement.py",
+                "tests/architecture/test_no_crm_writeback.py",
             ),
         ),
     ),

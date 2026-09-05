@@ -5641,13 +5641,6 @@ SETTINGS_SPECS.extend(
             default=1,
         ),
         SettingSpec(
-            domain=SettingDomain.subscriber,
-            key="quote_reconcile_interval_seconds",
-            env_var=None,
-            value_type=SettingValueType.integer,
-            default=3600,
-        ),
-        SettingSpec(
             domain=SettingDomain.usage,
             key="device_login_sync_interval_seconds",
             env_var="DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",

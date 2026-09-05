@@ -50,7 +50,6 @@ from collections.abc import Callable
 from datetime import UTC
 from typing import Literal, TypeAlias
 
-import httpx
 import routeros_api
 from billiard.exceptions import SoftTimeLimitExceeded
 from routeros_api.exceptions import (
@@ -111,7 +110,6 @@ ROUTER_SOCKET_TIMEOUT = 15.0
 # router this hour, retry next" philosophy as the binary socket timeout above.
 ROUTER_REST_CONNECT_TIMEOUT = 5.0
 ROUTER_REST_READ_TIMEOUT = 12.0
-ROUTER_REST_MAX_RETRIES = 1
 
 # Wall-clock safety net: the Celery task has soft_time_limit=300 — stop
 # attempting new devices before that so the run finishes cleanly (upsert +
@@ -435,7 +433,7 @@ def _read_neighbors_via_rest(router: LldpRouter) -> list[NeighborRow]:
     so a dead router costs seconds, not the snapshot retry budget. The service
     decrypts the same ``rest_api_*`` credentials, builds the
     ``management_ip``/``rest_api_port``/``use_ssl`` base URL, prepends ``/rest``,
-    and closes the httpx client via its ``with`` context (no session leak).
+    and closes the HTTP client via its context manager (no session leak).
 
     TLS: RouterOS presents a self-signed cert, so verification is governed by
     the router row's ``verify_tls`` column (``RouterConnectionService.get_client``
@@ -450,26 +448,20 @@ def _read_neighbors_via_rest(router: LldpRouter) -> list[NeighborRow]:
     SAME dict shape :func:`_read_neighbors_via_binary_api` yields — so downstream
     matching/edge-building is unchanged.
     """
-    # Imported lazily: the REST connection layer pulls in httpx/sshtunnel and is
+    # Imported lazily: the REST connection layer pulls in its transport and is
     # only needed on the rare REST-only-core fallback path.
     from app.services.router_management.connection import RouterConnectionService
 
-    # execute() resolves DB-backed retry settings even with explicit overrides.
-    # LLDP has always used one REST attempt; reuse client/tunnel/auth/TLS setup
-    # directly so the network phase cannot open a hidden settings transaction.
-    timeout = httpx.Timeout(ROUTER_REST_CONNECT_TIMEOUT, read=ROUTER_REST_READ_TIMEOUT)
-    with RouterConnectionService.get_client(router, timeout=timeout) as client:
-        response = client.request(method="GET", url="/rest/ip/neighbor", json=None)
-        response.raise_for_status()
-        if (
-            not response.text
-            or "json" not in response.headers.get("content-type", "").lower()
-        ):
-            return []
-        try:
-            data = response.json()
-        except ValueError:
-            return []
+    # LLDP has always used one REST attempt. The established connection owner
+    # provides an explicit one-shot boundary that cannot resolve DB settings.
+    data = RouterConnectionService.execute_once(
+        router,
+        method="GET",
+        path="/ip/neighbor",
+        payload=None,
+        connect_timeout=ROUTER_REST_CONNECT_TIMEOUT,
+        read_timeout=ROUTER_REST_READ_TIMEOUT,
+    )
     return [dict(row) for row in data] if isinstance(data, list) else []
 
 

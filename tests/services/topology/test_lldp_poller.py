@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import httpx
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 from routeros_api.exceptions import (
@@ -710,11 +709,11 @@ def test_rest_reader_parses_json_array_into_neighbor_dict_shape(monkeypatch):
         captured["timeout"] = timeout
         client = MagicMock()
         client.__enter__.return_value = client
-        client.request.return_value = httpx.Response(
-            200,
-            json=rest_json,
-            request=httpx.Request("GET", "https://router/rest/ip/neighbor"),
-        )
+        response = MagicMock()
+        response.text = "json response"
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = rest_json
+        client.request.return_value = response
         captured["client"] = client
         return client
 
@@ -737,6 +736,7 @@ def test_rest_reader_parses_json_array_into_neighbor_dict_shape(monkeypatch):
     captured["client"].request.assert_called_once_with(
         method="GET", url="/rest/ip/neighbor", json=None
     )
+    captured["client"].request.return_value.raise_for_status.assert_called_once_with()
     assert captured["timeout"].read == lldp_poller.ROUTER_REST_READ_TIMEOUT
     assert captured["timeout"].connect == lldp_poller.ROUTER_REST_CONNECT_TIMEOUT
     captured["client"].__exit__.assert_called_once()
@@ -879,6 +879,8 @@ def test_manual_backbone_link_not_duplicated_and_survives(db_session):
     )
     db_session.add_all([manual, manual_null])
     db_session.flush()
+    manual_id = manual.id
+    manual_null_id = manual_null.id
 
     neighbors = {
         # Both endpoints rediscover the manually-modeled pair (either direction).
@@ -894,8 +896,10 @@ def test_manual_backbone_link_not_duplicated_and_survives(db_session):
 
     # No lldp row exists for either canonical pair; the manual links survive.
     assert len(_active_links(db_session)) == 0  # source='lldp_neighbor' rows
-    db_session.refresh(manual)
-    db_session.refresh(manual_null)
+    manual = db_session.get(NetworkTopologyLink, manual_id)
+    manual_null = db_session.get(NetworkTopologyLink, manual_null_id)
+    assert manual is not None
+    assert manual_null is not None
     assert manual.is_active is True and manual.source == "manual"
     assert manual_null.is_active is True and manual_null.source is None
 
@@ -904,5 +908,6 @@ def test_manual_backbone_link_not_duplicated_and_survives(db_session):
         db_session, read_neighbors=stub, now=datetime(2026, 6, 17, 14, 5, tzinfo=UTC)
     )
     assert r2["pruned"] == 0
-    db_session.refresh(manual)
+    manual = db_session.get(NetworkTopologyLink, manual_id)
+    assert manual is not None
     assert manual.is_active is True

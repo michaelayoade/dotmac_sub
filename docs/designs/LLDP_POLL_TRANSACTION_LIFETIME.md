@@ -17,10 +17,10 @@ The task now owns two separate session lifetimes:
    credentials are excluded from repr. Rollback and close precede polling.
 2. `poll_all(snapshot=...)` has no Session input or database access. Decryption
    happens only after the read phase. Binary remains first; connection-class
-   failures alone permit REST fallback. REST reuses the established client,
-   authentication, tunnel, and TLS implementation, bypassing `execute()`'s
-   hidden DB-backed settings lookup. It still performs one GET attempt with
-   the existing discovery timeouts.
+   failures alone permit REST fallback. REST reuses the established connection
+   owner's authentication, tunnel, and TLS implementation through an explicit
+   one-shot request that cannot resolve database-backed retry settings. It still
+   performs one GET attempt with the existing discovery timeouts.
 3. `reconcile_poll(ReconcileLldpCommand)` enters `execute_owner_command` once
    on a fresh transaction-free session. PostgreSQL SHARE locks on inventory
    tables and SHARE ROW EXCLUSIVE on adjacency serialize conflicting writers,

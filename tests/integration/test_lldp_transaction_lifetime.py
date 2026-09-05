@@ -11,6 +11,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.event_store import EventStatus, EventStore
+from app.models.network_monitoring import NetworkDevice
+from app.models.router_management import Router
 from app.services.events.types import Event
 from app.services.owner_commands import CommandContext
 from app.services.topology import lldp_poller
@@ -21,8 +23,32 @@ from app.services.topology.lldp_contracts import (
     ReconcileLldpCommand,
 )
 from app.tasks import topology_lldp
-from tests.services.topology.test_lldp_poller import _plain, _router_node
 from tests.test_lldp_transaction_span import snapshot
+
+
+def _router_node(db: Session, name: str) -> tuple[NetworkDevice, Router]:
+    node = NetworkDevice(name=name, source="pytest", is_active=True)
+    db.add(node)
+    db.flush()
+    router = Router(
+        name=name,
+        hostname=name,
+        management_ip="192.0.2.1",
+        rest_api_username="api-user",
+        rest_api_password="api-pass",
+        network_device_id=node.id,
+        is_active=True,
+    )
+    db.add(router)
+    db.flush()
+    return node, router
+
+
+def _plain(db: Session, name: str) -> NetworkDevice:
+    node = NetworkDevice(name=name, source="pytest", is_active=True)
+    db.add(node)
+    db.flush()
+    return node
 
 
 @pytest.mark.parametrize("timeout", [False, True])

@@ -1,4 +1,4 @@
-"""Deployment retirement authority for CRM-backed quote work, never native quotes."""
+"""Deployment retirement authority for external quote work, never native quotes."""
 
 from typing import Literal
 
@@ -15,5 +15,5 @@ class QuoteRetirementOutcome(BaseModel):
 
 
 def retirement_outcome() -> QuoteRetirementOutcome:
-    """CRM retirement is an approved deployment contract, not a binding fallback."""
+    """Quote transport retirement is approved deployment policy, not a fallback."""
     return QuoteRetirementOutcome()

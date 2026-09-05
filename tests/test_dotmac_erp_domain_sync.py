@@ -140,8 +140,9 @@ def test_domain_sync_pushes_sub_ids_and_advances_cursors(db_session):
     assert result.project_tasks == 1
     assert result.tickets == 1
     assert result.work_orders == 1
-    assert result.status == "blocked"
-    assert result.diagnostic.code == "item_rejected" == ()
+    assert result.status == "success"
+    assert result.errors == ()
+    assert result.diagnostic is None
     command = client.commands[0]
     assert command.projects[0].source_id
     assert command.project_tasks[0].project_source_id == command.projects[0].source_id

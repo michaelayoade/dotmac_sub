@@ -129,7 +129,7 @@ heartbeat. The durable table remains authoritative if Redis is unavailable.
 7. For rollback, first pause the ERP operational capability and stop new workers.
    Keep the additive retry table and evidence; never downgrade by deleting it.
    An older worker ignores the gate, so do not re-enable it without equivalent
-   admission protection. Keep CRM retirement even when rolling back ERP changes.
+   admission protection. Keep quote-transport retirement when rolling back ERP changes.
 
 This feed preserves pending source state after unchanged watermarks. It does not
 capture every intermediate source version, and a count of failed sweeps is not a
