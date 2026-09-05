@@ -27,7 +27,6 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -81,10 +80,10 @@ from app.services.owner_commands import CommandContext
 from app.services.sales import lead_intake
 from app.services.workqueue import principal_from_auth
 from app.services.workqueue.scope import WorkqueuePermissionError, get_workqueue_scope
+from app.web.templates import templates
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 settings_router = APIRouter(prefix="/crm/inbox", tags=["web-admin-inbox"])
-templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
 INBOX_HTML_RESPONSE_HEADERS: dict[str, str] = {
     "Cache-Control": "private, no-store, no-cache, must-revalidate",
