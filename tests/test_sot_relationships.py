@@ -790,6 +790,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "auth.permission_gate",
         "auth.staff_provisioning",
         "communications.intents",
+        "customer.accounts",
         "events.dispatcher",
         "communications.notification_service",
         "communications.staff_notifications",
