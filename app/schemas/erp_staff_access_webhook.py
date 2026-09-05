@@ -3,8 +3,16 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 
 class ErpStaffLeaveRestrictionEvent(BaseModel):
@@ -50,12 +58,26 @@ class ErpLeaveSource(BaseModel):
 def _inclusive_date_range(
     effective_from: date,
     effective_until: date,
+    organization_timezone: str,
 ) -> tuple[datetime, datetime]:
-    """Translate ERP's inclusive dates to Selfcare's half-open UTC timestamps."""
+    """Translate inclusive ERP-local dates to half-open UTC timestamps."""
 
-    start = datetime.combine(effective_from, time.min, tzinfo=UTC)
-    end = datetime.combine(effective_until + timedelta(days=1), time.min, tzinfo=UTC)
-    return start, end
+    organization_zone = ZoneInfo(organization_timezone)
+    start = datetime.combine(effective_from, time.min, tzinfo=organization_zone)
+    end = datetime.combine(
+        effective_until + timedelta(days=1),
+        time.min,
+        tzinfo=organization_zone,
+    )
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+def _validate_organization_timezone(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("organization_timezone must be a valid IANA timezone") from exc
+    return value
 
 
 class ErpStaffLeaveRestrictionWebhook(BaseModel):
@@ -71,6 +93,7 @@ class ErpStaffLeaveRestrictionWebhook(BaseModel):
     person_id: UUID
     selfcare_user_id: UUID | None = None
     source: ErpLeaveSource
+    organization_timezone: str = Field(default="UTC", min_length=1, max_length=64)
     effective_from: date
     effective_until: date
     status: Literal["ACTIVE", "CANCELLED"]
@@ -78,6 +101,10 @@ class ErpStaffLeaveRestrictionWebhook(BaseModel):
     updated_at: datetime
     cancelled_at: datetime | None = None
     cancellation_reason: str | None = Field(default=None, max_length=100)
+
+    _valid_organization_timezone = field_validator("organization_timezone")(
+        _validate_organization_timezone
+    )
 
     @model_validator(mode="after")
     def _valid_date_range(self) -> ErpStaffLeaveRestrictionWebhook:
@@ -91,6 +118,7 @@ class ErpStaffLeaveRestrictionWebhook(BaseModel):
         effective_from, effective_until = _inclusive_date_range(
             self.effective_from,
             self.effective_until,
+            self.organization_timezone,
         )
         return ErpStaffLeaveRestrictionEvent(
             event_id=event_id,
@@ -156,6 +184,7 @@ class ErpStaffLeaveRestrictionProjection(BaseModel):
     person_id: UUID
     selfcare_user_id: UUID | None = None
     leave_application_id: UUID
+    organization_timezone: str = Field(default="UTC", min_length=1, max_length=64)
     effective_from: date
     effective_until: date
     status: Literal["ACTIVE", "CANCELLED"]
@@ -164,6 +193,10 @@ class ErpStaffLeaveRestrictionProjection(BaseModel):
     updated_at: datetime
     cancelled_at: datetime | None = None
     cancellation_reason: str | None = Field(default=None, max_length=100)
+
+    _valid_organization_timezone = field_validator("organization_timezone")(
+        _validate_organization_timezone
+    )
 
     @model_validator(mode="after")
     def _valid_date_range(self) -> ErpStaffLeaveRestrictionProjection:
@@ -177,6 +210,7 @@ class ErpStaffLeaveRestrictionProjection(BaseModel):
         effective_from, effective_until = _inclusive_date_range(
             self.effective_from,
             self.effective_until,
+            self.organization_timezone,
         )
         return ErpStaffLeaveRestrictionEvent(
             event_id=f"reconcile:leave:{self.restriction_id}:v{self.version}",

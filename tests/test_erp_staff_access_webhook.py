@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from app.api import erp_staff_access_webhooks
+from app.schemas.erp_staff_access_webhook import ERP_STAFF_ACCESS_WEBHOOK_ADAPTER
 from app.services.integrations.backoffice_contracts import (
     ERP_STAFF_ACCESS_WEBHOOK_CAPABILITY,
 )
@@ -46,6 +47,7 @@ def _leave_payload(user_id: UUID) -> bytes:
                 "id": "707ba800-00b9-4d2a-96a8-4ff5a523c822",
                 "status": "APPROVED",
             },
+            "organization_timezone": "Africa/Lagos",
             "effective_from": "2026-01-10",
             "effective_until": "2026-01-15",
             "status": "ACTIVE",
@@ -55,6 +57,14 @@ def _leave_payload(user_id: UUID) -> bytes:
             "cancellation_reason": None,
         }
     ).encode()
+
+
+def test_staff_leave_contract_rejects_unknown_organization_timezone() -> None:
+    payload = json.loads(_leave_payload(uuid4()))
+    payload["organization_timezone"] = "Not/AZone"
+
+    with pytest.raises(ValueError, match="valid IANA timezone"):
+        ERP_STAFF_ACCESS_WEBHOOK_ADAPTER.validate_python(payload)
 
 
 def test_staff_access_webhook_rejects_invalid_signature_before_claim(
@@ -194,8 +204,8 @@ def test_staff_access_webhook_enters_owner_command_after_inbox_commit(
         assert not db.in_transaction()
         assert command.delivery_id == "stable-delivery"
         assert command.event.event_id == "stable-delivery"
-        assert command.event.effective_from.isoformat() == "2026-01-10T00:00:00+00:00"
-        assert command.event.effective_until.isoformat() == "2026-01-16T00:00:00+00:00"
+        assert command.event.effective_from.isoformat() == "2026-01-09T23:00:00+00:00"
+        assert command.event.effective_until.isoformat() == "2026-01-15T23:00:00+00:00"
         return SimpleNamespace(
             event_id=command.event.event_id,
             applied=True,
