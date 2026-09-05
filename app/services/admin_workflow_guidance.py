@@ -186,6 +186,21 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "project-authoring",
+        "Projects",
+        "Create and update projects",
+        "Project managers, operations",
+        "Create project work against the correct customer account.",
+        ("/admin/projects",),
+        "Open New Project or edit the project that owns the work.",
+        "Search for an active customer by name, account ID, account number, subscriber number, or email, then choose the matching result.",
+        "Clear the customer field when the project is intentionally not linked to a customer.",
+        "Review the project type, status, priority, team, schedule, and customer before saving.",
+        notes=(
+            "The visible customer label is search text; the selected customer account is the identity saved with the project.",
+        ),
+    ),
+    _guide(
         "billing-overview",
         "Billing",
         "Understand customer billing",

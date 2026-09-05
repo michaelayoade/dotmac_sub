@@ -35,6 +35,18 @@ def test_customer_detail_guidance_explains_service_extension_states() -> None:
     assert "billing-date impact" in content
 
 
+def test_project_guidance_explains_customer_typeahead_selection() -> None:
+    guide = guidance_for_path("/admin/projects/new")
+
+    assert guide is not None
+    assert guide.id == "project-authoring"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "account id" in content
+    assert "choose the matching result" in content
+    assert "clear the customer field" in content
+    assert "selected customer account" in content
+
+
 def test_workflow_change_without_guidance_update_fails_gate() -> None:
     assert validation_errors(
         (__import__("pathlib").PurePosixPath("app/web/admin/reports.py"),)
