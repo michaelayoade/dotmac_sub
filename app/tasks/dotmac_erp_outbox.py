@@ -158,9 +158,17 @@ def refresh_purchase_invoice_statuses() -> dict:
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains")
 def sync_erp_operational_domains() -> dict[str, object]:
     """Push native project, ticket, project-task, and work-order context to ERP."""
+    from app.services import job_heartbeat
     from app.services.dotmac_erp.domain_sync import run_sync_operational_domains
 
-    return run_sync_operational_domains()
+    outcome = run_sync_operational_domains()
+    job_heartbeat.record_result(
+        "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains",
+        status=outcome.status,
+        detail=outcome.model_dump(mode="json"),
+        next_attempt_at=outcome.next_attempt_at,
+    )
+    return outcome.model_dump(mode="json")
 
 
 @celery_app.task(

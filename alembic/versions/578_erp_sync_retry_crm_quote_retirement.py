@@ -1,0 +1,45 @@
+"""Add ERP retry evidence and retire persisted CRM quote schedules.
+
+Expand-only storage; source rows, cursors and quote history are untouched.
+Rollback deliberately retains retry evidence and does not re-enable CRM.
+"""
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision: str = "578_erp_sync_retry"
+down_revision: str | None = "577_migrated_opening_consumption_source"
+branch_labels: tuple[str, ...] | None = None
+depends_on: str | None = None
+
+
+def upgrade() -> None:
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    op.execute("SET LOCAL statement_timeout = '30s'")
+    op.create_table(
+        "erp_operational_sync_state",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("configuration_fingerprint", sa.String(64)),
+        sa.Column("status", sa.String(24), nullable=False, server_default="ready"),
+        sa.Column("failure_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("next_attempt_at", sa.DateTime(timezone=True)),
+        sa.Column("last_attempt_at", sa.DateTime(timezone=True)),
+        sa.Column("diagnostic", sa.JSON()),
+        sa.CheckConstraint("id = 1", name="ck_erp_sync_singleton"),
+    )
+    op.execute("INSERT INTO erp_operational_sync_state (id) VALUES (1)")
+    op.execute("""
+        UPDATE scheduled_tasks SET enabled = false
+        WHERE task_name IN (
+          'app.tasks.quotes.reconcile_quote_mirror',
+          'app.tasks.quotes.refresh_quote_mirror_for_subscriber'
+        ) AND enabled = true
+    """)
+
+
+def downgrade() -> None:
+    raise RuntimeError(
+        "Forward-only retirement: preserve ERP retry evidence and retired CRM schedules. "
+        "Roll back application code only after pausing ERP sync through its owner."
+    )

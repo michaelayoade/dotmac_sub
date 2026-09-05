@@ -167,7 +167,7 @@ longer exists.
 
 Portal and public live chat is owned outright by
 `communications.team_inbox_widget`. The `crm.chat_session.v1` capability is
-removed from the current `dotmac.crm` manifest (1.2.0), the
+removed from the `dotmac.crm` manifests since 1.2.0, the
 `comms.chat_session_authority` selector and the CRM broker are deleted, and
 `tests/architecture/test_single_chat_authority.py` prevents a second chat
 authority returning. Retirement record: `docs/adr/0006-temporary-crm-chat-authority.md`.

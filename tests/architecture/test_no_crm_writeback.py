@@ -35,10 +35,7 @@ RETIRED_MUTATIONS = {
 #: referral mutation has been removed from this set.
 #:
 #: This set must only ever SHRINK. It goes to zero when the read cutover lands.
-DEFERRED_MUTATIONS = {
-    "request_portal_quote",
-    "accept_portal_quote",
-}
+DEFERRED_MUTATIONS: set[str] = set()
 
 
 def test_retired_crm_mutations_are_gone() -> None:
