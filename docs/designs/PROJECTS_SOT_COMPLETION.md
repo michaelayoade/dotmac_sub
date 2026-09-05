@@ -78,6 +78,11 @@ identifiers are provenance attributes only and are never decision or join keys.
 Vendor installation-project lifecycle and workspace owners retain their
 existing, non-overlapping authority.
 
+Optional Cable Rerun infrastructure uses the structural relationship and typed
+catalogue/scope contracts in `PROJECT_INFRASTRUCTURE_SCOPE.md`. The project owner
+validates and writes that relationship, then requests the installation-scope
+participant atomically. Selecting an asset does not assign a vendor.
+
 `ui.project_list_projection` owns the complete typed list query: visibility
 scope, search fields, filters, status vocabulary, stable sorting, pagination,
 freshness, and action eligibility. Routes serialize inputs and templates render
