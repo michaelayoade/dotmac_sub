@@ -276,6 +276,7 @@ class EventType(enum.Enum):
     olt_updated = "olt.updated"
     olt_deleted = "olt.deleted"
     olt_topology_imported = "olt.topology_imported"
+    lldp_observations_reconciled = "lldp.observations_reconciled"
 
     # ONT events (5)
     ont_discovered = "ont.discovered"
