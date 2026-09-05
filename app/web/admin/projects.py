@@ -30,6 +30,7 @@ from app.schemas.infrastructure import (
     InfrastructureSearch,
     InfrastructureType,
 )
+from app.services import infrastructure_catalogue
 from app.services import web_projects as projects_web_service
 from app.services.auth_dependencies import (
     can,
@@ -37,7 +38,6 @@ from app.services.auth_dependencies import (
     require_permission,
 )
 from app.services.domain_errors import DomainError
-from app.services.network import infrastructure_catalogue
 
 
 class ProjectDomainRoute(APIRoute):

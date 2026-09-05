@@ -8,7 +8,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_infrastructure_lookup_is_shared_and_read_only():
     owner = service_relationship("network.infrastructure_catalogue")
     assert owner.contract is not None
-    source = (ROOT / "app/services/network/infrastructure_catalogue.py").read_text(
+    assert owner.module == "app.services.infrastructure_catalogue"
+    assert not (ROOT / "app/services/network/infrastructure_catalogue.py").exists()
+    source = (ROOT / "app/services/infrastructure_catalogue.py").read_text(
         encoding="utf-8"
     )
     assert all(token not in source for token in (".commit(", ".add(", ".delete("))

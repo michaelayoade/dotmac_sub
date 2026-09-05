@@ -1,4 +1,8 @@
-"""Read owner for shared native infrastructure selection; never mutates inventory."""
+"""Cross-domain read owner joining native network and NAS inventory.
+
+Lives above the standalone network package because NAS is catalog-owned.
+This projection never mutates either inventory or subscription state.
+"""
 
 from uuid import UUID
 

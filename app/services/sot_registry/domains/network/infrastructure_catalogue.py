@@ -18,7 +18,7 @@ from app.services.sot_manifest import (
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="network.infrastructure_catalogue",
-        module="app.services.network.infrastructure_catalogue",
+        module="app.services.infrastructure_catalogue",
         owns=("native infrastructure selection and exact-reference resolution",),
         depends_on=("network.identity",),
         contract=ServiceContract(
