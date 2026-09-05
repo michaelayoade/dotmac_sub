@@ -7,7 +7,10 @@ the populated FK; names and metadata are never relationship authority.
 
 `network.infrastructure_catalogue` owns typed, bounded search and exact-reference
 resolution for both customer filters and project selectors. Inventory remains
-with the existing network owners. New selections must have the requested role
+with existing owners; its implementation lives in the cross-domain service layer
+at `app.services.infrastructure_catalogue` because NAS records are catalog-owned.
+The standalone network package does not acquire a catalog dependency.
+New selections must have the requested role
 and be active where that inventory has an active flag. Historical labels remain
 readable after archival. Catalogue results contain labels and context only.
 

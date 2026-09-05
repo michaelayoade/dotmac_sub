@@ -61,6 +61,7 @@ from app.schemas.project import (
 from app.services import (
     customer_experience_lifecycle,
     customer_search,
+    infrastructure_catalogue,
     project_filters,
     project_mentions,
     project_vendor_delivery,
@@ -75,7 +76,6 @@ from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
 from app.services.file_storage import file_uploads
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
-from app.services.network import infrastructure_catalogue
 from app.services.ui_contracts import Action
 
 logger = logging.getLogger(__name__)

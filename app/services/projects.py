@@ -101,8 +101,8 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services import domain_settings as domain_settings_service
+from app.services import infrastructure_catalogue, settings_spec
 from app.services import numbering as numbering_service
-from app.services import settings_spec
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import (
     apply_ordering,
@@ -121,7 +121,6 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.services.network import infrastructure_catalogue
 from app.services.numbering import generate_number
 from app.services.owner_commands import (
     CommandContext,

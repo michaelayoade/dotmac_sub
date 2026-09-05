@@ -15,8 +15,7 @@ from app.schemas.infrastructure import (
     InfrastructureType,
 )
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
-from app.services import web_customer_lists, web_projects
-from app.services.network import infrastructure_catalogue
+from app.services import infrastructure_catalogue, web_customer_lists, web_projects
 from app.services.projects import ProjectServiceError, projects
 
 

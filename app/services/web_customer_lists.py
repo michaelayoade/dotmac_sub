@@ -54,6 +54,7 @@ from app.schemas.infrastructure import (
     InfrastructureSearch,
     InfrastructureType,
 )
+from app.services import infrastructure_catalogue
 from app.services.billing_profile import effective_billing_mode_clause
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.customer_account_visibility import splynx_deleted_import_clause
@@ -64,7 +65,6 @@ from app.services.list_query import (
     PageMeta,
     SortDirection,
 )
-from app.services.network import infrastructure_catalogue
 from app.services.status_presentation import account_status_presentation
 from app.services.subscription_billing_treatments import (
     effective_customer_billing_treatment_clause,

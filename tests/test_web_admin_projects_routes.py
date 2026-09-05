@@ -11,6 +11,7 @@ EXPECTED_ROUTES = {
     ("POST", "/projects"),
     ("GET", "/projects/export.csv"),
     ("GET", "/projects/customers/search"),
+    ("GET", "/projects/infrastructure-options"),
     ("GET", "/projects/new"),
     ("GET", "/projects/tasks"),
     ("POST", "/projects/tasks"),
@@ -46,6 +47,7 @@ EXPECTED_ROUTES = {
 }
 
 EXPECTED_PERMISSIONS = {
+    ("GET", "/projects/infrastructure-options"): ("project:create", "project:update"),
     ("GET", "/projects"): "project:read",
     ("POST", "/projects"): "project:create",
     ("GET", "/projects/export.csv"): "project:read",
@@ -129,6 +131,7 @@ def test_static_paths_declared_before_dynamic_detail():
     assert get_paths.index("/projects/tasks") < detail_index
     assert get_paths.index("/projects/templates") < detail_index
     assert get_paths.index("/projects/customers/search") < detail_index
+    assert get_paths.index("/projects/infrastructure-options") < detail_index
     assert get_paths.index("/projects/new") < detail_index
     assert get_paths.index("/projects/export.csv") < detail_index
 
