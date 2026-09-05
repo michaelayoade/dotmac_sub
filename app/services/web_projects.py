@@ -1184,7 +1184,9 @@ def build_project_form_context(
             if selected_infrastructure
             else None,
         },
-        "infrastructure_error": error if error and "infrastructure" in error.lower() else None,
+        "infrastructure_error": error
+        if error and "infrastructure" in error.lower()
+        else None,
         "infrastructure_types": [
             (kind.value, kind.value.replace("_", " ").title())
             for kind in InfrastructureType
