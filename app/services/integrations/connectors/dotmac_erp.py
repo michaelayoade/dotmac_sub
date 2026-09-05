@@ -103,7 +103,10 @@ class DotmacErpRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> ValidationResult:
-        if capability_id != ERP_OPERATIONAL_SYNC_CAPABILITY:
+        if capability_id not in {
+            ERP_OPERATIONAL_SYNC_CAPABILITY,
+            ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
+        }:
             return self.validate(
                 manifest=manifest,
                 config=config,
@@ -120,17 +123,34 @@ class DotmacErpRunner:
             )
         client = self._client(config, secret_material)
         try:
-            client.sync_operational_domains(ErpOperationalSyncCommand())
+            if capability_id == ERP_OPERATIONAL_SYNC_CAPABILITY:
+                client.sync_operational_domains(ErpOperationalSyncCommand())
+            else:
+                client.get_staff_access_projection(
+                    entity="account_status",
+                    limit=1,
+                )
         except DotMacERPAuthError:
+            if capability_id == ERP_OPERATIONAL_SYNC_CAPABILITY:
+                return ValidationResult(
+                    valid=False,
+                    error_codes=("erp_operational_scope_missing",),
+                    details={"required_scope": "sub:domain:write"},
+                )
             return ValidationResult(
                 valid=False,
-                error_codes=("erp_operational_scope_missing",),
-                details={"required_scope": "sub:domain:write"},
+                error_codes=("erp_staff_access_scope_missing",),
+                details={"required_scope": "sub:staff_access:read"},
             )
         except DotMacERPError:
+            error_code = (
+                "erp_operational_sync_unavailable"
+                if capability_id == ERP_OPERATIONAL_SYNC_CAPABILITY
+                else "erp_staff_access_projection_unavailable"
+            )
             return ValidationResult(
                 valid=False,
-                error_codes=("erp_operational_sync_unavailable",),
+                error_codes=(error_code,),
             )
         except Exception:
             return ValidationResult(valid=False, error_codes=("validation_failed",))
