@@ -211,6 +211,11 @@ def test_render_project_forms(db_session, base_context, fiber_project):
     edit_ctx.update({"page_title": "Edit Project", "form_mode": "edit"})
     html = _render("admin/projects/project_form.html", base_context, edit_ctx)
     assert "Fiber install render" in html
+    assert 'data-typeahead-url="/admin/projects/customers/search"' in html
+    assert 'name="subscriber_id"' in html
+    assert str(fiber_project.subscriber_id) in html
+    assert '<select name="subscriber_id"' not in html
+    assert "Search name, account ID, or email" in html
 
 
 def test_render_tasks_pages(db_session, base_context, fiber_project):

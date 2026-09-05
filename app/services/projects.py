@@ -101,7 +101,6 @@ from app.services.common import (
     apply_ordering,
     apply_pagination,
     coerce_uuid,
-    ensure_exists,
     validate_enum,
 )
 from app.services.communication_intents import (
@@ -2487,8 +2486,21 @@ def _ensure_project_template(db: Session, template_id: str) -> ProjectTemplate:
     return template
 
 
-def _ensure_subscriber(db: Session, subscriber_id: str) -> None:
-    ensure_exists(db, Subscriber, subscriber_id, "Subscriber not found")
+def _ensure_subscriber(
+    db: Session, subscriber_id: str, *, require_active: bool = False
+) -> Subscriber:
+    subscriber = db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == coerce_uuid(subscriber_id))
+        .with_for_update()
+    )
+    if subscriber is None:
+        raise _project_error("not_found", "Subscriber not found")
+    if require_active and not subscriber.is_active:
+        raise _project_error(
+            "invalid_input", "Select an active customer for the project"
+        )
+    return subscriber
 
 
 def _ensure_lead(db: Session, lead_id: str) -> None:
@@ -3042,7 +3054,7 @@ class Projects(ListResponseMixin):
         if payload.manager_person_id:
             _ensure_staff_uuid(str(payload.manager_person_id))
         if payload.subscriber_id:
-            _ensure_subscriber(db, str(payload.subscriber_id))
+            _ensure_subscriber(db, str(payload.subscriber_id), require_active=True)
         if payload.lead_id:
             _ensure_lead(db, str(payload.lead_id))
         if payload.project_template_id:
@@ -3508,7 +3520,11 @@ class Projects(ListResponseMixin):
         if data.get("lead_id"):
             _ensure_lead(db, str(data["lead_id"]))
         if data.get("subscriber_id"):
-            _ensure_subscriber(db, str(data["subscriber_id"]))
+            _ensure_subscriber(
+                db,
+                str(data["subscriber_id"]),
+                require_active=data["subscriber_id"] != project.subscriber_id,
+            )
         # Auto-assign PM based on region if region changes and no PM is set
         new_region = data.get("region")
         current_pm = (
