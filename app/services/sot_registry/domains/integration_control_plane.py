@@ -1509,7 +1509,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "typed ERP operational-context projection mapping",
                 "version-2 ERP operational-context transport and response validation",
-                "per-domain ERP operational-context delivery watermarks",
+                "per-domain ERP operational-context delivery watermarks and retry admission",
             ),
             depends_on=(
                 "events.dispatcher",
@@ -1546,7 +1546,7 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     ConcernContract(
-                        name="per-domain ERP operational-context delivery watermarks",
+                        name="per-domain ERP operational-context delivery watermarks and retry admission",
                         role=OwnerRole.PROJECTION_WRITER,
                         input_names=(
                             "canonical Sub projects and project tasks",
@@ -1613,7 +1613,7 @@ DOMAIN = DomainSOT(
                         "all selected domain watermarks together only after zero errors."
                     ),
                     locking=(
-                        "Per-domain cursor rows serialize watermark advancement; the "
+                        "The singleton retry row serializes all runs with SKIP LOCKED before cursor locks; the "
                         "keyset cursor orders source updates by updated_at and UUID."
                     ),
                     idempotency=(
@@ -1621,8 +1621,10 @@ DOMAIN = DomainSOT(
                         "a failed batch replays from unchanged watermarks."
                     ),
                     retries=(
-                        "The scheduled capability retries transient transport failures; "
-                        "item errors leave every selected watermark unchanged."
+                        "Transient attempts back off from five minutes to one hour; permanent or "
+                        "configuration failures block for six hours. A changed configuration "
+                        "fingerprint permits an earlier probe. Failure evidence commits with "
+                        "unchanged watermarks; source records are never discarded."
                     ),
                 ),
                 errors=ErrorContract(
@@ -1669,7 +1671,10 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=("tests/test_dotmac_erp_domain_sync.py",),
                 events=EventContract(
-                    event_types=("erp.operational_context.watermark_advanced",),
+                    event_types=(
+                        "erp.operational_context.watermark_advanced",
+                        "erp.operational_context.retry_deferred",
+                    ),
                     schema_version=1,
                     delivery_owner="events.dispatcher",
                     compatibility=(

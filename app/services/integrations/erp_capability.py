@@ -79,9 +79,12 @@ class ErpCapabilityClient:
             return dict(result.output)
         if result.status == OperationStatus.retryable:
             raise DotMacERPTransientError(
-                result.error_code or "ERP operation retryable"
+                result.error_code or "ERP operation retryable",
+                diagnostic=result.diagnostic,
             )
-        raise DotMacERPError(result.error_code or "ERP operation rejected")
+        raise DotMacERPError(
+            result.error_code or "ERP operation rejected", diagnostic=result.diagnostic
+        )
 
     def post(
         self,
