@@ -295,6 +295,7 @@ class InvoiceAccountingSyncIssueCode(StrEnum):
     NO_ACTIVE_LINES = "no_active_lines"
     LINE_AMOUNT_MISMATCH = "line_amount_mismatch"
     MISSING_TAX_RATE_REFERENCE = "missing_tax_rate_reference"
+    TAX_SNAPSHOT_MISSING = "tax_snapshot_missing"
     HEADER_SUBTOTAL_MISMATCH = "header_subtotal_mismatch"
     TAXED_HEADER_WITHOUT_LINE_TAX = "taxed_header_without_line_tax"
     HEADER_TAX_MISMATCH = "header_tax_mismatch"

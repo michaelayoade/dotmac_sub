@@ -45,6 +45,13 @@ extracted from `source_amount`; exclusive tax is added to it; exempt tax is
 zero. The calculations use the same owner helper and minor-unit rounding as
 Invoice total recalculation.
 
+Tax-rate code, percentage, and active state are copied to additive versioned
+InvoiceLine snapshot columns whenever the invoice owner creates or reprices a
+line. The projection never dereferences today's mutable TaxRate row. Existing
+taxed lines are not backfilled from current configuration because that would
+manufacture historical evidence; they remain visible and blocked until a
+separately approved evidence-based repair exists.
+
 ## Fail-closed issue vocabulary
 
 The stable codes are:
@@ -52,6 +59,7 @@ The stable codes are:
 - `no_active_lines`
 - `line_amount_mismatch`
 - `missing_tax_rate_reference`
+- `tax_snapshot_missing`
 - `header_subtotal_mismatch`
 - `taxed_header_without_line_tax`
 - `header_tax_mismatch`
@@ -67,6 +75,8 @@ which the active lines project zero tax while the authoritative header contains
 tax. `legacy_header_totals_missing` distinguishes imported Splynx archive rows
 whose zero subtotal/tax headers do not describe their non-zero lines and total.
 Neither condition is silently corrected by the read model.
+`tax_snapshot_missing` identifies a taxed legacy line for which Self-Care did
+not record the tax configuration at authoring time.
 
 ## Discounts
 
@@ -113,4 +123,10 @@ Before ERP can consume version 2 for posting:
 6. Keep the version-1 endpoint and all billing writers unchanged until the
    shadow report is approved.
 
-No database migration is required for this Self-Care slice.
+Migration `580_invoice_line_tax_snapshots` adds only nullable columns and a
+`NOT VALID` snapshot-shape check, which still enforces every new or changed row
+without scanning the historical table during deployment. It takes a five-second
+lock timeout, performs no backfill, and leaves legacy rows untouched. Downgrade
+refuses once any snapshot has been recorded so application rollback retains
+financial evidence. A later low-traffic maintenance change may validate the
+constraint after the legacy cohort has been measured.

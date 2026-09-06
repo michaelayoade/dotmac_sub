@@ -85,18 +85,26 @@ def _project_line(
             )
         )
 
-    rate = line.tax_rate
-    if line.tax_rate_id is not None and rate is None:
+    has_tax_snapshot = (
+        line.tax_rate_snapshot_version == 1
+        and line.tax_rate_percent_snapshot is not None
+        and line.tax_rate_is_active_snapshot is not None
+    )
+    if line.tax_rate_id is not None and not has_tax_snapshot:
         issues.append(
             _issue(
-                InvoiceAccountingSyncIssueCode.MISSING_TAX_RATE_REFERENCE,
+                InvoiceAccountingSyncIssueCode.TAX_SNAPSHOT_MISSING,
                 line_id=line.id,
             )
         )
 
-    rate_percent = to_decimal(rate.rate) if rate is not None else Decimal("0.00")
+    rate_percent = (
+        to_decimal(line.tax_rate_percent_snapshot)
+        if has_tax_snapshot
+        else Decimal("0.00")
+    )
     tax_amount = Decimal("0.00")
-    if rate is not None:
+    if has_tax_snapshot:
         tax_amount = _calculate_tax_amount(
             amount,
             rate_percent,
@@ -120,9 +128,13 @@ def _project_line(
             tax_amount_before_discount=tax_amount,
             gross_amount_before_discount=gross_amount,
             tax_rate_id=line.tax_rate_id,
-            tax_rate_code=rate.code if rate is not None else None,
-            tax_rate_percent=rate.rate if rate is not None else None,
-            tax_rate_is_active=rate.is_active if rate is not None else None,
+            tax_rate_code=(line.tax_rate_code_snapshot if has_tax_snapshot else None),
+            tax_rate_percent=(
+                line.tax_rate_percent_snapshot if has_tax_snapshot else None
+            ),
+            tax_rate_is_active=(
+                line.tax_rate_is_active_snapshot if has_tax_snapshot else None
+            ),
             tax_application=line.tax_application,
         ),
         issues,
@@ -283,9 +295,7 @@ def list_invoice_accounting_sync(
 
     statement = db.query(Invoice).options(
         selectinload(Invoice.account),
-        selectinload(Invoice.lines.and_(InvoiceLine.is_active.is_(True))).selectinload(
-            InvoiceLine.tax_rate
-        ),
+        selectinload(Invoice.lines.and_(InvoiceLine.is_active.is_(True))),
     )
     if query.invoice_id is not None:
         statement = statement.filter(Invoice.id == query.invoice_id)

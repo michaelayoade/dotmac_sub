@@ -17,7 +17,9 @@ from app.schemas.billing import (
     InvoiceAccountingSyncDisposition,
     InvoiceAccountingSyncIssueCode,
     InvoiceAccountingSyncSourceKind,
+    InvoiceLineCreate,
 )
+from app.services.billing.invoices import DraftInvoiceLineReplacement, InvoiceLines
 from app.services.dotmac_erp.invoice_sync_projection import (
     ACCOUNTING_SYNC_CONTRACT_VERSION,
     InvoiceAccountingSyncQuery,
@@ -51,6 +53,7 @@ def _invoice(db_session, subscriber, **overrides) -> Invoice:
 
 
 def _line(db_session, invoice, **overrides) -> InvoiceLine:
+    snapshot_tax_rate = overrides.pop("snapshot_tax_rate", True)
     values = {
         "invoice_id": invoice.id,
         "description": "Internet service",
@@ -61,6 +64,18 @@ def _line(db_session, invoice, **overrides) -> InvoiceLine:
         "is_active": True,
     }
     values.update(overrides)
+    tax_rate_id = values.get("tax_rate_id")
+    if tax_rate_id is not None and snapshot_tax_rate:
+        tax_rate = db_session.get(TaxRate, tax_rate_id)
+        assert tax_rate is not None
+        values.update(
+            {
+                "tax_rate_snapshot_version": 1,
+                "tax_rate_code_snapshot": tax_rate.code,
+                "tax_rate_percent_snapshot": tax_rate.rate,
+                "tax_rate_is_active_snapshot": tax_rate.is_active,
+            }
+        )
     line = InvoiceLine(**values)
     db_session.add(line)
     db_session.flush()
@@ -136,6 +151,107 @@ def test_projection_extracts_inclusive_tax_without_changing_gross(
     assert projection.lines[0].net_amount_before_discount == Decimal("93.02")
     assert projection.lines[0].tax_amount_before_discount == Decimal("6.98")
     assert projection.lines[0].gross_amount_before_discount == Decimal("100.00")
+
+
+def test_projection_uses_immutable_tax_snapshot_after_catalog_change(
+    db_session, subscriber
+) -> None:
+    tax_rate = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    invoice = _invoice(db_session, subscriber)
+    _line(db_session, invoice, tax_rate_id=tax_rate.id)
+    db_session.refresh(invoice)
+
+    before = project_invoice_for_accounting(invoice)
+    tax_rate.code = "VAT200"
+    tax_rate.rate = Decimal("20.0000")
+    tax_rate.is_active = False
+    db_session.flush()
+    after = project_invoice_for_accounting(invoice)
+
+    assert after.updated_at == before.updated_at
+    assert after.disposition is InvoiceAccountingSyncDisposition.READY
+    assert after.lines[0].tax_rate_code == "VAT75"
+    assert after.lines[0].tax_rate_percent == Decimal("7.5000")
+    assert after.lines[0].tax_rate_is_active is True
+    assert after.lines[0].tax_amount_before_discount == Decimal("7.50")
+
+
+def test_draft_line_owner_records_current_tax_snapshot(db_session, subscriber) -> None:
+    tax_rate = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    invoice = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.draft,
+        issued_at=None,
+    )
+
+    InvoiceLines.replace_admin_draft_lines(
+        db_session,
+        invoice.id,
+        (
+            DraftInvoiceLineReplacement(
+                payload=InvoiceLineCreate(
+                    invoice_id=invoice.id,
+                    description="Internet service",
+                    quantity=Decimal("1.000"),
+                    unit_price=Decimal("100.00"),
+                    amount=Decimal("100.00"),
+                    tax_rate_id=tax_rate.id,
+                    tax_application=TaxApplication.exclusive,
+                )
+            ),
+        ),
+    )
+
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    assert line.tax_rate_snapshot_version == 1
+    assert line.tax_rate_code_snapshot == "VAT75"
+    assert line.tax_rate_percent_snapshot == Decimal("7.5000")
+    assert line.tax_rate_is_active_snapshot is True
+
+
+def test_projection_blocks_legacy_tax_line_without_snapshot(
+    db_session, subscriber
+) -> None:
+    tax_rate = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    invoice = _invoice(db_session, subscriber)
+    _line(
+        db_session,
+        invoice,
+        tax_rate_id=tax_rate.id,
+        snapshot_tax_rate=False,
+    )
+    db_session.refresh(invoice)
+
+    projection = project_invoice_for_accounting(invoice)
+
+    assert projection.disposition is InvoiceAccountingSyncDisposition.BLOCKED
+    assert _issue_codes(projection) == {
+        InvoiceAccountingSyncIssueCode.TAX_SNAPSHOT_MISSING,
+        InvoiceAccountingSyncIssueCode.TAXED_HEADER_WITHOUT_LINE_TAX,
+    }
+    assert projection.lines[0].tax_rate_percent is None
 
 
 def test_projection_names_taxed_header_without_line_tax(db_session, subscriber) -> None:

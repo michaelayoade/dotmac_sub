@@ -202,8 +202,8 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.tax_configuration",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "TaxRate identity, code, percentage, active state, and the "
-                        "InvoiceLine tax_application snapshot"
+                        "InvoiceLine tax-rate identity, snapshot version, snapshotted "
+                        "code, percentage and active state, plus tax_application"
                     ),
                 ),
             ),
@@ -233,6 +233,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "header and active-line amount disagreement",
                     "taxed headers without usable line tax facts",
                     "missing tax-rate references",
+                    "taxed legacy lines without immutable tax snapshots",
                     "unapproved Invoice discount apportionment",
                 ),
             ),
