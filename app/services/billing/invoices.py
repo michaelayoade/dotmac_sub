@@ -3024,20 +3024,20 @@ class InvoiceLines(ListResponseMixin):
                 _apply_invoice_line_tax_snapshot(line, tax_rate)
                 db.add(line)
                 continue
-            line = existing.get(replacement.line_id)
-            if line is None:
+            existing_line = existing.get(replacement.line_id)
+            if existing_line is None:
                 raise DraftInvoiceParticipantError(
                     "line_not_found",
                     "Invoice line not found",
                 )
-            seen.add(line.id)
-            line.description = payload.description
-            line.quantity = payload.quantity
-            line.unit_price = payload.unit_price
-            line.amount = amount
-            line.tax_rate_id = payload.tax_rate_id
-            line.tax_application = payload.tax_application
-            _apply_invoice_line_tax_snapshot(line, tax_rate)
+            seen.add(existing_line.id)
+            existing_line.description = payload.description
+            existing_line.quantity = payload.quantity
+            existing_line.unit_price = payload.unit_price
+            existing_line.amount = amount
+            existing_line.tax_rate_id = payload.tax_rate_id
+            existing_line.tax_application = payload.tax_application
+            _apply_invoice_line_tax_snapshot(existing_line, tax_rate)
         for line_id, line in existing.items():
             if line_id not in seen:
                 line.is_active = False

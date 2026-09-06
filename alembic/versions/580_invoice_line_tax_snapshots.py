@@ -41,18 +41,34 @@ def upgrade() -> None:
         "invoice_lines",
         sa.Column("tax_rate_is_active_snapshot", sa.Boolean(), nullable=True),
     )
+    # Some composed-module bootstrap paths materialize the model constraint
+    # before provider migrations run. Preserve that validated constraint when
+    # present; add the same invariant as NOT VALID on ordinary upgrades.
     op.execute(
-        "ALTER TABLE invoice_lines "
-        f"ADD CONSTRAINT {_CONSTRAINT} CHECK ("
-        "(tax_rate_snapshot_version IS NULL "
-        "AND tax_rate_code_snapshot IS NULL "
-        "AND tax_rate_percent_snapshot IS NULL "
-        "AND tax_rate_is_active_snapshot IS NULL) "
-        "OR (tax_rate_snapshot_version = 1 "
-        "AND tax_rate_id IS NOT NULL "
-        "AND tax_rate_percent_snapshot IS NOT NULL "
-        "AND tax_rate_is_active_snapshot IS NOT NULL)"
-        ") NOT VALID"
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'invoice_lines'::regclass
+                  AND conname = '{_CONSTRAINT}'
+            ) THEN
+                ALTER TABLE invoice_lines
+                ADD CONSTRAINT {_CONSTRAINT} CHECK (
+                    (tax_rate_snapshot_version IS NULL
+                     AND tax_rate_code_snapshot IS NULL
+                     AND tax_rate_percent_snapshot IS NULL
+                     AND tax_rate_is_active_snapshot IS NULL)
+                    OR (tax_rate_snapshot_version = 1
+                        AND tax_rate_id IS NOT NULL
+                        AND tax_rate_percent_snapshot IS NOT NULL
+                        AND tax_rate_is_active_snapshot IS NOT NULL)
+                ) NOT VALID;
+            END IF;
+        END
+        $$
+        """
     )
 
 
