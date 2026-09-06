@@ -1846,6 +1846,7 @@
     "header:x-api-key",
     "query:account_id",
     "query:is_active",
+    "query:invoice_id",
     "query:limit",
     "query:offset",
     "query:order_by",

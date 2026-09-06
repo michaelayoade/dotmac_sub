@@ -258,6 +258,7 @@ def sync_invoices(
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
 def sync_invoices_for_accounting_v2(
+    invoice_id: UUID | None = None,
     account_id: UUID | None = None,
     status: InvoiceStatus | None = None,
     is_active: bool | None = None,
@@ -276,6 +277,7 @@ def sync_invoices_for_accounting_v2(
         invoice_sync_projection.list_invoice_accounting_sync(
             db,
             invoice_sync_projection.InvoiceAccountingSyncQuery(
+                invoice_id=invoice_id,
                 account_id=account_id,
                 status=status,
                 is_active=is_active,

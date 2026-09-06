@@ -263,6 +263,7 @@ def test_list_query_is_watermarked_and_returns_typed_page(
     page = list_invoice_accounting_sync(
         db_session,
         InvoiceAccountingSyncQuery(
+            invoice_id=None,
             account_id=None,
             status=None,
             is_active=None,
@@ -277,3 +278,42 @@ def test_list_query_is_watermarked_and_returns_typed_page(
     assert page.count == 1
     assert page.limit == 500
     assert page.offset == 0
+
+
+def test_list_query_can_target_one_invoice_for_explicit_replay(
+    db_session, subscriber
+) -> None:
+    selected = _invoice(
+        db_session,
+        subscriber,
+        invoice_number="INV-REPLAY-SELECTED",
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("0.00"),
+        balance_due=Decimal("0.00"),
+    )
+    other = _invoice(
+        db_session,
+        subscriber,
+        invoice_number="INV-REPLAY-OTHER",
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("0.00"),
+        balance_due=Decimal("0.00"),
+    )
+
+    page = list_invoice_accounting_sync(
+        db_session,
+        InvoiceAccountingSyncQuery(
+            invoice_id=selected.id,
+            account_id=None,
+            status=None,
+            is_active=None,
+            updated_since=None,
+            limit=500,
+            offset=0,
+        ),
+    )
+
+    assert [item.source_invoice_id for item in page.items] == [selected.id]
+    assert other.id not in {item.source_invoice_id for item in page.items}

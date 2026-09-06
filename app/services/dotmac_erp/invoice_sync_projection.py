@@ -43,6 +43,7 @@ ACCOUNTING_SYNC_CONTRACT_VERSION: Literal["invoice-accounting-sync.v2"] = (
 class InvoiceAccountingSyncQuery:
     """Typed filters for one deterministic ERP accounting-sync page."""
 
+    invoice_id: UUID | None
     account_id: UUID | None
     status: InvoiceStatus | None
     is_active: bool | None
@@ -286,6 +287,8 @@ def list_invoice_accounting_sync(
             InvoiceLine.tax_rate
         ),
     )
+    if query.invoice_id is not None:
+        statement = statement.filter(Invoice.id == query.invoice_id)
     if query.account_id is not None:
         statement = statement.filter(Invoice.account_id == query.account_id)
     if query.status is not None:

@@ -87,7 +87,9 @@ sum of projected group bases and tax equals the immutable header.
 The feed uses an inclusive `updated_since` filter and stable ascending
 `updated_at,id` ordering. An owner update can therefore be replayed without
 guessing. Account, status, active-state, limit, and offset filters are typed and
-bounded. The query takes no locks and writes no data.
+bounded. A typed `invoice_id` filter permits one explicit operator replay
+without rewinding the global cursor or scanning another customer's invoices.
+The query takes no locks and writes no data.
 
 ERP must treat `blocked` as a durable data outcome, not as a transient exception:
 record the issue keyed by source invoice and source revision, advance the pull
