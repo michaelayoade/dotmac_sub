@@ -17,12 +17,14 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationLabel,
+    InboxConversationQueueEntry,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxLabel,
     InboxMessage,
     InboxMessageDirection,
     InboxMessageTemplate,
+    InboxQueueEntryStatus,
     InboxReplyMacro,
     InboxSavedFilter,
     InboxTeamRole,
@@ -88,6 +90,31 @@ def route_to_service_team(
     team = db.get(ServiceTeam, service_team_id)
     if team is None or not team.is_active:
         raise InboxOperationError("The target service team is not active.")
+    active_queue_entry = (
+        db.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .filter(
+            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value
+        )
+        .one_or_none()
+    )
+    if (
+        active_queue_entry is not None
+        and active_queue_entry.service_team_id != service_team_id
+    ):
+        outcome = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=service_team_id,
+            reason=f"queue team transfer: {source}",
+            source=InboxTeamSource.routing_rule.value,
+            reason_code="queue_team_transfer",
+        )
+        if outcome.kind != "queued":
+            raise InboxOperationError(
+                outcome.reason or "Could not transfer the queued conversation."
+            )
+        return conversation
     links = db.scalars(
         select(InboxConversationTeam)
         .where(InboxConversationTeam.conversation_id == conversation.id)
@@ -978,7 +1005,6 @@ def bulk_escalate(
     auto_assign: bool = True,
     actor_person_id: str | UUID | None = None,
     reason: str | None = None,
-    require_team_membership: bool = True,
 ) -> dict[str, object]:
     updated: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -1000,7 +1026,6 @@ def bulk_escalate(
                 person_id=assigned_person_id,
                 assigned_by_person_id=actor_person_id,
                 reason=reason,
-                require_team_membership=require_team_membership,
             )
         elif auto_assign:
             result = team_inbox_assignment.assign_conversation_to_available_agent(

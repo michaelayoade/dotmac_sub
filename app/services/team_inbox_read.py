@@ -168,7 +168,7 @@ class InboxConversationTimeline:
     created_at: datetime
     updated_at: datetime
     metadata: dict[str, object] | None
-    queue_position: int | None
+    current_visible_position: int | None
     queued_at: datetime | None
     estimated_wait_minutes: int | None
     teams: list[InboxTimelineTeam]
@@ -204,7 +204,7 @@ class InboxConversationListRow:
     latest_delivery_status: str | None
     latest_delivery_error: str | None
     active_assigned_person_id: str | None
-    queue_position: int | None
+    current_visible_position: int | None
     queued_at: datetime | None
     estimated_wait_minutes: int | None
     needs_response: bool
@@ -1564,11 +1564,13 @@ def list_conversations(
                 active_assigned_person_id=str(active_assignment.person_id)
                 if active_assignment is not None
                 else None,
-                queue_position=queue_projection[1] if queue_projection else None,
+                current_visible_position=(
+                    queue_projection[1] if queue_projection else None
+                ),
                 queued_at=queue_projection[0].entered_at if queue_projection else None,
                 estimated_wait_minutes=(
                     team_inbox_assignment.estimate_queue_wait_minutes(
-                        queue_position=queue_projection[1],
+                        current_visible_position=queue_projection[1],
                         active_assignments=capacity_by_team[
                             queue_projection[0].service_team_id
                         ].active_assignments,
@@ -1724,10 +1726,10 @@ def get_conversation_timeline(
         )
         .one_or_none()
     )
-    queue_position = None
+    current_visible_position = None
     estimated_wait_minutes = None
     if queue_entry is not None:
-        queue_position = int(
+        current_visible_position = int(
             db.query(func.count(InboxConversationQueueEntry.id))
             .filter(
                 InboxConversationQueueEntry.service_team_id
@@ -1754,7 +1756,7 @@ def get_conversation_timeline(
             db, queue_entry.service_team_id
         )
         estimated_wait_minutes = team_inbox_assignment.estimate_queue_wait_minutes(
-            queue_position=queue_position,
+            current_visible_position=current_visible_position,
             active_assignments=capacity.active_assignments,
             total_capacity=capacity.total_capacity,
         )
@@ -1793,7 +1795,7 @@ def get_conversation_timeline(
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         metadata=conversation.metadata_,
-        queue_position=queue_position,
+        current_visible_position=current_visible_position,
         queued_at=queue_entry.entered_at if queue_entry else None,
         estimated_wait_minutes=estimated_wait_minutes,
         teams=[

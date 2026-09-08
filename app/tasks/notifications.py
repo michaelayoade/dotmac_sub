@@ -634,6 +634,32 @@ def _deliver_notification_queue_stats(
         record_delivery_outcome(db, notification)
         db.commit()
 
+        # Queue notices are uniquely vulnerable to becoming stale between
+        # intent creation and provider dispatch.  This preflight deliberately
+        # holds the conversation/queue locks through the provider call: either
+        # delivery observes a still-current queue lifecycle first, or an
+        # assignment/terminal transition commits first and suppresses it.
+        from app.services import team_inbox_queue_notifications
+
+        queue_preflight = (
+            team_inbox_queue_notifications.preflight_queue_notification_delivery(
+                db, notification=notification
+            )
+        )
+        if queue_preflight.applies and not queue_preflight.allowed:
+            notification.status = NotificationStatus.canceled
+            notification.last_error = (
+                f"queue_notification_suppressed:{queue_preflight.reason}"
+            )
+            notification.metadata_ = {
+                **dict(notification.metadata_ or {}),
+                "queue_suppression_reason": queue_preflight.reason,
+            }
+            suppressed += 1
+            record_delivery_outcome(db, notification)
+            db.commit()
+            continue
+
         subject = notification.subject or "Notification"
         body = notification.body or ""
         delivery_metadata = dict(notification.metadata_ or {})

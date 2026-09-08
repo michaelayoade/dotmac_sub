@@ -1282,7 +1282,6 @@ def assign_conversation_to_me(
             auto_assign=False,
             actor_person_id=actor_uuid,
             reason="Assign to me",
-            require_team_membership=False,
         )
         updated = result.get("updated")
         if isinstance(updated, list) and updated:
@@ -2287,7 +2286,7 @@ def assign_conversation(
     """
 
     def action() -> team_inbox_assignment.InboxAssignmentResult:
-        conversation = _active_conversation(db, conversation_id, for_update=True)
+        conversation = _active_conversation(db, conversation_id)
         return team_inbox_assignment.assign_conversation_to_agent(
             db,
             conversation=conversation,

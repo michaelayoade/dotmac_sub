@@ -458,6 +458,26 @@ implementation.
 - Mobile layouts wrap long addresses without hiding recipients or displacing
   the message body and primary Send action.
 
+## Team Inbox Queue Position Contract
+
+- Authority: `communications.team_inbox_routing` owns queue membership,
+  admission sequence, current visible position, strict per-team FIFO,
+  assignment capacity and promotion. Templates and routes are adapters.
+- Staff and customer surfaces label only the live team-scoped rank as
+  **Position**. The durable admission sequence is ordering evidence and must
+  not be presented as the customer's current position.
+- Normal manual and self-assignment of a queued conversation may select only
+  the queue head and an eligible agent with capacity. A rejection must explain
+  that an older conversation or capacity limit prevents the action; the UI
+  must not imply that assignment succeeded.
+- Admin → System → Settings → Comms exposes **Default active Inbox
+  conversations per agent** with range 1–100 and default 10. Per-agent backend
+  overrides are not presented as though they are editable when no Admin writer
+  exists.
+- Queue heartbeats are off by default. If enabled in AI intake policy they are
+  clearly identified as reassurance, use different copy from a position
+  update, and never repeat the current position.
+
 ## Agent Performance Analytics Page Contract
 
 - Audience and task: CX/support leaders compare agent workload, resolution, and

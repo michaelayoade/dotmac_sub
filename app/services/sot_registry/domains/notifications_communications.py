@@ -2575,6 +2575,9 @@ DOMAIN = DomainSOT(
                 "routing assignment and escalation transitions",
                 "immutable routing assignment and escalation evidence",
                 "durable FIFO queue admission and promotion",
+                "strict per-team FIFO head serialization",
+                "current customer-visible queue position projection",
+                "global per-agent active assignment capacity enforcement",
                 "durable per-team round-robin cursor",
                 "customer-visible FIFO queue notification evidence",
                 "current agent presence state and freshness",
@@ -2588,6 +2591,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "operations.sla_escalation",
                 "auth.permission_gate",
+                "control.settings_spec",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_routing",
@@ -2604,6 +2608,18 @@ DOMAIN = DomainSOT(
                     (
                         "durable FIFO queue admission and promotion",
                         OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "strict per-team FIFO head serialization",
+                        OwnerRole.POLICY,
+                    ),
+                    (
+                        "current customer-visible queue position projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "global per-agent active assignment capacity enforcement",
+                        OwnerRole.POLICY,
                     ),
                     (
                         "durable per-team round-robin cursor",
@@ -2667,6 +2683,15 @@ DOMAIN = DomainSOT(
                             "subscriber and reseller principals are excluded."
                         ),
                     ),
+                    AuthorityInput(
+                        name="agent capacity configuration",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Comms default active-conversation capacity and the "
+                            "existing per-agent presence override."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -2674,27 +2699,36 @@ DOMAIN = DomainSOT(
                     "team_inbox.escalated.v1",
                     "team_inbox.queue_promoted.v1",
                 ),
-                projections=("FIFO queue position and notification due state",),
+                projections=(
+                    "team admission sequence, current visible FIFO position, "
+                    "agent capacity and notification due state",
+                ),
                 test_refs=(
                     "tests/test_admin_inbox_slice4_workflows.py",
                     "tests/test_auth_flow.py",
                     "tests/test_team_inbox_assignment.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
+                    "tests/integration/test_team_inbox_queue_concurrency.py",
                 ),
             ),
         ),
         SOTService(
             name="communications.team_inbox_queue_notifications",
             module="app.services.team_inbox_queue_notifications",
-            owns=("queue notification delivery ledger writes",),
+            owns=(
+                "queue notification delivery ledger writes",
+                "queue notification lifecycle deduplication and suppression",
+                "queue notification provider-dispatch validity decision",
+            ),
             depends_on=(
                 "communications.team_inbox_routing",
                 "communications.team_inbox_outbound_intents",
             ),
             notes=(
-                "Delivery ledger only. Queue membership, order, position and "
-                "promotion remain owned by communications.team_inbox_routing."
+                "Notification lifecycle, dedupe and dispatch preflight only. "
+                "Queue membership, order, live position, capacity and promotion "
+                "remain owned by communications.team_inbox_routing."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_queue_notifications",
@@ -2703,13 +2737,24 @@ DOMAIN = DomainSOT(
                         "queue notification delivery ledger writes",
                         OwnerRole.COMMAND_WRITER,
                     ),
+                    (
+                        "queue notification lifecycle deduplication and suppression",
+                        OwnerRole.POLICY,
+                    ),
+                    (
+                        "queue notification provider-dispatch validity decision",
+                        OwnerRole.POLICY,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
                         name="FIFO queue entry state",
                         owner="communications.team_inbox_routing",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="InboxConversationQueueEntry lifecycle, team, position and status.",
+                        source=(
+                            "InboxConversationQueueEntry admission generation, team, "
+                            "admission sequence, live position and status."
+                        ),
                     ),
                     AuthorityInput(
                         name="customer outbound delivery result",
@@ -2720,7 +2765,10 @@ DOMAIN = DomainSOT(
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=("team_inbox.queue_notification.changed.v1",),
-                projections=("queue notification next_due_at and delivery status",),
+                projections=(
+                    "queue notification next_due_at, durable notified position, "
+                    "suppression reason and delivery status",
+                ),
                 test_refs=("tests/test_team_inbox_queue_notifications.py",),
             ),
         ),

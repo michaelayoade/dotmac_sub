@@ -1356,7 +1356,12 @@ class InboxConversationAssignment(Base):
 
 
 class InboxConversationQueueEntry(Base):
-    """Durable FIFO admission and settlement evidence for a conversation."""
+    """Durable FIFO admission and settlement evidence for a conversation.
+
+    ``queue_position`` is the persisted admission sequence retained for schema
+    compatibility.  Customer-visible position is a live rank derived from the
+    active rows in this team and is never read from that column directly.
+    """
 
     __tablename__ = "inbox_conversation_queue_entries"
     __table_args__ = (
@@ -1365,10 +1370,21 @@ class InboxConversationQueueEntry(Base):
             "service_team_id", "queue_position", name="uq_inbox_queue_team_position"
         ),
         CheckConstraint("queue_position > 0", name="ck_inbox_queue_position_positive"),
+        CheckConstraint(
+            "admission_generation > 0",
+            name="ck_inbox_queue_admission_generation_positive",
+        ),
         Index(
             "ix_inbox_queue_team_status_position",
             "service_team_id",
             "status",
+            "queue_position",
+        ),
+        Index(
+            "ix_inbox_queue_team_fifo",
+            "service_team_id",
+            "status",
+            "entered_at",
             "queue_position",
         ),
     )
@@ -1385,6 +1401,9 @@ class InboxConversationQueueEntry(Base):
         UUID(as_uuid=True), ForeignKey("service_teams.id"), nullable=False
     )
     queue_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    admission_generation: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )
     status: Mapped[str] = mapped_column(
         String(24), default=InboxQueueEntryStatus.queued.value, nullable=False
     )
@@ -1392,6 +1411,11 @@ class InboxConversationQueueEntry(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_notified_position: Mapped[int | None] = mapped_column(Integer)
+    last_position_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -1407,6 +1431,16 @@ class InboxConversationQueueEntry(Base):
 
     conversation = relationship("InboxConversation")
     service_team = relationship("ServiceTeam")
+
+    @property
+    def admission_sequence(self) -> int:
+        """Explicit domain name for the legacy ``queue_position`` column."""
+
+        return self.queue_position
+
+    @admission_sequence.setter
+    def admission_sequence(self, value: int) -> None:
+        self.queue_position = value
 
 
 class InboxTeamRoundRobinCursor(Base):
@@ -1450,6 +1484,10 @@ class InboxQueueNotification(Base):
     __tablename__ = "inbox_queue_notifications"
     __table_args__ = (
         UniqueConstraint("dedupe_key", name="uq_inbox_queue_notification_dedupe"),
+        CheckConstraint(
+            "admission_generation > 0",
+            name="ck_inbox_queue_notification_generation_positive",
+        ),
         Index("ix_inbox_queue_notifications_entry", "queue_entry_id", "sent_at"),
         Index("ix_inbox_queue_notifications_due", "status", "next_due_at"),
     )
@@ -1468,12 +1506,16 @@ class InboxQueueNotification(Base):
         nullable=False,
     )
     notification_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    admission_generation: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )
     queue_position: Mapped[int | None] = mapped_column(Integer)
     outbound_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(String(40), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suppression_reason: Mapped[str | None] = mapped_column(String(80))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )

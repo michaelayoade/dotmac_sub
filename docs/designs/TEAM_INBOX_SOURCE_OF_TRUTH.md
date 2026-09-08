@@ -196,26 +196,55 @@ default or configured fallback team remains the primary team. The route rows
 are routing policy only; provider credentials and SMTP listener secrets remain
 owned by configuration and secret-management contracts.
 
-When no eligible agent has capacity, routing records one durable queue entry
-with a team-scoped monotonic admission position and entry timestamp. The
-periodic promotion command locks the oldest entries and each target team before
-rechecking live capacity, promotes only the oldest eligible conversation, and
-durably settles invalid or already-assigned entries. The agent projection
-derives current FIFO rank and an estimated wait from that ledger and the live
-capacity snapshot; it never makes a routing decision.
+When no eligible agent has capacity, routing records one durable queue entry.
+`InboxConversationQueueEntry.queue_position` is retained as the team-scoped
+**admission sequence** for schema compatibility; it is durable ordering
+evidence, not a customer-visible position. The **current visible position** is
+the live rank of active `queued` entries for that team ordered by `entered_at
+ASC, queue_position ASC`. The agent and customer projections derive that rank
+from the queue ledger and never expose the admission sequence as a current
+position.
+
+Strict FIFO is serialized by the `ServiceTeam` row. Admission, normal manual
+assignment, automatic assignment and promotion acquire that team lock before
+examining the head. A promotion worker that cannot acquire the team lock skips
+the whole team; it may not use `SKIP LOCKED` to take the team's second entry.
+The recovery sweep selects one head cohort per queued team rather than one
+global row batch, so a full team's backlog cannot hide another team's eligible
+head. Resolution, assignment, cancellation, requeue and team transfer settle
+or start the queue lifecycle transactionally. A conversation cannot remain an
+active member of one team's queue while assigned, resolved, or owned by another
+team.
 
 Automatic assignment uses `inbox_team_round_robin_cursors`, one durable cursor
-per service team. The routing owner locks the team and cursor, builds the
-eligible online candidate list, skips inactive/offline/stale/full agents, advances
-the cursor only inside the assignment transaction, and records routing evidence
-with candidate capacity details. An `online` presence is eligible only when its
-`last_seen_at` evidence is no more than 30 minutes old; missing or stale
-presence fails closed as offline. Manual assignment to a target-team member uses
-the same availability gate. The default capacity is ten active
-conversations per agent unless `InboxAgentPresence.max_concurrent_conversations`
-overrides it. Capacity counts active human assignments on `open`, human-owned
-`pending`, and `snoozed` conversations while ownership remains active. It
-excludes resolved conversations and unassigned AI-pending conversations.
+per service team. FIFO chooses the oldest customer first; round robin then
+chooses the next eligible agent. The routing owner locks the team and cursor,
+builds the eligible online candidate list, skips inactive/offline/stale/full
+agents, serializes the final global capacity decision on the active
+`SystemUser` row, creates the assignment, and only then advances the cursor.
+The per-agent lock is intentionally not team-scoped because one agent may be a
+member of several teams or channels. Normal manual, self, automation, workqueue
+and promotion assignments use the same membership, presence and capacity gate;
+there is no implicit force override and a queued non-head cannot be selected.
+
+An `online` presence is eligible only when its `last_seen_at` evidence is no
+more than 30 minutes old; missing or stale presence fails closed as offline.
+The default capacity is the `comms.inbox_agent_default_max_concurrent_conversations`
+setting (default `10`, allowed range `1..100`) unless
+`InboxAgentPresence.max_concurrent_conversations` supplies the existing
+per-agent override. Administrators edit the default at **Admin → System →
+Settings → Comms**, field **Default active Inbox conversations per agent**;
+the canonical settings writer invalidates the cache on commit and subsequent
+assignment decisions consume the new value immediately. There is currently no
+Admin writer for the per-agent override. Capacity counts active human
+assignments on `open`, human-owned `pending`, and `snoozed` conversations while
+ownership remains active. It excludes resolved conversations and unassigned
+AI-pending conversations.
+
+Capacity-opening transitions schedule an idempotent promotion task after the
+owning transaction commits. Agent return to eligible online presence,
+resolution, reassignment and requeue therefore prompt promotion; the configured
+60-second periodic sweep remains recovery rather than the sole trigger.
 
 Successful staff session issuance submits one typed, flush-only sign-in command
 to the routing owner in the same transaction. That command sets the signed-in
@@ -227,14 +256,35 @@ reseller sessions do not write agent presence. Operators may still select
 another availability after sign-in; the existing 30-minute freshness and
 assignment-capacity rules are unchanged.
 
-Queue communication is also owned by Team Inbox routing. `inbox_queue_notifications`
-records initial position notices, movement updates, fifteen-minute unchanged
-heartbeats, handoff notices, dedupe keys, delivery outcome and outbound message
-links. Customer-visible queue messages are sent only through Team Inbox
-outbound intents and only for WhatsApp, Facebook Messenger, Instagram DM, and
-the native chat widget.
-Queue messages never invent estimated wait times. Promotion, transfer,
-resolution, cancellation or assignment stops further queue updates.
+Queue communication is also owned by Team Inbox routing.
+`inbox_queue_notifications` records the admission generation, initial notice,
+forward-only position updates, optional heartbeats, handoff notices,
+deterministic dedupe keys, suppression reason, delivery outcome and outbound
+message links. The queue entry durably records `last_notified_position`,
+`last_position_notified_at` and `last_heartbeat_at`. Position keys have the
+shape `queue-position:<entry>:generation:<generation>:<visible-position>`, so
+the same position cannot be recreated through a later time window. Requeue
+increments the admission generation and begins an independent notification
+lifecycle.
+
+The initial notice is sent once. A position update is sent only when the live
+position moves forward; unchanged and worsening positions are suppressed, with
+worsening movement recorded as structured evidence. Heartbeats are disabled by
+the single policy default. When explicitly enabled they use a separate
+non-position template, default to 30 minutes, and are suppressed until that
+period has elapsed since the most recent position notice or heartbeat. Position
+checks default to 10 minutes. Runtime, Admin form and policy fallback use these
+same defaults.
+
+Customer-visible queue messages are sent only through Team Inbox outbound
+intents and only for WhatsApp, Facebook Messenger, Instagram DM, and the native
+chat widget. Queue messages never invent estimated wait times. Promotion,
+transfer, resolution, cancellation or assignment cancels pending intents for
+that admission generation and stops future updates. Immediately before provider
+contact, the notification dispatcher locks and revalidates the authoritative
+conversation, active queue entry, assignment absence, generation, notification
+kind and current visible position. A stale notice is durably suppressed without
+contacting the provider.
 
 ## Outbound flow
 

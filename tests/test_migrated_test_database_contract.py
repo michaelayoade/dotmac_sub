@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "584_field_request_requester_history",
+            "584_team_inbox_queue_correctness",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",
