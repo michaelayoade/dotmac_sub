@@ -23,6 +23,7 @@ from app.models.team_inbox import (
 from app.schemas.ai_intake import APPROVED_FOLLOW_UP_QUESTIONS
 from app.schemas.notification import NotificationDeliveryLatency
 from app.services import (
+    ai_conversation_ownership,
     inbox_sla,
     team_inbox_realtime,
     team_inbox_reply_window,
@@ -729,21 +730,11 @@ def send_inbox_reply(
             reason="Resolved conversations cannot be replied to",
         )
     if payload.sent_by_person_id is not None:
-        try:
-            from app.services import ai_conversation_intake
-
-            session = ai_conversation_intake.active_session_for_conversation(
-                db, conversation.id
-            )
-            if session is not None:
-                ai_conversation_intake.complete_session(
-                    session, state="stopped_human_takeover"
-                )
-                ai_conversation_intake.mark_conversation_ai_metadata(
-                    conversation, session=session, active=False
-                )
-        except Exception:
-            pass
+        ai_conversation_ownership.require_human_control(
+            db,
+            conversation_id=conversation.id,
+            mutation=ai_conversation_ownership.HumanConversationMutation.reply,
+        )
 
     if conversation.channel_type == InboxChannelType.whatsapp.value:
         return _send_whatsapp_reply(

@@ -10326,7 +10326,8 @@
     "query:search",
     "query:service_team_id",
     "query:snoozed",
-    "query:status"
+    "query:status",
+    "query:view"
    ],
    "request": null,
    "responses": {
@@ -19592,7 +19593,7 @@
   "InboxConversationContactLinkRequest": "f407043f0c43",
   "InboxConversationEscalateRequest": "616991a12b83",
   "InboxConversationEscalationRead": "504bf3a61754",
-  "InboxConversationListItemRead": "176802fc04c4",
+  "InboxConversationListItemRead": "b78d5b049ff0",
   "InboxConversationReplyRead": "344672986f33",
   "InboxConversationReplyRequest": "9297fb6a5133",
   "InboxConversationTimelineRead": "8a7a71519592",

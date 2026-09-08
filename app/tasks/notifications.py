@@ -22,8 +22,10 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.services import (
+    ai_conversation_ownership,
     communication_attachments,
     communication_eligibility,
+    team_inbox_commands,
     team_inbox_media,
     team_inbox_receive,
     team_inbox_reply_window,
@@ -42,6 +44,7 @@ from app.services.ephemeral_communication_actions import (
 from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.nextcloud_talk_staff import deliver_due_staff_talk_notifications
 from app.services.observability import record_notification_queue_result
+from app.services.owner_commands import CommandContext
 from app.services.settings_spec import resolve_value
 from app.services.whatsapp_notification_templates import provider_template_from_template
 
@@ -634,6 +637,25 @@ def _deliver_notification_queue_stats(
         record_delivery_outcome(db, notification)
         db.commit()
 
+        delivery_metadata = dict(notification.metadata_ or {})
+        if ai_conversation_ownership.is_ai_outbound_intent(delivery_metadata):
+            db_session_adapter.release_read_transaction(db)
+            suppression = team_inbox_commands.suppress_ai_outbound_without_ownership(
+                db,
+                team_inbox_commands.SuppressAiOutboundCommand(
+                    context=CommandContext.system(
+                        actor="service:notification-delivery-worker",
+                        scope="team-inbox:ai-outbound-revalidation",
+                        reason="revalidate AI ownership immediately before delivery",
+                        idempotency_key=f"ai-outbound-delivery:{candidate_id}",
+                    ),
+                    notification_id=candidate_id,
+                ),
+            )
+            if suppression.suppressed:
+                suppressed += 1
+                continue
+
         # Queue notices are uniquely vulnerable to becoming stale between
         # intent creation and provider dispatch.  This preflight deliberately
         # holds the conversation/queue locks through the provider call: either
@@ -662,7 +684,6 @@ def _deliver_notification_queue_stats(
 
         subject = notification.subject or "Notification"
         body = notification.body or ""
-        delivery_metadata = dict(notification.metadata_ or {})
         raw_inbox_attachment_ids = delivery_metadata.get("inbox_attachment_ids")
         inbox_attachment_ids = (
             [str(value) for value in raw_inbox_attachment_ids if isinstance(value, str)]

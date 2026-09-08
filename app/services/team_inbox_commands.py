@@ -23,7 +23,9 @@ from sqlalchemy import or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.models.ai_intake import AiIntakeSession
 from app.models.audit import AuditActorType
+from app.models.notification import Notification
 from app.models.organization import Organization
 from app.models.party import (
     Party,
@@ -42,6 +44,7 @@ from app.models.team_inbox import (
     InboxAgentPresence,
     InboxChannelType,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationStatus,
     InboxMessage,
     InboxMessageDirection,
@@ -54,6 +57,7 @@ from app.schemas.sales import (
     LeadOriginCaptureCreate,
 )
 from app.services import (
+    ai_conversation_ownership,
     inbox_sla,
     team_inbox_assignment,
     team_inbox_contact_links,
@@ -63,13 +67,17 @@ from app.services import (
     team_inbox_operations,
     team_inbox_outbound,
     team_inbox_participants,
+    team_inbox_realtime,
     team_inbox_routing,
     team_inbox_status,
 )
 from app.services import (
+    notification as notification_service,
+)
+from app.services import (
     party as party_service,
 )
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.domain_errors import DomainError
@@ -93,6 +101,11 @@ _ADMIN_MUTATION = OwnerCommandDefinition(
     owner=OWNER,
     concern="operator conversation and collaboration commands",
     name="execute_team_inbox_admin_mutation",
+)
+_AI_OUTBOUND_REVALIDATION = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="queued AI outbound ownership revalidation and suppression",
+    name="suppress_ai_outbound_without_ownership",
 )
 
 
@@ -285,11 +298,53 @@ class AgentPresenceOutcome:
     already_set: bool
 
 
+@dataclass(frozen=True, slots=True)
+class TakeOverConversationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    expected_ai_session_id: UUID
+    expected_ai_session_state: str
+    actor_person_id: UUID
+    permission_keys: frozenset[str]
+    service_team_id: UUID | None = None
+    reason: str = "Agent explicitly took over the conversation"
+
+
+@dataclass(frozen=True, slots=True)
+class TakeOverConversationOutcome:
+    conversation_id: UUID
+    ai_session_id: UUID
+    prior_ai_session_state: str
+    assigned_person_id: UUID
+    service_team_id: UUID
+    canceled_ai_outbound_count: int
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressAiOutboundCommand:
+    context: CommandContext
+    notification_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressAiOutboundOutcome:
+    notification_id: UUID
+    suppressed: bool
+    reason: str | None
+
+
+_TAKEOVER_PERMISSIONS = frozenset(
+    {"support:ticket:update", "support:inbox:self_assign"}
+)
+
+
 def _commit(
     db: Session,
     action: Callable[[], T],
     *,
     context: CommandContext | None = None,
+    definition: OwnerCommandDefinition = _ADMIN_MUTATION,
 ) -> T:
     if owner_command_active(db):
         return action()
@@ -303,7 +358,7 @@ def _commit(
     )
     return execute_owner_command(
         db,
-        definition=_ADMIN_MUTATION,
+        definition=definition,
         context=command_context,
         operation=action,
     )
@@ -328,6 +383,21 @@ def _active_conversation(
     if conversation is None or not conversation.is_active:
         raise ConversationNotFoundError("Conversation not found.")
     return conversation
+
+
+def _require_human_control(
+    db: Session,
+    conversation: InboxConversation,
+    *,
+    mutation: ai_conversation_ownership.HumanConversationMutation,
+    for_update: bool = True,
+) -> None:
+    ai_conversation_ownership.require_human_control(
+        db,
+        conversation_id=conversation.id,
+        mutation=mutation,
+        for_update=for_update,
+    )
 
 
 def _is_lock_unavailable(exc: OperationalError) -> bool:
@@ -621,6 +691,12 @@ def reply(
 ) -> ReplyOutcome:
     def action() -> ReplyOutcome:
         conversation = _active_conversation(db, command.conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.reply,
+            for_update=False,
+        )
         clean_body = command.body_text.strip()
         copy_recipients = command.email_copy_recipients
         clean_cc: tuple[str, ...] = ()
@@ -709,6 +785,11 @@ def reply(
             command.conversation_id,
             for_update=True,
             nowait=True,
+        )
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.reply,
         )
         replay = _reply_replay(
             db,
@@ -913,6 +994,11 @@ def apply_label(
 ) -> None:
     def action() -> None:
         conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.label,
+        )
         team_inbox_operations.apply_label(
             db,
             conversation=conversation,
@@ -930,9 +1016,15 @@ def remove_label(
     label_id: str | UUID,
 ) -> None:
     def action() -> None:
+        conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.label,
+        )
         team_inbox_operations.remove_label(
             db,
-            conversation=_active_conversation(db, conversation_id),
+            conversation=conversation,
             label_id=label_id,
         )
 
@@ -1040,6 +1132,11 @@ def update_workflow(
 ) -> None:
     def action() -> None:
         conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.workflow,
+        )
         if snooze_until_reply:
             # No wake time â€” the customer's next message wakes it. Priority and
             # mute still apply; they arrived in the same submit and dropping
@@ -1201,6 +1298,15 @@ def bulk_action(
         raise InboxCommandError("Select at least one conversation.")
 
     def execute() -> BulkActionOutcome:
+        for raw_conversation_id in conversation_ids:
+            conversation = _active_conversation(
+                db, raw_conversation_id, for_update=True
+            )
+            _require_human_control(
+                db,
+                conversation,
+                mutation=ai_conversation_ownership.HumanConversationMutation.bulk,
+            )
         if action == "status":
             result = team_inbox_operations.bulk_update_status(
                 db,
@@ -1264,9 +1370,12 @@ def assign_conversation_to_me(
         raise InboxCommandError("Conversation not found.")
 
     def execute() -> BulkActionOutcome:
-        conversation = db.get(InboxConversation, conversation_uuid)
-        if conversation is None or not conversation.is_active:
-            raise InboxCommandError("Conversation not found.")
+        conversation = _active_conversation(db, conversation_uuid, for_update=True)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.assignment,
+        )
         team_uuid = (
             coerce_uuid(service_team_id)
             or conversation.primary_service_team_id
@@ -1299,6 +1408,337 @@ def assign_conversation_to_me(
     return _commit(db, execute)
 
 
+def _cancel_pending_ai_outbound(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    session_id: UUID,
+) -> int:
+    messages = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .all()
+    )
+    matching = tuple(
+        message
+        for message in messages
+        if str((message.metadata_ or {}).get("ai_intake_session_id") or "")
+        == str(session_id)
+        and message.notification_id is not None
+    )
+    outcome = notification_service.cancel_pending_notifications(
+        db,
+        notification_service.CancelPendingNotificationsCommand(
+            notification_ids=tuple(
+                message.notification_id
+                for message in matching
+                if message.notification_id is not None
+            ),
+            reason="ai_ownership_ended_human_takeover",
+        ),
+    )
+    canceled_ids = set(outcome.canceled_notification_ids)
+    for message in matching:
+        if message.notification_id not in canceled_ids:
+            continue
+        metadata = dict(message.metadata_ or {})
+        metadata["delivery_status"] = "canceled"
+        metadata["suppression_reason"] = "ai_ownership_ended_human_takeover"
+        message.metadata_ = metadata
+    db.flush()
+    return len(canceled_ids)
+
+
+def suppress_ai_outbound_without_ownership(
+    db: Session,
+    command: SuppressAiOutboundCommand,
+) -> SuppressAiOutboundOutcome:
+    """Revalidate and suppress one AI delivery immediately before provider use."""
+
+    def execute() -> SuppressAiOutboundOutcome:
+        notification = db.get(Notification, command.notification_id)
+        if notification is None:
+            return SuppressAiOutboundOutcome(
+                notification_id=command.notification_id,
+                suppressed=False,
+                reason=None,
+            )
+        metadata = dict(notification.metadata_ or {})
+        try:
+            conversation_id = UUID(str(metadata.get("conversation_id")))
+        except (TypeError, ValueError):
+            conversation_id = None
+        decision = ai_conversation_ownership.decide_ai_outbound_delivery(
+            db,
+            conversation_id=conversation_id,
+            metadata=metadata,
+        )
+        if not decision.applicable or decision.allowed:
+            return SuppressAiOutboundOutcome(
+                notification_id=notification.id,
+                suppressed=False,
+                reason=None,
+            )
+        reason = decision.reason or "ai_ownership_ended"
+        suppression = notification_service.suppress_notification_delivery(
+            db,
+            notification_service.SuppressNotificationDeliveryCommand(
+                notification_id=notification.id,
+                reason=reason,
+            ),
+        )
+        if not suppression.suppressed:
+            return SuppressAiOutboundOutcome(
+                notification_id=notification.id,
+                suppressed=False,
+                reason=None,
+            )
+        message = (
+            db.query(InboxMessage)
+            .filter(InboxMessage.notification_id == notification.id)
+            .one_or_none()
+        )
+        if message is not None:
+            message_metadata = dict(message.metadata_ or {})
+            message_metadata["delivery_status"] = "canceled"
+            message_metadata["suppression_reason"] = reason
+            message.metadata_ = message_metadata
+        from app.services.communication_intents import record_delivery_outcome
+
+        record_delivery_outcome(db, notification)
+        db.flush()
+        return SuppressAiOutboundOutcome(
+            notification_id=notification.id,
+            suppressed=True,
+            reason=reason,
+        )
+
+    return _commit(
+        db,
+        execute,
+        context=command.context,
+        definition=_AI_OUTBOUND_REVALIDATION,
+    )
+
+
+def _takeover_replay(
+    db: Session,
+    *,
+    command: TakeOverConversationCommand,
+    session: AiIntakeSession,
+) -> TakeOverConversationOutcome | None:
+    metadata = dict(session.metadata_ or {})
+    takeover = metadata.get("human_takeover")
+    if not isinstance(takeover, Mapping):
+        return None
+    if (
+        session.state != "stopped_human_takeover"
+        or takeover.get("idempotency_key") != command.context.idempotency_key
+        or str(takeover.get("actor_person_id") or "") != str(command.actor_person_id)
+    ):
+        return None
+    assignment = (
+        db.query(InboxConversationAssignment)
+        .filter(
+            InboxConversationAssignment.conversation_id == command.conversation_id,
+            InboxConversationAssignment.is_active.is_(True),
+        )
+        .one_or_none()
+    )
+    if assignment is None:
+        raise ai_conversation_ownership.AiTakeoverConflictError(
+            "The previous takeover no longer has active human ownership.",
+            conversation_id=command.conversation_id,
+            ai_session_id=str(session.id),
+        )
+    return TakeOverConversationOutcome(
+        conversation_id=command.conversation_id,
+        ai_session_id=session.id,
+        prior_ai_session_state=str(takeover.get("prior_ai_session_state") or ""),
+        assigned_person_id=assignment.person_id,
+        service_team_id=assignment.service_team_id,
+        canceled_ai_outbound_count=int(takeover.get("canceled_ai_outbound_count") or 0),
+        replayed=True,
+    )
+
+
+def take_over_conversation(
+    db: Session,
+    command: TakeOverConversationCommand,
+) -> TakeOverConversationOutcome:
+    """Atomically stop AI Intake and acquire the conversation for one agent."""
+
+    missing_permissions = tuple(
+        sorted(
+            permission
+            for permission in _TAKEOVER_PERMISSIONS
+            if "*" not in command.permission_keys
+            and permission not in command.permission_keys
+        )
+    )
+    if missing_permissions:
+        raise ai_conversation_ownership.AiTakeoverPermissionError(
+            missing_permissions=missing_permissions
+        )
+    if not str(command.context.idempotency_key or "").strip():
+        raise ai_conversation_ownership.AiTakeoverConflictError(
+            "Takeover requires a stable idempotency key.",
+            conversation_id=command.conversation_id,
+        )
+    reason = command.reason.strip()
+    if not reason:
+        raise ai_conversation_ownership.AiTakeoverConflictError(
+            "Takeover reason is required.",
+            conversation_id=command.conversation_id,
+        )
+
+    def execute() -> TakeOverConversationOutcome:
+        conversation = _active_conversation(
+            db, command.conversation_id, for_update=True
+        )
+        expected_session = (
+            db.query(AiIntakeSession)
+            .filter(AiIntakeSession.id == command.expected_ai_session_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if (
+            expected_session is None
+            or expected_session.conversation_id != conversation.id
+        ):
+            raise ai_conversation_ownership.AiTakeoverConflictError(
+                "The expected AI session no longer owns this conversation.",
+                conversation_id=conversation.id,
+                expected_ai_session_id=str(command.expected_ai_session_id),
+            )
+        replay = _takeover_replay(db, command=command, session=expected_session)
+        if replay is not None:
+            return replay
+        active_session = ai_conversation_ownership.active_session(
+            db,
+            conversation_id=conversation.id,
+            for_update=True,
+        )
+        if active_session is None or active_session.id != expected_session.id:
+            raise ai_conversation_ownership.AiTakeoverConflictError(
+                "AI ownership changed before takeover completed.",
+                conversation_id=conversation.id,
+                expected_ai_session_id=str(command.expected_ai_session_id),
+            )
+        if active_session.state != command.expected_ai_session_state:
+            raise ai_conversation_ownership.AiTakeoverConflictError(
+                "AI session state changed. Refresh the conversation and try again.",
+                conversation_id=conversation.id,
+                expected_ai_session_id=str(active_session.id),
+                expected_ai_session_state=command.expected_ai_session_state,
+                current_ai_session_state=active_session.state,
+            )
+        prior_state = active_session.state
+        from app.services import ai_conversation_intake
+
+        ai_conversation_intake.complete_session(
+            active_session, state="stopped_human_takeover"
+        )
+        canceled_count = _cancel_pending_ai_outbound(
+            db,
+            conversation=conversation,
+            session_id=active_session.id,
+        )
+        takeover_at = active_session.takeover_at or datetime.now(UTC)
+        session_metadata = dict(active_session.metadata_ or {})
+        session_metadata["human_takeover"] = {
+            "actor_person_id": str(command.actor_person_id),
+            "at": takeover_at.isoformat(),
+            "reason": reason[:500],
+            "prior_ai_session_state": prior_state,
+            "command_id": str(command.context.command_id),
+            "idempotency_key": command.context.idempotency_key,
+            "canceled_ai_outbound_count": canceled_count,
+        }
+        active_session.metadata_ = session_metadata
+        ai_conversation_intake.mark_conversation_ai_metadata(
+            conversation, session=active_session, active=False
+        )
+        team_inbox_status.apply_status_transition(
+            db,
+            conversation=conversation,
+            status=InboxConversationStatus.open,
+            actor_person_id=command.actor_person_id,
+            reason=team_inbox_status.InboxStatusReason.ai_human_takeover,
+            source_id=f"ai-human-takeover:{command.context.command_id}",
+            compatibility_source="explicit_ai_human_takeover",
+        )
+        team_uuid = (
+            command.service_team_id
+            or conversation.primary_service_team_id
+            or coerce_uuid(team_inbox_routing.default_service_team_id(db))
+        )
+        if team_uuid is None:
+            raise ai_conversation_ownership.AiTakeoverConflictError(
+                "Choose a service team before taking over this conversation.",
+                conversation_id=conversation.id,
+            )
+        assignment = team_inbox_assignment.assign_conversation_to_agent(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            person_id=command.actor_person_id,
+            assigned_by_person_id=command.actor_person_id,
+            reason=reason,
+        )
+        if assignment.kind != "assigned":
+            raise ai_conversation_ownership.AiTakeoverConflictError(
+                assignment.reason or "Human ownership could not be acquired.",
+                conversation_id=conversation.id,
+                assignment_outcome=assignment.kind,
+            )
+        stage_audit_event(
+            db,
+            action="ai_conversation_human_takeover",
+            entity_type="inbox_conversation",
+            entity_id=str(conversation.id),
+            actor=AuditActor.user(
+                str(command.actor_person_id),
+                party_id=command.actor_person_id,
+            ),
+            metadata={
+                "owner": OWNER,
+                "ai_session_id": str(active_session.id),
+                "prior_ai_session_state": prior_state,
+                "service_team_id": str(team_uuid),
+                "canceled_ai_outbound_count": canceled_count,
+            },
+        )
+        team_inbox_realtime.publish_conversation_event(
+            db,
+            str(conversation.id),
+            event_type=team_inbox_realtime.EventType.CONVERSATION_UPDATED,
+            payload={
+                "conversation_id": str(conversation.id),
+                "control_owner": "human",
+                "ai_session_id": str(active_session.id),
+                "takeover": True,
+            },
+        )
+        team_inbox_realtime.publish_queue_event(
+            db,
+            conversation_id=str(conversation.id),
+            created=False,
+        )
+        return TakeOverConversationOutcome(
+            conversation_id=conversation.id,
+            ai_session_id=active_session.id,
+            prior_ai_session_state=prior_state,
+            assigned_person_id=command.actor_person_id,
+            service_team_id=team_uuid,
+            canceled_ai_outbound_count=canceled_count,
+            replayed=False,
+        )
+
+    return _commit(db, execute, context=command.context)
+
+
 def link_contact(
     db: Session,
     *,
@@ -1313,6 +1753,11 @@ def link_contact(
 ) -> ContactLinkOutcome:
     def action() -> ContactLinkOutcome:
         conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.contact,
+        )
         selected_subscriber = (
             str(subscriber_id_manual or subscriber_id or "").strip() or None
         )
@@ -1490,9 +1935,15 @@ def create_lead_from_conversation(
     note: str | None = None,
 ) -> LeadCreationOutcome:
     def action() -> LeadCreationOutcome:
+        conversation = _active_conversation(db, conversation_id, for_update=True)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.lead,
+        )
         return create_lead_from_conversation_uncommitted(
             db,
-            conversation=_active_conversation(db, conversation_id, for_update=True),
+            conversation=conversation,
             actor_person_id=actor_person_id,
             title=title,
             note=note,
@@ -2024,6 +2475,11 @@ def create_internal_note(
         conversation = _active_conversation(
             db, command.conversation_id, for_update=True
         )
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.private_note,
+        )
         mentions = _eligible_mention_users(
             db,
             conversation=conversation,
@@ -2199,9 +2655,15 @@ def create_comment(
     actor_person_id: str | UUID | None = None,
 ) -> None:
     def action() -> None:
+        conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.comment,
+        )
         team_inbox_operations.create_comment(
             db,
-            conversation=_active_conversation(db, conversation_id),
+            conversation=conversation,
             body=body,
             message_id=message_id,
             author_person_id=actor_person_id,
@@ -2240,7 +2702,12 @@ def update_status(
         raise InboxCommandError("Unsupported conversation status.")
 
     def action() -> StatusOutcome:
-        conversation = _active_conversation(db, conversation_id)
+        conversation = _active_conversation(db, conversation_id, for_update=True)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.status,
+        )
         previous_status = conversation.status
         if previous_status == clean_status:
             return StatusOutcome(
@@ -2286,7 +2753,12 @@ def assign_conversation(
     """
 
     def action() -> team_inbox_assignment.InboxAssignmentResult:
-        conversation = _active_conversation(db, conversation_id)
+        conversation = _active_conversation(db, conversation_id, for_update=True)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.assignment,
+        )
         return team_inbox_assignment.assign_conversation_to_agent(
             db,
             conversation=conversation,
@@ -2316,6 +2788,11 @@ def run_macro(
 
     def action() -> dict[str, object]:
         conversation = _active_conversation(db, conversation_id, for_update=True)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.macro,
+        )
         return team_inbox_operations.execute_macro_actions(
             db,
             conversation=conversation,
@@ -2947,6 +3424,11 @@ def email_transcript(
 
     def action() -> str:
         conversation = _active_conversation(db, conversation_id)
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.transcript,
+        )
         clean_recipient = str(recipient or "").strip()
         if "@" not in clean_recipient:
             raise InboxCommandError("Enter a valid email address.")
