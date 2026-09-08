@@ -29,6 +29,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.services import (
+    inbox_sla,
     team_inbox_assignment,
     team_inbox_filters,
     team_inbox_outbound,
@@ -677,6 +678,10 @@ def bulk_update_status(
         )
         updated.append(str(conversation.id))
     db.flush()
+    for conversation_id in updated:
+        conversation = db.get(InboxConversation, coerce_uuid(conversation_id))
+        if conversation is not None:
+            inbox_sla.update_status(db, conversation, clean_status)
     return {"updated": updated, "skipped": skipped, "status": clean_status}
 
 
@@ -1227,7 +1232,7 @@ def snooze_until_reply(
     conversation: InboxConversation,
     actor_person_id: str | UUID | None = None,
 ) -> InboxConversation:
-    """Snooze a conversation with no wake time — the customer's reply wakes it.
+    """Snooze a conversation with no wake time â€” the customer's reply wakes it.
 
     Stored as a metadata flag rather than a far-future ``snoozed_until``, so the
     queue's snoozed filter still means "asleep" while nothing invents a wake
@@ -1272,7 +1277,7 @@ def wake_due_snoozed_conversations(
     """Settle conversations whose chosen wake time has passed.
 
     Snoozing wrote a durable ``status='snoozed'`` and a ``snoozed_until``, and
-    nothing ever cleared them — so a conversation snoozed until Tuesday was
+    nothing ever cleared them â€” so a conversation snoozed until Tuesday was
     still filed as snoozed the following month, and absent from the Open
     cohort. The workqueue provider already read the wake time as expiry
     (``snoozed_until <= now`` means awake), so the two disagreed about the same
@@ -1459,7 +1464,7 @@ def render_conversation_transcript(
     for message in messages:
         metadata = message.metadata_ or {}
         if metadata.get("delivery_status") == SCHEDULED_DELIVERY_STATUS_FOR_TRANSCRIPT:
-            # Not sent yet — it is not part of what was exchanged.
+            # Not sent yet â€” it is not part of what was exchanged.
             continue
         who = "Us" if message.direction == "outbound" else "Customer"
         when = (message.sent_at or message.created_at).strftime("%Y-%m-%d %H:%M UTC")

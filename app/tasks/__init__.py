@@ -67,6 +67,7 @@ from app.tasks.forwarding_control_observations import (
 )
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
+from app.tasks.inbox_sla import evaluate_inbox_sla
 from app.tasks.infrastructure_availability import (
     prune_infrastructure_availability,
     snapshot_infrastructure_availability,
@@ -285,6 +286,7 @@ __all__ = [
     "recover_stale_inbox_ai_intake",
     "repair_inbox_whatsapp_locations",
     "auto_resolve_stale_inbox_conversations",
+    "evaluate_inbox_sla",
     "run_scheduled_export",
     "run_export_job",
     "prune_field_location_history_task",
