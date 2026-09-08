@@ -189,10 +189,14 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wifi_password_pushed_at=None,
         # Per-ONT service-port index overrides (operator-set via the
         # configure form, written to ``desired_config`` under the ``olt.*``
-        # section). When None, the planner allocates fresh indices on first
-        # provision. The validator rejects post-allocation changes
-        # (validator.py:107) so the form should disable these once the OLT
-        # observation shows real indices in use.
+        # section). There is no allocator: when None, no index has been
+        # assigned yet, and the planner plans no create for that slot — if
+        # both slots are None while ports are already observed, it refuses
+        # deletes rather than clearing them
+        # (``ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED``, see
+        # ``planner._plan_service_ports``). The validator rejects
+        # post-allocation changes (validator.py:107) so the form should
+        # disable these once the OLT observation shows real indices in use.
         mgmt_service_port_index=_int_or_none(values.get("mgmt_service_port_index")),
         wan_service_port_index=_int_or_none(values.get("wan_service_port_index")),
         # DEFAULT: forward-compat for legacy-BSS -> in-app Subscriber migration.
