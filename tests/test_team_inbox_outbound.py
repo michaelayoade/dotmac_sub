@@ -9,6 +9,7 @@ from app.models.notification import (
     CommunicationIntentRecord,
     Notification,
     NotificationChannel,
+    NotificationDelivery,
     NotificationStatus,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
@@ -910,6 +911,125 @@ def test_whatsapp_notification_delivers_inbox_attachment_as_media(
     assert message is not None
     assert message.external_message_id == "wamid.media"
     assert message.metadata_["provider_message_ids"] == ["wamid.media"]
+
+
+def test_instagram_notification_uploads_attachment_and_checkpoints_each_leg(
+    db_session, monkeypatch
+):
+    from app.services.integrations import meta_social_capability
+    from app.services.integrations.meta_social_contracts import (
+        MetaDirectMessageOutcome,
+        MetaMessageAttachmentType,
+    )
+
+    conversation = InboxConversation(
+        channel_type=InboxChannelType.instagram_dm.value,
+        subject="Instagram support",
+        contact_address="customer-ig",
+        external_thread_id="instagram_dm:customer-ig",
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type=InboxChannelType.instagram_dm.value,
+            direction=InboxMessageDirection.inbound.value,
+            body="Can you show me?",
+            external_message_id="inbound-instagram-1",
+            received_at=datetime.now(UTC),
+            metadata_={"provider_account_scope": "ig-123"},
+        )
+    )
+    attachment_id = uuid4()
+    monkeypatch.setattr(
+        notification_tasks.team_inbox_media,
+        "resolve_delivery_attachments",
+        lambda *_args, **_kwargs: (
+            team_inbox_media.InboxDeliveryAttachment(
+                asset_id=attachment_id,
+                filename="router.jpg",
+                content_type="image/jpeg",
+                content=b"jpeg-bytes",
+                asset_type="image",
+            ),
+        ),
+    )
+    calls = []
+
+    def send_direct_message(_db, command):
+        calls.append(command)
+        if command.attachment is not None:
+            return MetaDirectMessageOutcome(
+                accepted=True,
+                operation_status="succeeded",
+                provider_message_id="mid-instagram-media",
+                provider_attachment_id="meta-attachment-1",
+            )
+        return MetaDirectMessageOutcome(
+            accepted=True,
+            operation_status="succeeded",
+            provider_message_id="mid-instagram-text",
+        )
+
+    monkeypatch.setattr(
+        meta_social_capability,
+        "send_direct_message",
+        send_direct_message,
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>Photo attached.</p>",
+            body_text="Photo attached.",
+            metadata={"inbox_attachment_ids": [str(attachment_id)]},
+        ),
+    )
+    notification_tasks._deliver_notification_queue_stats(
+        db_session, notification_id=result.notification_id
+    )
+
+    message = db_session.get(InboxMessage, result.message_id)
+    notification = db_session.get(Notification, result.notification_id)
+    assert len(calls) == 2
+    assert calls[0].attachment is not None
+    assert calls[0].attachment.attachment_type is MetaMessageAttachmentType.image
+    assert calls[0].attachment.content == b"jpeg-bytes"
+    assert calls[1].body == "Photo attached."
+    assert message is not None
+    assert message.external_message_id == "mid-instagram-text"
+    assert message.metadata_["provider_message_ids"] == [
+        "mid-instagram-media",
+        "mid-instagram-text",
+    ]
+    assert message.metadata_["provider_attachment_ids"] == {
+        str(attachment_id): "meta-attachment-1"
+    }
+    completed_legs = {
+        row.response_code
+        for row in db_session.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_id == result.notification_id)
+        .all()
+    }
+    assert f"attachment:{attachment_id}" in completed_legs
+    assert "text" in completed_legs
+
+    assert notification is not None
+    notification.status = NotificationStatus.failed
+    notification.retry_count = 0
+    notification.send_at = None
+    notification.sent_at = None
+    db_session.commit()
+    notification_tasks._deliver_notification_queue_stats(
+        db_session, notification_id=notification.id
+    )
+
+    assert len(calls) == 2
+    assert notification.status == NotificationStatus.delivered
 
 
 def _social_comment_conversation(

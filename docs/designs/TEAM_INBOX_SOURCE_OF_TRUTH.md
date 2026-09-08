@@ -365,6 +365,15 @@ Email replies with Inbox attachments resolve those durable Inbox asset IDs only;
 they never reinterpret Inbox display metadata as generic communication
 attachments. The supported email attachment types include PDF, XLSX, and the
 Team Inbox image types PNG, JPEG, GIF, and WebP.
+Facebook Messenger and Instagram DM replies use the same private Inbox asset
+identity and content boundary. The notification worker resolves each asset only
+after the outbound intent commits, then the version-pinned `meta.social`
+capability uploads the bytes to Meta's attachment API and sends the returned
+attachment ID. It never exposes an authenticated Inbox media URL to Meta.
+Instagram permits image, audio, and video assets; document attachments fail
+closed before an intent is staged. Each accepted media leg and the optional
+text leg records its provider message ID durably, and a retry skips those exact
+completed legs rather than sending the customer a duplicate attachment.
 Immediate tasks and sweeps both lock and claim the exact
 eligible outbox row before provider delivery, so concurrent wake-ups are safe
 no-ops rather than duplicate sends. Immediate replies with no operator-supplied
