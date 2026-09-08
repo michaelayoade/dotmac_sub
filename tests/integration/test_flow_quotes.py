@@ -117,23 +117,21 @@ def test_quote_lifecycle_native(db_session):
     db_session.add(SystemUserRole(system_user_id=reviewer.id, role_id=admin_role.id))
     db_session.commit()
     review_id = uuid.uuid4()
-    db_session_adapter.release_read_transaction(db_session)
-    quote_payment_review.review_quote_payment(
-        db_session,
-        quote_payment_review.ReviewQuotePaymentCommand(
-            context=CommandContext.system(
-                actor=str(reviewer.id),
-                scope="crm:quote:review",
-                reason="Integration Quote payment review",
-                command_id=review_id,
-                idempotency_key=f"quote-payment-review:{quote.id}:{review_id}",
-            ),
-            quote_id=quote.id,
-            reviewer_system_user_id=reviewer.id,
-            expected_revision=0,
-            decision=QuotePaymentReviewDecision.approve,
+    review_command = quote_payment_review.ReviewQuotePaymentCommand(
+        context=CommandContext.system(
+            actor=str(reviewer.id),
+            scope="crm:quote:review",
+            reason="Integration Quote payment review",
+            command_id=review_id,
+            idempotency_key=f"quote-payment-review:{quote.id}:{review_id}",
         ),
+        quote_id=quote.id,
+        reviewer_system_user_id=reviewer.id,
+        expected_revision=0,
+        decision=QuotePaymentReviewDecision.approve,
     )
+    db_session_adapter.release_read_transaction(db_session)
+    quote_payment_review.review_quote_payment(db_session, review_command)
     db_session.refresh(quote)
     assert (
         selfserve.build_portal_quote_payload(db_session, quote)["can_pay_deposit"]
