@@ -23,6 +23,17 @@ REQUEST_ERRORS = Counter(
     "Total HTTP 5xx responses",
     ["method", "path", "status"],
 )
+WORKER_STARTUP_DURATION = Histogram(
+    "worker_startup_duration_seconds", "Time until complete route registration"
+)
+APPLICATION_READINESS = Gauge(
+    "application_readiness", "Whether essential startup and routes are ready"
+)
+INTEGRATION_ROUTE_404 = Counter(
+    "integration_route_404_total",
+    "404 responses for registered integration routes",
+    ["path"],
+)
 API_SYNC_PRESSURE_LIMITED = Counter(
     "api_sync_pressure_limited_total",
     "API sync requests rejected before they could acquire DB resources",
