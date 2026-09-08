@@ -27,10 +27,12 @@ from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.field import (
     FieldLiveMapFeedQuery,
-    FieldManagerActiveWorkOrder,
     FieldManagerTechnician,
     FieldManagerTechniciansQuery,
     FieldManagerTechniciansResponse,
+)
+from app.schemas.field import (
+    FieldManagerActiveWorkOrder as ActiveWorkOrderOutcome,
 )
 from app.services import field_maps
 from app.services.common import apply_pagination, coerce_uuid
@@ -180,7 +182,7 @@ class FieldManager:
                     is_live=map_position.is_live if map_position is not None else False,
                     last_seen_at=(_as_utc(presence.last_seen_at) if presence else None),
                     active_work_order=(
-                        FieldManagerActiveWorkOrder(
+                        ActiveWorkOrderOutcome(
                             id=order.public_id,
                             title=order.title,
                             status=order.status,

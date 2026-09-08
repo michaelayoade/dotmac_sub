@@ -54,13 +54,18 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-def _valid_coordinates(latitude: float | None, longitude: float | None) -> bool:
-    return bool(
-        latitude is not None
-        and longitude is not None
-        and -90 <= latitude <= 90
-        and -180 <= longitude <= 180
-    )
+def _validated_coordinates(
+    latitude: float | None,
+    longitude: float | None,
+) -> tuple[float, float] | None:
+    if (
+        latitude is None
+        or longitude is None
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+    return latitude, longitude
 
 
 def _technician_label(profile: TechnicianProfile | None) -> str:
@@ -103,10 +108,13 @@ def list_technician_positions(
     items: list[FieldLiveMapPosition] = []
     live_count = 0
     for presence in rows:
-        latitude = presence.last_latitude
-        longitude = presence.last_longitude
-        if not _valid_coordinates(latitude, longitude):
+        coordinates = _validated_coordinates(
+            presence.last_latitude,
+            presence.last_longitude,
+        )
+        if coordinates is None:
             continue
+        latitude, longitude = coordinates
         last_at = _as_utc(presence.last_location_at)
         is_live = bool(
             last_at and (now - last_at).total_seconds() <= query.stale_after_seconds
@@ -184,10 +192,13 @@ def search_live_map(
         .all()
     )
     for presence in technician_rows:
-        latitude = presence.last_latitude
-        longitude = presence.last_longitude
-        if not _valid_coordinates(latitude, longitude):
+        coordinates = _validated_coordinates(
+            presence.last_latitude,
+            presence.last_longitude,
+        )
+        if coordinates is None:
             continue
+        latitude, longitude = coordinates
         items.append(
             FieldLiveMapSearchResult(
                 kind="technician",
