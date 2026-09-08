@@ -53,7 +53,7 @@ def _work_order(
     db_session,
     public_id: str,
     *,
-    assigned_to_crm_person_id: str | None = "crm-assigned-technician",
+    assigned: bool = True,
 ) -> WorkOrder:
     subscriber = Subscriber(
         first_name="Work",
@@ -67,10 +67,21 @@ def _work_order(
         subscriber_id=subscriber.id,
         title="Repair fibre drop",
         status="in_progress",
-        assigned_to_crm_person_id=assigned_to_crm_person_id,
     )
     db_session.add(row)
     db_session.flush()
+    if assigned:
+        technician = TechnicianProfile(person_id=uuid4(), is_active=True)
+        db_session.add(technician)
+        db_session.flush()
+        db_session.add(
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=row.id,
+                status=DispatchQueueStatus.assigned,
+                assigned_technician_id=technician.id,
+            )
+        )
+        db_session.flush()
     return row
 
 
@@ -205,7 +216,7 @@ def test_staff_command_rejects_unassigned_work_order(db_session):
     work_order = _work_order(
         db_session,
         "sub-expense-unassigned",
-        assigned_to_crm_person_id=None,
+        assigned=False,
     )
     command = _command(user, work_order)
     db_session.commit()
@@ -219,21 +230,7 @@ def test_staff_command_rejects_unassigned_work_order(db_session):
 
 
 def test_assigned_queue_entry_satisfies_assignment_requirement(db_session):
-    work_order = _work_order(
-        db_session,
-        "sub-expense-queue-assigned",
-        assigned_to_crm_person_id=None,
-    )
-    technician = TechnicianProfile(person_id=uuid4(), is_active=True)
-    db_session.add(technician)
-    db_session.flush()
-    db_session.add(
-        WorkOrderAssignmentQueue(
-            work_order_mirror_id=work_order.id,
-            status=DispatchQueueStatus.assigned,
-            assigned_technician_id=technician.id,
-        )
-    )
+    work_order = _work_order(db_session, "sub-expense-queue-assigned")
     db_session.commit()
 
     eligibility = expense_web.evaluate_expense_work_order_eligibility(
@@ -330,7 +327,7 @@ def test_unassigned_work_order_disables_expense_action(db_session, monkeypatch):
     work_order = _work_order(
         db_session,
         "sub-expense-panel-unassigned",
-        assigned_to_crm_person_id=None,
+        assigned=False,
     )
     db_session.commit()
 
