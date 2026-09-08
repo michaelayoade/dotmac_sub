@@ -213,6 +213,24 @@ def test_recipient_uses_primary_active_party_email(db_session, subscriber):
     assert recipient.display_name == "Amina Bello"
 
 
+def test_recipient_uses_direct_customer_email_without_lead_or_party_binding(
+    db_session,
+    subscriber,
+):
+    quote, _primary, _quote_id = _quote(db_session, subscriber)
+    quote.lead_id = None
+    subscriber.party_id = None
+    db_session.commit()
+    db_session.refresh(quote)
+
+    recipient = quote_documents.resolve_quote_recipient(db_session, quote)
+
+    assert recipient is not None
+    assert recipient.contact_point_id is None
+    assert recipient.email == subscriber.email
+    assert recipient.display_name == subscriber.full_name
+
+
 def test_pdf_export_is_content_addressed_and_audited_once(
     db_session, subscriber, monkeypatch
 ):
@@ -336,6 +354,11 @@ def test_send_email_queues_one_pdf_intent_and_replays(
     assert replay.replayed is True
     assert replay.delivery_request_id == first.delivery_request_id
     assert len(captured) == 1
+    request = db_session.get(QuoteDeliveryRequest, first.delivery_request_id)
+    assert request.recipient_contact_point_id == primary.id
+    assert request.recipient_masked == document_delivery.mask_email(
+        primary.normalized_value
+    )
     assert captured[0].recipients == {
         NotificationChannel.email: primary.normalized_value
     }

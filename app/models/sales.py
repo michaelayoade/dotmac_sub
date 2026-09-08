@@ -332,7 +332,7 @@ class Lead(Base):
 
 
 class CustomerQuoteLeadLink(Base):
-    """The one system Lead that represents an existing customer in quoting."""
+    """Historical synthetic-Lead linkage retained as immutable legacy evidence."""
 
     __tablename__ = "customer_quote_lead_links"
 
@@ -886,6 +886,10 @@ class QuoteDeliveryRequest(Base):
             "request_status IN ('queued', 'suppressed')",
             name="ck_quote_delivery_requests_status",
         ),
+        CheckConstraint(
+            "recipient_contact_point_id IS NOT NULL OR recipient_masked IS NOT NULL",
+            name="ck_quote_delivery_requests_recipient_evidence",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -902,11 +906,12 @@ class QuoteDeliveryRequest(Base):
         ForeignKey("quote_pdf_exports.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    recipient_contact_point_id: Mapped[uuid.UUID] = mapped_column(
+    recipient_contact_point_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("party_contact_points.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
+    recipient_masked: Mapped[str | None] = mapped_column(String(320))
     communication_intent_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("communication_intents.id", ondelete="RESTRICT"),
