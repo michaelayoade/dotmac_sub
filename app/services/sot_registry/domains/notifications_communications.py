@@ -382,7 +382,7 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "The scheduler polls only. This owner decides Tuesday/local-time "
-                "eligibility, stores the exact XLSX, arbitrates one local-date "
+                "eligibility, stores the exact CSV, arbitrates one local-date "
                 "occurrence, and stages one durable attachment delivery intent."
             ),
             contract=ServiceContract(
