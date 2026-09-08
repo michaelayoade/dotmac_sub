@@ -115,7 +115,7 @@ class _ClassifierFailureGateway(_Gateway):
 
     def generate_with_fallback(self, db, **kwargs):
         if str(kwargs.get("system") or "").startswith(
-            "You compose one customer-facing response"
+            "You compose one concise customer-support response"
         ):
             prompt = json.loads(str(kwargs.get("prompt") or "{}"))
             step = dict(prompt.get("playbook_step") or {})
@@ -1013,9 +1013,15 @@ def test_department_mapping_routes_to_configured_team(db_session, monkeypatch):
     assert conversation.primary_service_team_id == finance.id
 
 
-def test_gateway_failure_still_routes_to_fallback(db_session, monkeypatch):
+def test_gateway_failure_routes_to_fallback_when_retries_are_disabled(
+    db_session, monkeypatch
+):
     fallback = _team(db_session, "Configured Fallback Team")
-    _config(db_session, fallback_team_id=fallback.id)
+    _config(
+        db_session,
+        fallback_team_id=fallback.id,
+        max_clarification_turns=0,
+    )
     gateway = _Gateway(error=TimeoutError("provider timeout"))
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
@@ -1025,7 +1031,10 @@ def test_gateway_failure_still_routes_to_fallback(db_session, monkeypatch):
     conversation = db_session.get(InboxConversation, result.conversation_id)
     message = db_session.get(InboxMessage, result.message_id)
     assert conversation.primary_service_team_id == fallback.id
-    assert message.metadata_["ai_intake_status"] == "failed"
+    assert message.metadata_["ai_intake_status"] == "classification_unavailable"
+    assert (
+        message.metadata_["ai_intake_reason"] == "classifier_unavailable_after_retries"
+    )
     assert message.metadata_["routing"]["reason"] == "ai_intake_fallback"
     assert conversation.status == "open"
     assert (
@@ -1064,7 +1073,10 @@ def test_missing_intent_mapping_uses_configured_fallback(db_session, monkeypatch
         fallback_team_id=fallback.id,
         mappings=[_mapping("billing_issue", configured_team, "billing")],
     )
-    gateway = _Gateway(intent="coverage_check", category="new_area")
+    gateway = _Gateway(
+        intent="coverage_request",
+        category="coverage_request",
+    )
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     result = _receive(db_session, message_id="wamid-ai-missing-mapping")

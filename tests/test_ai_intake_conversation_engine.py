@@ -1387,6 +1387,9 @@ def test_langgraph_tool_failure_handoff_requires_explicit_policy(db_session):
         version=version,
         latest_body="No internet.",
         classification=_classification(),
+        classifier_attempt=AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.accepted,
+        ),
         recent_messages=(),
         now=datetime.now(UTC),
         tool_mode="simulation",
