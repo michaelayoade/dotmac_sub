@@ -113,6 +113,23 @@ not by individual lines. Resource alerts use exact runtime evidence such as
 text query is unavoidable, it must use `\\boom\\b` rather than a substring
 match.
 
+## Application failures and payment verification
+
+`observability.application_failures` records one bounded exception fingerprint
+for each unhandled HTTP failure and the closed outcome of customer payment
+verification. It records no payment reference, provider payload, account, or
+customer identity. The payment owner remains the settlement and idempotency
+owner; this observer never retries provider work or changes a payment result.
+
+`application_exceptions_total` is grouped by `surface` and exception class.
+`payment_verification_outcomes_total` is grouped by the adapter channel and
+one of `settled`, `pending_provider_confirmation`, `business_refusal`, or
+`unexpected_failure`. The rules in
+`deploy/observability/application_failures.rules.yml` page only on sustained
+unexpected volume: five application exceptions or three unexpected payment
+verification failures in fifteen minutes. Pending-provider and business-refusal
+outcomes are dashboard signals, not pages.
+
 ## UI cutover
 
 The NOC page shows the three operational evidence checks and exact per-router

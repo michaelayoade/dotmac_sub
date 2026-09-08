@@ -455,6 +455,61 @@ DOMAIN = DomainSOT(
             depends_on=("observability.recording",),
         ),
         SOTService(
+            name="observability.application_failures",
+            module="app.services.application_exception_observability",
+            owns=(
+                "unhandled HTTP exception observations",
+                "payment verification outcome observations",
+            ),
+            depends_on=("observability.metrics",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="unhandled HTTP exception observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("unhandled HTTP exception",),
+                    ),
+                    ConcernContract(
+                        name="payment verification outcome observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("payment verification outcome",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="unhandled HTTP exception",
+                        owner="observability.application_failures",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="safe exception class and bounded request route after failure",
+                    ),
+                    AuthorityInput(
+                        name="payment verification outcome",
+                        owner="observability.application_failures",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="safe adapter outcome category; no provider reference or customer identifier",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="The observer emits process-local Prometheus counters and structured logs only.",
+                    locking="No lock or database transaction is acquired.",
+                    idempotency="Each observed request outcome increments once at its adapter boundary.",
+                    retries="The observer does not retry provider or payment work.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(), mapping_owner="HTTP and payment adapters"
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="observability.application_failures",
+                    verification="Focused exception and payment-outcome metric tests.",
+                ),
+                steward="platform operations",
+                design_refs=("docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",),
+                test_refs=("tests/test_application_exception_observability.py",),
+            ),
+        ),
+        SOTService(
             name="observability.metrics",
             module="app.metrics",
             owns=(
