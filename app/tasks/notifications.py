@@ -935,8 +935,8 @@ def _deliver_notification_queue_stats(
                 )
                 from app.services.owner_commands import CommandContext
                 from app.services.team_inbox_outbound import (
-                    MetaDeliveryLegCheckpointCommand,
-                    checkpoint_meta_delivery_leg,
+                    MetaDeliveryLegRecordCommand,
+                    record_meta_delivery_leg_acceptance,
                 )
 
                 account_id = str(
@@ -1082,11 +1082,11 @@ def _deliver_notification_queue_stats(
                             )
                         # Provider I/O and capability resolution can leave a
                         # read transaction open. Release it before entering the
-                        # registered owner command for this durable checkpoint.
+                        # registered owner command for this durable record.
                         db_session_adapter.release_read_transaction(db)
-                        checkpoint_meta_delivery_leg(
+                        record_meta_delivery_leg_acceptance(
                             db,
-                            command=MetaDeliveryLegCheckpointCommand(
+                            command=MetaDeliveryLegRecordCommand(
                                 notification_id=notification.id,
                                 provider_message_id=provider_message_id,
                                 response_code=leg_code,
@@ -1099,7 +1099,7 @@ def _deliver_notification_queue_stats(
                             context=CommandContext.system(
                                 actor="system:notification-delivery-worker",
                                 scope="team-inbox:meta-delivery-leg",
-                                reason="checkpoint accepted Meta attachment delivery",
+                                reason="record accepted Meta attachment delivery",
                                 idempotency_key=(
                                     f"notification:{notification.id}:{leg_code}"
                                 ),
@@ -1144,9 +1144,9 @@ def _deliver_notification_queue_stats(
                                 meta_provider_messages.append(provider_message_id)
                                 if resolved_inbox_attachments:
                                     db_session_adapter.release_read_transaction(db)
-                                    checkpoint_meta_delivery_leg(
+                                    record_meta_delivery_leg_acceptance(
                                         db,
-                                        command=MetaDeliveryLegCheckpointCommand(
+                                        command=MetaDeliveryLegRecordCommand(
                                             notification_id=notification.id,
                                             provider_message_id=provider_message_id,
                                             response_code="text",
@@ -1160,7 +1160,7 @@ def _deliver_notification_queue_stats(
                                             ),
                                             scope="team-inbox:meta-delivery-leg",
                                             reason=(
-                                                "checkpoint accepted Meta text delivery"
+                                                "record accepted Meta text delivery"
                                             ),
                                             idempotency_key=(
                                                 f"notification:{notification.id}:text"

@@ -57,10 +57,10 @@ _OUTBOUND_COMMAND = OwnerCommandDefinition(
     concern="transactional outbound communication intent",
     name="execute_team_inbox_outbound_intent",
 )
-_META_DELIVERY_LEG_CHECKPOINT_COMMAND = OwnerCommandDefinition(
+_META_DELIVERY_LEG_RECORD_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
     concern="outbound Inbox message attempt projection",
-    name="checkpoint_meta_delivery_leg",
+    name="record_meta_delivery_leg_acceptance",
 )
 
 
@@ -118,7 +118,7 @@ class InboxReplyResult:
 
 
 @dataclass(frozen=True, slots=True)
-class MetaDeliveryLegCheckpointCommand:
+class MetaDeliveryLegRecordCommand:
     """Accepted Meta provider leg that must survive a later delivery retry."""
 
     notification_id: UUID
@@ -130,20 +130,20 @@ class MetaDeliveryLegCheckpointCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class MetaDeliveryLegCheckpointOutcome:
+class MetaDeliveryLegRecordOutcome:
     notification_delivery_id: UUID
     replayed: bool
 
 
-def checkpoint_meta_delivery_leg(
+def record_meta_delivery_leg_acceptance(
     db: Session,
     *,
-    command: MetaDeliveryLegCheckpointCommand,
+    command: MetaDeliveryLegRecordCommand,
     context: CommandContext,
-) -> MetaDeliveryLegCheckpointOutcome:
-    """Durably checkpoint one accepted Meta send under the registered owner."""
+) -> MetaDeliveryLegRecordOutcome:
+    """Durably record one accepted Meta send under the registered owner."""
 
-    def operation() -> MetaDeliveryLegCheckpointOutcome:
+    def operation() -> MetaDeliveryLegRecordOutcome:
         provider_message_id = command.provider_message_id.strip()
         response_code = command.response_code.strip()
         response_body = command.response_body.strip()
@@ -152,7 +152,7 @@ def checkpoint_meta_delivery_leg(
 
             raise DomainError(
                 code=f"{OWNER}.invalid_command",
-                message="A Meta delivery checkpoint requires complete provider evidence.",
+                message="A Meta delivery record requires complete provider evidence.",
             )
         if (command.attachment_asset_id is None) != (
             command.provider_attachment_id is None
@@ -199,7 +199,7 @@ def checkpoint_meta_delivery_leg(
                 raise DomainError(
                     code=f"{OWNER}.identity_collision",
                     message=(
-                        "The Meta delivery leg was already checkpointed with "
+                        "The Meta delivery leg was already recorded with "
                         "different provider evidence."
                     ),
                     details={
@@ -207,7 +207,7 @@ def checkpoint_meta_delivery_leg(
                         "response_code": response_code,
                     },
                 )
-            return MetaDeliveryLegCheckpointOutcome(
+            return MetaDeliveryLegRecordOutcome(
                 notification_delivery_id=existing.id,
                 replayed=True,
             )
@@ -233,14 +233,14 @@ def checkpoint_meta_delivery_leg(
         )
         db.add(delivery)
         db.flush()
-        return MetaDeliveryLegCheckpointOutcome(
+        return MetaDeliveryLegRecordOutcome(
             notification_delivery_id=delivery.id,
             replayed=False,
         )
 
     return execute_owner_command(
         db,
-        definition=_META_DELIVERY_LEG_CHECKPOINT_COMMAND,
+        definition=_META_DELIVERY_LEG_RECORD_COMMAND,
         context=context,
         operation=operation,
     )
