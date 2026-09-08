@@ -124,4 +124,3 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
             "su_0003_billing_treatments",
         }
     )
-

@@ -1252,4 +1252,3 @@ def test_domain_sot_relationship_modules_are_importable():
     for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS:
         for service in domain.services:
             importlib.import_module(service.module)
-

@@ -662,4 +662,3 @@ def list_runs(
         )
         for row in rows
     )
-
