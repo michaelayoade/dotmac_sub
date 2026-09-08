@@ -77,6 +77,44 @@ def _owned_conversation(db_session, *, state: str = "collecting_intent"):
     return conversation, session, team, user
 
 
+@pytest.mark.parametrize("refusal", ["not_member", "offline"])
+def test_takeover_respects_routing_gate_and_preserves_ai_on_refusal(
+    db_session, refusal: str
+) -> None:
+    conversation, session, team, user = _owned_conversation(db_session)
+    if refusal == "not_member":
+        member = (
+            db_session.query(ServiceTeamMember)
+            .filter(ServiceTeamMember.team_id == team.id)
+            .one()
+        )
+        db_session.delete(member)
+    else:
+        presence = (
+            db_session.query(InboxAgentPresence)
+            .filter(InboxAgentPresence.person_id == user.id)
+            .one()
+        )
+        presence.status = "offline"
+        presence.manual_override_status = "offline"
+    db_session.commit()
+    command = _takeover_command(conversation, session, team, user.id)
+    session_id = session.id
+    prior_state = session.state
+    db_session.commit()
+
+    with pytest.raises(ai_conversation_ownership.AiTakeoverConflictError):
+        team_inbox_commands.take_over_conversation(db_session, command)
+
+    db_session.expire_all()
+    assert db_session.get(AiIntakeSession, session_id).state == prior_state
+    assert (
+        db_session.query(InboxConversationAssignment)
+        .filter(InboxConversationAssignment.conversation_id == command.conversation_id)
+        .count()
+    ) == 0
+
+
 def _takeover_command(
     conversation: InboxConversation,
     session: AiIntakeSession,

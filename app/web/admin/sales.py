@@ -46,9 +46,8 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition
 from app.services.owner_commands import CommandContext
-from app.services.sales import quote_delivery, quote_documents
+from app.services.sales import quote_delivery, quote_documents, quote_payment_review
 from app.services.sales import service as sales_service
-from app.services.sales import quote_payment_review
 
 router = APIRouter(prefix="/sales", tags=["web-admin-sales"])
 templates = Jinja2Templates(directory="templates")

@@ -184,8 +184,12 @@ def _work_order_page_url(
         "active": "1" if active else None,
         "project_task_id": project_task_id,
     }
-    return WORK_ORDERS_LIST_URL + "?" + urlencode(
-        {key: value for key, value in params.items() if value not in (None, "")}
+    return (
+        WORK_ORDERS_LIST_URL
+        + "?"
+        + urlencode(
+            {key: value for key, value in params.items() if value not in (None, "")}
+        )
     )
 
 
