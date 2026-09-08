@@ -19,7 +19,7 @@ from app import config as app_config
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "583_staff_expense_requesters"
-CANDIDATE = "584_field_request_requester_history"
+CANDIDATE = "587_field_request_requester_history"
 
 
 def _render(url: URL) -> str:

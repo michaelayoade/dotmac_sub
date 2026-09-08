@@ -8,8 +8,8 @@ make an owned request disappear from both the material and expense lists.
 This migration fills only identities proven by an exact foreign-key or unique
 identity match.  Ambiguous rows remain unchanged and therefore fail closed.
 
-Revision ID: 584_field_request_requester_history
-Revises: 583_staff_expense_requesters
+Revision ID: 587_field_request_requester_history
+Revises: 586_inbox_sla_rules
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "584_field_request_requester_history"
-down_revision: str | None = "583_staff_expense_requesters"
+revision: str = "587_field_request_requester_history"
+down_revision: str | None = "586_inbox_sla_rules"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 

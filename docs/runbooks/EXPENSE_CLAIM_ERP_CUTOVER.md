@@ -43,7 +43,7 @@ contains no migration, startup hook, scheduled scan, or repair command that
 backfills them. Any future historical repair requires a separate reviewed scope.
 
 This prohibition concerns ERP delivery. Revision
-`584_field_request_requester_history` separately repairs exact local requester
+`587_field_request_requester_history` separately repairs exact local requester
 identity links so staff can see claims they raised; it does not approve, enqueue,
 or replay an expense claim. Before rollout, record the count of active expenses
 with a null `requested_by_system_user_id`. After migration, investigate every

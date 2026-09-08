@@ -49,7 +49,8 @@ class QuotesRepository {
     String quoteId, {
     String? provider,
   }) async {
-    final idempotencyKey = 'quote-$quoteId-${DateTime.now().microsecondsSinceEpoch}-'
+    final idempotencyKey =
+        'quote-$quoteId-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random.secure().nextInt(1 << 32)}';
     final data = await guard(
       () => dio.post(

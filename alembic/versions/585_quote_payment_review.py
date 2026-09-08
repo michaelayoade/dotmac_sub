@@ -1,7 +1,7 @@
 """Require staff review before customer Quote deposit payment.
 
-Revision ID: 584_quote_payment_review
-Revises: 583_staff_expense_requesters
+Revision ID: 585_quote_payment_review
+Revises: 584_customer_backed_quote_delivery
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "584_quote_payment_review"
-down_revision: str | None = "583_staff_expense_requesters"
+revision: str = "585_quote_payment_review"
+down_revision: str | None = "584_customer_backed_quote_delivery"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 

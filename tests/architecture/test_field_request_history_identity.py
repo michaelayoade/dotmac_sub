@@ -59,7 +59,7 @@ def test_request_history_lists_delegate_to_the_identity_scope() -> None:
 
 def test_request_history_repair_migration_covers_both_owned_tables() -> None:
     migration = (
-        ROOT / "alembic/versions/584_field_request_requester_history.py"
+        ROOT / "alembic/versions/587_field_request_requester_history.py"
     ).read_text(encoding="utf-8")
     for table_name in ("field_material_requests", "field_expense_requests"):
         assert table_name in migration

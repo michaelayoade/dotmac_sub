@@ -1,15 +1,15 @@
 """Make Team Inbox queue lifecycles and notification state explicit.
 
-Revision ID: 584_team_inbox_queue_correctness
-Revises: 583_staff_expense_requesters
+Revision ID: 588_team_inbox_queue_correctness
+Revises: 587_field_request_requester_history
 """
 
 import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "584_team_inbox_queue_correctness"
-down_revision: str | None = "583_staff_expense_requesters"
+revision: str = "588_team_inbox_queue_correctness"
+down_revision: str | None = "587_field_request_requester_history"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 

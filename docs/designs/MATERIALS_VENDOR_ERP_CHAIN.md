@@ -128,7 +128,7 @@ from any exact requester link recorded on the request: technician profile,
 canonical Person Party, or authenticated SystemUser. Reassignment or completion
 of the related work order never removes the request from its requester's list.
 
-Alembic revision `584_field_request_requester_history` is the bounded repair
+Alembic revision `587_field_request_requester_history` is the bounded repair
 for older requests created before the durable SystemUser link was consistently
 recorded. It fills identity only through an exact technician-profile,
 SystemUser, or unique Person Party binding and adds indexes for the three-way

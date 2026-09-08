@@ -39,7 +39,7 @@ ERP must support the signed callback and neutral Sub payload. If its current hoo
 
 ## Requester-history migration evidence
 
-Revision `584_field_request_requester_history` repairs only exact requester
+Revision `587_field_request_requester_history` repairs only exact requester
 identity links and creates the Person Party and SystemUser history indexes.
 Before rollout, record the count of active material requests with a null
 `requested_by_system_user_id`. After migration, investigate every remaining

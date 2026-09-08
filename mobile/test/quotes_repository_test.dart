@@ -88,12 +88,15 @@ void main() {
     expect(body['note'], 'Blue gate, second floor');
   });
 
-  test('deposit initiation carries retry evidence and mobile return URL', () async {
-    await repository.initiateDeposit('quote-1');
+  test(
+    'deposit initiation carries retry evidence and mobile return URL',
+    () async {
+      await repository.initiateDeposit('quote-1');
 
-    final body = adapter.calls.single.data as Map<String, dynamic>;
-    expect(body['idempotency_key'], startsWith('quote-quote-1-'));
-    expect((body['idempotency_key'] as String).length, greaterThan(16));
-    expect(body['redirect_url'], endsWith('://success'));
-  });
+      final body = adapter.calls.single.data as Map<String, dynamic>;
+      expect(body['idempotency_key'], startsWith('quote-quote-1-'));
+      expect((body['idempotency_key'] as String).length, greaterThan(16));
+      expect(body['redirect_url'], endsWith('://success'));
+    },
+  );
 }

@@ -73,7 +73,7 @@ Browsers cannot repopulate file inputs, so a selected receipt is cleared and an
 explicit field error asks the user to reselect it. ERP category or sync
 unavailability never fabricates a usable fallback.
 
-Alembic revision `584_field_request_requester_history` repairs older claims
+Alembic revision `587_field_request_requester_history` repairs older claims
 whose durable SystemUser link can be proven from their technician profile,
 legacy SystemUser-as-person identifier, or unique Person Party binding. It also
 adds requester lookup indexes. Ambiguous claims remain unchanged and hidden;
