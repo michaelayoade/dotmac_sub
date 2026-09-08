@@ -267,13 +267,18 @@ def search_live_map(
         for work_order in work_orders:
             location = _location(work_order)
             canonical_address = service_address(db, work_order.subscriber_id)
-            latitude = location.latitude
-            longitude = location.longitude
-            if latitude is None or longitude is None:
-                latitude = canonical_address.latitude if canonical_address else None
-                longitude = canonical_address.longitude if canonical_address else None
-            if latitude is None or longitude is None:
+            work_order_coordinates = _validated_coordinates(
+                location.latitude,
+                location.longitude,
+            )
+            if work_order_coordinates is None and canonical_address is not None:
+                work_order_coordinates = _validated_coordinates(
+                    canonical_address.latitude,
+                    canonical_address.longitude,
+                )
+            if work_order_coordinates is None:
                 continue
+            work_order_latitude, work_order_longitude = work_order_coordinates
             address_text = work_order.address or _address_text(canonical_address)
             items.append(
                 FieldLiveMapSearchResult(
@@ -281,8 +286,8 @@ def search_live_map(
                     id=work_order.public_id,
                     label=work_order.title or work_order.public_id,
                     detail=address_text,
-                    latitude=latitude,
-                    longitude=longitude,
+                    latitude=work_order_latitude,
+                    longitude=work_order_longitude,
                     status=work_order.status,
                     href=f"/admin/dispatch/work-orders/{work_order.public_id}",
                 )
