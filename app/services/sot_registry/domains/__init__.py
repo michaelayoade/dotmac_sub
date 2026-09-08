@@ -4,6 +4,9 @@ from app.services.sot_registry.domains.ai_advisory import DOMAIN as AI_ADVISORY
 from app.services.sot_registry.domains.application_sessions import (
     DOMAIN as APPLICATION_SESSIONS,
 )
+from app.services.sot_registry.domains.automation_control_plane import (
+    DOMAIN as AUTOMATION_CONTROL_PLANE,
+)
 from app.services.sot_registry.domains.authorization_control_plane import (
     DOMAIN as AUTHORIZATION_CONTROL_PLANE,
 )
@@ -91,6 +94,7 @@ DOMAIN_DECLARATIONS = (
     OBSERVABILITY,
     WORKFORCE_OPERATIONS,
     SUPPORT_OPERATIONS,
+    AUTOMATION_CONTROL_PLANE,
     TENANCY,
     AI_ADVISORY,
     PROVISIONING_OPERATIONS,
