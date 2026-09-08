@@ -2541,10 +2541,12 @@ DOMAIN = DomainSOT(
                 "communications.notification_service",
                 "observability.audit_log",
                 "sales.quote_delivery",
+                "sales.quote_payment_review",
                 "sales.service",
             ),
             notes=(
                 "The Quote detail builder presents delivery eligibility and the "
+                "staff-owned payment-review state and actions alongside the "
                 "official Quote timeline from authoritative Quote, immutable audit, "
                 "and durable notification records. It does not infer final mailbox "
                 "receipt from SMTP transport acceptance."
@@ -2560,6 +2562,7 @@ DOMAIN = DomainSOT(
                             "canonical Quote detail state",
                             "canonical Quote audit evidence",
                             "canonical Quote delivery outcome",
+                            "canonical Quote payment-review decision",
                         ),
                     ),
                 ),
@@ -2578,6 +2581,15 @@ DOMAIN = DomainSOT(
                         owner="observability.audit_log",
                         kind=AuthorityKind.OBSERVATION,
                         source="immutable Quote-scoped action and actor evidence",
+                    ),
+                    AuthorityInput(
+                        name="canonical Quote payment-review decision",
+                        owner="sales.quote_payment_review",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "review status, revision, reviewer, decision time, "
+                            "reason, and current-snapshot eligibility"
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical Quote delivery outcome",
@@ -2612,6 +2624,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_quote_documents_and_delivery.py",
+                    "tests/test_quote_payment_review.py",
                     "tests/architecture/test_quote_document_delivery_boundary.py",
                 ),
             ),

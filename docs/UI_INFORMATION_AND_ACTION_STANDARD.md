@@ -386,16 +386,23 @@ implementation.
 - Audience and task: an authenticated customer reviews and pays the exact
   deposit for a quotation owned by an authorized subscriber identity.
 - Authority: `app.services.quote_deposits` resolves quotation eligibility and
-  the server-owned deposit amount; `financial.payment_routing` resolves
+  the server-owned deposit amount; `sales.quote_payment_review` owns the staff
+  decision for the exact commercial snapshot; `financial.payment_routing` resolves
   Paystack availability; established invoice, intent, payment-verification, and
   Quote-acceptance owners retain every financial transition. The route and
   template are adapters.
 - First viewport: quotation identity, expiry, authoritative currency and
-  deposit amount, secure-payment explanation, and one Paystack action.
+  deposit amount, payment-review status and explanation, and—only after current
+  staff approval—one Paystack action.
 - GET state: authentication, ownership, active status, expiry, paid state,
-  positive deposit, and Paystack availability are checked without creating an
+  current staff approval, positive deposit, and Paystack availability are checked without creating an
   invoice or payment intent. Missing or unauthorized quotations render the same
   not-found state.
+- Review state: Draft/Sent Quotes without a current approval show `Awaiting
+  staff review` and no payment action. Approved Quotes show `Approved — Payment
+  required`. Rejected Quotes show the owner-supplied rejection message. Mobile
+  must consume `can_pay_deposit`; it must not infer payment eligibility from
+  Quote status or deposit amount.
 - Mutation: the customer confirms through the CSRF-protected POST intent route.
   The request carries idempotency evidence only; it cannot submit amount,
   currency, invoice identity, or provider choice. The server fixes the provider

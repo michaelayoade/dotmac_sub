@@ -48,6 +48,7 @@ from app.services.file_storage import build_content_disposition
 from app.services.owner_commands import CommandContext
 from app.services.sales import quote_delivery, quote_documents
 from app.services.sales import service as sales_service
+from app.services.sales import quote_payment_review
 
 router = APIRouter(prefix="/sales", tags=["web-admin-sales"])
 templates = Jinja2Templates(directory="templates")
@@ -1465,6 +1466,56 @@ def quote_send_email(
     notice = "email_queued" if outcome.queued else "email_suppressed"
     return RedirectResponse(
         url=f"/admin/sales/quotes/{quote_id}?notice={notice}", status_code=303
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/payment-review",
+    dependencies=[Depends(require_permission("crm:quote:review"))],
+)
+def quote_payment_review_submit(
+    request: Request,
+    quote_id: UUID,
+    request_id: UUID = Form(...),
+    expected_revision: int = Form(..., ge=0),
+    decision: str = Form(...),
+    reason: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Approve or reject the exact Quote snapshot before customer payment."""
+
+    try:
+        selected_decision = quote_payment_review.QuotePaymentReviewDecision(decision)
+        actor_id = UUID(_quote_actor_system_user_id(request))
+        db_session_adapter.release_read_transaction(db)
+        outcome = quote_payment_review.review_quote_payment(
+            db,
+            quote_payment_review.ReviewQuotePaymentCommand(
+                context=_quote_command_context(
+                    request,
+                    str(quote_id),
+                    action="payment-review",
+                    command_id=request_id,
+                ),
+                quote_id=quote_id,
+                reviewer_system_user_id=actor_id,
+                expected_revision=expected_revision,
+                decision=selected_decision,
+                reason=reason,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        context = _ctx(request, db, "sales-quotes")
+        context.update(
+            web_sales_service.build_quote_detail_context(db, quote_id=str(quote_id))
+        )
+        context["error"] = _error_detail(exc)
+        return templates.TemplateResponse(
+            "admin/sales/quotes/detail.html", context, status_code=400
+        )
+    return RedirectResponse(
+        url=(f"/admin/sales/quotes/{quote_id}?notice=payment_{outcome.status.value}"),
+        status_code=303,
     )
 
 

@@ -89,6 +89,7 @@ from app.services.sales import (
     quote_authoring,
     quote_delivery,
     quote_documents,
+    quote_payment_review,
 )
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales.service import QuoteLeadSearchMatch
@@ -3101,6 +3102,24 @@ def build_quote_detail_context(db: Session, *, quote_id: str) -> dict[str, Any]:
             discount_actor.display_name
             or f"{discount_actor.first_name} {discount_actor.last_name}".strip()
         )
+    payment_review = quote_payment_review.resolve_payment_review(quote)
+    review_reason: str | None = None
+    if not quote.is_active:
+        review_reason = "This Quote is inactive."
+    elif quote.subscriber_id is None:
+        review_reason = "Link a Customer before reviewing payment."
+    elif quote.status not in {QuoteStatus.draft.value, QuoteStatus.sent.value}:
+        review_reason = "Only Draft or Sent Quotes can be reviewed for payment."
+    elif payment_review.approval_current:
+        review_reason = "This exact Quote is already approved for payment."
+    reviewer = quote.payment_reviewed_by
+    reviewer_label = None
+    if reviewer is not None:
+        reviewer_label = (
+            reviewer.display_name
+            or f"{reviewer.first_name} {reviewer.last_name}".strip()
+            or reviewer.email
+        )
 
     return {
         "quote": quote,
@@ -3124,6 +3143,13 @@ def build_quote_detail_context(db: Session, *, quote_id: str) -> dict[str, Any]:
             {"value": QuoteDiscountType.fixed_amount.value, "label": "Fixed Amount"},
         ],
         "discount_actor_label": discount_actor_label,
+        "payment_review": payment_review,
+        "payment_reviewer_label": reviewer_label,
+        "payment_review_action": {
+            "allowed": review_reason is None,
+            "reason": review_reason,
+            "request_id": str(uuid4()),
+        },
         "discount_action": {
             "allowed": discount_change_reason is None,
             "reason": discount_change_reason,
