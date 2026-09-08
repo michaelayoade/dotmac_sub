@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -28,6 +28,7 @@ from app.services import (
     team_inbox_participants,
     team_inbox_realtime,
     team_inbox_routing,
+    inbox_sla,
 )
 from app.services.customer_identity_normalization import normalize_email_identifier
 from app.services.owner_commands import CommandContext
@@ -247,6 +248,7 @@ def receive_fiber_inquiry(
     )
     db.add(message)
     db.flush()
+    inbox_sla.record_inbound(db, conversation, occurred_at=message.received_at or message.created_at)
     team_inbox_participants.record_message_participants(
         db,
         conversation=conversation,
@@ -454,7 +456,7 @@ def _resolve_thread_conversation(
 
     Only a live thread is joinable. The referenced message used to be matched
     with no conditions on its conversation at all, so a reply could attach to a
-    soft-deleted thread, or to a resolved one — and since inbound email never
+    soft-deleted thread, or to a resolved one â€” and since inbound email never
     changes status, a resolved thread did not reopen either, so the message
     landed where nobody was looking.
 
@@ -549,11 +551,11 @@ def receive_inbound_email(
     received_at = payload.received_at or datetime.now(UTC)
 
     # Email resolves its sender exactly like every other channel. It used to
-    # carry only whatever `subscriber_id` the caller supplied — and no caller
-    # supplies one — so every inbound email landed with a null subscriber and
+    # carry only whatever `subscriber_id` the caller supplied â€” and no caller
+    # supplies one â€” so every inbound email landed with a null subscriber and
     # no `contact_resolution`, invisible to the contact filter and to the
     # customer record's communications section.
-    # The already-parsed address, not the raw `From:` header — a header carries
+    # The already-parsed address, not the raw `From:` header â€” a header carries
     # a display name ("Ada <ada@example.com>") and the channel normalizer does
     # not strip one, so passing it raw resolved nobody.
     resolution = team_inbox_channel_receive.resolve_contact_context(
@@ -647,6 +649,7 @@ def receive_inbound_email(
     )
     db.add(message)
     db.flush()
+    inbox_sla.record_inbound(db, conversation, occurred_at=message.received_at or message.created_at)
 
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
@@ -697,3 +700,7 @@ def receive_inbound_email(
             else None
         ),
     )
+
+
+
+

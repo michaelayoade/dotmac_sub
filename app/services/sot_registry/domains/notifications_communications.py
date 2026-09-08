@@ -1,4 +1,4 @@
-"""Canonical SOT declarations for the notifications_communications domain."""
+﻿"""Canonical SOT declarations for the notifications_communications domain."""
 
 from __future__ import annotations
 
@@ -204,7 +204,7 @@ DOMAIN = DomainSOT(
                 "party.registry",
             ),
             notes=(
-                "Owns the SEQUENCE every emailed document repeats — arbitrate "
+                "Owns the SEQUENCE every emailed document repeats â€” arbitrate "
                 "the idempotency key, render branded bodies, submit one "
                 "communication intent, derive queued-or-suppressed, stage "
                 "audit, emit the domain event. It deliberately owns no "
@@ -241,7 +241,7 @@ DOMAIN = DomainSOT(
                         owner="party.registry",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "party.resolve_email_recipient — active email contact "
+                            "party.resolve_email_recipient â€” active email contact "
                             "point, primary then oldest then id"
                         ),
                     ),
@@ -269,7 +269,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "the document type's own delivery table, read by the "
-                            "caller and passed in — this owner never reads "
+                            "caller and passed in â€” this owner never reads "
                             "storage it does not own"
                         ),
                     ),
@@ -280,7 +280,7 @@ DOMAIN = DomainSOT(
                         "Runs inside the calling owner's command transaction. "
                         "Submits the intent, invokes the caller's record "
                         "callback, stages audit and emits the event, then "
-                        "flushes. Never commits or rolls back — the document "
+                        "flushes. Never commits or rolls back â€” the document "
                         "owner's command boundary does."
                     ),
                     locking=(
@@ -323,7 +323,7 @@ DOMAIN = DomainSOT(
                     verification=(
                         "sales.quote_delivery was migrated onto this owner with "
                         "its existing behaviour tests unchanged, including "
-                        "replay, suppression and audit assertions — the "
+                        "replay, suppression and audit assertions â€” the "
                         "abstraction was proved against a real path rather than "
                         "one invented to fit it."
                     ),
@@ -344,8 +344,8 @@ DOMAIN = DomainSOT(
                     delivery_owner="events.dispatcher",
                     compatibility=(
                         "The envelope is document-kind tagged rather than "
-                        "quote-specific — document_kind, entity_id, delivery_id, "
-                        "communication_intent_id, artifact_id, queued — so a new "
+                        "quote-specific â€” document_kind, entity_id, delivery_id, "
+                        "communication_intent_id, artifact_id, queued â€” so a new "
                         "document type adds an event type without changing the "
                         "shape consumers already parse."
                     ),
@@ -4091,7 +4091,7 @@ DOMAIN = DomainSOT(
                 "Ticket.origin_conversation_id, through the keyword-only "
                 "provenance argument on the Ticket create command. One "
                 "conversation may issue many tickets. Issuance never "
-                "transitions the conversation — opening a ticket and "
+                "transitions the conversation â€” opening a ticket and "
                 "resolving a thread are separate decisions and conversation "
                 "status belongs to communications.team_inbox. Replay is "
                 "keyed on conversation, actor and title rather than the "
@@ -4153,6 +4153,29 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="communications.inbox_sla",
+            module="app.services.inbox_sla",
+            owns=("Inbox SLA policy selection and clock state", "Inbox SLA transition evidence"),
+            depends_on=("communications.team_inbox_threads", "operations.sla_escalation"),
+            notes="Native Inbox SLA state is distinct from retired CRM history; policy configuration is explicit and mapping-safe.",
+            contract=_team_inbox_contract(
+                service_name="communications.inbox_sla",
+                concerns=(
+                    ("Inbox SLA policy selection and clock state", OwnerRole.AUTHORITATIVE_RECORD),
+                    ("Inbox SLA transition evidence", OwnerRole.AUTHORITATIVE_RECORD),
+                ),
+                inputs=(
+                    AuthorityInput(name="Inbox conversation facts", owner="communications.team_inbox_threads", kind=AuthorityKind.AUTHORITATIVE_RECORD, source="Inbox conversation and message rows"),
+                    AuthorityInput(name="Inbox SLA commands", owner="communications.inbox_sla", kind=AuthorityKind.CONTROL_INPUT, source="validated policy and lifecycle commands"),
+                ),
+                transaction_mode=TransactionMode.PARTICIPANT,
+                event_types=("inbox.sla.changed.v1",),
+                domain_error_codes=("communications.inbox_sla.incomplete_policy", "communications.inbox_sla.overlapping_rules", "communications.inbox_sla.invalid_timezone"),
+                design_refs=("docs/SOT_RELATIONSHIP_MAP.md", "docs/UI_INFORMATION_AND_ACTION_STANDARD.md"),
+                test_refs=("tests/test_inbox_sla.py",),
+            ),
+        ),
     ),
     entrypoints=(
         "app.services.events.handlers.notification",
@@ -4174,3 +4197,7 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
 )
+
+
+
+

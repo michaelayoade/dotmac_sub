@@ -1,4 +1,4 @@
-"""Admin web routes."""
+﻿"""Admin web routes."""
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
@@ -47,6 +47,7 @@ from app.web.admin.gis import router as gis_router
 from app.web.admin.help_center import router as help_center_router
 from app.web.admin.inbox import router as inbox_router
 from app.web.admin.inbox import settings_router as inbox_settings_router
+from app.web.admin.inbox_sla import router as inbox_sla_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.lead_intake import router as lead_intake_router
 from app.web.admin.legal import router as legal_router
@@ -158,7 +159,7 @@ def operations_service_orders_legacy():
 
 @router.get("/operations/service-orders/new")
 def operations_service_orders_new_legacy(subscriber: str | None = None):
-    """Legacy route redirect — create form removed, redirect to orders list."""
+    """Legacy route redirect â€” create form removed, redirect to orders list."""
     return RedirectResponse(url="/admin/provisioning/orders", status_code=307)
 
 
@@ -180,7 +181,7 @@ def admin_reports_hub():
 
 @router.get("/nas")
 def admin_nas_legacy_root_redirect():
-    """Legacy /admin/nas alias — NAS routes live under /admin/network/nas."""
+    """Legacy /admin/nas alias â€” NAS routes live under /admin/network/nas."""
     return RedirectResponse(url="/admin/network/nas/", status_code=307)
 
 
@@ -282,6 +283,7 @@ router.include_router(
 router.include_router(inbox_router)
 router.include_router(workqueue_router)
 router.include_router(inbox_settings_router)
+router.include_router(inbox_sla_router)
 router.include_router(system_router)
 router.include_router(system_whats_new_router)
 router.include_router(
@@ -508,3 +510,5 @@ def build_router() -> APIRouter:
 
 
 __all__ = ["build_router", "router"]
+
+

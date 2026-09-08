@@ -1,4 +1,4 @@
-"""Committed command boundary for team-inbox UI adapters.
+﻿"""Committed command boundary for team-inbox UI adapters.
 
 The underlying team-inbox services own their focused policies. This module owns
 admin command orchestration, model lookup, and the transaction boundary so web
@@ -57,6 +57,7 @@ from app.services import (
     party as party_service,
 )
 from app.services import (
+    inbox_sla,
     team_inbox_assignment,
     team_inbox_contact_links,
     team_inbox_field_job,
@@ -869,7 +870,7 @@ def reply(
                 },
             )
         # Bind staged uploads to the message that actually carried them, inside
-        # the same command — an attachment must never outlive a reply that
+        # the same command â€” an attachment must never outlive a reply that
         # failed to send.
         if staged_attachment_ids and result.message_id:
             message = db.get(InboxMessage, coerce_uuid(result.message_id))
@@ -1040,7 +1041,7 @@ def update_workflow(
     def action() -> None:
         conversation = _active_conversation(db, conversation_id)
         if snooze_until_reply:
-            # No wake time — the customer's next message wakes it. Priority and
+            # No wake time â€” the customer's next message wakes it. Priority and
             # mute still apply; they arrived in the same submit and dropping
             # them would silently discard half the operator's action.
             if priority is not None or is_muted is not None:
@@ -1066,7 +1067,7 @@ def update_workflow(
         )
         if conversation.snoozed_until is not None:
             # The wake is a durable per-conversation timer staged atomically
-            # with the snooze (ADR 0007 §7). Re-snoozing replaces it; an
+            # with the snooze (ADR 0007 Â§7). Re-snoozing replaces it; an
             # inbound reply or resolution makes a stale firing a
             # state-guarded no-op in the receipted consumer.
             from app.services.runtime_durable_timers import (
@@ -2257,6 +2258,7 @@ def update_status(
             source_id=f"operator-status:{uuid4()}",
             compatibility_source="admin_inbox_status_action",
         )
+        inbox_sla.update_status(db, conversation, clean_status)
         return StatusOutcome(
             conversation_id=str(conversation.id),
             status=clean_status,
@@ -2279,7 +2281,7 @@ def assign_conversation(
 
     ``team_inbox_assignment`` decides routing and records the assignment;
     this is its committed entry point. Bulk escalation already had one through
-    ``bulk_action(action="escalate")`` — the single-conversation case did not,
+    ``bulk_action(action="escalate")`` â€” the single-conversation case did not,
     which is why the workspace could only hand a thread to a teammate by
     pretending it was a bulk action of one.
     """
@@ -2575,8 +2577,8 @@ def start_conversation(
 
     Reuses the inbound contact resolver, so a thread an operator starts resolves
     to the same subscriber an inbound message from that address would. An
-    unmatched address is allowed — the operator may be reaching someone the
-    system does not know yet — and the resolution status is recorded on the
+    unmatched address is allowed â€” the operator may be reaching someone the
+    system does not know yet â€” and the resolution status is recorded on the
     conversation so the drawer can offer a contact link rather than silently
     showing an anonymous thread.
     """
@@ -2729,7 +2731,7 @@ def start_conversation(
         # Give the thread an owning team link, not just a primary id. An
         # operator-started conversation used to have no `InboxConversationTeam`
         # row at all, so it was invisible to every team filter and to "My team"
-        # the moment it was created — including to the operator who started it.
+        # the moment it was created â€” including to the operator who started it.
         team_inbox_routing.apply_email_routing_plan(
             db,
             conversation=conversation,
@@ -2875,7 +2877,7 @@ def _recipient_is_on_record(
 
     The decisive field in the export audit. Restricting transcripts to
     addresses already on the record is the tightest available control, but
-    whether it is affordable depends on how often operators send elsewhere —
+    whether it is affordable depends on how often operators send elsewhere â€”
     and nothing recorded that. This answers it from real use.
     """
     normalized = team_inbox_routing.normalize_email_address(recipient)
@@ -2900,7 +2902,7 @@ def _recipient_seen_on_thread(
     """Whether this address was ever observed in the thread's own headers.
 
     `recipient_on_record` is measured against a scalar `contact_address`, so a
-    genuine participant — a colleague on the Cc line, a vendor who replied —
+    genuine participant â€” a colleague on the Cc line, a vendor who replied â€”
     scores false and reads as an exception. Counting those as exceptions would
     overstate how often operators export outside the conversation, and a
     restriction policy judged on that figure would be judged on the wrong
@@ -2931,7 +2933,7 @@ def email_transcript(
     Sends through the same outbound path a reply uses, so the transcript
     inherits the team's sender and delivery handling rather than inventing a
     second way to send mail. Internal notes and comments are excluded by the
-    renderer — a transcript is often forwarded onward.
+    renderer â€” a transcript is often forwarded onward.
 
     Exporting a whole customer conversation to an arbitrary address is the
     widest data-egress path in this module and rides the ordinary
@@ -2967,7 +2969,7 @@ def email_transcript(
                 conversation_id=conversation.id,
             )
         # Staged inside the command, so the record commits with the send or not
-        # at all — an export can never leave without its audit row.
+        # at all â€” an export can never leave without its audit row.
         stage_audit_event(
             db,
             action=TRANSCRIPT_AUDIT_ACTION,
@@ -3079,3 +3081,6 @@ def consume_snooze_wake(
         )[0]
 
     return _commit(db, _operation, context=context)
+
+
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import html
 import re
@@ -23,6 +23,7 @@ from app.models.team_inbox import (
 from app.schemas.ai_intake import APPROVED_FOLLOW_UP_QUESTIONS
 from app.schemas.notification import NotificationDeliveryLatency
 from app.services import (
+    inbox_sla,
     team_inbox_realtime,
     team_inbox_reply_window,
     team_inbox_routing,
@@ -291,6 +292,7 @@ def _queue_outbox_reply(
     if existing_message is None:
         db.add(message)
     conversation.last_message_at = queued_at
+    inbox_sla.record_outbound(db, message, occurred_at=message.sent_at or message.created_at)
     db.flush()
     author_name = str(
         intent_metadata.get("author_name")
@@ -1340,3 +1342,4 @@ def send_transcript(
         conversation_id=str(conversation.id),
         to_email=recipient,
     )
+
