@@ -184,7 +184,7 @@ def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatc
     assert "every device" not in (decision.response_text or "").lower()
     assert "Portal ID" not in (decision.response_text or "")
     assert decision.state.subscriber_id == str(subscriber.id)
-    assert decision.state.monitoring_results == []
+    assert decision.state.monitoring_results == [{"status": "no_data"}]
     assert any(
         item["tool"] == "subscriber_monitoring" and item["status"] == "no_data"
         for item in decision.state.tool_executions
@@ -481,7 +481,7 @@ def test_monitoring_no_data_and_unavailable_are_not_offline(db_session, monkeypa
         assert engine._monitoring_offline(state) is False
 
 
-def test_first_turn_handoff_rule_is_ignored_at_runtime(db_session):
+def test_first_turn_handoff_rule_does_not_override_general_enquiry_plan(db_session):
     conversation = _conversation(db_session)
     version = _version(
         db_session,
@@ -516,8 +516,9 @@ def test_first_turn_handoff_rule_is_ignored_at_runtime(db_session):
         ),
     )
 
-    assert decision.action == "handoff"
-    assert decision.metadata["reason"] == "unsupported_or_troubleshooting_exhausted"
+    assert decision.action == "respond"
+    assert decision.metadata["reason"] == "useful_missing_fact"
+    assert decision.metadata["question_key"] == "service_interest"
     assert decision.metadata["reason"] != "bad_immediate_handoff"
 
 
@@ -622,7 +623,9 @@ def test_configured_no_internet_playbook_asks_first_line_steps(db_session, monke
     assert second.action == "respond"
     assert "red LOS" in (second.response_text or "")
     assert "Sorry about the downtime." not in (second.response_text or "")
-    assert "los_status" in second.state.already_requested_fields
+    assert "los_state" in second.state.already_requested_fields
+    assert second.metadata["question_key"] == "los_status"
+    assert second.metadata["expected_fact"] == "los_state"
     assert monitoring_calls == []
 
 
@@ -687,7 +690,8 @@ def test_monitoring_troubleshooting_then_red_los_handoff_retains_state(db_sessio
     )
 
     assert first.action == "respond"
-    assert "powered on" in (first.response_text or "")
+    assert first.metadata["question_key"] == "issue_started_when"
+    assert "problem start" in (first.response_text or "").lower()
     assert second.action == "handoff"
     assert second.state.collected_facts["router_restarted"] is True
     assert second.state.collected_facts["router_powered"] is True
@@ -1587,6 +1591,9 @@ def test_langgraph_tool_failure_handoff_requires_explicit_policy(db_session):
         version=version,
         latest_body="No internet.",
         classification=_classification(),
+        classifier_attempt=AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.accepted,
+        ),
         recent_messages=(),
         now=datetime.now(UTC),
         tool_mode="simulation",

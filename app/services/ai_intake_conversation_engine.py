@@ -989,6 +989,30 @@ def run_conversational_turn(
             ),
         )
 
+    if state.classification_requires_follow_up:
+        question = _record_question(
+            state,
+            key="intent_clarification",
+            expected_fact="intent",
+            prompt=(
+                state.classification_follow_up_question
+                or "Could you briefly tell me what you need help with?"
+            ),
+            now=now,
+        )
+        return ConversationEngineDecision(
+            action="respond",
+            state=state,
+            response_text=question.prompt,
+            metadata={
+                "reason": "classifier_clarification",
+                "question_key": question.key,
+                "expected_fact": question.expected_fact,
+                "next_action": "ask_question",
+                "response_source": "template",
+            },
+        )
+
     follow_up = _next_useful_question(state, policy, now=now)
     if follow_up is not None:
         return ConversationEngineDecision(
@@ -1022,30 +1046,6 @@ def run_conversational_turn(
                 policy,
                 default="I have the details needed and will pass this to the right team.",
             ),
-        )
-
-    if state.classification_requires_follow_up:
-        question = _record_question(
-            state,
-            key="intent_clarification",
-            expected_fact="intent",
-            prompt=(
-                state.classification_follow_up_question
-                or "Could you briefly tell me what you need help with?"
-            ),
-            now=now,
-        )
-        return ConversationEngineDecision(
-            action="respond",
-            state=state,
-            response_text=question.prompt,
-            metadata={
-                "reason": "classifier_clarification",
-                "question_key": question.key,
-                "expected_fact": question.expected_fact,
-                "next_action": "ask_question",
-                "response_source": "template",
-            },
         )
 
     return _handoff_decision(
@@ -2152,9 +2152,22 @@ def _identify_customer(
     policy: dict[str, object],
     tool_mode: str,
 ) -> None:
-    if state.subscriber_id or not _tool_allowed_for_state(
-        policy, "customer_lookup", state
-    ):
+    if state.subscriber_id:
+        return
+    if not _tool_allowed_for_state(policy, "customer_lookup", state):
+        if any(
+            _identifier_value(state, identifier_type)
+            for identifier_type in _permitted_identifiers(policy)
+        ):
+            _record_tool_result(
+                state,
+                "customer_lookup",
+                {
+                    "status": "unauthorized",
+                    "reason": "tool_not_allowed_for_state",
+                },
+                latency_ms=0,
+            )
         return
     for identifier_type in _permitted_identifiers(policy):
         value = _identifier_value(state, identifier_type)
