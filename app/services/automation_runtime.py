@@ -249,7 +249,9 @@ def _stored_mapping_list(
 
 
 _ORDERED_COMPARISONS: dict[AutomationOperator, Callable[[object, object], bool]] = {
-    AutomationOperator.greater_than: cast(Callable[[object, object], bool], operator.gt),
+    AutomationOperator.greater_than: cast(
+        Callable[[object, object], bool], operator.gt
+    ),
     AutomationOperator.greater_than_or_equal: cast(
         Callable[[object, object], bool], operator.ge
     ),
