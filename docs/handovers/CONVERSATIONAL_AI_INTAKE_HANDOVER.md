@@ -7,7 +7,7 @@ Branch: `feature/conversational-ai-intake-v2`
 
 Implement governed conversational AI intake for WhatsApp, Facebook Messenger and
 Instagram direct messages and explicitly scoped native Fiber, customer-portal,
-and reseller-portal chat widgets for Dotmac ISP support. Email and
+reseller-portal, and mobile chat widgets for Dotmac ISP support. Email and
 public comment channels remain outside AI intake.
 
 ## Confirmed Requirements
@@ -51,6 +51,17 @@ public comment channels remain outside AI intake.
 Local correction work was rebuilt onto current `origin/dev` from the preserved
 correction patch. No deployment, merge, production migration or production data
 change has been performed.
+
+The classifier-failure correction adds an explicit
+`classification_unavailable` state. Invalid JSON/schema, provider
+unavailability, or no accepted intent now asks one configured generic
+clarification through the existing bounded response composer and waits for the
+customer. The next inbound retries classification in the same session. Repeated
+failure hands off only after `max_clarification_turns`, with
+`classifier_unavailable_after_retries`; a deterministic human request still
+hands off immediately, and facts extracted before classification failure remain
+in the session. `unsupported_or_troubleshooting_exhausted` is no longer used for
+classifier failures.
 
 ## Migration Relationship
 
@@ -146,6 +157,27 @@ Also run focused browser/admin checks for:
 - Policy version display/history.
 - AI message bubble label and accessibility.
 - Queue notification visible behavior.
+
+## Conversational policy and wording boundary
+
+- `conversation_policy.inquiry_plans` is the policy authority for useful facts,
+  priority, required/optional status, allowed tools, skip conditions,
+  escalation conditions and tone. Declaring the key is fail-closed for uncovered
+  intent/category scopes.
+- Older policy versions use `intent_definitions.required_fields`; policies with
+  neither declaration use the named `DEFAULT_INQUIRY_PLANS` compatibility layer.
+- The planner emits a fact key and semantic purpose. The existing LLM gateway
+  phrases that approved step; customer-facing Python question copy is used only
+  when composition or validation falls back.
+- Affect is bounded to `none`, `mild`, `moderate` and `high`, with separate
+  frustration/agitation and issue/frustration acknowledgement state. Moderate or
+  high fresh affect creates an acknowledgement obligation.
+- The response validator rejects a bare diagnostic question while that
+  obligation is active, as well as excessive apology, patronizing or invented
+  emotion, unsupported device ownership and the existing factual/safety
+  violations.
+- No new provider, RAG store, embedding, fine-tuning or agent architecture was
+  introduced.
 
 ## Known Limitations
 

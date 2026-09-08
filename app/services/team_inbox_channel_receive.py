@@ -34,6 +34,7 @@ from app.schemas.ai_intake import (
     DataCleaningEligibility,
     DataCleaningEligibilityReason,
 )
+from app.schemas.chat import NATIVE_WIDGET_SURFACE_VALUES
 from app.services import (
     ai_conversation_intake,
     ai_intake,
@@ -78,7 +79,6 @@ _OPAQUE_CONTACT_CHANNELS = {
     InboxChannelType.instagram_comment.value,
     InboxChannelType.chat_widget.value,
 }
-_NATIVE_WIDGET_AI_SURFACES = frozenset({"customer", "reseller_portal"})
 
 
 def _inbound_attachment_observation(
@@ -698,7 +698,7 @@ def _start_ai_intake_for_persisted_widget_message(
             metadata.setdefault("provider", "fiber_website")
             metadata.setdefault("provider_account_scope", site_id)
     surface = str((conversation.metadata_ or {}).get("surface") or "").strip()
-    if surface in _NATIVE_WIDGET_AI_SURFACES:
+    if surface in NATIVE_WIDGET_SURFACE_VALUES:
         metadata.setdefault("provider", "native_widget")
         metadata.setdefault("provider_account_scope", surface)
     payload = InboundChannelPayload(

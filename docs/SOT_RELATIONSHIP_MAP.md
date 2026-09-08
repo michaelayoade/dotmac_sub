@@ -864,13 +864,14 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `ai.intake` | active AI conversation ownership resolution | `resolver` | active AI intake session state ← `ai.intake` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI conversational intake structured operational state | `authoritative_record` | active AI intake policy version ← `ai.intake`<br>normalized inbound conversation state ← `communications.team_inbox_threads`<br>support-relevant subscriber identity ← `customer.accounts`<br>approved monitoring projection ← `network.radius_sessions` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI conversational intake LangGraph orchestration | `resolver` | active AI intake policy version ← `ai.intake`<br>normalized inbound conversation state ← `communications.team_inbox_threads`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>support-relevant subscriber identity ← `customer.accounts`<br>approved monitoring projection ← `network.radius_sessions` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
+| `ai.intake` | AI intake inquiry, affect, and acknowledgement policy | `policy` | active AI intake policy version ← `ai.intake`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI intake approved tool catalogue policy | `policy` | active AI intake policy version ← `ai.intake` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI intake customer lookup tool resolver | `resolver` | active AI intake policy version ← `ai.intake`<br>approved customer identifier ← `communications.team_inbox_threads`<br>support-relevant subscriber identity ← `customer.accounts` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI intake subscriber monitoring tool resolver | `resolver` | active AI intake policy version ← `ai.intake`<br>support-relevant subscriber identity ← `customer.accounts`<br>approved monitoring projection ← `network.radius_sessions` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | AI generation attempt evidence | `authoritative_record` | bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>observed provider classification response ← `external:llm_provider`<br>observed provider response composition ← `external:llm_provider` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | customer-message intake eligibility policy | `policy` | enabled matching AI intake configuration ← `ai.intake`<br>normalized inbound conversation state ← `communications.team_inbox_threads`<br>channel AI-routing permission ← `communications.team_inbox_routing` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
-| `ai.intake` | bounded customer-message intent classification | `resolver` | enabled matching AI intake configuration ← `ai.intake`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>observed provider classification response ← `external:llm_provider` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
-| `ai.intake` | bounded customer-response composition | `resolver` | active AI intake policy version ← `ai.intake`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>approved conversational next action ← `ai.intake`<br>observed provider response composition ← `external:llm_provider` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
+| `ai.intake` | bounded customer-message classification and failure recovery | `resolver` | enabled matching AI intake configuration ← `ai.intake`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>observed provider classification response ← `external:llm_provider` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
+| `ai.intake` | bounded customer-response composition | `resolver` | active AI intake policy version ← `ai.intake`<br>bounded redacted inbound message projection ← `communications.team_inbox_observations`<br>approved conversational next action ← `ai.intake`<br>bounded acknowledgement obligation ← `ai.intake`<br>observed provider response composition ← `external:llm_provider` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake` | customer contact-data cleaning eligibility policy | `policy` | enabled matching AI intake configuration ← `ai.intake`<br>normalized inbound conversation state ← `communications.team_inbox_threads`<br>channel AI-routing permission ← `communications.team_inbox_routing`<br>active fallback and mapped service teams ← `operations.service_team_lifecycle` | `owner_managed` | `complete` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake.py`<br>`tests/test_ai_intake_conversation_engine.py`<br>`tests/test_team_inbox_ai_intake_flow.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake_canaries` | AI intake canary scenario library lifecycle | `command_writer` | reviewed AI intake canary scenario definition ← `auth.permission_gate`<br>active AI intake policy version ← `ai.intake` | `owner_managed` | `native` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake_production_canary_scenarios.py`<br>`tests/architecture/test_ai_boundaries.py` |
 | `ai.intake_canaries` | AI intake canary run evidence | `authoritative_record` | reviewed AI intake canary scenario definition ← `auth.permission_gate`<br>active AI intake policy version ← `ai.intake`<br>simulated canary execution evidence ← `ai.intake_canaries` | `owner_managed` | `native` | customer experience platform | `docs/designs/AI_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_ai_intake_production_canary_scenarios.py`<br>`tests/architecture/test_ai_boundaries.py` |
@@ -2164,12 +2165,10 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   invoice allocation, and unallocated-credit evidence are committed. The durable
   `payment.received` event invokes `financial.prepaid_service_renewals`, which is
   the sole decision owner of prepaid period funding, entitlements, billing-anchor
-  advancement, and `prepaid_service.renewed` outcomes. Every new funded renewal
-  uses one exact fully paid prepaid invoice as its customer-position debit;
-  historical invoice-less periods retain their exact adjustment debit as
-  read-only compatibility evidence. The transaction and replay contract is
-  detailed in `docs/designs/FUNDED_PREPAID_RENEWAL_INVOICING.md`. Access
-  enforcement has an
+  advancement, and `prepaid_service.renewed` outcomes. Invoice-funded periods use
+  the exact fully paid and fully settlement-backed prepaid invoice as their
+  customer-position debit;
+  invoice-less periods use the owner's exact adjustment debit. Access enforcement has an
   explicit dependency on that owner, while customer notifications and external
   delivery remain independent fanout consequences. The former inline payment
   renewal, operator-selected legacy cycle repair, and plan-driven gap reconciler
@@ -2262,7 +2261,7 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   service debit with exact account, subscription context where present,
   currency, and line-or-gross amount. It never infers evidence from memo text.
   One proven pair may void the pristine draft through `financial.invoices` and
-  allow the current funding-change transaction to continue to invoice-backed
+  allow the current funding-change transaction to continue to invoice-less
   renewal. Multiple, financially active, reversed, mismatched, or otherwise
   ambiguous pairs stay blocking and require Finance review. Admin invoice
   detail and issue handling read this owner preview and only project its action,
@@ -2924,9 +2923,8 @@ confirmation, tracking, or rating eligibility from raw statuses.
 1. `support.ticket_lifecycle` is the canonical owner of Ticket creation and
    identity, human-readable number allocation, guarded status transitions,
    timestamps, team/person assignment, comments/mentions/attachments,
-   links/duplicates/merges, resolution confirmation/disputes, best-effort CSAT
-   request handoff, audit, official timeline, and transactional events. Local
-   ticket creation reserves
+   links/duplicates/merges, resolution confirmation/disputes, CSAT, audit,
+   official timeline, and transactional events. Local ticket creation reserves
    numbers through the locked `support_ticket` document sequence and advances
    past occupied imported numbers; portal, API, automation, and admin adapters
    never allocate numbers. The retired lifecycle-owner alias is not a
@@ -2970,14 +2968,7 @@ confirmation, tracking, or rating eligibility from raw statuses.
    execution delegates through `app.services.support.Tickets.update`; it does
    not maintain a second status, priority, assignment, SLA, automation,
    work-order, notification, event, audit, or workqueue path.
-5. `support.csat` owns durable CSAT request and response records for resolved
-   support tickets and eligible Team Inbox conversations. Ticket and Inbox
-   lifecycle owners create one request per resolution cycle through a
-   best-effort participant path; customer submissions update
-   `support_csat_requests` as authority and only maintain `metadata.csat` as a
-   compatibility projection for existing readers. Reports read the durable CSAT
-   rows and their agent/team snapshots rather than current assignment state.
-6. `support.ticket_assignment_rule_configuration` and
+5. `support.ticket_assignment_rule_configuration` and
    `support.ticket_automation_rule_configuration` own their respective rules.
    `support.ticket_assignment_evaluation` and
    `support.ticket_automation_evaluation` return typed proposals. Policies do
@@ -3115,33 +3106,13 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     declared, so no selection/bulk is declared. Each dispatch route is granularly
     gated (`operations:dispatch:read`/`:write`/`:assign`).
 
-15a. `ui.work_order_expense_projection`
-    (`app.services.web_work_order_expenses`) composes the exact work-order page
-    context, authenticated staff identity, live ERP category rules, and only
-    that actor's expense claims. Global or matching reseller/region dispatch
-    read scope permits viewing the panel, while the matching write scope permits
-    submission; technician assignment remains a separate field-client rule. The
-    projection owns field errors, action and
-    delivery-state wording, while `operations.expense_requests` locks the exact
-    authorized work order and atomically writes the submitted claim, receipt
-    metadata, and durable ERP outbox consequence. Sent transport evidence is
-    shown as awaiting ERP acceptance, never as accepted.
-
 16. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
     project list capabilities with `ui.list_contracts` — searchable name,
     status/type/priority/region filters, name/priority/created sort, pagination —
     and delegates the read to `projects_service.projects.list`
     (`operations.project_lifecycle`), which owns the canonical filtered/sorted
     query; the projection issues no query of its own. Gated by the existing
-    granular `project:read`. It also owns the bounded project-form customer
-    picker projection over canonical active `customer.accounts`: the unnamed
-    display value searches name, native account ID, account number, subscriber
-    number, or email,
-    while only the selected native Subscriber UUID reaches
-    `operations.project_lifecycle`. The picker requires `project:create` or
-    `project:update`; the lifecycle owner rejects an inactive customer for a new
-    or changed relationship while allowing an unchanged legacy relationship to
-    be reviewed or cleared.
+    granular `project:read`.
 
 17. `ui.referral_list_projection` (`app.services.web_referrals`) owns the admin
     referral filter, stable sort, page/row projection, canonical URL, and KPI
@@ -3794,10 +3765,8 @@ in forms, or rotate key material directly.
    chronology, agent reply provenance and delivery state, conversation
    lifecycle, and ticket handoff provenance. KPI links carry the matching
    server filter; resolved conversations cannot leak into an open-derived
-   drilldown. The same projection owns pagination bounds: active queues use
-   exact filtered totals, while demand-loaded historical cohorts use one page
-   plus next-page evidence to avoid a full count scan. Conversation drill-down
-   and reply refresh adapters preserve its normalized
+   drilldown. The same projection owns exact filtered pagination bounds;
+   conversation drill-down and reply refresh adapters preserve its normalized
    filter, sort, page-size, and page-number state. A confirmed reply refreshes
    through exact-message and filter-aware single-row projections, never by
    treating the browser or realtime message UUID as cached authority.
@@ -4688,7 +4657,7 @@ Dependency order:
    boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`.
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
-8b. `operations.installation_scope` has three supported origins on one root. A sold
+8b. `operations.installation_scope` has two entry points onto one root. A sold
    installation is scoped by `ensure_for_project` (subscriber-bound, triggered
    by `sales.fulfillment`). Network buildout is scoped by `ensure_for_buildout`
    (subscriber-less, rooted on a `BuildoutProject`), which mints the native
@@ -4698,12 +4667,6 @@ Dependency order:
    rather than adding a column. Both land on `InstallationProject`, so every
    downstream vendor decision runs one path. Plant work has no subscriber and
    never invents one.
-   A Cable Rerun with a reviewed structural infrastructure link and vendor-enabled
-   template uses the same typed `EnsureProjectScope` participant without a
-   Subscriber. Project creation/editing owns the transaction. Existing unscoped
-   projects are repaired by selecting their reviewed infrastructure and saving;
-   no asset is inferred from names or metadata. See
-   `docs/designs/PROJECT_INFRASTRUCTURE_SCOPE.md`.
 
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
    is the only writer for vendor and staff work transitions on
@@ -5023,7 +4986,9 @@ a separate bounded classifier that may select only a destination service team.
    expire. Generated insights land here and nowhere else.
 4. `ai.intake` (`app.services.ai_intake`) is the sole reader and writer of
    `AiIntakeConfig` and owns bounded inbound intent classification for
-   WhatsApp, Facebook Messenger, and Instagram. No enabled matching config
+   WhatsApp, Facebook Messenger, Instagram, and explicitly scoped native Fiber,
+   customer-portal, reseller-portal, and mobile chat widgets. Widget evaluation
+   starts after the first visitor message is persisted. No enabled matching config
    means the existing normal channel path is used. It returns validated
    metadata or a fallback state and never sends a reply. For low-confidence
    intake, the Team Inbox coordinator hands its one approved question to
@@ -5413,7 +5378,7 @@ Authority cutover is complete for the platform-managed first-party paths:
 | Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Complete; runtime registration requires a valid manifest |
 | Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Complete for CRM, ERP, WhatsApp, payments, and outbound HTTP webhooks |
 | Sync dispatch | String adapter/action selection | Capability-bound `integration.sync` through `integration.runtime` | Complete; active jobs require a binding |
-| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete for platform transport. ADR 0006's temporary portal live-chat assignment is retired (2026-08-30): `crm.chat_session.v1` is gone from the `dotmac.crm` manifests since 1.2.0 and Sub's native Team Inbox is the sole live-chat authority. CRM ticket observation is a separate, still-present integration tracked for its own retirement slice |
+| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete for platform transport. ADR 0006's temporary portal live-chat assignment is retired (2026-08-30): `crm.chat_session.v1` is gone from the current `dotmac.crm` manifest (1.2.0) and Sub's native Team Inbox is the sole live-chat authority. CRM ticket observation is a separate, still-present integration tracked for its own retirement slice |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
 | WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
 | Backoffice/ERP | Direct provider transport clients | Default enabled typed backoffice capability binding (currently `dotmac.erp`) | Complete; the connector remains observation/transport only and is replaceable without changing Sub domain owners |
@@ -5530,10 +5495,7 @@ Quote-request and deposit surfaces branch on the explicit
 `quotes_native_write_enabled` cutover control: the native branch is owned by
 `sales.selfserve`, and its deposit "already paid" decision belongs to the paid
 deposit Invoice in the billing ledger — never to a mirror flag the CRM could
-stale-sync. Quote read owners also project action availability and any
-customer-safe unavailable explanation; mobile and web adapters render that
-decision and never infer command eligibility from an empty list or HTTP status.
-
+stale-sync.
 ## CRM Network Map Point Migration Addendum
 
 `network.crm_network_map_point_migration` owns the CRM Network Map point-asset
