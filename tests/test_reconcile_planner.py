@@ -25,6 +25,7 @@ from app.services.network.reconcile import (
     AcsSetRemoteAccess,
     AcsSetWanIp,
     AcsSetWifiConfig,
+    Drift,
     OltAuthorize,
     OltClearIphost,
     OltCreateServicePort,
@@ -45,6 +46,7 @@ from app.services.network.reconcile import (
     Tr181WanParameterPaths,
     compute_plan,
 )
+from app.services.network.reconcile.core import _plan_wait_failure
 
 # ── Builders ────────────────────────────────────────────────────────────────
 
@@ -1101,6 +1103,156 @@ def test_unallocated_service_port_indices_refuse_full_delete_sweep():
 
     assert OltDeleteServicePort not in _types(plan)
     assert plan.olt_wait_reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
+
+
+def test_unallocated_wan_index_withholds_only_the_correlated_wan_port_delete():
+    """Narrower gap: one slot allocated, the other unallocated and unprotected.
+
+    ``mgmt_service_port_index`` is allocated, so ``desired_indices`` is
+    non-empty and the both-indices-empty guard above never fires.
+    ``wan_service_port_index`` is ``None`` and ``wan_mode`` is not
+    ``"pppoe"``, so ``_matches_unindexed_desired_slot`` never protects the
+    WAN slot either. The observed port whose VLAN matches
+    ``desired.wan_vlan`` must still not be deleted -- nothing recreates it
+    (the create branch requires a real index) -- while the allocated mgmt
+    port is left alone entirely (it isn't even a delete candidate).
+    """
+    desired = _desired(
+        mgmt_service_port_index=23,
+        wan_service_port_index=None,
+        wan_mode="dhcp",
+    )
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 23, "vlan_id": 201, "gem_index": 2, "state": "up"},
+            {"index": 22, "vlan_id": 203, "gem_index": 1, "state": "up"},  # WAN slot
+        ),
+    )
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    assert OltDeleteServicePort not in _types(plan)
+    assert plan.olt_wait_reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
+    withheld = [
+        d
+        for d in plan.drifts
+        if d.field == "olt_service_ports[22]" and isinstance(d, Drift)
+    ]
+    assert len(withheld) == 1
+    assert withheld[0].repairable is False
+    assert withheld[0].desired is None
+
+
+def test_service_port_guard_reports_waiting_for_olt_with_a_sensible_detail():
+    """``waiting_for_olt``/``olt_wait_detail`` -- not just ``olt_wait_reason``."""
+    desired = _desired(mgmt_service_port_index=None, wan_service_port_index=None)
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 50, "vlan_id": 999, "gem_index": 4, "state": "up"},
+            {"index": 51, "vlan_id": 888, "gem_index": 5, "state": "up"},
+        ),
+    )
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    assert plan.waiting_for_olt is True
+    assert plan.olt_wait_detail
+    assert desired.serial_number in plan.olt_wait_detail
+
+
+def test_service_port_guard_does_not_withhold_other_olt_side_actions():
+    """The guard withholds service-port deletes only, not the whole OLT plan."""
+    desired = _desired(
+        mgmt_service_port_index=23,
+        wan_service_port_index=None,
+        wan_mode="dhcp",
+    )
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description="STALE_DESCRIPTION",  # differs -> should still be repaired
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 23, "vlan_id": 201, "gem_index": 2, "state": "up"},
+            {"index": 22, "vlan_id": 203, "gem_index": 1, "state": "up"},
+        ),
+    )
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    assert plan.olt_wait_reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
+    assert OltDeleteServicePort not in _types(plan)
+    assert OltModifyDescription in _types(plan)
+
+
+def test_plan_wait_failure_prefers_the_olt_reason_over_a_simultaneous_acs_wait():
+    """``_plan_wait_failure``'s documented "OLT checked first" precedence.
+
+    Construct a plan where both the OLT service-port guard AND the ACS
+    identity gate fire in the same pass, and assert the combined failure
+    reports the OLT reason, not the ACS one.
+    """
+    desired = _desired(
+        mgmt_service_port_index=None,
+        wan_service_port_index=None,
+        acs_device_id=None,
+    )
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 50, "vlan_id": 999, "gem_index": 4, "state": "up"},
+            {"index": 51, "vlan_id": 888, "gem_index": 5, "state": "up"},
+        ),
+    )
+    acs = _acs_observed(
+        acs_present=False,
+        acs_observed_device_id=None,
+        acs_observed_device_match_count=0,
+    )
+
+    plan = compute_plan(desired, _observed(olt=olt, acs=acs), "sync")
+
+    # Sanity: both wait gates actually fired -- otherwise this test would
+    # prove nothing about precedence.
+    assert plan.olt_wait_reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
+    assert plan.acs_wait_reason == ReconcileFailureReason.ONT_NOT_INFORMING
+
+    combined = _plan_wait_failure(plan)
+    assert combined is not None
+    assert combined.reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
 
 
 def test_no_action_when_service_ports_match():
