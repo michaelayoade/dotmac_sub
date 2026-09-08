@@ -43,7 +43,13 @@ from app.services.ephemeral_communication_actions import (
 )
 from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.nextcloud_talk_staff import deliver_due_staff_talk_notifications
-from app.services.observability import record_notification_queue_result
+from app.services.observability import (
+    OperationalEventName,
+    OperationalLogEvent,
+    OperationalOutcome,
+    log_operational_event,
+    record_notification_queue_result,
+)
 from app.services.owner_commands import CommandContext
 from app.services.settings_spec import resolve_value
 from app.services.whatsapp_notification_templates import provider_template_from_template
@@ -1600,14 +1606,24 @@ def deliver_notification_queue() -> dict[str, int]:
             result=result,
             started=started,
         )
-        logger.info(
-            "Notification queue processed: delivered=%d, retried=%d, failed=%d, "
-            "expired=%d, rate_limited=%d",
-            result["delivered"],
-            result["retried"],
-            result["failed"],
-            result["expired"],
-            result["rate_limited"],
+        log_operational_event(
+            logger,
+            OperationalLogEvent(
+                name=OperationalEventName.NOTIFICATION_QUEUE_PROCESSED,
+                outcome=(
+                    OperationalOutcome.COMPLETED_WITH_RETRIES
+                    if result["retried"] > 0
+                    else OperationalOutcome.COMPLETED
+                ),
+                component="notifications",
+                counters={
+                    "delivered": result["delivered"],
+                    "retried": result["retried"],
+                    "failed": result["failed"],
+                    "expired": result["expired"],
+                    "rate_limited": result["rate_limited"],
+                },
+            ),
         )
         return result
 
