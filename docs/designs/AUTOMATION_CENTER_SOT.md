@@ -27,6 +27,10 @@ a module key, event payload field, database field, command owner, permission,
 or action from the UI. Adding a capability is a reviewed code change in its
 owning domain.
 
+Every trigger declares the exact payload fields carrying tenant and target
+identity. Events without both identities cannot be registered for automation;
+the runtime never guesses tenancy from an unrelated record or a UI session.
+
 ## Rule shape
 
 The first contract is deliberately bounded:

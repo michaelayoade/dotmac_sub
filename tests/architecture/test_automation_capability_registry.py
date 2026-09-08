@@ -44,6 +44,8 @@ def test_invalid_enum_field_fails_closed(monkeypatch: pytest.MonkeyPatch) -> Non
                     event_type="test.entity.created",
                     event_schema_version=1,
                     entity_type="test.entity",
+                    tenant_id_field="tenant_id",
+                    entity_id_field="entity_id",
                     fields=(
                         AutomationConditionField(
                             key="status",

@@ -53,6 +53,8 @@ class AutomationTriggerCapability:
     event_type: str
     event_schema_version: int
     entity_type: str
+    tenant_id_field: str
+    entity_id_field: str
     fields: tuple[AutomationConditionField, ...]
     author_permission: str
 

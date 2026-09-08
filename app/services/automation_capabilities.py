@@ -157,6 +157,10 @@ def capability_registry_errors() -> tuple[str, ...]:
                 )
             if trigger.event_schema_version < 1:
                 errors.append(f"trigger {trigger.key!r} has invalid schema version")
+            if not trigger.tenant_id_field.strip():
+                errors.append(f"trigger {trigger.key!r} has no tenant identity field")
+            if not trigger.entity_id_field.strip():
+                errors.append(f"trigger {trigger.key!r} has no entity identity field")
             if not trigger.author_permission.strip():
                 errors.append(f"trigger {trigger.key!r} has no author permission")
             errors.extend(
