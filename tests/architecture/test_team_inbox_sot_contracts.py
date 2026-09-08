@@ -90,6 +90,42 @@ def test_routing_owner_contracts_signed_in_agent_presence() -> None:
     assert "agent_availability_snapshots(" in projection
 
 
+def test_queue_correctness_contracts_are_explicit_and_provider_preflighted() -> None:
+    routing = service_relationship("communications.team_inbox_routing")
+    notifications = service_relationship(
+        "communications.team_inbox_queue_notifications"
+    )
+    assert {
+        "strict per-team FIFO head serialization",
+        "current customer-visible queue position projection",
+        "global per-agent active assignment capacity enforcement",
+    } <= set(routing.owns)
+    assert {
+        "queue notification lifecycle deduplication and suppression",
+        "queue notification provider-dispatch validity decision",
+    } <= set(notifications.owns)
+
+    assignment = (ROOT / "app/services/team_inbox_assignment.py").read_text(
+        encoding="utf-8"
+    )
+    notification_owner = (
+        ROOT / "app/services/team_inbox_queue_notifications.py"
+    ).read_text(encoding="utf-8")
+    delivery_adapter = (ROOT / "app/tasks/notifications.py").read_text(encoding="utf-8")
+    assert "def _lock_agent_capacity(" in assignment
+    assert "def _try_lock_team(" in assignment
+    assert "queue-position:{entry.id}:{lifecycle}:{position}" in notification_owner
+    assert "preflight_queue_notification_delivery(" in delivery_adapter
+
+    assignment_constructors = []
+    for path in (ROOT / "app").rglob("*.py"):
+        if path == ROOT / "app/models/team_inbox.py":
+            continue
+        if "InboxConversationAssignment(" in path.read_text(encoding="utf-8"):
+            assignment_constructors.append(path.relative_to(ROOT).as_posix())
+    assert assignment_constructors == ["app/services/team_inbox_assignment.py"]
+
+
 def test_legacy_catch_all_is_retired() -> None:
     baseline = (
         ROOT / "tests/architecture/sot_manifest_legacy_baseline.txt"

@@ -3004,6 +3004,7 @@ def team_inbox_ai_intake_policy_draft_update(
     queue_handoff_template: str | None = Form(default=None),
     queue_position_update_minutes: int = Form(default=10),
     queue_heartbeat_minutes: int = Form(default=30),
+    queue_heartbeat_enabled: bool = Form(default=False),
     data_cleanup_prompt: str | None = Form(default=None),
     data_cleanup_gender_choices_json: str | None = Form(default=None),
     data_cleanup_dob_formats: str | None = Form(default=None),
@@ -3119,6 +3120,7 @@ def team_inbox_ai_intake_policy_draft_update(
                 1, min(int(queue_position_update_minutes), 120)
             ),
             "heartbeat_minutes": max(5, min(int(queue_heartbeat_minutes), 240)),
+            "heartbeat_enabled": bool(queue_heartbeat_enabled),
         }
         clean_escalate_after_minutes = max(1, min(int(escalate_after_minutes), 1440))
         if customer_response_timeout_minutes is None:

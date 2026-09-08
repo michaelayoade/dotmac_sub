@@ -21,11 +21,13 @@ public comment channels remain outside AI intake.
   transfers and provider delivery.
 - Round-robin assignment is durable per team and skips offline, inactive or full
   agents. An online presence is considered assignable only when its
-  `last_seen_at` observation is no more than three minutes old.
-- Default active-conversation capacity is 10, configurable through Comms
-  domain settings, with per-agent overrides preserved.
-- Queued customers receive configurable, versioned queue notices: initial
-  position, position-change updates, heartbeat and handoff.
+  `last_seen_at` observation is no more than 30 minutes old.
+- Default active-conversation capacity is 10, configurable at Admin → System →
+  Settings → Comms (range 1–100), with backend per-agent overrides preserved.
+- Queued customers receive one initial visible-position notice and forward-only
+  position changes. Heartbeats are disabled by default; an explicit opt-in uses
+  a separate non-position template. Assignment or terminal state cancels the
+  lifecycle and provider dispatch revalidates it before sending.
 - NCC DOB/gender cleanup is governed, disabled by default for production
   collection, and saves only through a typed profile cleanup command.
 

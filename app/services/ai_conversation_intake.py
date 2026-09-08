@@ -123,6 +123,7 @@ DEFAULT_WELCOME_MESSAGE = (
 )
 DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 10
 DEFAULT_QUEUE_HEARTBEAT_MINUTES = 30
+DEFAULT_QUEUE_HEARTBEAT_ENABLED = False
 DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES = 5
 DEFAULT_CUSTOMER_WAIT_EXPIRY_HOURS = 72
 DEFAULT_QUEUE_TEMPLATES = {
@@ -132,13 +133,13 @@ DEFAULT_QUEUE_TEMPLATES = {
     ),
     "position_update": "Quick update: you are now number {position} in the queue.",
     "heartbeat": (
-        "You are still number {position} in the queue. We will connect you as "
-        "soon as an agent is available."
+        "We are still working to connect you with an agent. Thank you for "
+        "your patience."
     ),
     "handoff": "Thanks for waiting. An agent has joined and will continue from here.",
 }
 APPROVED_QUEUE_TEMPLATE_VARIABLES = frozenset(
-    {"position", "queue_position", "team_name"}
+    {"current_visible_position", "position", "queue_position", "team_name"}
 )
 SUPPORTED_AI_INTENT_KEYS = frozenset(item.value for item in AiIntakeIntent)
 SUPPORTED_AI_CATEGORY_KEYS = frozenset(item.value for item in AiIntakeCategory)
@@ -909,7 +910,8 @@ def _validate_queue_templates(queue_templates: object) -> None:
         if unknown:
             raise ValueError(
                 "AI intake queue templates support only "
-                "{{queue_position}}, {{position}} and {{team_name}}"
+                "{{current_visible_position}}, {{position}}, "
+                "{{queue_position}} and {{team_name}}"
             )
     update_minutes = _bounded_int(
         queue_templates.get("position_update_minutes"),
@@ -925,6 +927,16 @@ def _validate_queue_templates(queue_templates: object) -> None:
     )
     if update_minutes < 1 or heartbeat_minutes < 5:
         raise ValueError("AI intake queue notification minutes are invalid")
+    heartbeat_enabled = bool(
+        queue_templates.get("heartbeat_enabled", DEFAULT_QUEUE_HEARTBEAT_ENABLED)
+    )
+    if heartbeat_enabled and (
+        _template_variables(queue_templates.get("heartbeat"))
+        & {"current_visible_position", "position", "queue_position"}
+    ):
+        raise ValueError(
+            "Queue heartbeat templates cannot repeat the customer position"
+        )
 
 
 def _validate_engine_playbooks(
@@ -2306,6 +2318,9 @@ def ensure_policy_version_from_legacy_config(
         ),
         "heartbeat_minutes": int(
             metadata.get("queue_heartbeat_minutes") or DEFAULT_QUEUE_HEARTBEAT_MINUTES
+        ),
+        "heartbeat_enabled": bool(
+            metadata.get("queue_heartbeat_enabled", DEFAULT_QUEUE_HEARTBEAT_ENABLED)
         ),
     }
     data_cleanup_policy = metadata.get("data_cleanup_policy")
