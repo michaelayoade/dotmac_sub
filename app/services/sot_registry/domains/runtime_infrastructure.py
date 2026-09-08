@@ -212,7 +212,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="runtime.web_worker_readiness",
-            module="app.main",
+            module="app.services.web_worker_readiness",
             owns=("web-worker route-table readiness",),
             depends_on=("observability.metrics",),
             contract=ServiceContract(

@@ -24,3 +24,9 @@ upstream dotmac_sub {
 
 Port 18002 may return only as a genuinely healthy, independently monitored
 standby with matching application configuration.
+
+
+`runtime.web_worker_readiness` is implemented by
+`app.services.web_worker_readiness`. It evaluates typed route and preflight
+observations. The application startup adapter supplies those observations only
+after preflight and router loading, then maps the result to readiness state.

@@ -1,4 +1,4 @@
-"""Import CRM Inbox SLA configuration without copying CRM operational data.
+"""Plan a sanitized Inbox SLA configuration import without operational data.
 
 Input is a sanitised JSON export containing configuration only.  The command
 is dry-run by default and refuses unresolved team/channel/priority mappings.
@@ -10,7 +10,8 @@ import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,35 +23,45 @@ class ImportSummary:
     unresolved: tuple[str, ...] = ()
 
 
-def _load(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8-sig"))
-    if not isinstance(value, dict) or not isinstance(value.get("policies"), list):
-        raise ValueError("input must be an object with a policies list")
-    return value
+class SourceRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_team_id: str | int | None = None
+    source_channel: str | None = None
+    source_priority: str | int | None = None
 
 
-def plan_import(
-    source: dict[str, Any], mappings: dict[str, dict[str, str]]
-) -> ImportSummary:
-    unresolved: list[str] = []
-    accepted = 0
-    for policy in source["policies"]:
-        for rule in policy.get("rules", []):
-            rule_unresolved = False
-            for kind, key in (
-                ("team", rule.get("crm_team_id")),
-                ("channel", rule.get("crm_channel")),
-                ("priority", rule.get("crm_priority")),
+class SourcePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    rules: tuple[SourceRule, ...] = Field(min_length=1)
+
+
+class ImportSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policies: tuple[SourcePolicy, ...]
+
+
+class ImportMappings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    team: dict[str, str] = Field(default_factory=dict)
+    channel: dict[str, str] = Field(default_factory=dict)
+    priority: dict[str, str] = Field(default_factory=dict)
+
+
+def plan_import(source: ImportSource, mappings: ImportMappings) -> ImportSummary:
+    unresolved: set[str] = set()
+    for policy in source.policies:
+        for rule in policy.rules:
+            for kind, key, mapping in (
+                ("team", rule.source_team_id, mappings.team),
+                ("channel", rule.source_channel, mappings.channel),
+                ("priority", rule.source_priority, mappings.priority),
             ):
-                if key is not None and str(key) not in mappings.get(kind, {}):
-                    unresolved.append(f"{kind}:{key}")
-                    rule_unresolved = True
-            if not rule_unresolved:
-                accepted += 1
+                if key is not None and str(key) not in mapping:
+                    unresolved.add(f"{kind}:{key}")
     return ImportSummary(
-        skipped=len(source["policies"]) - accepted,
-        rejected=0,
-        unresolved=tuple(sorted(set(unresolved))),
+        skipped=len(source.policies),
+        unresolved=tuple(sorted(unresolved)),
     )
 
 
@@ -69,10 +80,12 @@ def main() -> int:
         help="Apply only after a clean dry-run and explicit mapping review",
     )
     args = parser.parse_args()
-    source = _load(args.input)
-    mappings = json.loads(args.mappings.read_text(encoding="utf-8-sig"))
-    if not isinstance(mappings, dict):
-        raise ValueError("mappings must be an object")
+    source = ImportSource.model_validate_json(
+        args.input.read_text(encoding="utf-8-sig")
+    )
+    mappings = ImportMappings.model_validate_json(
+        args.mappings.read_text(encoding="utf-8-sig")
+    )
     summary = plan_import(source, mappings)
     print(
         json.dumps(

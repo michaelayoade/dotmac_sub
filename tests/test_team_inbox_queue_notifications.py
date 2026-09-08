@@ -669,3 +669,62 @@ def test_requeue_notification_keys_include_new_generation(db_session, monkeypatc
     assert len(keys) == 2
     assert first_key != keys[-1]
     assert "generation:2" in keys[-1]
+
+
+def test_rejected_queue_delivery_owner_cancels_and_replay_is_noop(db_session) -> None:
+    delivery = Notification(
+        channel=NotificationChannel.whatsapp,
+        recipient="unit-test-recipient",
+        status=NotificationStatus.sending,
+        metadata_={"automation_kind": "queue_notification"},
+    )
+    db_session.add(delivery)
+    db_session.commit()
+    command = team_inbox_queue_notifications.SettleRejectedQueueDeliveryCommand(
+        context=CommandContext.system(
+            actor="notification-queue-worker",
+            scope="team-inbox:queue-delivery",
+            reason="Unit suppression revalidation",
+        ),
+        notification_id=delivery.id,
+    )
+    db_session.rollback()
+    result = team_inbox_queue_notifications.settle_rejected_queue_delivery(
+        db_session, command=command
+    )
+    assert result.suppressed and not result.deferred
+    assert not db_session.in_transaction()
+    replay = team_inbox_queue_notifications.settle_rejected_queue_delivery(
+        db_session, command=command
+    )
+    assert not replay.suppressed and not replay.deferred
+    db_session.refresh(delivery)
+    assert delivery.status is NotificationStatus.canceled
+    assert delivery.metadata_["queue_suppression_reason"] == "invalid_queue_metadata"
+
+
+def test_changed_queue_delivery_decision_defers_for_a_fresh_claim(db_session) -> None:
+    delivery = Notification(
+        channel=NotificationChannel.whatsapp,
+        recipient="unit-test-recipient",
+        status=NotificationStatus.sending,
+        metadata_={},
+    )
+    db_session.add(delivery)
+    db_session.commit()
+    command = team_inbox_queue_notifications.SettleRejectedQueueDeliveryCommand(
+        context=CommandContext.system(
+            actor="notification-queue-worker",
+            scope="team-inbox:queue-delivery",
+            reason="Revalidate changed delivery metadata",
+        ),
+        notification_id=delivery.id,
+    )
+    db_session.rollback()
+    result = team_inbox_queue_notifications.settle_rejected_queue_delivery(
+        db_session, command=command
+    )
+    assert result.deferred and not result.suppressed
+    assert not db_session.in_transaction()
+    db_session.refresh(delivery)
+    assert delivery.status is NotificationStatus.queued

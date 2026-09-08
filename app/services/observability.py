@@ -10,10 +10,9 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,55 +21,6 @@ from app.models.network_monitoring import AlertSeverity
 from app.services import admin_alerts, job_heartbeat, task_heartbeat
 
 logger = logging.getLogger(__name__)
-
-
-class OperationalEventName(StrEnum):
-    """Closed event names for task summaries that are safe to aggregate."""
-
-    BILLING_ENFORCEMENT_COMPLETED = "billing_enforcement_completed"
-    NOTIFICATION_QUEUE_PROCESSED = "notification_queue_processed"
-    ERP_SYNC_EVENTS_COMPLETED = "erp_sync_events_completed"
-    ERP_EXPENSE_STATUS_REFRESH_COMPLETED = "erp_expense_status_refresh_completed"
-    ERP_MATERIAL_STATUS_REFRESH_COMPLETED = "erp_material_status_refresh_completed"
-    ERP_PURCHASE_INVOICE_STATUS_REFRESH_COMPLETED = (
-        "erp_purchase_invoice_status_refresh_completed"
-    )
-
-
-class OperationalOutcome(StrEnum):
-    COMPLETED = "completed"
-    COMPLETED_WITH_RETRIES = "completed_with_retries"
-
-
-@dataclass(frozen=True)
-class OperationalLogEvent:
-    """One compact task-summary event, without message-text classification."""
-
-    name: OperationalEventName
-    outcome: OperationalOutcome
-    component: str
-    counters: Mapping[str, int]
-
-
-def log_operational_event(
-    event_logger: logging.Logger, event: OperationalLogEvent
-) -> None:
-    """Emit one structured INFO record for a completed operational task.
-
-    The event name and outcome are closed vocabulary.  Counters explain a
-    completed run but do not turn expected retries or domain refusals into an
-    ERROR signal.
-    """
-
-    event_logger.info(
-        "operational_task_outcome",
-        extra={
-            "event_name": event.name.value,
-            "outcome": event.outcome.value,
-            "component": event.component,
-            "counters": dict(event.counters),
-        },
-    )
 
 
 @dataclass(frozen=True)

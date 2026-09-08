@@ -1307,7 +1307,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="authorized staff reviewer",
                     owner="auth.permission_gate",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="active SystemUser holding crm:quote:review",
+                    source="active SystemUser holding sales:quote:review",
                 ),
             ),
             transaction=TransactionContract(

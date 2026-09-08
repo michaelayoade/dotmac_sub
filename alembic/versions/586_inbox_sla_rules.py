@@ -1,6 +1,6 @@
 """Add native Inbox SLA policies, clocks, and audit evidence.
 
-CRM SLA settings are not imported here.  The separate configuration importer
+legacy external inbox SLA settings are not imported here.  The separate configuration importer
 requires explicit mappings and is dry-run by default.
 """
 

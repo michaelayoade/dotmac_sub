@@ -36,6 +36,11 @@ _QUEUE_NOTICE_COMMAND = OwnerCommandDefinition(
     concern="customer-visible FIFO queue notification evidence",
     name="execute_team_inbox_queue_notification_command",
 )
+_QUEUE_SUPPRESSION_COMMAND = OwnerCommandDefinition(
+    owner="communications.team_inbox_queue_notifications",
+    concern="queue notification delivery ledger writes",
+    name="settle_rejected_queue_delivery",
+)
 
 SUPPORTED_NOTICE_CHANNELS = frozenset(
     {
@@ -74,6 +79,70 @@ class QueueDeliveryPreflightOutcome:
     queue_entry_id: UUID | None = None
     admission_generation: int | None = None
     current_visible_position: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SettleRejectedQueueDeliveryCommand:
+    context: CommandContext
+    notification_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class QueueDeliverySettlement:
+    suppressed: bool
+    deferred: bool = False
+
+
+def settle_rejected_queue_delivery(
+    db: Session, command: SettleRejectedQueueDeliveryCommand
+) -> QueueDeliverySettlement:
+    """Recheck a denied delivery under the owner transaction before suppressing it.
+
+    A changed decision returns the claimed notification to the queue; only a
+    fresh worker claim may contact the provider with current lifecycle locks.
+    """
+    from app.services.communication_intents import record_delivery_outcome
+
+    def operation() -> QueueDeliverySettlement:
+        observed = db.get(Notification, command.notification_id)
+        if observed is None:
+            return QueueDeliverySettlement(suppressed=False)
+        preflight_queue_notification_delivery(
+            db, notification=observed, record_suppression=False
+        )
+        notification = (
+            db.query(Notification)
+            .filter(Notification.id == command.notification_id)
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if notification is None or notification.status not in {
+            NotificationStatus.sending,
+            NotificationStatus.queued,
+        }:
+            return QueueDeliverySettlement(suppressed=False)
+        decision = preflight_queue_notification_delivery(db, notification=notification)
+        if not decision.applies or decision.allowed:
+            notification.status = NotificationStatus.queued
+            db.flush()
+            return QueueDeliverySettlement(suppressed=False, deferred=True)
+        notification.status = NotificationStatus.canceled
+        notification.last_error = f"queue_notification_suppressed:{decision.reason}"
+        notification.metadata_ = {
+            **dict(notification.metadata_ or {}),
+            "queue_suppression_reason": decision.reason,
+        }
+        record_delivery_outcome(db, notification)
+        db.flush()
+        return QueueDeliverySettlement(suppressed=True)
+
+    return execute_owner_command(
+        db,
+        definition=_QUEUE_SUPPRESSION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def current_visible_position(db: Session, entry: InboxConversationQueueEntry) -> int:
@@ -201,7 +270,7 @@ def cancel_queue_lifecycle_notifications(
 
 
 def preflight_queue_notification_delivery(
-    db: Session, *, notification: Notification
+    db: Session, *, notification: Notification, record_suppression: bool = True
 ) -> QueueDeliveryPreflightOutcome:
     """Serialize provider delivery against assignment and queue settlement."""
 
@@ -255,7 +324,7 @@ def preflight_queue_notification_delivery(
         *,
         cancel_ledger: bool = True,
     ) -> QueueDeliveryPreflightOutcome:
-        if not allowed and ledger is not None:
+        if record_suppression and not allowed and ledger is not None:
             ledger.suppression_reason = reason[:80]
             if cancel_ledger:
                 _cancel_notice(ledger, reason)
@@ -323,6 +392,8 @@ def preflight_queue_notification_delivery(
     if kind in {NOTICE_INITIAL, NOTICE_POSITION_UPDATE} and (
         expected_position is None or expected_position != visible_position
     ):
+        if not record_suppression:
+            return outcome(False, "visible_position_stale", visible_position)
         if expected_position is not None and visible_position < expected_position:
             _cancel_notice(ledger, "visible_position_stale")
             policy = _queue_policy(db, conversation)

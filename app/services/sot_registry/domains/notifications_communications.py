@@ -27,6 +27,7 @@ def _team_inbox_contract(
     concerns: tuple[tuple[str, OwnerRole], ...],
     inputs: tuple[AuthorityInput, ...],
     transaction_mode: TransactionMode,
+    transaction_contract: TransactionContract | None = None,
     event_types: tuple[str, ...] = (),
     projections: tuple[str, ...] = (),
     domain_error_codes: tuple[str, ...] = (),
@@ -63,7 +64,8 @@ def _team_inbox_contract(
             for name, role in concerns
         ),
         authoritative_inputs=inputs,
-        transaction=TransactionContract(
+        transaction=transaction_contract
+        or TransactionContract(
             mode=transaction_mode,
             boundary=(
                 "Public commands enter execute_owner_command once on a transaction-free "
@@ -4322,6 +4324,8 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "communications.team_inbox_threads",
                 "operations.sla_escalation",
+                "observability.audit_log",
+                "events.dispatcher",
             ),
             notes="Native Inbox SLA state is distinct from retired CRM history; policy configuration is explicit and mapping-safe.",
             contract=_team_inbox_contract(
@@ -4347,18 +4351,38 @@ DOMAIN = DomainSOT(
                         source="validated policy and lifecycle commands",
                     ),
                 ),
-                transaction_mode=TransactionMode.PARTICIPANT,
-                event_types=("inbox.sla.changed.v1",),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Public policy and sweep commands enter execute_owner_command once; conversation lifecycle participants only flush in their caller's command.",
+                    locking="Policy commands take one transaction-scoped PostgreSQL advisory lock before policy rows; sweeps lock eligible clocks with SKIP LOCKED in oldest-evaluation order.",
+                    idempotency="Unique policy names reject repeated creates; unchanged activation is a no-op; clock/event-key uniqueness and persisted warning timestamps suppress repeated transition evidence.",
+                    retries="Retry only after rollback. Clock sweeps revisit the least recently evaluated clocks; duplicate policy creation is a domain refusal, never a blind retry.",
+                ),
+                event_types=(
+                    "inbox.sla.policy_changed.v1",
+                    "inbox.sla.clock_changed.v1",
+                ),
                 domain_error_codes=(
                     "communications.inbox_sla.incomplete_policy",
                     "communications.inbox_sla.overlapping_rules",
                     "communications.inbox_sla.invalid_timezone",
+                    "communications.inbox_sla.invalid_working_days",
+                    "communications.inbox_sla.invalid_working_hours",
+                    "communications.inbox_sla.invalid_target",
+                    "communications.inbox_sla.invalid_warning",
+                    "communications.inbox_sla.duplicate_policy",
+                    "communications.inbox_sla.forbidden",
                 ),
                 design_refs=(
+                    "docs/designs/INBOX_SLA.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                 ),
-                test_refs=("tests/test_inbox_sla.py",),
+                test_refs=(
+                    "tests/test_inbox_sla.py",
+                    "tests/architecture/test_inbox_sla_command_boundary.py",
+                ),
             ),
         ),
     ),

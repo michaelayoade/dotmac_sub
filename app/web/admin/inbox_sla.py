@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from datetime import date, time
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.inbox_sla import InboxSlaPolicy
+from app.services import inbox_sla
+from app.services.audit_adapter import AuditActor
 from app.services.auth_dependencies import require_permission
 from app.services.db_session_adapter import db_session_adapter
-from app.services.inbox_sla import SlaPolicyInput, SlaRuleInput, create_policy
+from app.services.inbox_sla import SlaPolicyInput, SlaPolicyView, SlaRuleInput
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/inbox/sla", tags=["admin-inbox-sla"])
 
@@ -40,16 +42,16 @@ class SlaPolicyRequest(BaseModel):
     is_default: bool = False
 
 
-def _serialize(policy: InboxSlaPolicy) -> dict[str, object]:
+def _serialize(policy: SlaPolicyView) -> dict[str, object]:
     return {
         "id": str(policy.id),
         "name": policy.name,
         "description": policy.description,
         "timezone": policy.timezone,
-        "working_days": policy.working_days,
+        "working_days": list(policy.working_days),
         "workday_start": policy.workday_start.isoformat(),
         "workday_end": policy.workday_end.isoformat(),
-        "holidays": policy.holidays or [],
+        "holidays": [day.isoformat() for day in policy.holidays],
         "is_active": policy.is_active,
         "is_default": policy.is_default,
         "rules": [
@@ -71,33 +73,71 @@ def _serialize(policy: InboxSlaPolicy) -> dict[str, object]:
     }
 
 
+def _context(principal_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=principal_id,
+        scope="support:ticket:update",
+        reason="Administrator configured Inbox SLA policy",
+    )
+
+
+def _http_error(error: inbox_sla.InboxSlaError) -> HTTPException:
+    return HTTPException(
+        status_code=404 if error.code.endswith(".not_found") else 400,
+        detail=error.message,
+    )
+
+
 @router.get(
     "/policies", dependencies=[Depends(require_permission("support:ticket:read"))]
 )
 def list_policies(db: Session = Depends(get_db)) -> list[dict[str, object]]:
     return [
         _serialize(policy)
-        for policy in db.query(InboxSlaPolicy).order_by(InboxSlaPolicy.name).all()
+        for policy in inbox_sla.query_policies(db, query=inbox_sla.SlaPolicyQuery())
     ]
 
 
-@router.post(
-    "/policies", dependencies=[Depends(require_permission("support:ticket:update"))]
-)
-def add_policy(request: SlaPolicyRequest) -> dict[str, object]:
-    command = SlaPolicyInput(
-        name=request.name,
-        description=request.description,
-        rules=tuple(SlaRuleInput(**rule.model_dump()) for rule in request.rules),
-        timezone=request.timezone,
-        working_days=request.working_days,
-        workday_start=request.workday_start,
-        workday_end=request.workday_end,
-        holidays=request.holidays,
-        is_default=request.is_default,
+@router.post("/policies")
+def add_policy(
+    request: SlaPolicyRequest,
+    auth: dict[str, object] = Depends(require_permission("support:ticket:update")),
+) -> dict[str, object]:
+    principal_id = str(auth["principal_id"])
+    command = inbox_sla.SaveSlaPolicyCommand(
+        context=_context(principal_id),
+        actor=AuditActor.user(principal_id),
+        policy=SlaPolicyInput(
+            name=request.name,
+            description=request.description,
+            rules=tuple(
+                SlaRuleInput(
+                    first_response_minutes=rule.first_response_minutes,
+                    resolution_minutes=rule.resolution_minutes,
+                    warning_minutes=rule.warning_minutes,
+                    next_response_minutes=rule.next_response_minutes,
+                    service_team_id=rule.service_team_id,
+                    channel_type=rule.channel_type,
+                    priority=rule.priority,
+                )
+                for rule in request.rules
+            ),
+            timezone=request.timezone,
+            working_days=request.working_days,
+            workday_start=request.workday_start,
+            workday_end=request.workday_end,
+            holidays=request.holidays,
+            is_default=request.is_default,
+        ),
     )
-    with db_session_adapter.session() as db:
-        return _serialize(create_policy(db, command))
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            return _serialize(inbox_sla.save_policy(db, command=command))
+    except inbox_sla.InboxSlaError as error:
+        raise _http_error(error) from error
 
 
 @router.get(
@@ -105,27 +145,31 @@ def add_policy(request: SlaPolicyRequest) -> dict[str, object]:
     dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def get_policy(policy_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
-    policy = db.get(InboxSlaPolicy, policy_id)
-    if policy is None:
-        from fastapi import HTTPException
+    try:
+        return _serialize(
+            inbox_sla.query_policies(
+                db, query=inbox_sla.SlaPolicyQuery(policy_id=policy_id)
+            )[0]
+        )
+    except inbox_sla.InboxSlaError as error:
+        raise _http_error(error) from error
 
-        raise HTTPException(status_code=404, detail="Inbox SLA policy not found")
-    return _serialize(policy)
 
-
-@router.post(
-    "/policies/{policy_id}/active",
-    dependencies=[Depends(require_permission("support:ticket:update"))],
-)
-def set_policy_active(policy_id: UUID, active: bool) -> dict[str, object]:
-    with db_session_adapter.session() as db:
-        policy = db.get(InboxSlaPolicy, policy_id)
-        if policy is None:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail="Inbox SLA policy not found")
-        policy.is_active = active
-        if not active:
-            policy.is_default = False
-        db.flush()
-        return _serialize(policy)
+@router.post("/policies/{policy_id}/active")
+def set_policy_active(
+    policy_id: UUID,
+    active: bool,
+    auth: dict[str, object] = Depends(require_permission("support:ticket:update")),
+) -> dict[str, object]:
+    principal_id = str(auth["principal_id"])
+    command = inbox_sla.ActivateSlaPolicyCommand(
+        context=_context(principal_id),
+        actor=AuditActor.user(principal_id),
+        policy_id=policy_id,
+        active=active,
+    )
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            return _serialize(inbox_sla.activate_policy(db, command=command))
+    except inbox_sla.InboxSlaError as error:
+        raise _http_error(error) from error

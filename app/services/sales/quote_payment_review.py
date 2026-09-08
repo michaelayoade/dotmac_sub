@@ -22,7 +22,7 @@ from app.models.sales import (
 )
 from app.models.system_user import SystemUser
 from app.services import communication_intents, staff_notifications
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
@@ -31,7 +31,7 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 
-REVIEW_PERMISSION = "crm:quote:review"
+REVIEW_PERMISSION = "sales:quote:review"
 REVIEW_REQUEST_EVENT = "quote.payment_review_requested"
 
 _REVIEW_QUOTE = OwnerCommandDefinition(
@@ -270,7 +270,7 @@ def _request_operation(
             action="quote.payment_review_requested",
             entity_type="quote",
             entity_id=str(quote.id),
-            actor_id=str(command.subscriber_id),
+            actor=AuditActor.user(str(command.subscriber_id)),
             request_id=str(command.context.command_id),
             metadata={"payment_review_status": QuotePaymentReviewStatus.pending.value},
         )
@@ -486,7 +486,7 @@ def _operation(
         action=f"quote.payment_{status.value}",
         entity_type="quote",
         entity_id=str(quote.id),
-        actor_id=str(reviewer.id),
+        actor=AuditActor.user(str(reviewer.id)),
         request_id=str(command.context.command_id),
         metadata={
             "revision": revision,

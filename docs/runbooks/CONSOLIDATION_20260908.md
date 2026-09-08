@@ -53,3 +53,20 @@ build, staging acceptance, and authorization and production deployment of that
 same digest. Follow `docs/runbooks/STAGING_PROMOTION.md`; Michael must name the
 staging and production hosts before deployment.
 This document records required gates, not evidence that they have passed.
+
+
+## Ownership validation corrections
+
+Inbox SLA configuration and scheduled evaluation now use the registered public
+owner transaction. Warnings include clocks whose response deadline has not yet
+elapsed. Policy audit and clock transition events are staged with their state.
+The configuration planner uses typed sanitized source references and remains
+dry-run only. The new quote-review permission is `sales:quote:review` in seed,
+migration, authorization, and tests.
+
+Queue preflight in the worker is read-only. A rejected delivery is handed to
+`settle_rejected_queue_delivery`, which locks current conversation/queue state
+before the notification, revalidates, and commits cancellation and delivery
+ledger evidence together. If the decision has changed, it returns the message
+to the queue for a fresh claim without contacting a provider. Allowed delivery
+continues to hold the existing lifecycle locks through provider dispatch.

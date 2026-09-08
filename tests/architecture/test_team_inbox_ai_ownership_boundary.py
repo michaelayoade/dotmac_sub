@@ -62,11 +62,8 @@ def test_implicit_fail_open_takeover_does_not_return() -> None:
 
 def test_delivery_revalidates_ai_session_before_provider_contact() -> None:
     worker = _source("app/tasks/notifications.py")
-    suppression = worker[
-        worker.index("def _suppress_ai_outbound_without_ownership(") : worker.index(
-            "\n@dataclass", worker.index("def _suppress_ai_outbound_without_ownership(")
-        )
-    ]
+    owner = _source("app/services/team_inbox_commands.py")
+    suppression = owner[owner.index("def suppress_ai_outbound_without_ownership(") :]
     delivery = worker[
         worker.index("def _deliver_notification_queue_stats(") : worker.index(
             "\ndef _deliver_notification_queue("
@@ -74,10 +71,10 @@ def test_delivery_revalidates_ai_session_before_provider_contact() -> None:
     ]
 
     assert "decide_ai_outbound_delivery" in suppression
-    assert "NotificationStatus.canceled" in suppression
-    assert delivery.index("_suppress_ai_outbound_without_ownership") < delivery.index(
-        "communication_eligibility.may_send"
-    )
+    assert "suppress_notification_delivery" in suppression
+    assert delivery.index(
+        "team_inbox_commands.suppress_ai_outbound_without_ownership"
+    ) < delivery.index("if notification.channel == NotificationChannel.email:")
 
 
 def test_registry_names_ai_session_authority_for_commands_and_projection() -> None:

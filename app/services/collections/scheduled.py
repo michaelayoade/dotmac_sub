@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.schemas.collections import BillingEnforcementRunRequest
 from app.services.collections import billing_enforcement_reconciler
 from app.services.db_session_adapter import db_session_adapter
-from app.services.observability import (
+from app.services.operational_logging import (
     OperationalEventName,
     OperationalLogEvent,
     OperationalOutcome,

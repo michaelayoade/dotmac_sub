@@ -1470,7 +1470,7 @@ def quote_send_email(
 
 @router.post(
     "/quotes/{quote_id}/payment-review",
-    dependencies=[Depends(require_permission("crm:quote:review"))],
+    dependencies=[Depends(require_permission("sales:quote:review"))],
 )
 def quote_payment_review_submit(
     request: Request,

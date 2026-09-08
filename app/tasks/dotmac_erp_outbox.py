@@ -18,7 +18,7 @@ import time
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.celery_app import celery_app
-from app.services.observability import (
+from app.services.operational_logging import (
     OperationalEventName,
     OperationalLogEvent,
     OperationalOutcome,

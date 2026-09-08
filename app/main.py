@@ -676,9 +676,18 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to set threadpool limit", exc_info=True)
     _startup_preflight()
     await _load_deferred_api_routers(app)
-    if "/api/v1/subscribers/sync" not in {
-        getattr(route, "path", "") for route in app.routes
-    }:
+    from app.services.web_worker_readiness import (
+        WorkerStartupObservation,
+        evaluate_worker_readiness,
+    )
+
+    readiness = evaluate_worker_readiness(
+        WorkerStartupObservation(
+            route_paths=tuple(getattr(route, "path", "") for route in app.routes),
+            preflight_complete=True,
+        )
+    )
+    if not readiness.ready:
         raise RuntimeError("subscriber sync route was not registered during startup")
     from app.websocket.manager import get_connection_manager
 

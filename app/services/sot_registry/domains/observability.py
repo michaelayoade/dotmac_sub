@@ -214,7 +214,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="observability.structured_operational_logs",
-            module="app.services.observability",
+            module="app.services.operational_logging",
             owns=("structured operational task-summary observations",),
             depends_on=("observability.recording",),
             contract=ServiceContract(

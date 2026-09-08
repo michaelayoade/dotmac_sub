@@ -54,5 +54,5 @@ def test_admin_review_route_has_dedicated_permission() -> None:
     routes = _source("app/web/admin/sales.py")
     review = routes[routes.index('"/quotes/{quote_id}/payment-review"') :]
     review = review[: review.index('@router.get(\n    "/quotes/{quote_id}/edit"')]
-    assert 'require_permission("crm:quote:review")' in review
+    assert 'require_permission("sales:quote:review")' in review
     assert "review_quote_payment(" in review

@@ -321,7 +321,7 @@ DEFAULT_PERMISSIONS = [
     ("crm:quote:read", "View quotes"),
     ("crm:quote:write", "Manage quotes"),
     ("crm:quote:send", "Send quotes to customers"),
-    ("crm:quote:review", "Approve or reject quotes for customer payment"),
+    ("sales:quote:review", "Approve or reject quotes for customer payment"),
     ("crm:sales_order:read", "View sales orders"),
     ("crm:sales_order:write", "Manage sales orders"),
     # Deliberately NOT covered by :write. Deciding not to pursue an order is a

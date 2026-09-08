@@ -81,7 +81,7 @@ def _command(
     return quote_payment_review.ReviewQuotePaymentCommand(
         context=CommandContext.system(
             actor=str(reviewer.id),
-            scope="crm:quote:review",
+            scope="sales:quote:review",
             reason="Review customer Quote for payment",
             command_id=resolved_id,
             idempotency_key=f"quote-payment-review:{quote.id}:{resolved_id}",

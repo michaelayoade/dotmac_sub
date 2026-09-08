@@ -1,7 +1,7 @@
 """Typed Inbox SLA policy selection, calendar arithmetic, and evaluation.
 
-The service is deliberately flush-only when called from Inbox owners.  The
-caller owns the transaction; scheduled evaluation locks one clock at a time.
+Public configuration and sweep commands own their transactions. Lifecycle
+participants called from Inbox owners only flush within the caller's command.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import Final
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.inbox_sla import (
@@ -26,7 +27,19 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
 )
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+
+_POLICY_COMMAND = OwnerCommandDefinition(
+    owner="communications.inbox_sla",
+    concern="Inbox SLA policy selection and clock state",
+    name="execute_inbox_sla_policy_command",
+)
 
 STATUS_RUNNING: Final = "running"
 STATUS_WARNING: Final = "warning"
@@ -116,7 +129,7 @@ def validate_policy(command: SlaPolicyInput) -> None:
             )
 
 
-def create_policy(db: Session, command: SlaPolicyInput) -> InboxSlaPolicy:
+def _create_policy(db: Session, command: SlaPolicyInput) -> InboxSlaPolicy:
     validate_policy(command)
     if (
         db.query(InboxSlaPolicy)
@@ -279,6 +292,20 @@ def _record(
         )
     )
     db.flush()
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    emit_event(
+        db,
+        EventType.inbox_sla_clock_changed,
+        {
+            "clock_id": str(clock.id),
+            "conversation_id": str(clock.conversation_id),
+            "event_key": event_key,
+            "transition": event_type,
+            "occurred_at": occurred_at.isoformat(),
+        },
+    )
 
 
 def ensure_clock(
@@ -433,20 +460,26 @@ def evaluate_clock(
         clock.status = STATUS_PAUSED
         db.flush()
         return clock.status
+
+    def utc(value: datetime) -> datetime:
+        return (
+            value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        )
+
     overdue = (
         clock.first_response_at is None
-        and current >= clock.first_response_due_at
+        and current >= utc(clock.first_response_due_at)
         or clock.next_response_due_at is not None
         and clock.next_response_at is None
-        and current >= clock.next_response_due_at
-        or current >= clock.resolution_due_at
+        and current >= utc(clock.next_response_due_at)
+        or current >= utc(clock.resolution_due_at)
     )
     rule = db.get(InboxSlaRule, clock.rule_id)
     warning = bool(
         rule
         and clock.first_response_at is None
         and current
-        >= clock.first_response_due_at - timedelta(minutes=rule.warning_minutes)
+        >= utc(clock.first_response_due_at) - timedelta(minutes=rule.warning_minutes)
     )
     if overdue:
         if clock.status != STATUS_BREACHED:
@@ -465,3 +498,240 @@ def evaluate_clock(
         clock.status = STATUS_RUNNING
     db.flush()
     return clock.status
+
+
+@dataclass(frozen=True, slots=True)
+class SlaRuleView:
+    id: UUID
+    service_team_id: UUID | None
+    channel_type: str | None
+    priority: int | None
+    first_response_minutes: int
+    next_response_minutes: int | None
+    resolution_minutes: int
+    warning_minutes: int
+    is_active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SlaPolicyView:
+    id: UUID
+    name: str
+    description: str | None
+    timezone: str
+    working_days: tuple[int, ...]
+    workday_start: time
+    workday_end: time
+    holidays: tuple[date, ...]
+    is_active: bool
+    is_default: bool
+    rules: tuple[SlaRuleView, ...]
+
+
+def _policy_view(policy: InboxSlaPolicy) -> SlaPolicyView:
+    return SlaPolicyView(
+        id=policy.id,
+        name=policy.name,
+        description=policy.description,
+        timezone=policy.timezone,
+        working_days=tuple(policy.working_days),
+        workday_start=policy.workday_start,
+        workday_end=policy.workday_end,
+        holidays=tuple(date.fromisoformat(value) for value in policy.holidays or ()),
+        is_active=policy.is_active,
+        is_default=policy.is_default,
+        rules=tuple(
+            SlaRuleView(
+                id=rule.id,
+                service_team_id=rule.service_team_id,
+                channel_type=rule.channel_type,
+                priority=rule.priority,
+                first_response_minutes=rule.first_response_minutes,
+                next_response_minutes=rule.next_response_minutes,
+                resolution_minutes=rule.resolution_minutes,
+                warning_minutes=rule.warning_minutes,
+                is_active=rule.is_active,
+            )
+            for rule in policy.rules
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SlaPolicyQuery:
+    policy_id: UUID | None = None
+
+
+def query_policies(db: Session, query: SlaPolicyQuery) -> tuple[SlaPolicyView, ...]:
+    policies = db.query(InboxSlaPolicy).order_by(InboxSlaPolicy.name)
+    if query.policy_id is not None:
+        policies = policies.filter(InboxSlaPolicy.id == query.policy_id)
+    result = tuple(_policy_view(policy) for policy in policies.all())
+    if query.policy_id is not None and not result:
+        raise _error("not_found", "Inbox SLA policy not found")
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class SaveSlaPolicyCommand:
+    context: CommandContext
+    actor: AuditActor
+    policy: SlaPolicyInput
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateSlaPolicyCommand:
+    context: CommandContext
+    actor: AuditActor
+    policy_id: UUID
+    active: bool
+
+
+def _lock_policy_configuration(db: Session) -> None:
+    # Serializes default selection even when there are no policy rows yet.
+    # SQLite is only the non-authoritative unit lane.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(select(func.pg_advisory_xact_lock(783241906)))
+
+
+def _record_policy_change(
+    db: Session,
+    *,
+    policy: InboxSlaPolicy,
+    context: CommandContext,
+    actor: AuditActor,
+) -> None:
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    stage_audit_event(
+        db,
+        action="inbox.sla.policy_changed",
+        entity_type="inbox_sla_policy",
+        entity_id=str(policy.id),
+        actor=actor,
+        request_id=str(context.command_id),
+        metadata={"is_active": policy.is_active, "is_default": policy.is_default},
+    )
+    emit_event(
+        db,
+        EventType.inbox_sla_policy_changed,
+        {
+            "policy_id": str(policy.id),
+            "is_active": policy.is_active,
+            "is_default": policy.is_default,
+            "command_id": str(context.command_id),
+        },
+        actor=context.actor,
+    )
+
+
+def _authorize_policy_change(context: CommandContext, actor: AuditActor) -> None:
+    if context.scope != "support:ticket:update" or context.actor != actor.actor_id:
+        raise _error(
+            "forbidden", "SLA policy changes require an authorized administrator"
+        )
+
+
+def save_policy(db: Session, command: SaveSlaPolicyCommand) -> SlaPolicyView:
+    def operation() -> SlaPolicyView:
+        _authorize_policy_change(command.context, command.actor)
+        _lock_policy_configuration(db)
+        policy = _create_policy(db, command=command.policy)
+        _record_policy_change(
+            db, policy=policy, context=command.context, actor=command.actor
+        )
+        return _policy_view(policy)
+
+    return execute_owner_command(
+        db,
+        definition=_POLICY_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def activate_policy(db: Session, command: ActivateSlaPolicyCommand) -> SlaPolicyView:
+    def operation() -> SlaPolicyView:
+        _authorize_policy_change(command.context, command.actor)
+        _lock_policy_configuration(db)
+        policy = (
+            db.query(InboxSlaPolicy)
+            .filter(
+                InboxSlaPolicy.id == command.policy_id,
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if policy is None:
+            raise _error("not_found", "Inbox SLA policy not found")
+        if policy.is_active != command.active:
+            policy.is_active = command.active
+            if not command.active:
+                policy.is_default = False
+            db.flush()
+            _record_policy_change(
+                db, policy=policy, context=command.context, actor=command.actor
+            )
+        return _policy_view(policy)
+
+    return execute_owner_command(
+        db,
+        definition=_POLICY_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluateSlaCommand:
+    context: CommandContext
+    now: datetime
+    limit: int = 500
+
+
+@dataclass(frozen=True, slots=True)
+class SlaEvaluationOutcome:
+    checked: int
+    warning: int
+    breached: int
+    completed: int
+    paused: int
+
+
+def evaluate_due_clocks(
+    db: Session, command: EvaluateSlaCommand
+) -> SlaEvaluationOutcome:
+    def operation() -> SlaEvaluationOutcome:
+        clocks = (
+            db.query(InboxSlaClock)
+            .filter(
+                InboxSlaClock.status.in_(
+                    (STATUS_RUNNING, STATUS_WARNING, STATUS_PAUSED)
+                )
+            )
+            .order_by(
+                InboxSlaClock.last_evaluated_at.asc().nullsfirst(), InboxSlaClock.id
+            )
+            .with_for_update(skip_locked=True)
+            .limit(max(1, min(command.limit, 5000)))
+            .all()
+        )
+        # Include pre-deadline clocks: their warning window may already be open.
+        statuses = tuple(
+            evaluate_clock(db, clock_id=clock.id, now=command.now) for clock in clocks
+        )
+        return SlaEvaluationOutcome(
+            checked=len(statuses),
+            warning=statuses.count(STATUS_WARNING),
+            breached=statuses.count(STATUS_BREACHED),
+            completed=statuses.count(STATUS_COMPLETED),
+            paused=statuses.count(STATUS_PAUSED),
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_POLICY_COMMAND,
+        context=command.context,
+        operation=operation,
+    )

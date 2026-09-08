@@ -19,7 +19,7 @@ down_revision: str | None = "584_customer_backed_quote_delivery"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 
-PERMISSION_KEY = "crm:quote:review"
+PERMISSION_KEY = "sales:quote:review"
 
 
 def upgrade() -> None:

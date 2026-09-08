@@ -141,3 +141,10 @@ The fleet-wide `network.device_state` owner now exposes only
 `working`/`not_working`. Collector freshness and retry evidence remain internal
 verification inputs; templates consume the owner result and reason without
 creating another state.
+
+
+Structured task summaries belong to `observability.structured_operational_logs`
+in `app.services.operational_logging`. Its closed event/outcome types and bounded
+counters are separate from the existing persistence and heartbeat recording
+owner. All task-summary callers use this module directly; no parallel helper
+remains in `app.services.observability`.

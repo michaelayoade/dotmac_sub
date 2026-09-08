@@ -1,6 +1,6 @@
 import logging
 
-from app.services.observability import (
+from app.services.operational_logging import (
     OperationalEventName,
     OperationalLogEvent,
     OperationalOutcome,

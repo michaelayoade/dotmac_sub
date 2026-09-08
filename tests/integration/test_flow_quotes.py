@@ -120,7 +120,7 @@ def test_quote_lifecycle_native(db_session):
     review_command = quote_payment_review.ReviewQuotePaymentCommand(
         context=CommandContext.system(
             actor=str(reviewer.id),
-            scope="crm:quote:review",
+            scope="sales:quote:review",
             reason="Integration Quote payment review",
             command_id=review_id,
             idempotency_key=f"quote-payment-review:{quote.id}:{review_id}",

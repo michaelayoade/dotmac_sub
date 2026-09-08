@@ -43,12 +43,12 @@ from app.services.ephemeral_communication_actions import (
 )
 from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.nextcloud_talk_staff import deliver_due_staff_talk_notifications
-from app.services.observability import (
+from app.services.observability import record_notification_queue_result
+from app.services.operational_logging import (
     OperationalEventName,
     OperationalLogEvent,
     OperationalOutcome,
     log_operational_event,
-    record_notification_queue_result,
 )
 from app.services.owner_commands import CommandContext
 from app.services.settings_spec import resolve_value
@@ -671,21 +671,25 @@ def _deliver_notification_queue_stats(
 
         queue_preflight = (
             team_inbox_queue_notifications.preflight_queue_notification_delivery(
-                db, notification=notification
+                db, notification=notification, record_suppression=False
             )
         )
         if queue_preflight.applies and not queue_preflight.allowed:
-            notification.status = NotificationStatus.canceled
-            notification.last_error = (
-                f"queue_notification_suppressed:{queue_preflight.reason}"
+            settlement_command = (
+                team_inbox_queue_notifications.SettleRejectedQueueDeliveryCommand(
+                    context=CommandContext.system(
+                        actor="notification-queue-worker",
+                        scope="team-inbox:queue-delivery",
+                        reason="Revalidate rejected queue delivery before suppression",
+                    ),
+                    notification_id=candidate_id,
+                )
             )
-            notification.metadata_ = {
-                **dict(notification.metadata_ or {}),
-                "queue_suppression_reason": queue_preflight.reason,
-            }
-            suppressed += 1
-            record_delivery_outcome(db, notification)
-            db.commit()
+            db_session_adapter.release_read_transaction(db)
+            settlement = team_inbox_queue_notifications.settle_rejected_queue_delivery(
+                db, command=settlement_command
+            )
+            suppressed += int(settlement.suppressed)
             continue
 
         subject = notification.subject or "Notification"
