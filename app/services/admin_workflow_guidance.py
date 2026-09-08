@@ -362,8 +362,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use All only when historical conversations should be included; use Active or a specific status for operational work.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and long-term inactive-session expiry.",
+        "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
+            "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
+            "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",
             "Awaiting-customer AI sessions remain resumable. Their long-term expiry ends AI ownership without assigning or queueing a human.",
             "In Manager AI, select a Conversation or use Period Review with a period and any channel or status filters, then submit your question with Ask AI.",
             "Read the response under Answer; emphasis and lists are formatted, while HTML-like text remains plain text. Verify AI advice against the source conversations before acting.",
