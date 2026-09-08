@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -34,9 +35,7 @@ from app.schemas.team_inbox import (
     InboxConversationTimelineRead,
 )
 from app.services import (
-    support as support_service,
-)
-from app.services import (
+    ai_conversation_ownership,
     team_inbox_assignment,
     team_inbox_contact_links,
     team_inbox_filters,
@@ -44,6 +43,9 @@ from app.services import (
     team_inbox_read,
     ticket_validation,
     ticket_work_order_handoff,
+)
+from app.services import (
+    support as support_service,
 )
 from app.services.auth_dependencies import (
     require_permission,
@@ -360,15 +362,21 @@ def escalate_inbox_conversation(
 ):
     actor_id = _actor_id(auth)
     finish_read_transaction(db)
-    result = team_inbox_assignment.escalate_conversation_committed(
-        db,
-        conversation_id=conversation_id,
-        service_team_id=payload.service_team_id,
-        assigned_person_id=payload.assigned_person_id,
-        auto_assign=payload.auto_assign,
-        assigned_by_person_id=actor_id,
-        reason=payload.reason,
-    )
+    try:
+        result = team_inbox_assignment.escalate_conversation_committed(
+            db,
+            conversation_id=conversation_id,
+            service_team_id=payload.service_team_id,
+            assigned_person_id=payload.assigned_person_id,
+            auto_assign=payload.auto_assign,
+            assigned_by_person_id=actor_id,
+            reason=payload.reason,
+        )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
     if result.kind == "conversation_not_found":
         raise HTTPException(status_code=404, detail=result.reason)
     if result.kind == "conversation_resolved":
@@ -398,6 +406,7 @@ def escalate_inbox_conversation(
     dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def list_inbox_conversations(
+    view: Literal["all", "ai_intake", "queue", "history"] = Query(default="all"),
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
@@ -419,6 +428,11 @@ def list_inbox_conversations(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    normalized_view = (
+        view
+        if isinstance(view, str) and view in {"all", "ai_intake", "queue", "history"}
+        else "all"
+    )
     clean_contact_resolution_status = (
         contact_resolution_status.strip()
         if isinstance(contact_resolution_status, str)
@@ -452,6 +466,12 @@ def list_inbox_conversations(
         priority_at_most=clean_priority_at_most,
         muted=clean_muted,
         snoozed=clean_snoozed,
+        ownership_cohort={
+            "all": ai_conversation_ownership.ConversationOwnershipCohort.actionable,
+            "ai_intake": ai_conversation_ownership.ConversationOwnershipCohort.ai_intake,
+            "queue": ai_conversation_ownership.ConversationOwnershipCohort.queue,
+            "history": ai_conversation_ownership.ConversationOwnershipCohort.history,
+        }[normalized_view],
         limit=limit,
         offset=offset,
     )
@@ -493,17 +513,23 @@ def reply_to_inbox_conversation(
     db: Session = Depends(get_db),
 ):
     finish_read_transaction(db)
-    result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
-        db,
-        conversation_id=conversation_id,
-        payload=team_inbox_outbound.InboxReplyPayload(
-            body_html=payload.body_html,
-            body_text=payload.body_text,
-            subject=payload.subject,
-            to_email=payload.to_email,
-            sent_by_person_id=_actor_id(auth),
-        ),
-    )
+    try:
+        result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
+            db,
+            conversation_id=conversation_id,
+            payload=team_inbox_outbound.InboxReplyPayload(
+                body_html=payload.body_html,
+                body_text=payload.body_text,
+                subject=payload.subject,
+                to_email=payload.to_email,
+                sent_by_person_id=_actor_id(auth),
+            ),
+        )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
     if result.kind == "conversation_not_found":
         raise HTTPException(status_code=404, detail=result.reason)
     if result.kind == "invalid_conversation":

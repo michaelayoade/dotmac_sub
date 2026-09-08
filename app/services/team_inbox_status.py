@@ -122,6 +122,19 @@ def _apply_status_transition(
     conversation.status = command.status.value
     db.flush()
     if command.status is InboxConversationStatus.resolved:
+        from app.services import team_inbox_assignment
+
+        team_inbox_assignment.cancel_queued_conversation(
+            db,
+            conversation=conversation,
+            now=effective_at,
+            reason="conversation_resolved",
+        )
+        team_inbox_assignment.schedule_queue_promotion_after_commit(
+            db,
+            reason="conversation_resolved_opened_capacity",
+            service_team_id=conversation.primary_service_team_id,
+        )
 
         def create_csat_request():
             from app.services import support_csat

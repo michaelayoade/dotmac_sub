@@ -15,7 +15,11 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.dispatch import TechnicianProfile
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
 from app.models.field_attachment import FieldAttachment
 from app.models.field_expense import (
     FIELD_EXPENSE_STATUSES,
@@ -47,6 +51,35 @@ from app.services.owner_commands import (
 class ExpenseRequestAccessMode(StrEnum):
     FIELD_ASSIGNMENT = "field_assignment"
     STAFF_WORK_ORDER = "staff_work_order"
+
+
+@dataclass(frozen=True, slots=True)
+class ExpenseWorkOrderEligibility:
+    allowed: bool
+    reason: str | None
+
+
+def evaluate_expense_work_order_eligibility(
+    db: Session,
+    *,
+    work_order: WorkOrder,
+) -> ExpenseWorkOrderEligibility:
+    """Return whether the work order has authoritative assignment evidence."""
+    if work_order.assigned_to_crm_person_id:
+        return ExpenseWorkOrderEligibility(allowed=True, reason=None)
+    assigned_queue_entry = (
+        db.query(WorkOrderAssignmentQueue.id)
+        .filter(WorkOrderAssignmentQueue.work_order_mirror_id == work_order.id)
+        .filter(WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned)
+        .filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
+        .first()
+    )
+    if assigned_queue_entry is not None:
+        return ExpenseWorkOrderEligibility(allowed=True, reason=None)
+    return ExpenseWorkOrderEligibility(
+        allowed=False,
+        reason="Assign a technician first.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +341,12 @@ def submit_field_expense_request_command(
             raise FieldExpenseRequestError(
                 code="operations.expense_requests.work_order_not_found",
                 message="Job not found.",
+            )
+        eligibility = evaluate_expense_work_order_eligibility(db, work_order=row)
+        if not eligibility.allowed:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.work_order_unassigned",
+                message=eligibility.reason or "Assign a technician first.",
             )
         raw_items = [
             {

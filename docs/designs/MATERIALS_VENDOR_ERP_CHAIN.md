@@ -119,3 +119,20 @@ best-effort enqueue whose only trace was a metadata breadcrumb.
   control, validation, section-divider, and footer-action conventions as other
   admin editors. Two-column fields and material lines stack without losing
   context, required-field meaning, or the primary action.
+
+## Requester-owned field history and repair
+
+The field app's material list is requester-owned history, not an assignment or
+global operations queue. `operations.material_dependencies` resolves ownership
+from any exact requester link recorded on the request: technician profile,
+canonical Person Party, or authenticated SystemUser. Reassignment or completion
+of the related work order never removes the request from its requester's list.
+
+Alembic revision `587_field_request_requester_history` is the bounded repair
+for older requests created before the durable SystemUser link was consistently
+recorded. It fills identity only through an exact technician-profile,
+SystemUser, or unique Person Party binding and adds indexes for the three-way
+history lookup. Ambiguous rows remain unchanged and hidden. The migration is
+idempotent, never changes request lifecycle or ERP state, and never replays a
+material request. `operations.material_dependencies` remains the repair owner;
+the migration is its one-time deployment adapter.

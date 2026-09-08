@@ -3,10 +3,10 @@
 ## Decision
 
 Authenticated staff who can open an exact admin work-order detail page may
-create an expense claim from that page. Technician assignment is not the access
-rule for this web surface. Global dispatch-read access, or a matching reseller
-or region scoped grant, permits viewing the page; creating a claim separately
-requires the equivalent scoped `operations:dispatch:write` grant. Field/mobile
+create an expense claim from that page after a technician has been assigned.
+Technician assignment is an expense-eligibility requirement, not an identity or
+access rule: global dispatch-read access, or a matching reseller or region
+scoped grant, permits both viewing the page and creating a claim. Field/mobile
 expense entry retains its assigned-technician scope.
 
 Every claim created here is bound to the work order in the route. The browser
@@ -24,9 +24,11 @@ requester identifiers and email are not form inputs.
   are distinct and both disable submission.
 - `operations.expense_requests` owns validation and the atomic submitted claim,
   line items, requester evidence, idempotency fingerprint, receipt metadata,
-  work-order activity mark, and durable ERP delivery staging.
-- The admin route parses HTTP form and file values, enforces CSRF and exact
-  work-order write-tier RBAC scope, releases its read transaction, and invokes
+  work-order assignment eligibility, activity mark, and durable ERP delivery
+  staging. It rejects submission when the current work order has no assigned
+  technician.
+- The admin route parses HTTP form and file values, enforces CSRF and the exact
+  work-order read RBAC scope, releases its read transaction, and invokes
   the typed owner command. It does not commit or call ERP.
 - ERP remains authoritative for approval routing, rejection, reimbursement
   account details, and payment. The form deliberately has no approver, bank,
@@ -44,6 +46,12 @@ identity. Local submission, durable delivery pending, delivered but awaiting
 ERP acceptance, ERP accepted, rejected, failed/dead, approved, and paid facts
 remain distinct. `sent` outbox evidence is not presented as ERP acceptance;
 only an accepted event or ERP claim reference qualifies.
+
+The field app's expense list follows the same requester-owned rule. Ownership
+is resolved from any exact technician-profile, canonical Person Party, or
+authenticated SystemUser link on the claim. Work-order completion or
+reassignment does not remove the claim from the requester's history, and a
+claim created by another staff identity is not exposed.
 
 ## Schema change
 
@@ -64,6 +72,14 @@ Text values and the stable claim client reference survive validation errors.
 Browsers cannot repopulate file inputs, so a selected receipt is cleared and an
 explicit field error asks the user to reselect it. ERP category or sync
 unavailability never fabricates a usable fallback.
+
+Alembic revision `587_field_request_requester_history` repairs older claims
+whose durable SystemUser link can be proven from their technician profile,
+legacy SystemUser-as-person identifier, or unique Person Party binding. It also
+adds requester lookup indexes. Ambiguous claims remain unchanged and hidden;
+the repair never changes approval, delivery, or payment state and never queues
+an ERP claim. `operations.expense_requests` owns this bounded, idempotent
+repair, with Alembic acting only as its deployment adapter.
 
 ## Non-goals
 

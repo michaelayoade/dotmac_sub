@@ -27,8 +27,9 @@ class AdminWorkflowGuidance:
 
     def matches_path(self, path: str) -> bool:
         return any(
-            path == prefix or path.startswith(f"{prefix}/")
+            path == normalized_prefix or path.startswith(f"{normalized_prefix}/")
             for prefix in self.route_prefixes
+            if (normalized_prefix := prefix.rstrip("/"))
         )
 
 
@@ -100,9 +101,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/customers/",),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
+        "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
+        "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
         "Open the specific record before performing a state-changing action.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
+            "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
         ),
     ),
@@ -194,7 +199,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create and track your own expense claim against the exact work order.",
         ("/admin/dispatch/work-orders",),
         "Open the exact work order and review its customer and operational context.",
-        "Choose New Expense Claim when you have dispatch write access and ERP categories are available.",
+        (
+            "Choose New Expense Claim from any work order you can open; the form "
+            "becomes available after a technician is assigned and ERP categories "
+            "are available."
+        ),
         "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting.",
         "Return to the work order to track delivery and ERP acceptance separately.",
         notes=(
@@ -223,6 +232,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "For an older unscoped project, review and save its infrastructure and vendor-enabled template. Do not guess the target from the project name.",
             "Assigned or published work cannot be retargeted through ordinary project edits. A draft vendor work record cannot lose its last customer, infrastructure, or buildout reference.",
             "Selecting infrastructure does not assign a vendor or approve a quote or payment.",
+        ),
+    ),
+    _guide(
+        "sales-quotes",
+        "Sales",
+        "Create and manage sales Quotes",
+        "Sales and account managers",
+        "Prepare a pricing proposal for a genuine Lead or an existing Customer.",
+        ("/admin/sales/quotes",),
+        "Open New Quote and search at least two characters for exactly one Lead or Customer.",
+        "Choose Lead only when the proposal belongs to an open sales opportunity; choose Customer when the account already exists.",
+        "Confirm the selected result, Project Type, line items, discount, tax, expiry, and optional install location before creating the Quote.",
+        "For an installation estimate awaiting staff review, confirm the customer, pinned installation address, feasibility result, price, deposit, and expiry.",
+        "Choose Approve for payment when the estimate is correct, or reject it with a clear reason. Confirm the page shows Approved and the customer notification has been queued.",
+        "Send the Quote for review, then use acceptance only after the customer agrees to the commercial terms.",
+        notes=(
+            "A Customer-backed Quote uses the selected Subscriber account directly and does not create a Lead or require a Party binding.",
+            "Accepting a Lead-backed Quote converts its reviewed identity and marks that Lead Won; accepting a Customer-backed Quote reuses the existing active Subscriber. Both continue through the same sales-order and implementation workflow.",
+            "Typing text alone does not select a recipient. Choose an exact typeahead result; changing the text clears the previous selection.",
+            "Customers can see an installation estimate while it is under review, but payment remains unavailable.",
+            "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
         ),
     ),
     _guide(
@@ -338,6 +368,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "ncc-complaints-report",
+        "Reports",
+        "Export NCC complaints",
+        "Customer experience managers, compliance staff",
+        "Prepare the weekly NCC complaints CSV for Box submission.",
+        ("/admin/reports/ncc-complaints", "/admin/reports/ncc-weekly-runs"),
+        "Use the default completed Monday-Sunday reporting week unless NCC has explicitly named another date range.",
+        "Review Not yet filable before exporting; every row must be filing-ready before submission.",
+        "Download the CSV and confirm the filename follows the required week format, such as 36_2026_COMPLAINTS_DOTMAC.csv.",
+        "Upload exactly one CSV file to the provider folder in Box.",
+        notes=(
+            "Do not submit the validation workbook or any file with multiple sheets.",
+            "Scheduled NCC delivery preserves the same single CSV artifact for the completed reporting week.",
+        ),
+    ),
+    _guide(
         "support-csat-report",
         "Support",
         "Review support CSAT",
@@ -358,13 +404,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Support, operations",
         "Review and filter customer conversations without losing route, channel, or assignment context.",
         ("/admin/inbox",),
-        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the queue.",
-        "Use All only when historical conversations should be included; use Active or a specific status for operational work.",
+        "Use All for active human-actionable work, AI Intake for conversations still owned by AI, Queue for durable handoffs waiting for capacity, and History for resolved or older conversations.",
+        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the selected ownership view.",
+        "While AI is handling a conversation or waiting for the customer, review it read-only; normal reply, note, assignment, status, ticket, macro, and bulk actions remain unavailable.",
+        "When authorized human intervention is intentional, choose Take Over Conversation and confirm it before replying; ordinary replies do not take ownership.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and long-term inactive-session expiry.",
+        "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
+            "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
+            "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",
+            "AI-owned conversations have a separate AI Intake count and do not contribute to normal human workload counts until handoff, queueing, or assignment.",
+            "Take Over stops the active AI session and acquires the conversation through the existing Team Inbox assignment rules; if it fails, refresh and leave AI ownership unchanged.",
             "Awaiting-customer AI sessions remain resumable. Their long-term expiry ends AI ownership without assigning or queueing a human.",
+            "SLA policies define response and resolution targets, working hours, and warning time. Use a unique policy name and check the saved values before relying on them.",
+            "Turning an SLA policy off prevents it being selected for new conversations; existing conversation deadlines continue. Scheduled checks record each warning once, before the response deadline.",
             "In Manager AI, select a Conversation or use Period Review with a period and any channel or status filters, then submit your question with Ask AI.",
             "Read the response under Answer; emphasis and lists are formatted, while HTML-like text remains plain text. Verify AI advice against the source conversations before acting.",
         ),

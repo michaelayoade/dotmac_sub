@@ -297,6 +297,7 @@ def enqueue_purchase_order(
         entity_id=installation_project.id,
         idempotency_key=purchase_order_idempotency_key(installation_project),
         payload=payload,
+        isolate=False,
     )
 
 

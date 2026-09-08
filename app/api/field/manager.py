@@ -16,6 +16,8 @@ from app.schemas.field import (
     FieldEquipmentReturnRequest,
     FieldExpenseApprovalRead,
     FieldExpenseRequestRead,
+    FieldLiveMapFeed,
+    FieldLiveMapFeedQuery,
     FieldManagerExpenseRejectRequest,
     FieldManagerJob,
     FieldManagerJobAssignRequest,
@@ -23,6 +25,7 @@ from app.schemas.field import (
     FieldManagerMaterialRejectRequest,
     FieldManagerMeResponse,
     FieldManagerSummary,
+    FieldManagerTechniciansQuery,
     FieldManagerTechniciansResponse,
     FieldMaterialRequestRead,
     TechnicianSatisfactionResponse,
@@ -32,6 +35,7 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceRead,
     VendorPurchaseInvoiceReview,
 )
+from app.services import field_maps as field_maps_service
 from app.services import technician_satisfaction
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
@@ -70,6 +74,7 @@ _ops_read = require_any_permission(
     "operations:work_order:read",
     "operations:technician:read",
 )
+_team_map_read = require_permission("operations:dispatch:read")
 _dispatch_write = require_any_permission(
     "operations:work_order:update",
     "operations:work_order:dispatch",
@@ -172,18 +177,31 @@ def field_manager_technicians(
     limit: int = Query(default=500, ge=1, le=500),
     auth: dict = Depends(_ops_read),
     db: Session = Depends(get_db),
-):
-    items = field_manager.list_technicians(
-        db, stale_after_seconds=stale_after_seconds, limit=limit
+) -> FieldManagerTechniciansResponse:
+    return field_manager.list_technicians(
+        db,
+        FieldManagerTechniciansQuery(
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        ),
     )
-    return {
-        "items": items,
-        "count": len(items),
-        "live_count": sum(1 for item in items if item["is_live"]),
-        "sharing_count": sum(1 for item in items if item["location_sharing_enabled"]),
-        "limit": limit,
-        "offset": 0,
-    }
+
+
+@router.get("/team-map", response_model=FieldLiveMapFeed)
+def field_manager_team_map(
+    stale_after_seconds: int = Query(default=120, ge=15, le=3600),
+    limit: int = Query(default=500, ge=1, le=2000),
+    auth: dict = Depends(_team_map_read),
+    db: Session = Depends(get_db),
+) -> FieldLiveMapFeed:
+    """Return sharing-authorized positions through the canonical map owner."""
+    return field_maps_service.list_technician_positions(
+        db=db,
+        query=FieldLiveMapFeedQuery(
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        ),
+    )
 
 
 @router.get("/technicians/satisfaction", response_model=TechnicianSatisfactionResponse)

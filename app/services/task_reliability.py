@@ -91,6 +91,15 @@ REDRIVE = FailureVisibility.ADMIN_REDRIVE
 
 
 TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
+    "app.tasks.inbox_sla.evaluate_inbox_sla": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "Periodic bounded evaluation locks each clock; persisted warning and "
+        "breach evidence prevents duplicate transitions. Task failures are logged "
+        "and the next scheduled sweep re-evaluates eligible clocks.",
+    ),
     "app.tasks.field_location_retention.prune_field_location_history": _c(
         "field_operations",
         AUTORETRY,

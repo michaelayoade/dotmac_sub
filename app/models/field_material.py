@@ -199,6 +199,14 @@ class FieldMaterialRequest(Base):
         Index("ix_field_material_requests_status", "status"),
         Index("ix_field_material_requests_requested_by", "requested_by_technician_id"),
         Index(
+            "ix_field_material_requests_requested_by_person",
+            "requested_by_person_id",
+        ),
+        Index(
+            "ix_field_material_requests_requested_by_system_user",
+            "requested_by_system_user_id",
+        ),
+        Index(
             "ix_field_material_requests_support_reference",
             "support_reference",
         ),

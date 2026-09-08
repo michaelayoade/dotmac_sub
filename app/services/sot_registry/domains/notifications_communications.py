@@ -27,6 +27,7 @@ def _team_inbox_contract(
     concerns: tuple[tuple[str, OwnerRole], ...],
     inputs: tuple[AuthorityInput, ...],
     transaction_mode: TransactionMode,
+    transaction_contract: TransactionContract | None = None,
     event_types: tuple[str, ...] = (),
     projections: tuple[str, ...] = (),
     domain_error_codes: tuple[str, ...] = (),
@@ -63,7 +64,8 @@ def _team_inbox_contract(
             for name, role in concerns
         ),
         authoritative_inputs=inputs,
-        transaction=TransactionContract(
+        transaction=transaction_contract
+        or TransactionContract(
             mode=transaction_mode,
             boundary=(
                 "Public commands enter execute_owner_command once on a transaction-free "
@@ -204,7 +206,7 @@ DOMAIN = DomainSOT(
                 "party.registry",
             ),
             notes=(
-                "Owns the SEQUENCE every emailed document repeats — arbitrate "
+                "Owns the SEQUENCE every emailed document repeats â€” arbitrate "
                 "the idempotency key, render branded bodies, submit one "
                 "communication intent, derive queued-or-suppressed, stage "
                 "audit, emit the domain event. It deliberately owns no "
@@ -241,7 +243,7 @@ DOMAIN = DomainSOT(
                         owner="party.registry",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "party.resolve_email_recipient — active email contact "
+                            "party.resolve_email_recipient â€” active email contact "
                             "point, primary then oldest then id"
                         ),
                     ),
@@ -269,7 +271,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "the document type's own delivery table, read by the "
-                            "caller and passed in — this owner never reads "
+                            "caller and passed in â€” this owner never reads "
                             "storage it does not own"
                         ),
                     ),
@@ -280,7 +282,7 @@ DOMAIN = DomainSOT(
                         "Runs inside the calling owner's command transaction. "
                         "Submits the intent, invokes the caller's record "
                         "callback, stages audit and emits the event, then "
-                        "flushes. Never commits or rolls back — the document "
+                        "flushes. Never commits or rolls back â€” the document "
                         "owner's command boundary does."
                     ),
                     locking=(
@@ -323,7 +325,7 @@ DOMAIN = DomainSOT(
                     verification=(
                         "sales.quote_delivery was migrated onto this owner with "
                         "its existing behaviour tests unchanged, including "
-                        "replay, suppression and audit assertions — the "
+                        "replay, suppression and audit assertions â€” the "
                         "abstraction was proved against a real path rather than "
                         "one invented to fit it."
                     ),
@@ -344,8 +346,8 @@ DOMAIN = DomainSOT(
                     delivery_owner="events.dispatcher",
                     compatibility=(
                         "The envelope is document-kind tagged rather than "
-                        "quote-specific — document_kind, entity_id, delivery_id, "
-                        "communication_intent_id, artifact_id, queued — so a new "
+                        "quote-specific â€” document_kind, entity_id, delivery_id, "
+                        "communication_intent_id, artifact_id, queued â€” so a new "
                         "document type adds an event type without changing the "
                         "shape consumers already parse."
                     ),
@@ -382,7 +384,7 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "The scheduler polls only. This owner decides Tuesday/local-time "
-                "eligibility, stores the exact XLSX, arbitrates one local-date "
+                "eligibility, stores the exact CSV, arbitrates one local-date "
                 "occurrence, and stages one durable attachment delivery intent."
             ),
             contract=ServiceContract(
@@ -2575,6 +2577,9 @@ DOMAIN = DomainSOT(
                 "routing assignment and escalation transitions",
                 "immutable routing assignment and escalation evidence",
                 "durable FIFO queue admission and promotion",
+                "strict per-team FIFO head serialization",
+                "current customer-visible queue position projection",
+                "global per-agent active assignment capacity enforcement",
                 "durable per-team round-robin cursor",
                 "customer-visible FIFO queue notification evidence",
                 "current agent presence state and freshness",
@@ -2588,6 +2593,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "operations.sla_escalation",
                 "auth.permission_gate",
+                "control.settings_spec",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_routing",
@@ -2604,6 +2610,18 @@ DOMAIN = DomainSOT(
                     (
                         "durable FIFO queue admission and promotion",
                         OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "strict per-team FIFO head serialization",
+                        OwnerRole.POLICY,
+                    ),
+                    (
+                        "current customer-visible queue position projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
+                        "global per-agent active assignment capacity enforcement",
+                        OwnerRole.POLICY,
                     ),
                     (
                         "durable per-team round-robin cursor",
@@ -2649,6 +2667,15 @@ DOMAIN = DomainSOT(
                         source="Approved intent, category, confidence, department, and fallback policy.",
                     ),
                     AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Active-session ownership plus typed AI-handoff provenance; "
+                            "ordinary and generic assignment paths fail closed."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="successful staff session issuance",
                         owner="app_sessions.auth",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -2667,6 +2694,15 @@ DOMAIN = DomainSOT(
                             "subscriber and reseller principals are excluded."
                         ),
                     ),
+                    AuthorityInput(
+                        name="agent capacity configuration",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Comms default active-conversation capacity and the "
+                            "existing per-agent presence override."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=(
@@ -2674,27 +2710,36 @@ DOMAIN = DomainSOT(
                     "team_inbox.escalated.v1",
                     "team_inbox.queue_promoted.v1",
                 ),
-                projections=("FIFO queue position and notification due state",),
+                projections=(
+                    "team admission sequence, current visible FIFO position, "
+                    "agent capacity and notification due state",
+                ),
                 test_refs=(
                     "tests/test_admin_inbox_slice4_workflows.py",
                     "tests/test_auth_flow.py",
                     "tests/test_team_inbox_assignment.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
+                    "tests/integration/test_team_inbox_queue_concurrency.py",
                 ),
             ),
         ),
         SOTService(
             name="communications.team_inbox_queue_notifications",
             module="app.services.team_inbox_queue_notifications",
-            owns=("queue notification delivery ledger writes",),
+            owns=(
+                "queue notification delivery ledger writes",
+                "queue notification lifecycle deduplication and suppression",
+                "queue notification provider-dispatch validity decision",
+            ),
             depends_on=(
                 "communications.team_inbox_routing",
                 "communications.team_inbox_outbound_intents",
             ),
             notes=(
-                "Delivery ledger only. Queue membership, order, position and "
-                "promotion remain owned by communications.team_inbox_routing."
+                "Notification lifecycle, dedupe and dispatch preflight only. "
+                "Queue membership, order, live position, capacity and promotion "
+                "remain owned by communications.team_inbox_routing."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_queue_notifications",
@@ -2703,13 +2748,24 @@ DOMAIN = DomainSOT(
                         "queue notification delivery ledger writes",
                         OwnerRole.COMMAND_WRITER,
                     ),
+                    (
+                        "queue notification lifecycle deduplication and suppression",
+                        OwnerRole.POLICY,
+                    ),
+                    (
+                        "queue notification provider-dispatch validity decision",
+                        OwnerRole.POLICY,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
                         name="FIFO queue entry state",
                         owner="communications.team_inbox_routing",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="InboxConversationQueueEntry lifecycle, team, position and status.",
+                        source=(
+                            "InboxConversationQueueEntry admission generation, team, "
+                            "admission sequence, live position and status."
+                        ),
                     ),
                     AuthorityInput(
                         name="customer outbound delivery result",
@@ -2720,7 +2776,10 @@ DOMAIN = DomainSOT(
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=("team_inbox.queue_notification.changed.v1",),
-                projections=("queue notification next_due_at and delivery status",),
+                projections=(
+                    "queue notification next_due_at, durable notified position, "
+                    "suppression reason and delivery status",
+                ),
                 test_refs=("tests/test_team_inbox_queue_notifications.py",),
             ),
         ),
@@ -2735,6 +2794,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "communications.team_inbox_routing",
                 "communications.team_inbox_commands",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_automation",
@@ -2746,6 +2806,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Active AI sessions suppress generic automation actions.",
+                    ),
                     AuthorityInput(
                         name="conversation trigger facts",
                         owner="communications.team_inbox_threads",
@@ -3021,6 +3087,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_reply_window",
                 "communications.intents",
                 "communications.channel_policy",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_outbound_intents",
@@ -3035,6 +3102,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "The referenced session must remain active and authoritative "
+                            "immediately before provider delivery."
+                        ),
+                    ),
                     AuthorityInput(
                         name="conversation reply target",
                         owner="communications.team_inbox_threads",
@@ -3057,6 +3133,15 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Provider-neutral channel and sender eligibility.",
                     ),
+                    AuthorityInput(
+                        name="accepted outbound provider message observation",
+                        owner="external:communications_provider",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "Accepted provider message identity and bounded reusable "
+                            "attachment receipt returned by the account-scoped transport."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=("team_inbox.outbound_intent_recorded.v1",),
@@ -3069,7 +3154,11 @@ DOMAIN = DomainSOT(
                 "stays on notifications as the durable recovery sweep; each worker locks "
                 "and claims the exact eligible row before provider delivery. Email "
                 "intents persist the thread-owner-derived Message-ID, In-Reply-To and "
-                "bounded References values; every retry serializes the same identity."
+                "bounded References values; every retry serializes the same identity. "
+                "Meta direct-message intents retain private Inbox asset IDs; the "
+                "delivery worker materializes each asset, delegates account-scoped "
+                "upload/send transport to meta.social, and checkpoints each accepted "
+                "provider message leg before continuing."
             ),
         ),
         SOTService(
@@ -3110,7 +3199,10 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_commands",
             module="app.services.team_inbox_commands",
-            owns=("operator conversation and collaboration commands",),
+            owns=(
+                "operator conversation and collaboration commands",
+                "queued AI outbound ownership revalidation and suppression",
+            ),
             depends_on=(
                 "auth.permission_gate",
                 "communications.nextcloud_talk_staff",
@@ -3121,6 +3213,8 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_status",
                 "communications.team_inbox_outbound_intents",
                 "communications.team_inbox_operator_state",
+                "communications.notification_service",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_commands",
@@ -3129,8 +3223,21 @@ DOMAIN = DomainSOT(
                         "operator conversation and collaboration commands",
                         OwnerRole.APPLICATION_COORDINATOR,
                     ),
+                    (
+                        "queued AI outbound ownership revalidation and suppression",
+                        OwnerRole.APPLICATION_COORDINATOR,
+                    ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Authoritative active-session identity and state used for "
+                            "mutation admission and expected-state takeover."
+                        ),
+                    ),
                     AuthorityInput(
                         name="authenticated operator command",
                         owner="auth.permission_gate",
@@ -3166,6 +3273,15 @@ DOMAIN = DomainSOT(
                         source="Stable queued or suppressed intent and message identifiers.",
                     ),
                     AuthorityInput(
+                        name="notification delivery state",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Locked queued, failed, or sending Notification state "
+                            "suppressed before provider contact when AI authority ended."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="operator read state",
                         owner="communications.team_inbox_operator_state",
                         kind=AuthorityKind.DERIVED_PROJECTION,
@@ -3193,6 +3309,9 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_commands.conversation_busy",
+                    "communications.team_inbox_commands.ai_owned",
+                    "communications.team_inbox_commands.takeover_conflict",
+                    "communications.team_inbox_commands.takeover_permission_denied",
                 ),
                 retryable_codes=(
                     "communications.team_inbox_commands.conversation_busy",
@@ -3613,6 +3732,7 @@ DOMAIN = DomainSOT(
                 "communications.conversation_ticket_handoff",
                 "operations.service_team_lifecycle",
                 "auth.staff_provisioning",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_projection",
@@ -3639,6 +3759,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Active-session identity and state define AI Intake, "
+                            "human-actionable, controls, badges, counts, and workload."
+                        ),
+                    ),
                     AuthorityInput(
                         name="conversation records",
                         owner="communications.team_inbox_threads",
@@ -3735,6 +3864,7 @@ DOMAIN = DomainSOT(
                     "tests/test_admin_inbox_workspace_integrity.py",
                     "tests/architecture/test_team_inbox_boundaries.py",
                     "tests/architecture/test_team_inbox_sot_contracts.py",
+                    "tests/architecture/test_team_inbox_ai_ownership_boundary.py",
                 ),
             ),
         ),
@@ -4122,7 +4252,7 @@ DOMAIN = DomainSOT(
                 "Ticket.origin_conversation_id, through the keyword-only "
                 "provenance argument on the Ticket create command. One "
                 "conversation may issue many tickets. Issuance never "
-                "transitions the conversation — opening a ticket and "
+                "transitions the conversation â€” opening a ticket and "
                 "resolving a thread are separate decisions and conversation "
                 "status belongs to communications.team_inbox. Replay is "
                 "keyed on conversation, actor and title rather than the "
@@ -4181,6 +4311,77 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_conversation_ticket_handoff.py",
                     "tests/architecture/test_conversation_ticket_handoff_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.inbox_sla",
+            module="app.services.inbox_sla",
+            owns=(
+                "Inbox SLA policy selection and clock state",
+                "Inbox SLA transition evidence",
+            ),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "operations.sla_escalation",
+                "observability.audit_log",
+                "events.dispatcher",
+            ),
+            notes="Native Inbox SLA state is distinct from retired CRM history; policy configuration is explicit and mapping-safe.",
+            contract=_team_inbox_contract(
+                service_name="communications.inbox_sla",
+                concerns=(
+                    (
+                        "Inbox SLA policy selection and clock state",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    ("Inbox SLA transition evidence", OwnerRole.AUTHORITATIVE_RECORD),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="Inbox conversation facts",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Inbox conversation and message rows",
+                    ),
+                    AuthorityInput(
+                        name="Inbox SLA commands",
+                        owner="communications.inbox_sla",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="validated policy and lifecycle commands",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Public policy and sweep commands enter execute_owner_command once; conversation lifecycle participants only flush in their caller's command.",
+                    locking="Policy commands take one transaction-scoped PostgreSQL advisory lock before policy rows; sweeps lock eligible clocks with SKIP LOCKED in oldest-evaluation order.",
+                    idempotency="Unique policy names reject repeated creates; unchanged activation is a no-op; clock/event-key uniqueness and persisted warning timestamps suppress repeated transition evidence.",
+                    retries="Retry only after rollback. Clock sweeps revisit the least recently evaluated clocks; duplicate policy creation is a domain refusal, never a blind retry.",
+                ),
+                event_types=(
+                    "inbox.sla.policy_changed.v1",
+                    "inbox.sla.clock_changed.v1",
+                ),
+                domain_error_codes=(
+                    "communications.inbox_sla.incomplete_policy",
+                    "communications.inbox_sla.overlapping_rules",
+                    "communications.inbox_sla.invalid_timezone",
+                    "communications.inbox_sla.invalid_working_days",
+                    "communications.inbox_sla.invalid_working_hours",
+                    "communications.inbox_sla.invalid_target",
+                    "communications.inbox_sla.invalid_warning",
+                    "communications.inbox_sla.duplicate_policy",
+                    "communications.inbox_sla.forbidden",
+                ),
+                design_refs=(
+                    "docs/designs/INBOX_SLA.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_inbox_sla.py",
+                    "tests/architecture/test_inbox_sla_command_boundary.py",
                 ),
             ),
         ),

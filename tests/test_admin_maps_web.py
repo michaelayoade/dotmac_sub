@@ -390,6 +390,30 @@ def test_technician_positions_excludes_disabled_location_sharing(db_session):
     assert feed.items == []
 
 
+def test_technician_positions_excludes_invalid_coordinates(db_session):
+    user = _user(db_session)
+    profile = _technician(db_session, user)
+    db_session.add(
+        FieldTechPresence(
+            technician_id=profile.id,
+            person_id=user.id,
+            status="on_shift",
+            location_sharing_enabled=True,
+            last_latitude=float("nan"),
+            last_longitude=3.3,
+            last_location_at=datetime.now(UTC),
+        )
+    )
+    db_session.flush()
+
+    feed = field_maps_service.list_technician_positions(
+        db_session,
+        FieldLiveMapFeedQuery(),
+    )
+
+    assert all(item.technician_id != profile.id for item in feed.items)
+
+
 def test_live_map_search_matches_canonical_service_street(db_session):
     subscriber = _subscriber(db_session)
     db_session.add(

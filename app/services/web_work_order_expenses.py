@@ -31,6 +31,7 @@ from app.services.field.expense_requests import (
     ExpenseReceiptUploadInput,
     FieldExpenseVendorOption,
     ListFieldExpenseVendors,
+    evaluate_expense_work_order_eligibility,
     list_expense_vendors,
 )
 from app.services.status_presentation import (
@@ -210,13 +211,17 @@ def build_work_order_expense_panel(
         query=ListFieldExpenseVendors(limit=100),
     )
     claims = _claim_views(db, work_order=work_order, user=user)
-    action_reason = category_message
+    eligibility = evaluate_expense_work_order_eligibility(
+        db,
+        work_order=work_order,
+    )
+    action_reason = eligibility.reason or category_message
     create_action = Action(
         key="create_work_order_expense",
         label="New Expense Claim",
         allowed=action_reason is None,
         reason=action_reason,
-        permission="operations:dispatch:write",
+        permission="operations:dispatch:read",
     )
     return WorkOrderExpensePanel(
         work_order_id=work_order.id,

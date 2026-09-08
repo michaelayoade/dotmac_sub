@@ -1050,11 +1050,13 @@ def test_blank_priority_is_omitted_from_inbox_htmx_filter_requests():
     assert "priority_at_most: str | None = Query(default=None)" in ROUTES
 
 
-def test_assignment_filter_colours_and_counts_are_present():
+def test_ownership_views_and_assignment_filters_are_present():
+    assert "AI Intake" in SIDEBAR
+    assert "assignment_counts.ai_handling" in SIDEBAR
+    assert "view=ai_intake" in SIDEBAR
     for label in (
         "Assigned to me",
         "My Team",
-        "AI handling",
         "Unassigned",
         "Unreplied",
         "Needs attention",

@@ -36,6 +36,7 @@ from app.csrf import (
 )
 from app.errors import register_error_handlers
 from app.logging import configure_logging
+from app.metrics import APPLICATION_READINESS, WORKER_STARTUP_DURATION
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
@@ -652,6 +653,9 @@ async def _run_deferred_startup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _DEFERRED_ROUTER_TASK, _DEFERRED_STARTUP_TASK
+    started_at = monotonic()
+    app.state.routes_ready = False
+    APPLICATION_READINESS.set(0)
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
     # Cap the threadpool that runs sync request handlers so a worker never holds
@@ -671,6 +675,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Failed to set threadpool limit", exc_info=True)
     _startup_preflight()
+    await _load_deferred_api_routers(app)
+    from app.services.web_worker_readiness import (
+        WorkerStartupObservation,
+        evaluate_worker_readiness,
+    )
+
+    readiness = evaluate_worker_readiness(
+        WorkerStartupObservation(
+            route_paths=tuple(getattr(route, "path", "") for route in app.routes),
+            preflight_complete=True,
+        )
+    )
+    if not readiness.ready:
+        raise RuntimeError("subscriber sync route was not registered during startup")
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()
@@ -687,10 +705,24 @@ async def lifespan(app: FastAPI):
     # integration health probes) off the serving path so a restart serves
     # health/traffic in seconds, not minutes.
     _DEFERRED_STARTUP_TASK = asyncio.create_task(_run_deferred_startup())
-    _DEFERRED_ROUTER_TASK = asyncio.create_task(_load_deferred_api_routers(app))
+    startup_duration = monotonic() - started_at
+    app.state.routes_ready = True
+    APPLICATION_READINESS.set(1)
+    WORKER_STARTUP_DURATION.observe(startup_duration)
+    logger.info(
+        "startup_complete",
+        extra={
+            "event": "startup_complete",
+            "route_count": len(app.routes),
+            "duration_ms": round(startup_duration * 1000.0, 2),
+            "routes_ready": True,
+        },
+    )
     try:
         yield
     finally:
+        app.state.routes_ready = False
+        APPLICATION_READINESS.set(0)
         for _task_name in ("_DEFERRED_STARTUP_TASK", "_DEFERRED_ROUTER_TASK"):
             _task = globals().get(_task_name)
             if _task is not None:

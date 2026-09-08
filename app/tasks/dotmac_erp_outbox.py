@@ -18,6 +18,12 @@ import time
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.celery_app import celery_app
+from app.services.operational_logging import (
+    OperationalEventName,
+    OperationalLogEvent,
+    OperationalOutcome,
+    log_operational_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +55,17 @@ def deliver_erp_sync_events() -> dict:
     finally:
         observe_job("deliver_erp_sync_events", status, time.monotonic() - start)
 
-    logger.info("DELIVER_ERP_SYNC_EVENTS_COMPLETE %s", results)
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.ERP_SYNC_EVENTS_COMPLETED,
+            outcome=OperationalOutcome.COMPLETED,
+            component="dotmac_erp",
+            counters={
+                key: value for key, value in results.items() if isinstance(value, int)
+            },
+        ),
+    )
     return results
 
 
@@ -80,7 +96,17 @@ def refresh_expense_claim_statuses() -> dict:
     finally:
         observe_job("refresh_expense_claim_statuses", status, time.monotonic() - start)
 
-    logger.info("REFRESH_EXPENSE_CLAIM_STATUSES_COMPLETE %s", results)
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.ERP_EXPENSE_STATUS_REFRESH_COMPLETED,
+            outcome=OperationalOutcome.COMPLETED,
+            component="dotmac_erp",
+            counters={
+                key: value for key, value in results.items() if isinstance(value, int)
+            },
+        ),
+    )
     return results
 
 
@@ -114,7 +140,17 @@ def refresh_material_request_statuses() -> dict:
             "refresh_material_request_statuses", status, time.monotonic() - start
         )
 
-    logger.info("REFRESH_MATERIAL_REQUEST_STATUSES_COMPLETE %s", results)
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.ERP_MATERIAL_STATUS_REFRESH_COMPLETED,
+            outcome=OperationalOutcome.COMPLETED,
+            component="dotmac_erp",
+            counters={
+                key: value for key, value in results.items() if isinstance(value, int)
+            },
+        ),
+    )
     return results
 
 
@@ -151,7 +187,17 @@ def refresh_purchase_invoice_statuses() -> dict:
             "refresh_purchase_invoice_statuses", status, time.monotonic() - start
         )
 
-    logger.info("REFRESH_PURCHASE_INVOICE_STATUSES_COMPLETE %s", results)
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.ERP_PURCHASE_INVOICE_STATUS_REFRESH_COMPLETED,
+            outcome=OperationalOutcome.COMPLETED,
+            component="dotmac_erp",
+            counters={
+                key: value for key, value in results.items() if isinstance(value, int)
+            },
+        ),
+    )
     return results
 
 

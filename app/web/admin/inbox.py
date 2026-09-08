@@ -38,6 +38,7 @@ from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogu
 from app.schemas.settings import DomainSettingUpdate
 from app.services import (
     ai_conversation_intake,
+    ai_conversation_ownership,
     ai_intake_canary_library,
     ai_intake_canary_runner,
     ai_intake_rollout_readiness,
@@ -68,7 +69,7 @@ from app.services import (
     team_inbox_contact_context as contact_context_service,
 )
 from app.services.ai.client import AIClientError
-from app.services.auth_dependencies import can, require_permission
+from app.services.auth_dependencies import can, load_permission_keys, require_permission
 from app.services.catalog import plan_family_catalogues
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
@@ -115,6 +116,17 @@ class InboxReadPresentation(BaseModel):
     status: Literal["success", "error"]
     changed: bool
     message: str
+
+
+def _request_permission_keys(request: Request, db: Session) -> frozenset[str]:
+    """Return projection permissions, denying when an adapter supplied no actor."""
+
+    auth = getattr(request.state, "auth", None)
+    if not isinstance(auth, dict):
+        return frozenset()
+    if "admin" not in set(auth.get("roles") or ()) and not auth.get("principal_id"):
+        return frozenset()
+    return load_permission_keys(auth, db)
 
 
 def _json_object_list(value: str | None) -> tuple[dict[str, object], ...]:
@@ -307,6 +319,7 @@ def team_inbox_queue(
         actor_person_id = UUID(actor_id) if actor_id else None
     except ValueError:
         actor_person_id = None
+    actor_permission_keys = _request_permission_keys(request, db)
     try:
         projection = team_inbox_projection.build_queue_projection(
             db,
@@ -347,6 +360,7 @@ def team_inbox_queue(
                     _query_text(conversation_id) or _query_text(c)
                 ),
                 actor_person_id=actor_person_id,
+                actor_permission_keys=actor_permission_keys,
                 composition=(
                     team_inbox_projection.InboxQueueComposition.queue_only
                     if is_queue_request
@@ -750,6 +764,17 @@ def _read_presentation_response(
     )
 
 
+def _domain_conflict_response(exc: DomainError) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "code": exc.code,
+            "message": exc.message,
+            "details": exc.details,
+        },
+        status_code=409,
+    )
+
+
 @router.get(
     "/media/{asset_id}/content",
     dependencies=[Depends(require_permission("support:ticket:read"))],
@@ -1024,6 +1049,7 @@ def team_inbox_detail(
         db,
         conversation_id=conversation_id,
         actor_person_id=actor_person_id,
+        actor_permission_keys=_request_permission_keys(request, db),
         include_contact_candidates=False,
         include_label_usage_counts=False,
     )
@@ -1618,6 +1644,17 @@ def team_inbox_reply(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        if _is_htmx_request(request):
+            return _reply_presentation_response(
+                conversation_id,
+                status="error",
+                outcome="error",
+                message=exc.message,
+                error_code=exc.code,
+                http_status=409,
+            )
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -2112,6 +2149,8 @@ def team_inbox_workflow_action(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -2276,6 +2315,8 @@ def team_inbox_bulk_action(
             auto_assign=auto_assign,
             actor_person_id=_actor_id_from_request(request),
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -2309,6 +2350,8 @@ def team_inbox_assign_to_me(
             service_team_id=_query_text(service_team_id),
             actor_person_id=actor_person_id,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -2320,6 +2363,62 @@ def team_inbox_assign_to_me(
     return RedirectResponse(
         url=f"/admin/inbox?c={conversation_id}&status=success&message={quote_plus(outcome.message)}",
         status_code=303,
+    )
+
+
+@router.post(
+    "/{conversation_id}/take-over",
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("support:inbox:self_assign")),
+    ],
+)
+def team_inbox_take_over(
+    conversation_id: UUID,
+    request: Request,
+    expected_ai_session_id: UUID = Form(...),
+    expected_ai_session_state: str = Form(...),
+    idempotency_key: str = Form(...),
+    service_team_id: UUID | None = Form(default=None),
+    reason: str = Form(default="Agent explicitly took over the conversation"),
+    db: Session = Depends(get_db),
+):
+    auth = getattr(request.state, "auth", None) or {}
+    permission_keys = load_permission_keys(auth, db)
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        raise HTTPException(status_code=403, detail="Staff identity is required.")
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.take_over_conversation(
+            db,
+            team_inbox_commands.TakeOverConversationCommand(
+                context=CommandContext.system(
+                    actor=f"system-user:{actor_person_id}",
+                    scope="team-inbox:ai-takeover",
+                    reason=reason,
+                    idempotency_key=idempotency_key,
+                ),
+                conversation_id=conversation_id,
+                expected_ai_session_id=expected_ai_session_id,
+                expected_ai_session_state=expected_ai_session_state,
+                actor_person_id=actor_person_id,
+                permission_keys=permission_keys,
+                service_team_id=service_team_id,
+                reason=reason,
+            ),
+        )
+    except DomainError as exc:
+        return _domain_conflict_response(exc)
+    message = (
+        "Conversation takeover already completed."
+        if outcome.replayed
+        else "AI Intake stopped and conversation assigned to you."
+    )
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message=message,
     )
 
 
@@ -2501,6 +2600,8 @@ def team_inbox_internal_note(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -2604,6 +2705,8 @@ def team_inbox_status_action(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except team_inbox_commands.InboxCommandError as exc:
         return _detail_redirect(
             conversation_id,
@@ -2667,6 +2770,8 @@ def team_inbox_issue_ticket(
             status="error",
             message=exc.message,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except ValueError as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
     verb = "already open" if result.replayed else "opened"
@@ -2721,6 +2826,8 @@ def team_inbox_assign(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -2768,6 +2875,8 @@ def team_inbox_run_macro(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
+        return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_operations.InboxOperationError,
@@ -3004,6 +3113,7 @@ def team_inbox_ai_intake_policy_draft_update(
     queue_handoff_template: str | None = Form(default=None),
     queue_position_update_minutes: int = Form(default=10),
     queue_heartbeat_minutes: int = Form(default=30),
+    queue_heartbeat_enabled: bool = Form(default=False),
     data_cleanup_prompt: str | None = Form(default=None),
     data_cleanup_gender_choices_json: str | None = Form(default=None),
     data_cleanup_dob_formats: str | None = Form(default=None),
@@ -3119,6 +3229,7 @@ def team_inbox_ai_intake_policy_draft_update(
                 1, min(int(queue_position_update_minutes), 120)
             ),
             "heartbeat_minutes": max(5, min(int(queue_heartbeat_minutes), 240)),
+            "heartbeat_enabled": bool(queue_heartbeat_enabled),
         }
         clean_escalate_after_minutes = max(1, min(int(escalate_after_minutes), 1440))
         if customer_response_timeout_minutes is None:
