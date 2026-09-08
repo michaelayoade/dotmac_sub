@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -248,10 +249,14 @@ def _stored_mapping_list(
 
 
 _ORDERED_COMPARISONS: dict[AutomationOperator, Callable[[object, object], bool]] = {
-    AutomationOperator.greater_than: operator.gt,
-    AutomationOperator.greater_than_or_equal: operator.ge,
-    AutomationOperator.less_than: operator.lt,
-    AutomationOperator.less_than_or_equal: operator.le,
+    AutomationOperator.greater_than: cast(Callable[[object, object], bool], operator.gt),
+    AutomationOperator.greater_than_or_equal: cast(
+        Callable[[object, object], bool], operator.ge
+    ),
+    AutomationOperator.less_than: cast(Callable[[object, object], bool], operator.lt),
+    AutomationOperator.less_than_or_equal: cast(
+        Callable[[object, object], bool], operator.le
+    ),
 }
 
 
@@ -655,3 +660,4 @@ def list_runs(
         )
         for row in rows
     )
+
