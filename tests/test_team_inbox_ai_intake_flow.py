@@ -1035,7 +1035,7 @@ def test_gateway_failure_routes_to_fallback_when_retries_are_disabled(
     assert (
         message.metadata_["ai_intake_reason"] == "classifier_unavailable_after_retries"
     )
-    assert message.metadata_["routing"]["reason"] == "ai_intake_fallback"
+    assert message.metadata_["routing"]["reason"] == "fallback_route"
     assert conversation.status == "open"
     assert (
         db_session.query(InboxStatusTransitionEvent)
@@ -1074,8 +1074,8 @@ def test_missing_intent_mapping_uses_configured_fallback(db_session, monkeypatch
         mappings=[_mapping("billing_issue", configured_team, "billing")],
     )
     gateway = _Gateway(
-        intent="coverage_request",
-        category="coverage_request",
+        intent="plan_change",
+        category="plan_change_request",
     )
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
@@ -1085,7 +1085,7 @@ def test_missing_intent_mapping_uses_configured_fallback(db_session, monkeypatch
     conversation = db_session.get(InboxConversation, result.conversation_id)
     message = db_session.get(InboxMessage, result.message_id)
     assert conversation.primary_service_team_id == fallback.id
-    assert message.metadata_["routing"]["reason"] == "ai_intake_fallback"
+    assert message.metadata_["routing"]["reason"] == "ai_intake_missing_team_id"
 
 
 def test_inactive_mapped_team_makes_enabled_config_invalid(db_session, monkeypatch):
