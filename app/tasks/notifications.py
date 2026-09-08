@@ -939,6 +939,8 @@ def _deliver_notification_queue_stats(
                     record_meta_delivery_leg_acceptance,
                 )
 
+                meta_notification_id = notification.id
+                meta_recipient = notification.recipient
                 account_id = str(
                     delivery_metadata.get("provider_account_id") or ""
                 ).strip()
@@ -964,7 +966,9 @@ def _deliver_notification_queue_stats(
                     str(row.response_code): str(row.provider_message_id)
                     for row in (
                         db.query(NotificationDelivery)
-                        .filter(NotificationDelivery.notification_id == notification.id)
+                        .filter(
+                            NotificationDelivery.notification_id == meta_notification_id
+                        )
                         .filter(NotificationDelivery.is_active.is_(True))
                         .filter(NotificationDelivery.provider == "meta")
                         .filter(NotificationDelivery.status == DeliveryStatus.delivered)
@@ -998,7 +1002,7 @@ def _deliver_notification_queue_stats(
                         meta_provider_failure = preflight_failure
                         notification.retry_count = max_retries - 1
                         raise ValueError(preflight_failure.code)
-                    if not account_id or not notification.recipient:
+                    if not account_id or not meta_recipient:
                         meta_provider_failure = _safe_provider_failure(
                             channel=notification.channel,
                             error_code="meta_direct_message_context_missing",
@@ -1044,7 +1048,7 @@ def _deliver_notification_queue_stats(
                             MetaDirectMessageCommand(
                                 channel=meta_channel,
                                 provider_account_id=account_id,
-                                recipient_id=notification.recipient,
+                                recipient_id=meta_recipient,
                                 attachment=MetaDirectMessageAttachment(
                                     asset_id=attachment.asset_id,
                                     attachment_type=attachment_type,
@@ -1053,7 +1057,7 @@ def _deliver_notification_queue_stats(
                                     content=attachment.content,
                                 ),
                                 correlation_id=(
-                                    f"notification:{notification.id}:"
+                                    f"notification:{meta_notification_id}:"
                                     f"attachment:{attachment.asset_id}"
                                 ),
                             ),
@@ -1087,7 +1091,7 @@ def _deliver_notification_queue_stats(
                         record_meta_delivery_leg_acceptance(
                             db,
                             command=MetaDeliveryLegRecordCommand(
-                                notification_id=notification.id,
+                                notification_id=meta_notification_id,
                                 provider_message_id=provider_message_id,
                                 response_code=leg_code,
                                 response_body="Meta attachment message accepted",
@@ -1101,7 +1105,7 @@ def _deliver_notification_queue_stats(
                                 scope="team-inbox:meta-delivery-leg",
                                 reason="record accepted Meta attachment delivery",
                                 idempotency_key=(
-                                    f"notification:{notification.id}:{leg_code}"
+                                    f"notification:{meta_notification_id}:{leg_code}"
                                 ),
                             ),
                         )
@@ -1116,10 +1120,10 @@ def _deliver_notification_queue_stats(
                                 MetaDirectMessageCommand(
                                     channel=meta_channel,
                                     provider_account_id=account_id,
-                                    recipient_id=notification.recipient,
+                                    recipient_id=meta_recipient,
                                     body=body,
                                     correlation_id=(
-                                        f"notification:{notification.id}:text"
+                                        f"notification:{meta_notification_id}:text"
                                     ),
                                 ),
                             )
@@ -1147,7 +1151,7 @@ def _deliver_notification_queue_stats(
                                     record_meta_delivery_leg_acceptance(
                                         db,
                                         command=MetaDeliveryLegRecordCommand(
-                                            notification_id=notification.id,
+                                            notification_id=meta_notification_id,
                                             provider_message_id=provider_message_id,
                                             response_code="text",
                                             response_body=(
@@ -1163,7 +1167,7 @@ def _deliver_notification_queue_stats(
                                                 "record accepted Meta text delivery"
                                             ),
                                             idempotency_key=(
-                                                f"notification:{notification.id}:text"
+                                                f"notification:{meta_notification_id}:text"
                                             ),
                                         ),
                                     )
@@ -1193,7 +1197,7 @@ def _deliver_notification_queue_stats(
                 notification.last_error = None if success else provider_error
                 db.add(
                     NotificationDelivery(
-                        notification_id=notification.id,
+                        notification_id=meta_notification_id,
                         provider="meta",
                         provider_message_id=(
                             provider_message_id
@@ -1220,7 +1224,7 @@ def _deliver_notification_queue_stats(
                 if success and meta_provider_messages:
                     message = (
                         db.query(InboxMessage)
-                        .filter(InboxMessage.notification_id == notification.id)
+                        .filter(InboxMessage.notification_id == meta_notification_id)
                         .one_or_none()
                     )
                     if message is not None:
