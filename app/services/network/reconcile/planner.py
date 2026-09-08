@@ -56,7 +56,11 @@ deletion — none of them protected by a VLAN+GEM match against an unindexed
 desired slot — the plan fails closed there too: it withholds every
 ``OltDeleteServicePort`` action and sets ``Plan.olt_wait_reason`` to
 ``SERVICE_PORT_INDEX_UNALLOCATED`` instead of deleting the ONT's entire
-service-port set with nothing to recreate it at.
+service-port set with nothing to recreate it at. The same class of refusal
+applies narrower: when only ONE of the two indices is unallocated, a
+specific observed port correlated (by VLAN) to that one slot is withheld
+from deletion the same way, even though the other slot's real index means
+the rest of the set is still repaired normally.
 
 What the planner doesn't do
 ===========================
@@ -142,13 +146,15 @@ class Plan:
     # for the CPE's next Inform. It never means "push anyway to a guessed id".
     acs_wait_reason: str | None = None
     acs_wait_detail: str = ""
-    # Set when the OLT half of this plan withheld every
-    # ``OltDeleteServicePort`` action for this ONT because neither the mgmt
-    # nor the WAN service-port index has been allocated (both are ``None``)
-    # and every currently observed service port would otherwise have been
-    # planned for deletion, with nothing to recreate them at. Unindexed
-    # ports still matched by ``_matches_unindexed_desired_slot`` remain
-    # preserved and do not trigger this —
+    # Set when the OLT half of this plan withheld one or more
+    # ``OltDeleteServicePort`` actions for this ONT because the mgmt and/or
+    # WAN service-port index is unallocated (``None``) and a correlated
+    # observed service port would otherwise have been planned for deletion,
+    # with nothing to recreate it at — either every observed port (both
+    # indices unallocated, nothing preserved) or just the port(s) correlated
+    # to the one unallocated slot (the other slot carries a real index).
+    # Unindexed ports still matched by ``_matches_unindexed_desired_slot``
+    # remain preserved and do not trigger this —
     # see ``ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED``.
     olt_wait_reason: str | None = None
     olt_wait_detail: str = ""
@@ -335,10 +341,11 @@ def compute_plan(
     olt_wait_detail = ""
     if olt_wait_reason is not None:
         olt_wait_detail = (
-            f"ONT {desired.serial_number}: neither mgmt nor WAN service-port "
-            "index is allocated while "
+            f"ONT {desired.serial_number}: one or more OLT service-port "
+            "indices (mgmt and/or WAN) are unallocated while "
             f"{len(observed.olt.olt_service_ports)} service port(s) are "
-            "observed; refusing to delete them with no target to recreate."
+            "observed; refusing to delete the correlated port(s) with no "
+            "target to recreate them."
         )
 
     required_surfaces = frozenset(a.surface for a in actions)
@@ -586,17 +593,34 @@ def _plan_service_ports(
 ) -> str | None:
     """Repair OLT service ports; returns a wait reason when deletes are withheld.
 
-    Returns ``ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED`` when
-    both ``mgmt_service_port_index`` and ``wan_service_port_index`` are
-    ``None`` AND every observed service port would be planned for deletion —
-    i.e. none of them is protected by ``_matches_unindexed_desired_slot``
-    (a VLAN+GEM match against a still-unallocated desired slot). In that
-    case the desired set is empty and nothing preserves any observed port,
-    so the delete loop would remove the ONT's entire service-port set with
-    no way to recreate them (the create branch below requires a real index).
-    A port that *does* match an unindexed desired slot is still preserved
-    exactly as before this guard existed; the guard only fires when there is
-    nothing left standing.
+    Returns ``ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED`` in two
+    cases, both withholding only the affected delete(s) rather than the
+    whole OLT plan:
+
+    1. **Both slots unallocated.** ``mgmt_service_port_index`` and
+       ``wan_service_port_index`` are both ``None`` AND every observed
+       service port would be planned for deletion — i.e. none of them is
+       protected by ``_matches_unindexed_desired_slot`` (a VLAN+GEM match
+       against a still-unallocated desired slot). The desired set is empty
+       and nothing preserves any observed port, so the delete loop would
+       remove the ONT's entire service-port set with no way to recreate
+       them (the create branch below requires a real index).
+    2. **One slot unallocated.** Only ``mgmt_service_port_index`` (or only
+       ``wan_service_port_index``) is ``None``. This is narrower and does
+       not require the whole set to be at risk: a specific observed port
+       whose VLAN correlates to that one still-unallocated slot (the same
+       correlation ``_matches_unindexed_desired_slot`` uses, just not
+       protected by it — e.g. a non-PPPoE WAN slot, which that helper never
+       protects regardless of index) would otherwise be deleted with
+       nothing to recreate it. Only that specific port's delete is
+       withheld; an unrelated stale port in the same batch is still
+       deleted normally.
+
+    A port that *does* match an unindexed desired slot via
+    ``_matches_unindexed_desired_slot`` is preserved exactly as before this
+    guard existed. Every withheld port also gets an unrepairable ``Drift``
+    entry, so ``plan.drifts`` reflects the withheld state instead of
+    looking clean.
     """
 
     def _sp_int(sp: dict, *names: str) -> int | None:
@@ -677,9 +701,44 @@ def _plan_service_ports(
         # recreate them at. Refuse instead of deleting the ONT's entire
         # service-port set. See
         # ``ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED``.
+        for idx, slot, sp in delete_candidates:
+            drifts.append(
+                Drift(
+                    field=f"olt_service_ports[{idx}]",
+                    surface="olt",
+                    desired=None,
+                    observed=sp,
+                    repairable=False,
+                )
+            )
         return ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
 
+    # Narrower per-slot case: one slot carries a real, operator-supplied
+    # index (so the desired state is meaningfully populated) but a specific
+    # observed port's VLAN positively correlates to the OTHER, still-
+    # unallocated slot, and nothing protects it (`_matches_unindexed_desired_
+    # slot` only protects the WAN slot in PPPoE mode and the mgmt slot when
+    # a VLAN is set — a non-PPPoE WAN slot is never protected regardless of
+    # index). Deleting it would strand that slot: nothing recreates it (the
+    # create branch below requires a real index) and nothing protected it.
+    # Withhold just that candidate; a port unrelated to either slot (`slot ==
+    # "unknown"`) is unaffected and still deleted below.
+    slot_index_unallocated = False
     for idx, slot, sp in delete_candidates:
+        if (slot == "mgmt" and desired.mgmt_service_port_index is None) or (
+            slot == "wan" and desired.wan_service_port_index is None
+        ):
+            slot_index_unallocated = True
+            drifts.append(
+                Drift(
+                    field=f"olt_service_ports[{idx}]",
+                    surface="olt",
+                    desired=None,
+                    observed=sp,
+                    repairable=False,
+                )
+            )
+            continue
         actions.append(OltDeleteServicePort(service_port_index=idx, slot=slot))
         drifts.append(
             Drift(
@@ -695,9 +754,9 @@ def _plan_service_ports(
     # is no allocator: an index either arrives from operator input
     # (``desired.mgmt_service_port_index``/``wan_service_port_index``, see
     # ``adapters.py``) or stays ``None``. A ``None`` index here plans no
-    # create action; if it left both slots unallocated with ports still
-    # observed, the guard above already returned
-    # ``SERVICE_PORT_INDEX_UNALLOCATED`` before this point.
+    # create action; the both-slots-unallocated case already returned above,
+    # and the per-slot case leaves ``slot_index_unallocated`` set so the
+    # caller still learns nothing was recreated for the withheld slot.
     observed_indices = {
         sp.get("index") for sp in observed.olt.olt_service_ports if isinstance(sp, dict)
     }
@@ -717,7 +776,11 @@ def _plan_service_ports(
             )
         )
     _plan_wan_service_port(desired, observed, actions)
-    return None
+    return (
+        ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
+        if slot_index_unallocated
+        else None
+    )
 
 
 def _plan_wan_service_port(
