@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -29,6 +30,23 @@ class AutomationRuleStatus(StrEnum):
     published = "published"
     paused = "paused"
     retired = "retired"
+
+
+class AutomationRunStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    skipped = "skipped"
+    succeeded = "succeeded"
+    failed = "failed"
+    blocked = "blocked"
+
+
+class AutomationStepStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    blocked = "blocked"
 
 
 class AutomationRule(Base):
@@ -129,3 +147,103 @@ class AutomationRuleVersion(Base):
     )
     published_by: Mapped[str | None] = mapped_column(String(255))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AutomationRun(Base):
+    __tablename__ = "automation_runs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_automation_runs_tenant_id"),
+        UniqueConstraint(
+            "rule_version_id", "event_id", name="uq_automation_runs_version_event"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "rule_id"],
+            ["automation_rules.tenant_id", "automation_rules.id"],
+            name="fk_automation_runs_rule_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "rule_version_id"],
+            ["automation_rule_versions.tenant_id", "automation_rule_versions.id"],
+            name="fk_automation_runs_version_tenant",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'skipped', 'succeeded', 'failed', "
+            "'blocked')",
+            name="ck_automation_runs_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    rule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=AutomationRunStatus.pending.value
+    )
+    matched: Mapped[bool | None] = mapped_column(Boolean)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(160))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class AutomationStepRun(Base):
+    __tablename__ = "automation_step_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "step_index", name="uq_automation_step_runs_run_index"
+        ),
+        UniqueConstraint(
+            "idempotency_key", name="uq_automation_step_runs_idempotency_key"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["automation_runs.tenant_id", "automation_runs.id"],
+            ondelete="CASCADE",
+            name="fk_automation_step_runs_run_tenant",
+        ),
+        CheckConstraint("step_index >= 0", name="ck_automation_step_runs_index"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'blocked')",
+            name="ck_automation_step_runs_status",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0", name="ck_automation_step_runs_attempt_count"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    action_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=AutomationStepStatus.pending.value
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(160))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )

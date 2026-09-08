@@ -60,6 +60,13 @@ run and step ledger records matched, skipped, succeeded, failed and blocked
 outcomes. Retry does not repeat completed steps. Sensitive event and action
 values are not copied into the ledger.
 
+Planning, step claim, module action, and step completion are separate committed
+boundaries. The module command receives the stable event/version/step key and
+must implement the idempotency contract in its own source-of-truth service. A
+crash after a side effect therefore retries the same module command identity;
+the Automation Center never attempts to reverse or reconstruct another
+module's mutation.
+
 ## Authorization
 
 Authoring requires an Automation Center permission and every permission

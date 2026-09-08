@@ -210,10 +210,132 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="automation.execution",
+            module="app.services.automation_runtime",
+            owns=("automation execution decisions and run evidence",),
+            depends_on=(
+                "automation.capability_registry",
+                "automation.rule_definitions",
+                "events.store",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="automation execution decisions and run evidence",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "durable domain event evidence",
+                            "published automation rule versions",
+                            "declared automation runtime adapters",
+                            "tenant-scoped automation run evidence",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="durable domain event evidence",
+                        owner="events.store",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "EventStore identity, type, payload, actor, and durable "
+                            "handler retry evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="published automation rule versions",
+                        owner="automation.rule_definitions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "active immutable AutomationRuleVersion conditions and "
+                            "ordered action declarations"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="declared automation runtime adapters",
+                        owner="automation.capability_registry",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "closed code registry whose action keys exactly match "
+                            "typed idempotent executors"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="tenant-scoped automation run evidence",
+                        owner="automation.execution",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AutomationRun and AutomationStepRun rows",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "event planning, each step claim, each module owner command, "
+                        "and each step completion use separate committed owner "
+                        "boundaries so external effects never share a transaction"
+                    ),
+                    locking=(
+                        "rule-version/event uniqueness converges replay; run and step "
+                        "rows are locked before claim and completion transitions"
+                    ),
+                    idempotency=(
+                        "each action receives the stable event/version/step key and "
+                        "module adapters must honor their declared idempotency contract"
+                    ),
+                    retries=(
+                        "EventStore retries only the failed automation handler; "
+                        "succeeded steps are skipped and expired claims are reclaimed"
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "automation.execution.trigger_event_mismatch",
+                        "automation.execution.trigger_target_mismatch",
+                        "automation.execution.step_not_found",
+                        "automation.execution.run_not_found",
+                        "automation.execution.action_failed",
+                        *owner_command_boundary_error_codes("automation.execution"),
+                    ),
+                    mapping_owner="automation event and web adapters",
+                    fail_closed_on=(
+                        "missing or mismatched event tenant and target identity",
+                        "capability-to-executor registry mismatch",
+                        "busy or failed ordered action step",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="automation.execution",
+                    verification=(
+                        "automation runtime, handler registration, RLS, replay, and "
+                        "static adapter registry tests"
+                    ),
+                    cutover_gate=(
+                        "a module receives no automation traffic until its trigger, "
+                        "action, and exact executor are admitted together"
+                    ),
+                    fallback_retirement=(
+                        "remove the module declaration and executor; existing legacy "
+                        "automation surfaces remain independently owned"
+                    ),
+                ),
+                steward="platform automation",
+                design_refs=(
+                    "docs/designs/AUTOMATION_CENTER_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_automation_runtime.py",
+                    "tests/architecture/test_automation_runtime_boundary.py",
+                ),
+            ),
+        ),
     ),
     entrypoints=(
         "app.services.automation_capabilities",
         "app.services.automation_rules",
+        "app.services.automation_runtime",
+        "app.services.events.handlers.automation",
     ),
     rule=(
         "Every SOT domain is visible to the Automation Center, but only a closed, "

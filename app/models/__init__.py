@@ -41,6 +41,10 @@ from app.models.automation import (  # noqa: F401
     AutomationRule,
     AutomationRuleStatus,
     AutomationRuleVersion,
+    AutomationRun,
+    AutomationRunStatus,
+    AutomationStepRun,
+    AutomationStepStatus,
 )
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401

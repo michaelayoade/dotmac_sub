@@ -55,6 +55,9 @@ DEFAULT_PERMISSIONS = [
     ("automation:rule:update", "Update Automation Center rule drafts"),
     ("automation:rule:publish", "Publish Automation Center rule versions"),
     ("automation:rule:operate", "Pause, resume, and retire automation rules"),
+    ("automation:hub:read", "Open the Automation Center"),
+    ("automation:run:read", "View Automation Center execution runs"),
+    ("automation:run:redrive", "Retry failed Automation Center runs"),
     # Audit
     ("audit:read", "Read audit events"),
     # Workforce attendance (pilot: intentionally not granted to seeded roles)
