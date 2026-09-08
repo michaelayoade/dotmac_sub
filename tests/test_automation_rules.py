@@ -34,6 +34,8 @@ def declared_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
                     event_type="test.ticket.created",
                     event_schema_version=2,
                     entity_type="test.ticket",
+                    tenant_id_field="tenant_id",
+                    entity_id_field="ticket_id",
                     fields=(
                         AutomationConditionField(
                             key="priority",
@@ -159,6 +161,8 @@ def test_legacy_exclusive_scope_blocks_definition(
                     event_type="test.ticket.created",
                     event_schema_version=1,
                     entity_type="test.ticket",
+                    tenant_id_field="tenant_id",
+                    entity_id_field="ticket_id",
                     fields=(),
                     author_permission="support:ticket:read",
                 ),
