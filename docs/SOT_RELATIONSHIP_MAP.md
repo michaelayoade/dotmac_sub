@@ -3109,8 +3109,6 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     declared, so no selection/bulk is declared. Each dispatch route is granularly
     gated (`operations:dispatch:read`/`:write`/`:assign`).
 
-<<<<<<< HEAD
-=======
 15a. `ui.work_order_expense_projection`
     (`app.services.web_work_order_expenses`) composes the exact work-order page
     context, authenticated staff identity, live ERP category rules, and only
@@ -3124,7 +3122,6 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     metadata, and durable ERP outbox consequence. Sent transport evidence is
     shown as awaiting ERP acceptance, never as accepted.
 
->>>>>>> origin/pr-2983
 16. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
     project list capabilities with `ui.list_contracts` — searchable name,
     status/type/priority/region filters, name/priority/created sort, pagination —
