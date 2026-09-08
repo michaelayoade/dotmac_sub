@@ -54,6 +54,15 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _valid_coordinates(latitude: float | None, longitude: float | None) -> bool:
+    return bool(
+        latitude is not None
+        and longitude is not None
+        and -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    )
+
+
 def _technician_label(profile: TechnicianProfile | None) -> str:
     """Human label for a technician, mirroring the dispatch web service."""
     if profile is None:
@@ -96,7 +105,7 @@ def list_technician_positions(
     for presence in rows:
         latitude = presence.last_latitude
         longitude = presence.last_longitude
-        if latitude is None or longitude is None:
+        if not _valid_coordinates(latitude, longitude):
             continue
         last_at = _as_utc(presence.last_location_at)
         is_live = bool(
@@ -177,7 +186,7 @@ def search_live_map(
     for presence in technician_rows:
         latitude = presence.last_latitude
         longitude = presence.last_longitude
-        if latitude is None or longitude is None:
+        if not _valid_coordinates(latitude, longitude):
             continue
         items.append(
             FieldLiveMapSearchResult(

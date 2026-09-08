@@ -1243,12 +1243,13 @@ class FieldManagerTechnician(BaseModel):
     status: str
     location_sharing_enabled: bool
     is_live: bool
-    last_latitude: float | None = None
-    last_longitude: float | None = None
-    accuracy_m: float | None = None
-    last_location_at: datetime | None = None
     last_seen_at: datetime | None = None
     active_work_order: FieldManagerActiveWorkOrder | None = None
+
+
+class FieldManagerTechniciansQuery(BaseModel):
+    stale_after_seconds: int = Field(default=120, ge=15, le=3600)
+    limit: int = Field(default=500, ge=1, le=500)
 
 
 class FieldManagerTechniciansResponse(BaseModel):

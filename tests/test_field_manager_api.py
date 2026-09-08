@@ -19,6 +19,7 @@ from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldManagerTechniciansQuery
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -204,17 +205,21 @@ def test_manager_me_summary_and_technicians(db_session):
     assert summary["unassigned_jobs"] == baseline["unassigned_jobs"] + 1
     assert summary["pending_expenses"] == baseline["pending_expenses"] + 1
 
-    technicians = field_manager.list_technicians(db_session)
-    item = next(
-        entry for entry in technicians if entry["person_id"] == profile.person_id
+    technicians = field_manager.list_technicians(
+        db_session,
+        FieldManagerTechniciansQuery(),
     )
-    assert item["person_label"] == "Tech Staff"
-    assert item["status"] == "on_shift"
-    assert item["is_live"] is True
-    assert item["last_latitude"] == pytest.approx(9.0765)
-    assert item["active_work_order"]["id"] == "wo-mgr-assigned"
-    assert item["active_work_order"]["status"] == "in_progress"
-    assert item["active_work_order"]["status_presentation"].model_dump(mode="json") == {
+    item = next(
+        entry for entry in technicians.items if entry.person_id == profile.person_id
+    )
+    assert item.person_label == "Tech Staff"
+    assert item.status == "on_shift"
+    assert item.is_live is True
+    assert not hasattr(item, "last_latitude")
+    assert item.active_work_order is not None
+    assert item.active_work_order.id == "wo-mgr-assigned"
+    assert item.active_work_order.status == "in_progress"
+    assert item.active_work_order.status_presentation.model_dump(mode="json") == {
         "value": "in_progress",
         "label": "In progress",
         "tone": "info",
@@ -392,6 +397,7 @@ def test_manager_api(db_session):
     me = client.get("/api/v1/field/manager/me")
     assert me.status_code == 200
     assert me.json()["is_manager"] is True
+    assert "*" in me.json()["permissions"]
 
     summary = client.get("/api/v1/field/manager/summary")
     assert summary.status_code == 200
@@ -414,6 +420,18 @@ def test_manager_api(db_session):
         "tone": "info",
         "icon": "clock",
     }
+    assert "last_latitude" not in item
+    assert "last_longitude" not in item
+
+    team_map = client.get("/api/v1/field/manager/team-map")
+    assert team_map.status_code == 200
+    map_item = next(
+        entry
+        for entry in team_map.json()["items"]
+        if entry["person_id"] == str(profile.person_id)
+    )
+    assert map_item["latitude"] == pytest.approx(9.0765)
+    assert map_item["longitude"] == pytest.approx(7.3986)
 
     jobs = client.get("/api/v1/field/manager/jobs")
     assert jobs.status_code == 200

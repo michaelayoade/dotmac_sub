@@ -247,10 +247,33 @@ class _MapSwitch extends ConsumerWidget {
     if (auth is Authenticated && auth.mode == LoginMode.vendor) {
       return const VendorMapScreen();
     }
-    if (isManagerProfile(ref.watch(managerProfileProvider))) {
-      return const ManagerTeamMapScreen();
+    final managerProfile = ref.watch(managerProfileProvider).valueOrNull;
+    if (managerProfile?.isManager == true) {
+      return managerProfile!.canViewTeamMap
+          ? const ManagerTeamMapScreen()
+          : const _ManagerMapAccessDeniedScreen();
     }
     return MapScreen(key: ValueKey(focusJobId), focusJobId: focusJobId);
+  }
+}
+
+class _ManagerMapAccessDeniedScreen extends StatelessWidget {
+  const _ManagerMapAccessDeniedScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Team location')),
+      body: const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'You do not have permission to view technician locations.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -331,12 +354,15 @@ class _AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final isVendor = auth is Authenticated && auth.mode == LoginMode.vendor;
-    final isManager =
-        !isVendor && isManagerProfile(ref.watch(managerProfileProvider));
+    final managerProfile = ref.watch(managerProfileProvider).valueOrNull;
+    final isManager = !isVendor && managerProfile?.isManager == true;
     final items = isVendor
         ? _vendorNav
         : isManager
-        ? _managerNav
+        ? [
+            for (final item in _managerNav)
+              if (item.branchIndex != 1 || managerProfile!.canViewTeamMap) item,
+          ]
         : _staffNav;
     // Map the active branch to its position in the visible set (0 if the
     // current branch is hidden for this mode).
