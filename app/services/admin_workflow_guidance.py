@@ -27,8 +27,9 @@ class AdminWorkflowGuidance:
 
     def matches_path(self, path: str) -> bool:
         return any(
-            path == prefix or path.startswith(f"{prefix}/")
+            path == normalized_prefix or path.startswith(f"{normalized_prefix}/")
             for prefix in self.route_prefixes
+            if (normalized_prefix := prefix.rstrip("/"))
         )
 
 
@@ -100,9 +101,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/customers/",),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
+        "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
+        "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
         "Open the specific record before performing a state-changing action.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
+            "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
         ),
     ),

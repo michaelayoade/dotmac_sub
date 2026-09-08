@@ -35,6 +35,19 @@ def test_customer_detail_guidance_explains_service_extension_states() -> None:
     assert "billing-date impact" in content
 
 
+def test_customer_detail_guidance_explains_stale_payment_intent_cancellation() -> None:
+    guide = guidance_for_path("/admin/customers/person/customer-id/payment-intents")
+
+    assert guide is not None
+    assert guide.id == "customer-detail"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "cancel stale intent" in content
+    assert "exact submitted proof" in content
+    assert "no payment was received" in content
+    assert "rejects its linked proof and cancels the intent together" in content
+    assert "allowing the customer to start a new payment" in content
+
+
 def test_project_guidance_explains_customer_typeahead_selection() -> None:
     guide = guidance_for_path("/admin/projects/new")
 
