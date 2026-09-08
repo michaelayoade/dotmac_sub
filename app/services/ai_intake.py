@@ -27,6 +27,9 @@ from app.models.service_team import ServiceTeam
 from app.models.subscriber import Subscriber
 from app.schemas.ai_intake import (
     DEFAULT_CLARIFICATION_QUESTIONS,
+    AiClassifierAttempt,
+    AiClassifierAttemptStatus,
+    AiClassifierFailureKind,
     AiCustomerResponseCompositionOutcome,
     AiCustomerResponseCompositionRequest,
     AiIntakeCategory,
@@ -1377,6 +1380,7 @@ def _outcome(
     fallback_due_at: datetime | None = None,
     provider: str | None = None,
     model: str | None = None,
+    classifier_attempt: AiClassifierAttempt | None = None,
 ) -> AiIntakeOutcome:
     return AiIntakeOutcome(
         status=status,
@@ -1389,7 +1393,92 @@ def _outcome(
         provider=provider,
         model=model,
         duration_ms=max(int((time.monotonic() - started) * 1000), 0),
+        classifier_attempt=classifier_attempt or AiClassifierAttempt(),
     )
+
+
+def _accepted_classifier_attempt(
+    *,
+    request: AiIntakeRequest,
+    config: ResolvedAiIntakeConfig,
+    provider: str | None,
+    model: str | None,
+) -> AiClassifierAttempt:
+    return AiClassifierAttempt(
+        status=AiClassifierAttemptStatus.accepted,
+        retry_count=request.classifier_failure_count,
+        retry_limit=(
+            config.max_follow_up_turns if config.allow_follow_up_questions else 0
+        ),
+        provider=provider,
+        model=model,
+    )
+
+
+def _classifier_unavailable_outcome(
+    *,
+    started: float,
+    channel: str,
+    request: AiIntakeRequest,
+    config: ResolvedAiIntakeConfig,
+    attempt_status: AiClassifierAttemptStatus,
+    failure_kind: AiClassifierFailureKind,
+    reason: AiIntakeReason,
+    provider: str | None = None,
+    model: str | None = None,
+) -> AiIntakeOutcome:
+    retry_limit = config.max_follow_up_turns if config.allow_follow_up_questions else 0
+    retry_count = min(request.classifier_failure_count + 1, 10)
+    can_request_clarification = request.follow_up_count < retry_limit
+    selected_reason = (
+        reason
+        if can_request_clarification
+        else AiIntakeReason.classifier_unavailable_after_retries
+    )
+    next_follow_up_count = (
+        request.follow_up_count + 1
+        if can_request_clarification
+        else request.follow_up_count
+    )
+    attempt = AiClassifierAttempt(
+        status=attempt_status,
+        reason=reason,
+        failure_kind=failure_kind,
+        retry_count=retry_count,
+        retry_limit=retry_limit,
+        retries_exhausted=not can_request_clarification,
+        provider=provider,
+        model=model,
+    )
+    outcome = _outcome(
+        started=started,
+        status=AiIntakeStatus.classification_unavailable,
+        reason=selected_reason,
+        config=config,
+        follow_up_count=next_follow_up_count,
+        provider=provider,
+        model=model,
+        classifier_attempt=attempt,
+    )
+    logger.warning(
+        "ai intake classifier unavailable",
+        extra={
+            "event": "ai_intake_classifier_unavailable",
+            "channel": channel,
+            "config_id": str(config.id),
+            "classifier_attempt_status": attempt.status.value,
+            "reason": selected_reason.value,
+            "classifier_failure_reason": reason.value,
+            "classifier_failure_kind": failure_kind.value,
+            "classifier_retry_count": retry_count,
+            "classifier_retry_limit": retry_limit,
+            "classifier_retries_exhausted": attempt.retries_exhausted,
+            "provider": provider,
+            "model": model,
+            "duration_ms": outcome.duration_ms,
+        },
+    )
+    return outcome
 
 
 def _skipped_outcome(
@@ -1590,38 +1679,71 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
                 "error_type": type(exc).__name__,
             },
         )
-        return _outcome(
+        return _classifier_unavailable_outcome(
             started=started,
-            status=AiIntakeStatus.failed,
-            reason=AiIntakeReason.gateway_unavailable,
+            channel=channel,
+            request=request,
             config=config,
-            follow_up_count=request.follow_up_count,
+            attempt_status=AiClassifierAttemptStatus.unavailable,
+            failure_kind=AiClassifierFailureKind.classifier_unavailable,
+            reason=AiIntakeReason.classifier_unavailable,
         )
+    provider = str(response.provider or "")[:80] or None
+    model = str(response.model or "")[:160] or None
     try:
         parsed = AiProviderClassification.model_validate(
             parse_json_object(response.content)
         )
     except (AIClientError, ValidationError, ValueError, TypeError) as exc:
+        failure_kind = (
+            AiClassifierFailureKind.schema_validation_failure
+            if isinstance(exc, ValidationError)
+            else AiClassifierFailureKind.invalid_model_output
+        )
         logger.warning(
             "ai intake model output invalid",
             extra={
                 "event": "ai_intake_invalid_model_output",
                 "channel": channel,
                 "config_id": str(config.id),
-                "reason": AiIntakeReason.invalid_model_output.value,
+                "reason": AiIntakeReason.classifier_invalid_output.value,
+                "classifier_failure_kind": failure_kind.value,
                 "error_type": type(exc).__name__,
+                "provider": provider,
+                "model": model,
             },
         )
-        return _outcome(
+        return _classifier_unavailable_outcome(
             started=started,
-            status=AiIntakeStatus.failed,
-            reason=AiIntakeReason.invalid_model_output,
+            channel=channel,
+            request=request,
             config=config,
-            follow_up_count=request.follow_up_count,
+            attempt_status=AiClassifierAttemptStatus.invalid_output,
+            failure_kind=failure_kind,
+            reason=AiIntakeReason.classifier_invalid_output,
+            provider=provider,
+            model=model,
         )
 
-    provider = str(response.provider or "")[:80] or None
-    model = str(response.model or "")[:160] or None
+    if parsed.intent is AiIntakeIntent.unknown:
+        return _classifier_unavailable_outcome(
+            started=started,
+            channel=channel,
+            request=request,
+            config=config,
+            attempt_status=AiClassifierAttemptStatus.no_accepted_intent,
+            failure_kind=AiClassifierFailureKind.no_accepted_intent,
+            reason=AiIntakeReason.classifier_unavailable,
+            provider=provider,
+            model=model,
+        )
+
+    classifier_attempt = _accepted_classifier_attempt(
+        request=request,
+        config=config,
+        provider=provider,
+        model=model,
+    )
     intent_confident = parsed.confidence >= config.confidence_threshold
     party_type_unclear = _sales_party_type_unclear(
         parsed, confidence_threshold=config.confidence_threshold
@@ -1637,6 +1759,7 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
             follow_up_count=request.follow_up_count,
             provider=provider,
             model=model,
+            classifier_attempt=classifier_attempt,
         )
         logger.info(
             "ai intake classification succeeded",
@@ -1686,6 +1809,7 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
             fallback_due_at=due_at,
             provider=provider,
             model=model,
+            classifier_attempt=classifier_attempt,
         )
         logger.info(
             "ai intake follow-up required",
@@ -1715,6 +1839,7 @@ def classify_message(db: Session, request: AiIntakeRequest) -> AiIntakeOutcome:
         follow_up_count=request.follow_up_count,
         provider=provider,
         model=model,
+        classifier_attempt=classifier_attempt,
     )
     logger.info(
         "ai intake fallback selected",
@@ -1736,6 +1861,7 @@ def route_metadata(outcome: AiIntakeOutcome) -> dict[str, object]:
     """Serialize a validated outcome at the Inbox metadata boundary."""
 
     classification = outcome.classification
+    classifier_attempt = outcome.classifier_attempt
     metadata: dict[str, object] = {
         "ai_intake_status": outcome.status.value,
         "ai_intake_version": AI_INTAKE_VERSION,
@@ -1754,6 +1880,18 @@ def route_metadata(outcome: AiIntakeOutcome) -> dict[str, object]:
         "ai_intake_duration_ms": outcome.duration_ms,
         "ai_intake_provider": outcome.provider,
         "ai_intake_model": outcome.model,
+        "ai_classifier_attempt_status": classifier_attempt.status.value,
+        "ai_classifier_failure_reason": (
+            classifier_attempt.reason.value if classifier_attempt.reason else None
+        ),
+        "ai_classifier_failure_kind": (
+            classifier_attempt.failure_kind.value
+            if classifier_attempt.failure_kind
+            else None
+        ),
+        "ai_classifier_retry_count": classifier_attempt.retry_count,
+        "ai_classifier_retry_limit": classifier_attempt.retry_limit,
+        "ai_classifier_retries_exhausted": classifier_attempt.retries_exhausted,
     }
     if classification is not None:
         metadata.update(

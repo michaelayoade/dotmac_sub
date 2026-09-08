@@ -14,10 +14,14 @@ from app.models.subscriber import (
 )
 from app.models.team_inbox import InboxChannelType, InboxConversation
 from app.schemas.ai_intake import (
+    AiClassifierAttempt,
+    AiClassifierAttemptStatus,
+    AiClassifierFailureKind,
     AiIntakeCategory,
     AiIntakeClassification,
     AiIntakeExtractedFacts,
     AiIntakeIntent,
+    AiIntakeReason,
 )
 from app.services import (
     ai_conversation_intake,
@@ -874,6 +878,109 @@ def test_explicit_human_request_escalates(db_session):
     assert decision.state.escalation_reason == "human_requested"
 
 
+def test_langgraph_classifier_unavailable_asks_and_preserves_facts(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={"conversation_engine_mode": "langgraph_v1"},
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = ai_intake_graph.run_ai_intake_graph(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="My internet is down",
+        classification=None,
+        classifier_attempt=AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.invalid_output,
+            reason=AiIntakeReason.classifier_invalid_output,
+            failure_kind=AiClassifierFailureKind.invalid_model_output,
+            retry_count=1,
+            retry_limit=2,
+            provider="test-provider",
+            model="test-model",
+        ),
+        tool_mode="simulation",
+    )
+
+    assert decision.action == "respond"
+    assert decision.metadata["next_action"] == "ask_question"
+    assert decision.metadata["reason"] == "classifier_unavailable"
+    assert "handle_classifier_unavailable" in decision.metadata["node_trace"]
+    assert "handoff" not in decision.metadata["node_trace"]
+    assert decision.state.collected_facts["connectivity_state"] == "down"
+    assert decision.state.collected_facts["connectivity_problem"] is True
+    assert decision.state.classifier_failure_reason is (
+        AiIntakeReason.classifier_invalid_output
+    )
+
+
+def test_langgraph_classifier_unavailable_hands_off_after_retry_limit(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={"conversation_engine_mode": "langgraph_v1"},
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = ai_intake_graph.run_ai_intake_graph(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Still need help",
+        classification=None,
+        classifier_attempt=AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.unavailable,
+            reason=AiIntakeReason.classifier_unavailable,
+            failure_kind=AiClassifierFailureKind.classifier_unavailable,
+            retry_count=3,
+            retry_limit=2,
+            retries_exhausted=True,
+        ),
+        tool_mode="simulation",
+    )
+
+    assert decision.action == "handoff"
+    assert decision.metadata["reason"] == "classifier_unavailable_after_retries"
+    assert decision.state.escalation_reason == "classifier_unavailable_after_retries"
+    assert "handle_classifier_unavailable" in decision.metadata["node_trace"]
+
+
+def test_langgraph_human_request_precedes_classifier_unavailable(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={"conversation_engine_mode": "langgraph_v1"},
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = ai_intake_graph.run_ai_intake_graph(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="My internet is down but I want an agent",
+        classification=None,
+        classifier_attempt=AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.invalid_output,
+            reason=AiIntakeReason.classifier_invalid_output,
+            failure_kind=AiClassifierFailureKind.schema_validation_failure,
+            retry_count=1,
+            retry_limit=2,
+        ),
+        tool_mode="simulation",
+    )
+
+    assert decision.action == "handoff"
+    assert decision.metadata["reason"] == "human_requested"
+    assert decision.state.human_requested is True
+    assert decision.state.collected_facts["connectivity_state"] == "down"
+    assert "handle_classifier_unavailable" not in decision.metadata["node_trace"]
+
+
 def test_follow_up_classification_is_not_handed_off_by_engine(db_session):
     conversation = _conversation(db_session)
     version = _version(
@@ -1261,6 +1368,8 @@ def test_langgraph_topology_contains_expected_nodes_and_edges():
 
     assert set(ai_intake_graph.GRAPH_NODE_SEQUENCE) <= set(topology)
     assert topology["load_policy"] == ("load_state",)
+    assert "handle_classifier_unavailable" in topology["determine_missing_information"]
+    assert topology["handle_classifier_unavailable"] == ("decide_next_action",)
     assert "request_identifier" in topology["determine_missing_information"]
     assert "execute_tool" in topology["select_tool"]
     assert "handoff" in topology["decide_next_action"]

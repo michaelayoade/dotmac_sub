@@ -153,6 +153,7 @@ class AiIntakeResponsePurpose(StrEnum):
 class AiIntakeStatus(StrEnum):
     skipped = "skipped"
     classifying = "classifying"
+    classification_unavailable = "classification_unavailable"
     awaiting_follow_up = "awaiting_follow_up"
     classified = "classified"
     fallback = "fallback"
@@ -202,10 +203,43 @@ class AiIntakeReason(StrEnum):
     follow_up_limit_reached = "follow_up_limit_reached"
     gateway_unavailable = "gateway_unavailable"
     invalid_model_output = "invalid_model_output"
+    classifier_invalid_output = "classifier_invalid_output"
+    classifier_unavailable = "classifier_unavailable"
+    classifier_unavailable_after_retries = "classifier_unavailable_after_retries"
     invalid_configuration = "invalid_configuration"
     context_error = "context_error"
     fallback_timeout = "fallback_timeout"
     no_text_content = "no_text_content"
+
+
+class AiClassifierAttemptStatus(StrEnum):
+    not_attempted = "not_attempted"
+    accepted = "accepted"
+    invalid_output = "invalid_output"
+    unavailable = "unavailable"
+    no_accepted_intent = "no_accepted_intent"
+
+
+class AiClassifierFailureKind(StrEnum):
+    invalid_model_output = "invalid_model_output"
+    schema_validation_failure = "schema_validation_failure"
+    classifier_unavailable = "classifier_unavailable"
+    no_accepted_intent = "no_accepted_intent"
+
+
+class AiClassifierAttempt(BaseModel):
+    """Safe classifier evidence passed from classification into orchestration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: AiClassifierAttemptStatus = AiClassifierAttemptStatus.not_attempted
+    reason: AiIntakeReason | None = None
+    failure_kind: AiClassifierFailureKind | None = None
+    retry_count: Annotated[int, Field(ge=0, le=10)] = 0
+    retry_limit: Annotated[int, Field(ge=0, le=5)] = 0
+    retries_exhausted: bool = False
+    provider: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=160)
 
 
 class AiIntakeContextMessage(BaseModel):
@@ -259,6 +293,7 @@ class AiIntakeRequest(BaseModel):
     has_active_assignment: bool = False
     awaiting_follow_up: bool = False
     follow_up_count: Annotated[int, Field(ge=0, le=10)] = 0
+    classifier_failure_count: Annotated[int, Field(ge=0, le=10)] = 0
 
 
 class AiProviderClassification(BaseModel):
@@ -323,6 +358,7 @@ class AiIntakeOutcome(BaseModel):
     provider: str | None = Field(default=None, max_length=80)
     model: str | None = Field(default=None, max_length=160)
     duration_ms: Annotated[int, Field(ge=0)] = 0
+    classifier_attempt: AiClassifierAttempt = Field(default_factory=AiClassifierAttempt)
 
 
 class AiIntakeSafeCustomerIdentity(BaseModel):

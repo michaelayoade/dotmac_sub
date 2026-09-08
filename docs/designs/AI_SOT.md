@@ -118,7 +118,7 @@ skipped and the existing channel route remains authoritative. A matching row
 controls channel/scope, confidence, optional clarification turns, fallback
 deadline and team, department overrides, custom instructions, and campaign
 attribution exclusion. The admin contract refuses email and limits
-clarification to one turn.
+clarification to at most five turns.
 
 `app.services.ai_intake` owns typed message understanding and customer-response
 composition. Eligibility remains provider-free. The session processor sends the
@@ -155,6 +155,40 @@ transitions the AI session to `expired` and the Inbox conversation to resolved.
 It creates no handoff note or assignment. A newer customer reply resumes the
 same graph in `collecting_intent`; legacy short-wait rows are extended onto the new
 long-term lifecycle before any expiry consequence.
+
+Classifier transport success is not classifier acceptance. Invalid JSON,
+schema-validation failure, provider unavailability, and a response with no
+accepted intent produce the typed `classification_unavailable` status, a typed
+classifier-attempt status (`invalid_output`, `unavailable`, or
+`no_accepted_intent`), and the more precise safe failure kind
+(`invalid_model_output`, `schema_validation_failure`, `classifier_unavailable`,
+or `no_accepted_intent`). Deterministic and accepted model facts are merged
+before this branch. An explicit deterministic `human_requested` fact takes
+precedence and requests immediate handoff; otherwise both `custom_v1` and
+`langgraph_v1` select `ask_question`, phrase the configured generic
+clarification through the existing customer-response composer, and enter
+`awaiting_customer`. Composer failure uses that same configured question as its
+safe fallback.
+
+A later customer message is classified with the existing session state. Each
+classifier-failure turn consumes the existing configured clarification-turn
+budget; no second retry-limit system and no synchronous retry loop exists. A
+successful classification resets the consecutive failure count. Only failure
+after the configured limit requests handoff, with
+`classifier_unavailable_after_retries`. The reasons
+`classifier_invalid_output` and `classifier_unavailable` describe classifier
+evidence; `unsupported_or_troubleshooting_exhausted` is reserved for an accepted
+classification whose applicable playbook, tool, follow-up, and support options
+are genuinely unavailable or exhausted.
+
+The generation-attempt record, session state, selected inbound metadata, and
+structured worker logs retain only safe classifier evidence: provider/model,
+attempt status, validation/failure reason, retry count and limit, exhaustion,
+selected engine/action, graph node trace, and recovery or final handoff reason.
+Raw customer content and full model output are not added to logs. Celery workers
+install the application JSON formatter so these structured fields are emitted
+to the configured log aggregation backend rather than discarded by a plain
+worker formatter.
 
 Inbound processing serializes one channel/thread with a PostgreSQL transaction
 advisory lock, then locks an existing conversation row before reading or

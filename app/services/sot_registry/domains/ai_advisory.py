@@ -243,7 +243,7 @@ DOMAIN = DomainSOT(
                 "AI intake subscriber monitoring tool resolver",
                 "AI generation attempt evidence",
                 "customer-message intake eligibility policy",
-                "bounded customer-message intent classification",
+                "bounded customer-message classification and failure recovery",
                 "bounded customer-response composition",
                 "customer contact-data cleaning eligibility policy",
             ),
@@ -281,7 +281,13 @@ DOMAIN = DomainSOT(
                 "typed validator rejects invented facts, unsafe promises, repeated "
                 "questions, and internal terminology. Customer inactivity remains "
                 "awaiting_customer until long-term expiry and never requests human "
-                "assignment by itself."
+                "assignment by itself. An invalid, unavailable, or unaccepted "
+                "classifier result is a typed classification_unavailable condition: "
+                "deterministic facts and human-request precedence are preserved, and "
+                "the engine uses the existing bounded clarification budget before an "
+                "explicit classifier_unavailable_after_retries handoff. The "
+                "unsupported_or_troubleshooting_exhausted reason requires an accepted "
+                "classification and genuinely unavailable support options."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -377,7 +383,10 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     ConcernContract(
-                        name="bounded customer-message intent classification",
+                        name=(
+                            "bounded customer-message classification and failure "
+                            "recovery"
+                        ),
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "enabled matching AI intake configuration",
@@ -523,7 +532,11 @@ DOMAIN = DomainSOT(
                         "Clarification delivery uses an inbound-message-derived communication-intent "
                         "dedupe key."
                     ),
-                    retries="No synchronous retry beyond ai.gateway's configured fallback provider.",
+                    retries=(
+                        "No synchronous retry beyond ai.gateway's configured fallback "
+                        "provider. Classifier recovery occurs only on a later customer "
+                        "turn and reuses the configured clarification-turn limit."
+                    ),
                 ),
                 errors=ErrorContract(
                     domain_codes=(
@@ -531,12 +544,15 @@ DOMAIN = DomainSOT(
                         "ai.intake.invalid_configuration",
                         "ai.intake.invalid_model_output",
                         "ai.intake.gateway_unavailable",
+                        "ai.intake.classifier_invalid_output",
+                        "ai.intake.classifier_unavailable",
+                        "ai.intake.classifier_unavailable_after_retries",
                     ),
                     mapping_owner="Team Inbox processing and AI operations API adapters",
                     fail_closed_on=(
                         "invalid or missing configuration",
-                        "invalid provider output",
-                        "provider unavailability",
+                        "invalid provider output (bounded clarification only)",
+                        "provider unavailability (bounded clarification only)",
                     ),
                 ),
                 events=EventContract(

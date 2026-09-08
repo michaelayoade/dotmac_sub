@@ -38,6 +38,7 @@ from app.models.team_inbox import (
 )
 from app.schemas.ai_intake import (
     DEFAULT_CLARIFICATION_QUESTIONS,
+    AiClassifierAttemptStatus,
     AiCustomerResponseCompositionRequest,
     AiIntakeCategory,
     AiIntakeClassification,
@@ -2702,7 +2703,11 @@ def _composition_request(
         latest_customer_statement=str(inbound.body or "")[:1200],
         recent_messages=recent,
         facts=_composition_facts(state),
-        missing_fact_keys=tuple(state.missing_facts[-12:]),
+        missing_fact_keys=tuple(
+            dict.fromkeys(
+                [*state.missing_facts[-12:], *([question_key] if question_key else [])]
+            )
+        ),
         asked_question_keys=tuple(item.key for item in state.question_history[-12:]),
         troubleshooting_completed=tuple(state.troubleshooting_completed[-12:]),
         customer_identity=AiIntakeSafeCustomerIdentity(
@@ -3071,6 +3076,12 @@ def _process_one_session(
             )
         )
     recent = tuple(recent_items)
+    prior_classifier_failure_count = _bounded_int(
+        dict(session.metadata_ or {}).get("classifier_failure_count"),
+        default=0,
+        minimum=0,
+        maximum=10,
+    )
     request = AiIntakeRequest(
         channel_type=conversation.channel_type,
         provider=session.provider,
@@ -3086,14 +3097,27 @@ def _process_one_session(
         has_active_assignment=False,
         awaiting_follow_up=was_awaiting_customer,
         follow_up_count=session.turn_count,
+        classifier_failure_count=prior_classifier_failure_count,
     )
     outcome = ai_intake.classify_message(db, request)
     engine_enabled = _session_engine_enabled(db, session=session, version=version)
+    legacy_classifier_clarification = not engine_enabled and (
+        outcome.status is AiIntakeStatus.awaiting_follow_up
+        or (
+            outcome.status is AiIntakeStatus.classification_unavailable
+            and not outcome.classifier_attempt.retries_exhausted
+        )
+    )
     metadata.update(ai_intake.route_metadata(outcome))
-    if outcome.status == AiIntakeStatus.awaiting_follow_up and not engine_enabled:
+    if legacy_classifier_clarification:
         metadata.setdefault("ai_intake_engine_action", "legacy_clarification")
         metadata.setdefault(
-            "ai_intake_engine_reason", "legacy_classifier_clarification"
+            "ai_intake_engine_reason",
+            (
+                "classifier_unavailable"
+                if outcome.status is AiIntakeStatus.classification_unavailable
+                else "legacy_classifier_clarification"
+            ),
         )
     inbound.metadata_ = metadata
     conversation_metadata = dict(conversation.metadata_ or {})
@@ -3114,15 +3138,114 @@ def _process_one_session(
         model=outcome.model,
         duration_ms=outcome.duration_ms,
         error_code=outcome.reason.value,
+        metadata={
+            "classifier_attempt_status": outcome.classifier_attempt.status.value,
+            "classifier_failure_reason": (
+                outcome.classifier_attempt.reason.value
+                if outcome.classifier_attempt.reason is not None
+                else None
+            ),
+            "classifier_failure_kind": (
+                outcome.classifier_attempt.failure_kind.value
+                if outcome.classifier_attempt.failure_kind is not None
+                else None
+            ),
+            "classifier_retry_count": outcome.classifier_attempt.retry_count,
+            "classifier_retry_limit": outcome.classifier_attempt.retry_limit,
+            "classifier_retries_exhausted": (
+                outcome.classifier_attempt.retries_exhausted
+            ),
+            "app_revision": get_app_revision(),
+        },
     )
     session_metadata = dict(session.metadata_ or {})
     session_metadata["last_generation_attempt_id"] = str(generation.id)
+    session_metadata["classifier_attempt_status"] = (
+        outcome.classifier_attempt.status.value
+    )
+    session_metadata["classifier_failure_reason"] = (
+        outcome.classifier_attempt.reason.value
+        if outcome.classifier_attempt.reason is not None
+        else None
+    )
+    session_metadata["classifier_failure_kind"] = (
+        outcome.classifier_attempt.failure_kind.value
+        if outcome.classifier_attempt.failure_kind is not None
+        else None
+    )
+    session_metadata["classifier_retry_count"] = outcome.classifier_attempt.retry_count
+    session_metadata["classifier_retry_limit"] = outcome.classifier_attempt.retry_limit
+    session_metadata["classifier_retries_exhausted"] = (
+        outcome.classifier_attempt.retries_exhausted
+    )
+    if outcome.classifier_attempt.status is AiClassifierAttemptStatus.accepted:
+        session_metadata["classifier_failure_count"] = 0
+        if prior_classifier_failure_count:
+            session_metadata["classifier_recovered_after_failures"] = (
+                prior_classifier_failure_count
+            )
+    else:
+        session_metadata["classifier_failure_count"] = (
+            outcome.classifier_attempt.retry_count
+        )
     session.metadata_ = session_metadata
+    logger.info(
+        "ai intake classifier attempt recorded",
+        extra={
+            "event": "ai_intake_classifier_attempt_recorded",
+            "conversation_id": str(conversation.id),
+            "session_id": str(session.id),
+            "inbound_message_id": str(inbound.id),
+            "policy_version_id": (
+                str(session.policy_version_id) if session.policy_version_id else None
+            ),
+            "provider": outcome.classifier_attempt.provider,
+            "model": outcome.classifier_attempt.model,
+            "classifier_attempt_status": outcome.classifier_attempt.status.value,
+            "classifier_failure_reason": (
+                outcome.classifier_attempt.reason.value
+                if outcome.classifier_attempt.reason is not None
+                else None
+            ),
+            "classifier_failure_kind": (
+                outcome.classifier_attempt.failure_kind.value
+                if outcome.classifier_attempt.failure_kind is not None
+                else None
+            ),
+            "classifier_retry_count": outcome.classifier_attempt.retry_count,
+            "classifier_retry_limit": outcome.classifier_attempt.retry_limit,
+            "classifier_retries_exhausted": (
+                outcome.classifier_attempt.retries_exhausted
+            ),
+            "app_revision": get_app_revision(),
+        },
+    )
+    if (
+        outcome.classifier_attempt.status is AiClassifierAttemptStatus.accepted
+        and prior_classifier_failure_count
+    ):
+        logger.info(
+            "ai intake classifier recovered",
+            extra={
+                "event": "ai_intake_classifier_recovered",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "policy_version_id": (
+                    str(session.policy_version_id)
+                    if session.policy_version_id
+                    else None
+                ),
+                "provider": outcome.classifier_attempt.provider,
+                "model": outcome.classifier_attempt.model,
+                "recovered_after_failures": prior_classifier_failure_count,
+            },
+        )
     engine_forced_handoff = False
     engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
         None
     )
-    if outcome.status == AiIntakeStatus.awaiting_follow_up and not engine_enabled:
+    if legacy_classifier_clarification:
         delivery_question = " ".join(
             str(
                 metadata.get("ai_intake_follow_up_question")
@@ -3238,6 +3361,7 @@ def _process_one_session(
                     version=version,
                     latest_body=str(inbound.body or ""),
                     classification=outcome.classification,
+                    classifier_attempt=outcome.classifier_attempt,
                     recent_messages=recent,
                 )
                 engine_name = ai_intake_graph.LANGGRAPH_ENGINE_MODE
@@ -3263,6 +3387,7 @@ def _process_one_session(
                     version=version,
                     latest_body=str(inbound.body or ""),
                     classification=outcome.classification,
+                    classifier_attempt=outcome.classifier_attempt,
                 )
                 engine_name = "composable_v1_fallback"
         else:
@@ -3274,12 +3399,35 @@ def _process_one_session(
                 version=version,
                 latest_body=str(inbound.body or ""),
                 classification=outcome.classification,
+                classifier_attempt=outcome.classifier_attempt,
             )
         ai_intake_conversation_engine.persist_state(session, decision.state)
         metadata["ai_intake_engine_requested"] = requested_engine_name
         metadata["ai_intake_engine"] = engine_name
         metadata["ai_intake_engine_action"] = decision.action
+        metadata["ai_intake_selected_action"] = (
+            decision.metadata.get("next_action") or decision.action
+        )
         metadata["ai_intake_engine_reason"] = decision.metadata.get("reason")
+        metadata["ai_intake_classifier_attempt_status"] = (
+            outcome.classifier_attempt.status.value
+        )
+        metadata["ai_intake_classifier_failure_reason"] = (
+            outcome.classifier_attempt.reason.value
+            if outcome.classifier_attempt.reason is not None
+            else None
+        )
+        metadata["ai_intake_classifier_failure_kind"] = (
+            outcome.classifier_attempt.failure_kind.value
+            if outcome.classifier_attempt.failure_kind is not None
+            else None
+        )
+        metadata["ai_intake_classifier_retry_count"] = (
+            outcome.classifier_attempt.retry_count
+        )
+        metadata["ai_intake_classifier_retry_limit"] = (
+            outcome.classifier_attempt.retry_limit
+        )
         raw_node_trace = decision.metadata.get("node_trace")
         node_trace = (
             [str(item) for item in raw_node_trace if str(item)][-40:]
@@ -3318,7 +3466,26 @@ def _process_one_session(
                 "engine_mode": engine_name,
                 "requested_engine": requested_engine_name,
                 "engine_action": decision.action,
+                "selected_action": (
+                    decision.metadata.get("next_action") or decision.action
+                ),
                 "engine_reason": decision.metadata.get("reason"),
+                "classifier_attempt_status": outcome.classifier_attempt.status.value,
+                "classifier_failure_reason": (
+                    outcome.classifier_attempt.reason.value
+                    if outcome.classifier_attempt.reason is not None
+                    else None
+                ),
+                "classifier_failure_kind": (
+                    outcome.classifier_attempt.failure_kind.value
+                    if outcome.classifier_attempt.failure_kind is not None
+                    else None
+                ),
+                "classifier_retry_count": outcome.classifier_attempt.retry_count,
+                "classifier_retry_limit": outcome.classifier_attempt.retry_limit,
+                "classifier_retries_exhausted": (
+                    outcome.classifier_attempt.retries_exhausted
+                ),
                 "human_requested": decision.state.human_requested,
                 "current_intent": decision.state.current_intent,
                 "previous_intent": decision.state.previous_intent,
@@ -3330,6 +3497,43 @@ def _process_one_session(
         )
         conversation_metadata["ai_intake"] = intake_metadata
         conversation.metadata_ = conversation_metadata
+        logger.info(
+            "ai intake conversation decision selected",
+            extra={
+                "event": "ai_intake_conversation_decision_selected",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "policy_version_id": (
+                    str(session.policy_version_id)
+                    if session.policy_version_id
+                    else None
+                ),
+                "requested_engine": requested_engine_name,
+                "actual_engine": engine_name,
+                "selected_action": (
+                    decision.metadata.get("next_action") or decision.action
+                ),
+                "delivery_action": decision.action,
+                "reason": decision.metadata.get("reason"),
+                "classifier_attempt_status": outcome.classifier_attempt.status.value,
+                "classifier_failure_reason": (
+                    outcome.classifier_attempt.reason.value
+                    if outcome.classifier_attempt.reason is not None
+                    else None
+                ),
+                "classifier_failure_kind": (
+                    outcome.classifier_attempt.failure_kind.value
+                    if outcome.classifier_attempt.failure_kind is not None
+                    else None
+                ),
+                "classifier_retry_count": outcome.classifier_attempt.retry_count,
+                "classifier_retry_limit": outcome.classifier_attempt.retry_limit,
+                "classifier_retries_exhausted": (
+                    outcome.classifier_attempt.retries_exhausted
+                ),
+            },
+        )
         composition_attempt: AiIntakeGenerationAttempt | None = None
         composition = None
         if (
@@ -3473,6 +3677,44 @@ def _process_one_session(
                 mark_conversation_ai_metadata(
                     conversation, session=session, active=True
                 )
+                if decision.metadata.get("reason") == "classifier_unavailable":
+                    logger.info(
+                        "ai intake classifier clarification awaiting customer",
+                        extra={
+                            "event": (
+                                "ai_intake_classifier_clarification_awaiting_customer"
+                            ),
+                            "conversation_id": str(conversation.id),
+                            "session_id": str(session.id),
+                            "inbound_message_id": str(inbound.id),
+                            "policy_version_id": (
+                                str(session.policy_version_id)
+                                if session.policy_version_id
+                                else None
+                            ),
+                            "requested_engine": requested_engine_name,
+                            "actual_engine": engine_name,
+                            "selected_action": "ask_question",
+                            "reason": "classifier_unavailable",
+                            "classifier_failure_reason": (
+                                outcome.classifier_attempt.reason.value
+                                if outcome.classifier_attempt.reason is not None
+                                else None
+                            ),
+                            "classifier_failure_kind": (
+                                outcome.classifier_attempt.failure_kind.value
+                                if outcome.classifier_attempt.failure_kind is not None
+                                else None
+                            ),
+                            "classifier_retry_count": (
+                                outcome.classifier_attempt.retry_count
+                            ),
+                            "classifier_retry_limit": (
+                                outcome.classifier_attempt.retry_limit
+                            ),
+                            "session_state": "awaiting_customer",
+                        },
+                    )
                 mark_inbound_processed(
                     session,
                     inbound_message_id=inbound.id,
@@ -3614,9 +3856,12 @@ def _process_one_session(
             follow_up_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
         metadata["ai_intake_follow_up_question"] = follow_up_question
         inbound.metadata_ = metadata
-    should_deliver_follow_up = (
-        not engine_forced_handoff
-        and outcome.status == AiIntakeStatus.awaiting_follow_up
+    should_deliver_follow_up = not engine_forced_handoff and (
+        outcome.status is AiIntakeStatus.awaiting_follow_up
+        or (
+            outcome.status is AiIntakeStatus.classification_unavailable
+            and not outcome.classifier_attempt.retries_exhausted
+        )
     )
     if should_deliver_follow_up:
         delivery_question = " ".join(

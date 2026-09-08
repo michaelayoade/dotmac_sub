@@ -10,6 +10,8 @@ from app.models.ai_intake import AiIntakeConfig
 from app.models.service_team import ServiceTeam
 from app.schemas.ai_intake import (
     CUSTOMER_TYPE_FOLLOW_UP_QUESTION,
+    AiClassifierAttemptStatus,
+    AiClassifierFailureKind,
     AiCustomerResponseCompositionRequest,
     AiIntakeCategory,
     AiIntakeContextMessage,
@@ -322,12 +324,47 @@ def test_unknown_intent_malformed_json_and_invalid_confidence_fail_closed(
     gateway.content = _classification(confidence=1.2)
     invalid_confidence = ai_intake.classify_message(db_session, _request())
 
-    assert unknown.reason is AiIntakeReason.invalid_model_output
-    assert malformed.reason is AiIntakeReason.invalid_model_output
-    assert invalid_confidence.reason is AiIntakeReason.invalid_model_output
+    assert unknown.reason is AiIntakeReason.classifier_invalid_output
+    assert malformed.reason is AiIntakeReason.classifier_invalid_output
+    assert invalid_confidence.reason is AiIntakeReason.classifier_invalid_output
     assert all(
-        outcome.status is AiIntakeStatus.failed
+        outcome.status is AiIntakeStatus.classification_unavailable
         for outcome in (unknown, malformed, invalid_confidence)
+    )
+    assert all(
+        outcome.classifier_attempt.status is AiClassifierAttemptStatus.invalid_output
+        for outcome in (unknown, malformed, invalid_confidence)
+    )
+    assert unknown.classifier_attempt.failure_kind is (
+        AiClassifierFailureKind.schema_validation_failure
+    )
+    assert malformed.classifier_attempt.failure_kind is (
+        AiClassifierFailureKind.invalid_model_output
+    )
+    assert invalid_confidence.classifier_attempt.failure_kind is (
+        AiClassifierFailureKind.schema_validation_failure
+    )
+    assert malformed.provider == "test-provider"
+    assert malformed.model == "test-model"
+    assert malformed.classifier_attempt.retry_count == 1
+    assert malformed.classifier_attempt.retry_limit == 1
+    assert malformed.classifier_attempt.retries_exhausted is False
+
+
+def test_classifier_unknown_intent_is_no_accepted_intent(db_session, monkeypatch):
+    _config(db_session)
+    gateway = _Gateway(_classification(intent="unknown", category="unknown"))
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    outcome = ai_intake.classify_message(db_session, _request())
+
+    assert outcome.status is AiIntakeStatus.classification_unavailable
+    assert outcome.reason is AiIntakeReason.classifier_unavailable
+    assert outcome.classifier_attempt.status is (
+        AiClassifierAttemptStatus.no_accepted_intent
+    )
+    assert outcome.classifier_attempt.failure_kind is (
+        AiClassifierFailureKind.no_accepted_intent
     )
 
 
@@ -690,13 +727,44 @@ def test_active_ai_session_keeps_existing_conversation_eligible(db_session):
     assert outcome.reason is AiIntakeReason.classified
 
 
-def test_gateway_failure_returns_fallback_metadata(db_session, monkeypatch):
+def test_gateway_failure_returns_classifier_unavailable_metadata(
+    db_session, monkeypatch
+):
     _config(db_session)
     gateway = _Gateway(error=AIClientError("provider unavailable"))
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     outcome = ai_intake.classify_message(db_session, _request())
 
-    assert outcome.status is AiIntakeStatus.failed
-    assert outcome.reason is AiIntakeReason.gateway_unavailable
-    assert ai_intake.route_metadata(outcome)["ai_intake_status"] == "failed"
+    assert outcome.status is AiIntakeStatus.classification_unavailable
+    assert outcome.reason is AiIntakeReason.classifier_unavailable
+    assert outcome.classifier_attempt.status is AiClassifierAttemptStatus.unavailable
+    assert outcome.classifier_attempt.failure_kind is (
+        AiClassifierFailureKind.classifier_unavailable
+    )
+    assert ai_intake.route_metadata(outcome)["ai_intake_status"] == (
+        "classification_unavailable"
+    )
+
+
+def test_classifier_failure_uses_existing_clarification_limit(db_session, monkeypatch):
+    _config(db_session, max_clarification_turns=1)
+    gateway = _Gateway("not-json")
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    first = ai_intake.classify_message(db_session, _request())
+    exhausted = ai_intake.classify_message(
+        db_session,
+        _request(follow_up_count=1, classifier_failure_count=1),
+    )
+
+    assert first.reason is AiIntakeReason.classifier_invalid_output
+    assert first.follow_up_count == 1
+    assert first.classifier_attempt.retries_exhausted is False
+    assert exhausted.reason is AiIntakeReason.classifier_unavailable_after_retries
+    assert (
+        exhausted.classifier_attempt.reason is AiIntakeReason.classifier_invalid_output
+    )
+    assert exhausted.follow_up_count == 1
+    assert exhausted.classifier_attempt.retry_count == 2
+    assert exhausted.classifier_attempt.retries_exhausted is True

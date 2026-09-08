@@ -19,9 +19,14 @@ from sqlalchemy.orm import Session
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
 from app.models.team_inbox import InboxConversation
 from app.schemas.ai_intake import (
+    DEFAULT_CLARIFICATION_QUESTIONS,
+    AiClassifierAttempt,
+    AiClassifierAttemptStatus,
+    AiClassifierFailureKind,
     AiIntakeAnswerStatus,
     AiIntakeClassification,
     AiIntakeExtractedFacts,
+    AiIntakeReason,
 )
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
@@ -220,6 +225,14 @@ class ConversationalState:
     confidence: float | None = None
     classification_requires_follow_up: bool = False
     classification_follow_up_question: str | None = None
+    classifier_attempt_status: AiClassifierAttemptStatus = (
+        AiClassifierAttemptStatus.not_attempted
+    )
+    classifier_failure_reason: AiIntakeReason | None = None
+    classifier_failure_kind: AiClassifierFailureKind | None = None
+    classifier_retry_count: int = 0
+    classifier_retry_limit: int = 0
+    classifier_retries_exhausted: bool = False
     subscriber_id: str | None = None
     contact_identity: dict[str, object] = field(default_factory=dict)
     portal_id: str | None = None
@@ -283,6 +296,24 @@ class ConversationalState:
                 classification_follow_up_question=_text_or_none(
                     raw.get("classification_follow_up_question")
                 ),
+                classifier_attempt_status=_classifier_attempt_status(
+                    raw.get("classifier_attempt_status")
+                ),
+                classifier_failure_reason=_classifier_failure_reason(
+                    raw.get("classifier_failure_reason")
+                ),
+                classifier_failure_kind=_classifier_failure_kind(
+                    raw.get("classifier_failure_kind")
+                ),
+                classifier_retry_count=_bounded_int(
+                    raw.get("classifier_retry_count"), default=0, low=0, high=10
+                ),
+                classifier_retry_limit=_bounded_int(
+                    raw.get("classifier_retry_limit"), default=0, low=0, high=5
+                ),
+                classifier_retries_exhausted=bool(
+                    raw.get("classifier_retries_exhausted")
+                ),
                 subscriber_id=_text_or_none(raw.get("subscriber_id")),
                 contact_identity=_dict(raw.get("contact_identity")),
                 portal_id=_text_or_none(raw.get("portal_id")),
@@ -337,6 +368,20 @@ class ConversationalState:
                 self.classification_requires_follow_up
             ),
             "classification_follow_up_question": self.classification_follow_up_question,
+            "classifier_attempt_status": self.classifier_attempt_status.value,
+            "classifier_failure_reason": (
+                self.classifier_failure_reason.value
+                if self.classifier_failure_reason is not None
+                else None
+            ),
+            "classifier_failure_kind": (
+                self.classifier_failure_kind.value
+                if self.classifier_failure_kind is not None
+                else None
+            ),
+            "classifier_retry_count": self.classifier_retry_count,
+            "classifier_retry_limit": self.classifier_retry_limit,
+            "classifier_retries_exhausted": self.classifier_retries_exhausted,
             "subscriber_id": self.subscriber_id,
             "contact_identity": self.contact_identity,
             "portal_id": self.portal_id,
@@ -418,6 +463,7 @@ def run_conversational_turn(
     version: AiIntakePolicyVersion | None,
     latest_body: str,
     classification: AiIntakeClassification | None,
+    classifier_attempt: AiClassifierAttempt | None = None,
     now: datetime | None = None,
     tool_mode: str = "live_read_only",
 ) -> ConversationEngineDecision:
@@ -426,6 +472,12 @@ def run_conversational_turn(
     now = now or datetime.now(UTC)
     state.turn_count += 1
     _append_statement(state, latest_body)
+    resolved_classifier_attempt = _resolve_classifier_attempt(
+        classification=classification,
+        classifier_attempt=classifier_attempt,
+        retry_limit=max(0, min(session.max_turns - 1, 5)),
+    )
+    _merge_classifier_attempt(state, resolved_classifier_attempt)
     facts = extract_facts(latest_body)
     _merge_facts(state, facts)
     _merge_classification(state, classification)
@@ -450,6 +502,15 @@ def run_conversational_turn(
                 policy,
                 default="I will pass this to a support agent now.",
             ),
+        )
+
+    if classifier_attempt_unavailable(resolved_classifier_attempt):
+        return classifier_unavailable_decision(
+            state=state,
+            policy=policy,
+            classifier_attempt=resolved_classifier_attempt,
+            question=_classifier_unavailable_question(version),
+            now=now,
         )
 
     _merge_contact_from_conversation(state, conversation, db)
@@ -1126,6 +1187,134 @@ def _merge_facts(state: ConversationalState, facts: dict[str, object]) -> None:
     elif connectivity_state == "down":
         state.collected_facts["connectivity_problem"] = True
         state.collected_facts["slow_internet"] = False
+
+
+def _resolve_classifier_attempt(
+    *,
+    classification: AiIntakeClassification | None,
+    classifier_attempt: AiClassifierAttempt | None,
+    retry_limit: int,
+) -> AiClassifierAttempt:
+    if classifier_attempt is not None:
+        if classifier_attempt.status is AiClassifierAttemptStatus.accepted:
+            if classification is not None:
+                return classifier_attempt
+            return AiClassifierAttempt(
+                status=AiClassifierAttemptStatus.no_accepted_intent,
+                reason=AiIntakeReason.classifier_unavailable,
+                failure_kind=AiClassifierFailureKind.no_accepted_intent,
+                retry_count=max(1, classifier_attempt.retry_count),
+                retry_limit=classifier_attempt.retry_limit,
+                retries_exhausted=classifier_attempt.retry_limit == 0,
+                provider=classifier_attempt.provider,
+                model=classifier_attempt.model,
+            )
+        if classifier_attempt.status is not AiClassifierAttemptStatus.not_attempted:
+            return classifier_attempt
+    if classification is not None:
+        return AiClassifierAttempt(
+            status=AiClassifierAttemptStatus.accepted,
+            retry_limit=retry_limit,
+        )
+    return AiClassifierAttempt(
+        status=AiClassifierAttemptStatus.unavailable,
+        reason=AiIntakeReason.classifier_unavailable,
+        failure_kind=AiClassifierFailureKind.classifier_unavailable,
+        retry_count=1,
+        retry_limit=retry_limit,
+        retries_exhausted=retry_limit == 0,
+    )
+
+
+def classifier_attempt_unavailable(attempt: AiClassifierAttempt) -> bool:
+    return attempt.status in {
+        AiClassifierAttemptStatus.invalid_output,
+        AiClassifierAttemptStatus.unavailable,
+        AiClassifierAttemptStatus.no_accepted_intent,
+    }
+
+
+def _merge_classifier_attempt(
+    state: ConversationalState, attempt: AiClassifierAttempt
+) -> None:
+    state.classifier_attempt_status = attempt.status
+    state.classifier_failure_reason = attempt.reason
+    state.classifier_failure_kind = attempt.failure_kind
+    state.classifier_retry_count = attempt.retry_count
+    state.classifier_retry_limit = attempt.retry_limit
+    state.classifier_retries_exhausted = attempt.retries_exhausted
+    if classifier_attempt_unavailable(attempt):
+        state.classification_requires_follow_up = not attempt.retries_exhausted
+        state.classification_follow_up_question = None
+
+
+def _classifier_unavailable_question(
+    version: AiIntakePolicyVersion | None,
+) -> str:
+    raw = version.clarification_questions if version is not None else None
+    if isinstance(raw, list | tuple) and raw:
+        question = str(raw[0] or "").strip()
+        if question:
+            return question[:300]
+    return DEFAULT_CLARIFICATION_QUESTIONS[0]
+
+
+def classifier_unavailable_decision(
+    *,
+    state: ConversationalState,
+    policy: dict[str, object],
+    classifier_attempt: AiClassifierAttempt,
+    question: str,
+    now: datetime,
+) -> ConversationEngineDecision:
+    if classifier_attempt.retries_exhausted:
+        return _handoff_decision(
+            policy,
+            state,
+            reason=AiIntakeReason.classifier_unavailable_after_retries.value,
+            response=_handoff_response(
+                policy,
+                default=(
+                    "I could not reliably understand the request after the "
+                    "available clarification attempts, so I will pass it to "
+                    "the support team."
+                ),
+            ),
+        )
+    clarification = _record_question(
+        state,
+        key="classifier_unavailable_clarification",
+        expected_fact="intent",
+        prompt=question,
+        now=now,
+    )
+    return ConversationEngineDecision(
+        action="respond",
+        state=state,
+        response_text=clarification.prompt,
+        metadata={
+            "reason": AiIntakeReason.classifier_unavailable.value,
+            "classifier_failure_reason": (
+                classifier_attempt.reason.value
+                if classifier_attempt.reason is not None
+                else None
+            ),
+            "classifier_attempt_status": classifier_attempt.status.value,
+            "classifier_failure_kind": (
+                classifier_attempt.failure_kind.value
+                if classifier_attempt.failure_kind is not None
+                else None
+            ),
+            "classifier_retry_count": classifier_attempt.retry_count,
+            "classifier_retry_limit": classifier_attempt.retry_limit,
+            "classifier_retries_exhausted": False,
+            "question_key": clarification.key,
+            "expected_fact": clarification.expected_fact,
+            "answer_status": clarification.answer_status.value,
+            "next_action": "ask_question",
+            "response_source": "template",
+        },
+    )
 
 
 def _merge_classification(
@@ -2317,6 +2506,31 @@ def _float_or_none(value: object) -> float | None:
     try:
         return float(str(value)) if value is not None else None
     except (TypeError, ValueError):
+        return None
+
+
+def _classifier_attempt_status(value: object) -> AiClassifierAttemptStatus:
+    try:
+        return AiClassifierAttemptStatus(str(value or "not_attempted"))
+    except ValueError:
+        return AiClassifierAttemptStatus.not_attempted
+
+
+def _classifier_failure_reason(value: object) -> AiIntakeReason | None:
+    if value is None:
+        return None
+    try:
+        return AiIntakeReason(str(value))
+    except ValueError:
+        return None
+
+
+def _classifier_failure_kind(value: object) -> AiClassifierFailureKind | None:
+    if value is None:
+        return None
+    try:
+        return AiClassifierFailureKind(str(value))
+    except ValueError:
         return None
 
 

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
 from app.models.team_inbox import InboxConversation
-from app.schemas.ai_intake import AiIntakeClassification
+from app.schemas.ai_intake import AiClassifierAttempt, AiIntakeClassification
 from app.services import ai_intake_conversation_engine as engine
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ GRAPH_NODE_SEQUENCE: tuple[str, ...] = (
     "merge_facts",
     "identify_customer",
     "determine_missing_information",
+    "handle_classifier_unavailable",
     "request_identifier",
     "select_tool",
     "execute_tool",
@@ -62,6 +63,12 @@ class AiIntakeGraphState(TypedDict, total=False):
     previous_intent: str | None
     category: str | None
     confidence: float | None
+    classifier_attempt_status: str
+    classifier_failure_reason: str | None
+    classifier_failure_kind: str | None
+    classifier_retry_count: int
+    classifier_retry_limit: int
+    classifier_retries_exhausted: bool
     customer_identity: dict[str, object]
     subscriber_id: str | None
     portal_id: str | None
@@ -105,6 +112,7 @@ class _GraphRuntime:
     version: AiIntakePolicyVersion | None
     latest_body: str
     classification: AiIntakeClassification | None
+    classifier_attempt: AiClassifierAttempt
     recent_messages: tuple[dict[str, str], ...]
     now: datetime
     tool_mode: str
@@ -135,6 +143,7 @@ def run_ai_intake_graph(
     version: AiIntakePolicyVersion | None,
     latest_body: str,
     classification: AiIntakeClassification | None,
+    classifier_attempt: AiClassifierAttempt | None = None,
     recent_messages: Sequence[object] = (),
     now: datetime | None = None,
     tool_mode: str = "live_read_only",
@@ -142,6 +151,11 @@ def run_ai_intake_graph(
     """Run one inbound-message graph turn and return the existing decision type."""
 
     _, state_graph = _langgraph_runtime()
+    resolved_classifier_attempt = engine._resolve_classifier_attempt(
+        classification=classification,
+        classifier_attempt=classifier_attempt,
+        retry_limit=max(0, min(session.max_turns - 1, 5)),
+    )
     runtime = _GraphRuntime(
         db=db,
         conversation=conversation,
@@ -149,6 +163,7 @@ def run_ai_intake_graph(
         version=version,
         latest_body=str(latest_body or ""),
         classification=classification,
+        classifier_attempt=resolved_classifier_attempt,
         recent_messages=_serialize_recent_messages(recent_messages),
         now=now or datetime.now(UTC),
         tool_mode=tool_mode,
@@ -162,6 +177,22 @@ def run_ai_intake_graph(
             "session_id": str(session.id),
             "policy_version_id": str(version.id) if version is not None else None,
             "engine": LANGGRAPH_ENGINE_MODE,
+            "classifier_attempt_status": resolved_classifier_attempt.status.value,
+            "classifier_failure_reason": (
+                resolved_classifier_attempt.reason.value
+                if resolved_classifier_attempt.reason is not None
+                else None
+            ),
+            "classifier_failure_kind": (
+                resolved_classifier_attempt.failure_kind.value
+                if resolved_classifier_attempt.failure_kind is not None
+                else None
+            ),
+            "classifier_retry_count": resolved_classifier_attempt.retry_count,
+            "classifier_retry_limit": resolved_classifier_attempt.retry_limit,
+            "classifier_retries_exhausted": (
+                resolved_classifier_attempt.retries_exhausted
+            ),
         },
     )
     result = graph.invoke(
@@ -217,10 +248,12 @@ def graph_topology() -> dict[str, tuple[str, ...]]:
         "merge_facts": ("handoff", "identify_customer"),
         "identify_customer": ("determine_missing_information",),
         "determine_missing_information": (
+            "handle_classifier_unavailable",
             "request_identifier",
             "handoff",
             "select_tool",
         ),
+        "handle_classifier_unavailable": ("decide_next_action",),
         "request_identifier": ("compose_response",),
         "select_tool": ("execute_tool", "troubleshoot", "handoff"),
         "execute_tool": ("interpret_tool_result",),
@@ -258,6 +291,10 @@ def _build_graph(state_graph: Any, runtime: _GraphRuntime) -> Any:
         "determine_missing_information",
         _determine_missing_information(runtime),
     )
+    builder.add_node(
+        "handle_classifier_unavailable",
+        _handle_classifier_unavailable(runtime),
+    )
     builder.add_node("request_identifier", _request_identifier(runtime))
     builder.add_node("select_tool", _select_tool(runtime))
     builder.add_node("execute_tool", _execute_tool(runtime))
@@ -282,11 +319,13 @@ def _build_graph(state_graph: Any, runtime: _GraphRuntime) -> Any:
         "determine_missing_information",
         _route_missing_information,
         {
+            "handle_classifier_unavailable": "handle_classifier_unavailable",
             "request_identifier": "request_identifier",
             "handoff": "handoff",
             "select_tool": "select_tool",
         },
     )
+    builder.add_edge("handle_classifier_unavailable", "decide_next_action")
     builder.add_edge("request_identifier", "compose_response")
     builder.add_conditional_edges(
         "select_tool",
@@ -354,6 +393,7 @@ def _load_state(runtime: _GraphRuntime):
         )
         dotmac_state.turn_count += 1
         engine._append_statement(dotmac_state, runtime.latest_body)
+        engine._merge_classifier_attempt(dotmac_state, runtime.classifier_attempt)
         updates = _state_updates(dotmac_state)
         updates.update(
             {
@@ -369,6 +409,19 @@ def _load_state(runtime: _GraphRuntime):
             runtime,
             turn_count=dotmac_state.turn_count,
             current_intent=dotmac_state.current_intent,
+            classifier_attempt_status=runtime.classifier_attempt.status.value,
+            classifier_failure_reason=(
+                runtime.classifier_attempt.reason.value
+                if runtime.classifier_attempt.reason is not None
+                else None
+            ),
+            classifier_failure_kind=(
+                runtime.classifier_attempt.failure_kind.value
+                if runtime.classifier_attempt.failure_kind is not None
+                else None
+            ),
+            classifier_retry_count=runtime.classifier_attempt.retry_count,
+            classifier_retry_limit=runtime.classifier_attempt.retry_limit,
         )
         return _trace(state, "load_state", updates)
 
@@ -507,6 +560,28 @@ def _determine_missing_information(runtime: _GraphRuntime):
                 ),
                 node="determine_missing_information",
             )
+        if engine.classifier_attempt_unavailable(runtime.classifier_attempt):
+            _log_node(
+                "determine_missing_information",
+                runtime,
+                route="handle_classifier_unavailable",
+                classifier_attempt_status=runtime.classifier_attempt.status.value,
+                classifier_failure_kind=(
+                    runtime.classifier_attempt.failure_kind.value
+                    if runtime.classifier_attempt.failure_kind is not None
+                    else None
+                ),
+                classifier_retry_count=runtime.classifier_attempt.retry_count,
+                classifier_retry_limit=runtime.classifier_attempt.retry_limit,
+                classifier_retries_exhausted=(
+                    runtime.classifier_attempt.retries_exhausted
+                ),
+            )
+            return _trace(
+                state,
+                "determine_missing_information",
+                {"graph_route": "handle_classifier_unavailable"},
+            )
         max_turns = engine._bounded_int(
             policy.get("max_turns"),
             default=runtime.session.max_turns,
@@ -559,6 +634,45 @@ def _determine_missing_information(runtime: _GraphRuntime):
             state,
             "determine_missing_information",
             {"graph_route": "select_tool"},
+        )
+
+    return node
+
+
+def _handle_classifier_unavailable(runtime: _GraphRuntime):
+    def node(state: AiIntakeGraphState) -> AiIntakeGraphState:
+        dotmac_state = _dotmac_state(state)
+        decision = engine.classifier_unavailable_decision(
+            state=dotmac_state,
+            policy=_policy(state),
+            classifier_attempt=runtime.classifier_attempt,
+            question=engine._classifier_unavailable_question(runtime.version),
+            now=runtime.now,
+        )
+        _log_node(
+            "handle_classifier_unavailable",
+            runtime,
+            action=decision.action,
+            reason=decision.metadata.get("reason"),
+            classifier_failure_reason=(
+                runtime.classifier_attempt.reason.value
+                if runtime.classifier_attempt.reason is not None
+                else None
+            ),
+            classifier_attempt_status=runtime.classifier_attempt.status.value,
+            classifier_failure_kind=(
+                runtime.classifier_attempt.failure_kind.value
+                if runtime.classifier_attempt.failure_kind is not None
+                else None
+            ),
+            classifier_retry_count=runtime.classifier_attempt.retry_count,
+            classifier_retry_limit=runtime.classifier_attempt.retry_limit,
+            classifier_retries_exhausted=(runtime.classifier_attempt.retries_exhausted),
+        )
+        return _set_existing_decision(
+            state,
+            decision,
+            node="handle_classifier_unavailable",
         )
 
     return node
@@ -941,6 +1055,8 @@ def _route_missing_information(state: AiIntakeGraphState) -> str:
     if action == "handoff":
         return "handoff"
     route = state.get("graph_route")
+    if route == "handle_classifier_unavailable":
+        return "handle_classifier_unavailable"
     if route == "request_identifier":
         return "request_identifier"
     return "select_tool"
@@ -1029,6 +1145,20 @@ def _state_updates(dotmac_state: engine.ConversationalState) -> dict[str, object
         "previous_intent": dotmac_state.previous_intent,
         "category": dotmac_state.category,
         "confidence": dotmac_state.confidence,
+        "classifier_attempt_status": dotmac_state.classifier_attempt_status.value,
+        "classifier_failure_reason": (
+            dotmac_state.classifier_failure_reason.value
+            if dotmac_state.classifier_failure_reason is not None
+            else None
+        ),
+        "classifier_failure_kind": (
+            dotmac_state.classifier_failure_kind.value
+            if dotmac_state.classifier_failure_kind is not None
+            else None
+        ),
+        "classifier_retry_count": dotmac_state.classifier_retry_count,
+        "classifier_retry_limit": dotmac_state.classifier_retry_limit,
+        "classifier_retries_exhausted": (dotmac_state.classifier_retries_exhausted),
         "customer_identity": dotmac_state.contact_identity,
         "subscriber_id": dotmac_state.subscriber_id,
         "portal_id": dotmac_state.portal_id,
