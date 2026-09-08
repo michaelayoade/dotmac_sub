@@ -554,6 +554,7 @@ def _publish_prepaid_enforcement_snapshot(
         "no_contact_route": _count("no_contact_route"),
         "delivery_unavailable": _count("delivery_unavailable"),
         "budget_deferred": _count("budget_deferred"),
+        "lock_deferred": _count("lock_deferred"),
         "accounts_scanned": _count("accounts_scanned"),
         "cycle_total": _count("cycle_total"),
         "cycle_remaining": _count("cycle_remaining"),
@@ -576,6 +577,7 @@ def _publish_prepaid_enforcement_snapshot(
             "delivery_unavailable",
             "coverage_repair_deferred",
             "budget_deferred",
+            "lock_deferred",
         )
     ):
         status = "degraded"

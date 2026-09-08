@@ -325,6 +325,13 @@ covered or unresolved services. Restoration releases a prepaid lock only when
 all due service is fundable or the exact locked subscription is currently
 covered.
 
+The scheduled prepaid sweep acquires each candidate account with a non-blocking
+row lock. A concurrently owned account is deferred and re-evaluated from
+authoritative facts on the next run; it is never treated as a safe no-action
+result and it does not make the whole sweep wait for PostgreSQL's lock timeout.
+The sweep publishes the bounded `lock_deferred` signal, and persistent deferral
+is a database-pressure alert requiring correlation with the blocking owner.
+
 ### Postpaid
 
 Postpaid dunning:
