@@ -132,7 +132,9 @@ SERVICES: tuple[SOTService, ...] = (
             "never own RouterOS polling cadence. The direct RouterOS read remains "
             "an explicit operator diagnostic, is admitted once per NAS device "
             "through a shared Redis claim, and starts only after its clean database "
-            "read transaction has returned its pooled connection."
+            "read transaction has returned its pooled connection. The centralized "
+            "poller bounds fleet-wide RouterOS concurrency and backs off each "
+            "failing device so a reachability incident cannot exhaust workers."
         ),
         contract=ServiceContract(
             concerns=(
