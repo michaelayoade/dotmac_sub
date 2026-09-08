@@ -20,6 +20,20 @@ class ManagerProfile {
   final List<String> permissions;
   final bool isManager;
 
+  bool allows(String permission) {
+    if (roles.contains('admin')) return true;
+    if (permissions.contains(permission) || permissions.contains('*')) {
+      return true;
+    }
+    final parts = permission.split(':');
+    for (var index = 1; index < parts.length; index++) {
+      if (permissions.contains('${parts.take(index).join(':')}:*')) return true;
+    }
+    return false;
+  }
+
+  bool get canViewTeamMap => allows('operations:dispatch:read');
+
   factory ManagerProfile.fromJson(Map<String, dynamic> json) => ManagerProfile(
     name: json['name']?.toString() ?? 'Manager',
     roles: _stringList(json['roles']),
@@ -65,10 +79,8 @@ class ManagerTechnician {
     this.technicianId,
     this.title,
     this.region,
-    this.latitude,
-    this.longitude,
-    this.accuracyM,
-    this.lastLocationAt,
+    this.lastSeenAt,
+    this.activeWorkOrderId,
     this.activeWorkOrderTitle,
     this.activeWorkOrderStatus,
     this.activeWorkOrderStatusPresentation,
@@ -82,10 +94,8 @@ class ManagerTechnician {
   final String? region;
   final bool locationSharingEnabled;
   final bool isLive;
-  final double? latitude;
-  final double? longitude;
-  final double? accuracyM;
-  final DateTime? lastLocationAt;
+  final DateTime? lastSeenAt;
+  final String? activeWorkOrderId;
   final String? activeWorkOrderTitle;
   final String? activeWorkOrderStatus;
   final StatusPresentation? activeWorkOrderStatusPresentation;
@@ -102,10 +112,8 @@ class ManagerTechnician {
       region: json['region']?.toString(),
       locationSharingEnabled: json['location_sharing_enabled'] == true,
       isLive: json['is_live'] == true,
-      latitude: _double(json['last_latitude'] ?? json['latitude']),
-      longitude: _double(json['last_longitude'] ?? json['longitude']),
-      accuracyM: _double(json['accuracy_m']),
-      lastLocationAt: _date(json['last_location_at']),
+      lastSeenAt: _date(json['last_seen_at']),
+      activeWorkOrderId: activeWork?['id']?.toString(),
       activeWorkOrderTitle: activeWork?['title']?.toString(),
       activeWorkOrderStatus: activeWork?['status']?.toString(),
       activeWorkOrderStatusPresentation: activeWork == null
@@ -116,6 +124,92 @@ class ManagerTechnician {
             ),
     );
   }
+}
+
+enum ManagerPresenceStatus {
+  offShift,
+  onShift,
+  onBreak,
+  busy,
+  unknown;
+
+  factory ManagerPresenceStatus.fromWire(String? value) => switch (value) {
+    'off_shift' => ManagerPresenceStatus.offShift,
+    'on_shift' => ManagerPresenceStatus.onShift,
+    'break' => ManagerPresenceStatus.onBreak,
+    'busy' => ManagerPresenceStatus.busy,
+    _ => ManagerPresenceStatus.unknown,
+  };
+
+  String get label => switch (this) {
+    ManagerPresenceStatus.offShift => 'Off shift',
+    ManagerPresenceStatus.onShift => 'On shift',
+    ManagerPresenceStatus.onBreak => 'On break',
+    ManagerPresenceStatus.busy => 'Busy',
+    ManagerPresenceStatus.unknown => 'Status unknown',
+  };
+}
+
+class ManagerTeamMapPosition {
+  const ManagerTeamMapPosition({
+    required this.technicianId,
+    required this.personId,
+    required this.label,
+    required this.status,
+    required this.latitude,
+    required this.longitude,
+    required this.isLive,
+    this.accuracyM,
+    this.lastLocationAt,
+  });
+
+  final String technicianId;
+  final String personId;
+  final String label;
+  final ManagerPresenceStatus status;
+  final double latitude;
+  final double longitude;
+  final bool isLive;
+  final double? accuracyM;
+  final DateTime? lastLocationAt;
+
+  factory ManagerTeamMapPosition.fromJson(Map<String, dynamic> json) =>
+      ManagerTeamMapPosition(
+        technicianId: json['technician_id']?.toString() ?? '',
+        personId: json['person_id']?.toString() ?? '',
+        label: json['label']?.toString() ?? 'Technician',
+        status: ManagerPresenceStatus.fromWire(json['status']?.toString()),
+        latitude: _double(json['latitude']) ?? double.nan,
+        longitude: _double(json['longitude']) ?? double.nan,
+        isLive: json['is_live'] == true,
+        accuracyM: _double(json['accuracy_m']),
+        lastLocationAt: _date(json['last_location_at']),
+      );
+}
+
+class ManagerTeamMapFeed {
+  const ManagerTeamMapFeed({
+    required this.count,
+    required this.liveCount,
+    required this.staleAfterSeconds,
+    required this.positions,
+    required this.receivedAt,
+  });
+
+  final int count;
+  final int liveCount;
+  final int staleAfterSeconds;
+  final List<ManagerTeamMapPosition> positions;
+  final DateTime receivedAt;
+
+  factory ManagerTeamMapFeed.fromJson(Map<String, dynamic> json) =>
+      ManagerTeamMapFeed(
+        count: _int(json['count']),
+        liveCount: _int(json['live_count']),
+        staleAfterSeconds: _int(json['stale_after_seconds']),
+        positions: _items(json).map(ManagerTeamMapPosition.fromJson).toList(),
+        receivedAt: DateTime.now(),
+      );
 }
 
 class ManagerJob {
@@ -258,6 +352,16 @@ class ManagerRepository {
     return _items(response.data).map(ManagerTechnician.fromJson).toList();
   }
 
+  Future<ManagerTeamMapFeed> fetchTeamMap() async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .get('/api/v1/field/manager/team-map');
+    return ManagerTeamMapFeed.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
+  }
+
   Future<List<ManagerJob>> fetchJobs() async {
     final response = await _ref
         .read(apiClientProvider)
@@ -342,6 +446,10 @@ final managerSummaryProvider = FutureProvider<ManagerSummary>(
 
 final managerTechniciansProvider = FutureProvider<List<ManagerTechnician>>(
   (ref) => ref.watch(managerRepositoryProvider).fetchTechnicians(),
+);
+
+final managerTeamMapProvider = FutureProvider<ManagerTeamMapFeed>(
+  (ref) => ref.watch(managerRepositoryProvider).fetchTeamMap(),
 );
 
 final managerJobsProvider = FutureProvider<List<ManagerJob>>(

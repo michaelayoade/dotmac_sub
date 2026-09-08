@@ -168,7 +168,10 @@ void main() {
         managerProfile: const ManagerProfile(
           name: 'Amaka Manager',
           roles: ['field_manager'],
-          permissions: ['operations:work_order:read'],
+          permissions: [
+            'operations:work_order:read',
+            'operations:dispatch:read',
+          ],
           isManager: true,
         ),
         managerJobs: [
@@ -213,6 +216,30 @@ void main() {
     expect(find.text('Repair customer drop'), findsOneWidget);
     expect(find.text('Assigned to Ada Technician'), findsOneWidget);
     expect(find.text('Unassign'), findsOneWidget);
+  });
+
+  testWidgets('manager shell hides team map without dispatch read', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        managerProfile: const ManagerProfile(
+          name: 'Expense Manager',
+          roles: ['field_manager'],
+          permissions: ['operations:expense_request:read'],
+          isManager: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    final labels = navigation.destinations
+        .whereType<NavigationDestination>()
+        .map((destination) => destination.label)
+        .toList();
+    expect(labels, isNot(contains('Team')));
+    expect(find.text('Team location'), findsNothing);
   });
 
   testWidgets('start shift enables mobile location sharing', (tester) async {

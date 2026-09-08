@@ -4603,6 +4603,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/manager/team-map": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:limit",
+    "query:stale_after_seconds"
+   ],
+   "request": null,
+   "responses": {
+    "200": "20f698e43702",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/manager/technicians": {
    "params": [
     "header:authorization",
@@ -19476,6 +19489,8 @@
   "FieldJobSummary": "4e501c02cf74",
   "FieldLinkBudgetComponentRead": "8f2c11d8a0f2",
   "FieldLinkBudgetRead": "0fe4def40cc4",
+  "FieldLiveMapFeed": "048a87551489",
+  "FieldLiveMapPosition": "ae257e574bcc",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",
@@ -19484,7 +19499,7 @@
   "FieldManagerMaterialRejectRequest": "c88a1edfa686",
   "FieldManagerMeResponse": "2f2d847e8029",
   "FieldManagerSummary": "5b25b71d2a7f",
-  "FieldManagerTechnician": "48d4741f6ce0",
+  "FieldManagerTechnician": "b3a0402ad751",
   "FieldManagerTechniciansResponse": "afee067c1d2e",
   "FieldMapAsset": "ab8c6d0cb70f",
   "FieldMapAssetLocationUpdate": "c28e382f6d84",

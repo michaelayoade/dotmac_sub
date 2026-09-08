@@ -1159,49 +1159,50 @@ DOMAIN = DomainSOT(
             name="ui.field_live_map_projection",
             module="app.services.field_maps",
             owns=(
-                "admin field-map sharing-authorized technician position projection",
-                "admin field-map searchable fields and focus coordinates",
-                "admin field-map stale-position semantics",
+                "dispatch field-map sharing-authorized technician position projection",
+                "dispatch field-map searchable fields and focus coordinates",
+                "dispatch field-map stale-position semantics",
             ),
             depends_on=(
                 "customer.accounts",
                 "operations.work_orders",
             ),
             notes=(
-                "field_maps owns the typed admin live-map feed and search "
+                "field_maps owns the typed dispatch live-map feed and search "
                 "projection. Technician visibility fails closed when location "
                 "sharing is disabled. Search resolves technician identity and "
                 "native work-order/customer/service-address facts before "
-                "returning only results with focusable coordinates. The admin "
-                "web adapter enforces operations:dispatch:read and the sidebar "
-                "uses the same permission for discoverability."
+                "returning only results with valid, focusable coordinates. The "
+                "admin-web and manager-mobile adapters both enforce "
+                "operations:dispatch:read, and their navigation uses the same "
+                "permission for discoverability."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name=(
-                            "admin field-map sharing-authorized technician "
+                            "dispatch field-map sharing-authorized technician "
                             "position projection"
                         ),
                         role=OwnerRole.RESOLVER,
                         input_names=("native field-technician presence facts",),
                     ),
                     ConcernContract(
-                        name="admin field-map searchable fields and focus coordinates",
+                        name="dispatch field-map searchable fields and focus coordinates",
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "native field-technician presence facts",
                             "canonical work-order map facts",
                             "canonical subscriber service-address facts",
-                            "admin field-map search input",
+                            "dispatch field-map search input",
                         ),
                     ),
                     ConcernContract(
-                        name="admin field-map stale-position semantics",
+                        name="dispatch field-map stale-position semantics",
                         role=OwnerRole.POLICY,
                         input_names=(
                             "native field-technician presence facts",
-                            "admin field-map freshness input",
+                            "dispatch field-map freshness input",
                         ),
                     ),
                 ),
@@ -1235,13 +1236,13 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
-                        name="admin field-map search input",
+                        name="dispatch field-map search input",
                         owner="ui.field_live_map_projection",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="typed normalized search text and bounded result limit",
                     ),
                     AuthorityInput(
-                        name="admin field-map freshness input",
+                        name="dispatch field-map freshness input",
                         owner="ui.field_live_map_projection",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="typed bounded stale-after duration",
@@ -1265,11 +1266,11 @@ DOMAIN = DomainSOT(
                         "ui.field_live_map_projection.invalid_search",
                         "ui.field_live_map_projection.unauthorized",
                     ),
-                    mapping_owner="admin field-map web adapter",
+                    mapping_owner="admin-web and manager-mobile field-map adapters",
                     fail_closed_on=(
                         "missing operations:dispatch:read permission",
                         "disabled technician location sharing",
-                        "missing focus coordinates",
+                        "missing or invalid focus coordinates",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1284,8 +1285,8 @@ DOMAIN = DomainSOT(
                         "search tests, route permission tests, and UI focus tests"
                     ),
                     cutover_gate=(
-                        "Routes return owner-provided typed outcomes and the template "
-                        "only renders or focuses those outcomes."
+                        "Routes return owner-provided typed outcomes; web and mobile "
+                        "clients only render or focus those outcomes."
                     ),
                     fallback_retirement=(
                         "The feed no longer exposes non-sharing technicians and no "
@@ -1296,9 +1297,11 @@ DOMAIN = DomainSOT(
                 design_refs=(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/designs/FIELD_MANAGER_TEAM_MAP.md",
                 ),
                 test_refs=(
                     "tests/test_admin_maps_web.py",
+                    "field_mobile/test/manager_team_map_test.dart",
                     "tests/architecture/test_field_live_map_boundary.py",
                 ),
             ),
