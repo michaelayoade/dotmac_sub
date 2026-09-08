@@ -380,8 +380,7 @@ def test_every_mutating_route_requires_a_write_tier_permission():
         "them. Move the route to the write-tier permission its own module "
         "already uses. A reviewed product contract that deliberately permits a "
         "read-authorized mutation must be added to _READ_AUTHORIZED_MUTATIONS "
-        "with its safety reason:\n  "
-        + "\n  ".join(unexpected)
+        "with its safety reason:\n  " + "\n  ".join(unexpected)
     )
 
     # The other direction of the ratchet: an allowlisted route that is no longer
