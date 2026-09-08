@@ -3057,6 +3057,15 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Provider-neutral channel and sender eligibility.",
                     ),
+                    AuthorityInput(
+                        name="accepted outbound provider message observation",
+                        owner="external:communications_provider",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "Accepted provider message identity and bounded reusable "
+                            "attachment receipt returned by the account-scoped transport."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=("team_inbox.outbound_intent_recorded.v1",),

@@ -933,6 +933,11 @@ def _deliver_notification_queue_stats(
                     MetaMessageAttachmentType,
                     MetaSocialChannel,
                 )
+                from app.services.owner_commands import CommandContext
+                from app.services.team_inbox_outbound import (
+                    MetaDeliveryLegCheckpointCommand,
+                    checkpoint_meta_delivery_leg,
+                )
 
                 account_id = str(
                     delivery_metadata.get("provider_account_id") or ""
@@ -1075,25 +1080,31 @@ def _deliver_notification_queue_stats(
                             provider_attachment_ids[str(attachment.asset_id)] = (
                                 outcome.provider_attachment_id
                             )
-                            updated_metadata = dict(notification.metadata_ or {})
-                            updated_metadata["meta_provider_attachment_ids"] = (
-                                provider_attachment_ids
-                            )
-                            notification.metadata_ = updated_metadata
-                        db.add(
-                            NotificationDelivery(
+                        # Provider I/O and capability resolution can leave a
+                        # read transaction open. Release it before entering the
+                        # registered owner command for this durable checkpoint.
+                        db_session_adapter.release_read_transaction(db)
+                        checkpoint_meta_delivery_leg(
+                            db,
+                            command=MetaDeliveryLegCheckpointCommand(
                                 notification_id=notification.id,
-                                provider="meta",
                                 provider_message_id=provider_message_id,
-                                status=DeliveryStatus.delivered,
                                 response_code=leg_code,
                                 response_body="Meta attachment message accepted",
-                            )
+                                attachment_asset_id=attachment.asset_id
+                                if outcome.provider_attachment_id
+                                else None,
+                                provider_attachment_id=outcome.provider_attachment_id,
+                            ),
+                            context=CommandContext.system(
+                                actor="system:notification-delivery-worker",
+                                scope="team-inbox:meta-delivery-leg",
+                                reason="checkpoint accepted Meta attachment delivery",
+                                idempotency_key=(
+                                    f"notification:{notification.id}:{leg_code}"
+                                ),
+                            ),
                         )
-                        # Checkpoint each accepted provider leg. If a later leg
-                        # fails or the worker crashes, retry skips this exact
-                        # asset instead of sending the customer a duplicate.
-                        db.commit()
 
                     if success and body:
                         if "text" in completed_legs:
@@ -1132,19 +1143,30 @@ def _deliver_notification_queue_stats(
                             else:
                                 meta_provider_messages.append(provider_message_id)
                                 if resolved_inbox_attachments:
-                                    db.add(
-                                        NotificationDelivery(
+                                    db_session_adapter.release_read_transaction(db)
+                                    checkpoint_meta_delivery_leg(
+                                        db,
+                                        command=MetaDeliveryLegCheckpointCommand(
                                             notification_id=notification.id,
-                                            provider="meta",
                                             provider_message_id=provider_message_id,
-                                            status=DeliveryStatus.delivered,
                                             response_code="text",
                                             response_body=(
                                                 "Meta text message accepted"
                                             ),
-                                        )
+                                        ),
+                                        context=CommandContext.system(
+                                            actor=(
+                                                "system:notification-delivery-worker"
+                                            ),
+                                            scope="team-inbox:meta-delivery-leg",
+                                            reason=(
+                                                "checkpoint accepted Meta text delivery"
+                                            ),
+                                            idempotency_key=(
+                                                f"notification:{notification.id}:text"
+                                            ),
+                                        ),
                                     )
-                                    db.commit()
                 except ValueError:
                     success = False
                     notification.retry_count = max_retries - 1
