@@ -51,6 +51,9 @@ def _quote(db_session, subscriber, **overrides) -> Quote:
     quote = Quote(**values)
     db_session.add(quote)
     db_session.flush()
+    # Staff review reads persisted values, including database numeric scales
+    # and the fast unit database's timestamp representation.
+    db_session.refresh(quote)
     quote.payment_review_status = QuotePaymentReviewStatus.approved.value
     quote.payment_review_revision = 1
     quote.payment_reviewed_by_system_user_id = reviewer.id

@@ -17,6 +17,13 @@ exhaustion, while the newer response policy retains expected facts, affect
 assessment, and question planning. Readiness, operational logging, and payment
 failure metrics remain separate observations.
 
+The sales Quote guide includes both recipient selection and staff payment review,
+so one route does not hide the other workflow's instructions. Capacity-change
+queue admission preserves the typed agent-selection evidence in its routing event.
+Concurrency checks scope their assertions to their own team while sharing the
+migrated test database. Quote-payment unit fixtures review persisted values,
+matching the staff review owner's read path.
+
 ## Database acceptance
 
 The application migrations form one linear sequence from

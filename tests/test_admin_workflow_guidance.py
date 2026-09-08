@@ -70,6 +70,8 @@ def test_sales_quote_guidance_explains_direct_customer_subject() -> None:
     assert "does not create a lead" in content
     assert "does not" in content and "party binding" in content
     assert "reuses the existing active subscriber" in content
+    assert "approve for payment" in content
+    assert "material quote changes require a new review" in content
 
 
 def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:

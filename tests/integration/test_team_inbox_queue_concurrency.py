@@ -167,6 +167,7 @@ def test_simultaneous_promotion_workers_promote_only_the_true_head(engine):
         )
         setup.commit()
         first_id = first.id
+        team_id = team.id
     barrier = Barrier(2)
 
     def promote(index: int) -> int:
@@ -192,6 +193,7 @@ def test_simultaneous_promotion_workers_promote_only_the_true_head(engine):
     with factory() as check:
         active = (
             check.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.service_team_id == team_id)
             .filter(InboxConversationAssignment.is_active.is_(True))
             .one()
         )
@@ -270,7 +272,12 @@ def test_locked_team_head_cannot_be_skipped_by_another_promotion_worker(engine):
     assert promoted.promoted == 1
 
     with factory() as check:
-        assignment = check.query(InboxConversationAssignment).one()
+        assignment = (
+            check.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.service_team_id == team_id)
+            .filter(InboxConversationAssignment.is_active.is_(True))
+            .one()
+        )
         assert assignment.conversation_id == first_id
         second_entry = (
             check.query(InboxConversationQueueEntry)

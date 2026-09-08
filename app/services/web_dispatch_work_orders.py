@@ -475,13 +475,6 @@ def list_page(
             create_prefill_error = str(exc.detail)
     create_work_order_action = _create_action(error=create_prefill_error)
     total_pages = max(1, ceil(total / list_query.per_page)) if total else 1
-    page_url_values = {
-        "per_page": list_query.per_page,
-        "status": list_query.filter_value("status"),
-        "q": list_query.search,
-        "active": bool(active),
-        "project_task_id": str(task_filter_id) if task_filter_id else None,
-    }
     return {
         "items": items,
         "counts": counts,
@@ -495,12 +488,26 @@ def list_page(
         "total": total,
         "total_pages": total_pages,
         "previous_page_url": (
-            _work_order_page_url(page=list_query.page - 1, **page_url_values)
+            _work_order_page_url(
+                page=list_query.page - 1,
+                per_page=list_query.per_page,
+                status=list_query.filter_value("status"),
+                q=list_query.search,
+                active=bool(active),
+                project_task_id=str(task_filter_id) if task_filter_id else None,
+            )
             if list_query.page > 1
             else None
         ),
         "next_page_url": (
-            _work_order_page_url(page=list_query.page + 1, **page_url_values)
+            _work_order_page_url(
+                page=list_query.page + 1,
+                per_page=list_query.per_page,
+                status=list_query.filter_value("status"),
+                q=list_query.search,
+                active=bool(active),
+                project_task_id=str(task_filter_id) if task_filter_id else None,
+            )
             if list_query.page < total_pages
             else None
         ),

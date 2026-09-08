@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.models.inbox_sla import InboxSlaPolicy, InboxSlaRule
+from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.team_inbox import InboxConversation
 from app.services.inbox_sla import (
     SlaPolicyInput,
     SlaRuleInput,
@@ -71,7 +73,10 @@ def test_ai_and_system_messages_do_not_satisfy_first_response() -> None:
 
 
 def test_rule_specificity_prefers_team_channel_and_priority(db_session) -> None:
-    team_id = uuid4()
+    team = ServiceTeam(name="SLA specificity", team_type=ServiceTeamType.support.value)
+    db_session.add(team)
+    db_session.flush()
+    team_id = team.id
     policy = _policy()
     policy.rules = [
         InboxSlaRule(
@@ -88,7 +93,7 @@ def test_rule_specificity_prefers_team_channel_and_priority(db_session) -> None:
     ]
     db_session.add(policy)
     db_session.flush()
-    conversation = SimpleNamespace(
+    conversation = InboxConversation(
         primary_service_team_id=team_id, channel_type="whatsapp", priority=1
     )
     selected = select_policy_rule(db_session, conversation)

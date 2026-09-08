@@ -1356,6 +1356,7 @@ def queue_conversation_for_team(
     event_type: InboxRoutingEventType | None = None,
     reason_code: str = "manual_queue",
     provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
+    decision_evidence: InboxAgentCandidate | None = None,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
     actor_uuid = _coerce_uuid(assigned_by_person_id)
@@ -1414,7 +1415,7 @@ def queue_conversation_for_team(
         occurred_at=queued_at,
         source_id=source_id,
         decision_mode=decision_mode,
-        decision_evidence=None,
+        decision_evidence=decision_evidence,
     )
     _record_escalation_metadata(
         conversation,

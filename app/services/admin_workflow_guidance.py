@@ -140,22 +140,6 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
-        "quote-payment-review",
-        "Sales",
-        "Review an installation Quote for payment",
-        "Sales staff, feasibility reviewers",
-        "Approve or reject a customer installation estimate before payment is allowed.",
-        ("/admin/sales/quotes",),
-        "Open the Draft or Sent Quote that is awaiting staff review.",
-        "Confirm the customer, pinned installation address, feasibility result, price, deposit, and expiry.",
-        "Choose Approve for payment when the estimate is correct, or reject it with a clear reason.",
-        "After approval, confirm the page shows Approved and the customer notification has been queued.",
-        notes=(
-            "Customers can see the estimate while it is under review, but payment remains unavailable.",
-            "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
-        ),
-    ),
-    _guide(
         "change-plan",
         "Subscriptions",
         "Change a customer plan",
@@ -260,11 +244,15 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open New Quote and search at least two characters for exactly one Lead or Customer.",
         "Choose Lead only when the proposal belongs to an open sales opportunity; choose Customer when the account already exists.",
         "Confirm the selected result, Project Type, line items, discount, tax, expiry, and optional install location before creating the Quote.",
+        "For an installation estimate awaiting staff review, confirm the customer, pinned installation address, feasibility result, price, deposit, and expiry.",
+        "Choose Approve for payment when the estimate is correct, or reject it with a clear reason. Confirm the page shows Approved and the customer notification has been queued.",
         "Send the Quote for review, then use acceptance only after the customer agrees to the commercial terms.",
         notes=(
             "A Customer-backed Quote uses the selected Subscriber account directly and does not create a Lead or require a Party binding.",
             "Accepting a Lead-backed Quote converts its reviewed identity and marks that Lead Won; accepting a Customer-backed Quote reuses the existing active Subscriber. Both continue through the same sales-order and implementation workflow.",
             "Typing text alone does not select a recipient. Choose an exact typeahead result; changing the text clears the previous selection.",
+            "Customers can see an installation estimate while it is under review, but payment remains unavailable.",
+            "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
         ),
     ),
     _guide(

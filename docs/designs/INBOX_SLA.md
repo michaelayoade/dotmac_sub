@@ -2,6 +2,12 @@
 
 Owner: `communications.inbox_sla`
 
+The evaluator's reliability classification is owned by
+`observability.task_reliability`: failures are logged and the next scheduled
+sweep re-evaluates eligible clocks. Clock locks and persisted warning/breach
+evidence make repeated evaluation idempotent; the transport does not blindly
+autoretry the task.
+
 Selfcare Inbox SLA clocks are separate from the retired CRM conversation
 history and from customer service-level availability scoring.  A clock is
 created only when an active Selfcare policy and matching rule exist.  The
