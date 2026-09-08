@@ -336,6 +336,8 @@ DOMAIN = DomainSOT(
         "app.services.automation_rules",
         "app.services.automation_runtime",
         "app.services.events.handlers.automation",
+        "app.services.web_automation_center",
+        "app.web.admin.automation_center",
     ),
     rule=(
         "Every SOT domain is visible to the Automation Center, but only a closed, "

@@ -78,6 +78,13 @@ Runtime uses an automation service principal constrained to the action's
 declared runtime scope. It does not impersonate the publisher. Removing or
 disabling a registered capability makes affected rules ineligible to execute.
 
+The admin shell is available at `/admin/automation`. Opening the hub requires
+`automation:hub:read`; its rule and execution sections independently require
+`automation:rule:read` and `automation:run:read`. The initial shell is
+read-only. It exposes registry readiness, central definitions, run evidence,
+and legacy ownership links without implying that rule authoring is available
+before a complete module adapter exists.
+
 ## Legacy coexistence
 
 Legacy automation surfaces may register descriptive ownership and conflict
