@@ -210,7 +210,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create and track your own expense claim against the exact work order.",
         ("/admin/dispatch/work-orders",),
         "Open the exact work order and review its customer and operational context.",
-        "Choose New Expense Claim when you have dispatch write access and ERP categories are available.",
+        (
+            "Choose New Expense Claim from any work order you can open; the form "
+            "becomes available after a technician is assigned and ERP categories "
+            "are available."
+        ),
         "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting.",
         "Return to the work order to track delivery and ERP acceptance separately.",
         notes=(

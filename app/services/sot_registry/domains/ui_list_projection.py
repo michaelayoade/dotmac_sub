@@ -1586,7 +1586,10 @@ DOMAIN = DomainSOT(
                         name="canonical work-order expense scope",
                         owner="operations.work_orders",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Exact active native WorkOrder ID and public identity",
+                        source=(
+                            "Exact active native WorkOrder ID, public identity, and "
+                            "current technician-assignment evidence"
+                        ),
                     ),
                     AuthorityInput(
                         name="authenticated requester scope",
@@ -1594,8 +1597,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "Authenticated active SystemUser identity and exact global, "
-                            "reseller, or region dispatch-read decision for viewing and "
-                            "dispatch-write decision for expense submission"
+                            "reseller, or region dispatch-read decision for both viewing "
+                            "and expense submission"
                         ),
                     ),
                     AuthorityInput(
@@ -1652,6 +1655,7 @@ DOMAIN = DomainSOT(
                     retryable_codes=(),
                     fail_closed_on=(
                         "missing or inactive work order or requester",
+                        "work order without a current technician assignment",
                         "unavailable ERP category rules",
                         "invalid amount or receipt evidence",
                     ),

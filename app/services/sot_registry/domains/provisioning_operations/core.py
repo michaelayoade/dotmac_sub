@@ -723,7 +723,8 @@ SERVICES: tuple[SOTService, ...] = (
             "One typed command creates and submits an expense request atomically. "
             "Field clients retain assigned-technician scope; the staff web adapter "
             "supplies exact RBAC-authorized work-order evidence and derives the actor "
-            "from the authenticated session. Receipt metadata is staged flush-only "
+            "from the authenticated session. Every submission requires current "
+            "technician-assignment evidence. Receipt metadata is staged flush-only "
             "inside the same command. A separate typed manager approval owns the "
             "local financial decision and stages the idempotent ERP delivery intent; "
             "submission never sends an unapproved expense. The client reference and "
@@ -791,8 +792,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="operations.work_orders",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "Active WorkOrder identity; assigned-technician scope for field "
-                        "clients or exact route-authorized work-order identity for staff"
+                        "Active WorkOrder identity and current technician-assignment "
+                        "evidence; assigned-technician scope for field clients or exact "
+                        "route-authorized work-order identity for staff"
                     ),
                 ),
                 AuthorityInput(
@@ -801,7 +803,7 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
                         "Authenticated system-user identity and global, reseller, or "
-                        "region operations:dispatch:write access resolved for the exact "
+                        "region operations:dispatch:read access resolved for the exact "
                         "work order"
                     ),
                 ),
@@ -902,6 +904,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.requester_not_found",
                     "operations.expense_requests.request_not_found",
                     "operations.expense_requests.work_order_not_found",
+                    "operations.expense_requests.work_order_unassigned",
                     *owner_command_boundary_error_codes("operations.expense_requests"),
                 ),
                 mapping_owner="field expense request API adapter",
@@ -912,6 +915,7 @@ SERVICES: tuple[SOTService, ...] = (
                 fail_closed_on=(
                     "unknown requester or work order",
                     "missing exact staff work-order authorization evidence",
+                    "work order without a current technician assignment",
                     "unavailable or invalid ERP category rules",
                     "invalid receipt evidence",
                     "client-reference fingerprint conflict",

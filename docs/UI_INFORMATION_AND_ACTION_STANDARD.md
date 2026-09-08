@@ -584,21 +584,23 @@ implementation.
 ## Admin Work-Order Expense Entry Page Contract
 
 - Audience and task: authenticated staff with read access to the exact work order
-  can track their own work-order expense claims. Creating a claim additionally
-  requires the matching write-tier dispatch access. Technician assignment is
-  not required on this admin web surface.
+  can track their own work-order expense claims and can create one after a
+  technician has been assigned. The requester does not need to be that technician.
 - Authority: `ui.work_order_expense_projection` owns the form, validation
   presentation, requester-owned list, action eligibility, and ERP delivery
   labels. `operations.expense_requests` owns the atomic claim and durable ERP
   staging; ERP owns approval routing and reimbursement.
 - First viewport: the work-order identity remains the page context. The expense
   card explains that approval and payment happen in ERP, shows the actor's
-  existing claims, and exposes one New Expense Claim action when ERP categories
-  are available.
-- Mutation: the multipart POST is explicitly CSRF protected, write-tier guarded,
+  existing claims, and always exposes one New Expense Claim action. The action
+  opens the form when a technician is assigned and ERP categories are available;
+  otherwise it remains visibly disabled with the authoritative reason, including
+  `Assign a technician first.` for an unassigned work order.
+- Mutation: the multipart POST is explicitly CSRF protected, read-scope guarded,
   and scoped to the work order in the URL. No work-order, requester, person,
   user, or requester email input is accepted. A stable client reference prevents
-  double creation.
+  double creation. The command owner rechecks current technician assignment while
+  holding the work-order lock, so a direct or stale form submission fails closed.
 - Form: purpose and expense date are required, currency defaults to NGN, notes
   are optional, and at least one stacked repeatable item remains. Items expose
   ERP category, description, positive amount, optional date/vendor/receipt
