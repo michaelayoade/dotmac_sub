@@ -3093,9 +3093,10 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     (`app.services.web_work_order_expenses`) composes the exact work-order page
     context, authenticated staff identity, live ERP category rules, and only
     that actor's expense claims. Global or matching reseller/region dispatch
-    read scope permits viewing the panel, while the matching write scope permits
-    submission; technician assignment remains a separate field-client rule. The
-    projection owns field errors, action and
+    read scope permits both viewing the panel and submitting a claim. Submission
+    additionally requires current technician-assignment evidence, but the
+    requester need not be that technician. The projection owns field errors,
+    action and
     delivery-state wording, while `operations.expense_requests` locks the exact
     authorized work order and atomically writes the submitted claim, receipt
     metadata, and durable ERP outbox consequence. Sent transport evidence is

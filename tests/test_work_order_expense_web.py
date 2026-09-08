@@ -7,6 +7,11 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
 from app.models.field_erp_sync import (
     FieldErpSyncEvent,
     FieldErpSyncFlow,
@@ -44,7 +49,12 @@ def _user(db_session, name: str) -> SystemUser:
     return user
 
 
-def _work_order(db_session, public_id: str) -> WorkOrder:
+def _work_order(
+    db_session,
+    public_id: str,
+    *,
+    assigned_to_crm_person_id: str | None = "crm-assigned-technician",
+) -> WorkOrder:
     subscriber = Subscriber(
         first_name="Work",
         last_name="Order",
@@ -57,6 +67,7 @@ def _work_order(db_session, public_id: str) -> WorkOrder:
         subscriber_id=subscriber.id,
         title="Repair fibre drop",
         status="in_progress",
+        assigned_to_crm_person_id=assigned_to_crm_person_id,
     )
     db_session.add(row)
     db_session.flush()
@@ -68,7 +79,7 @@ def _context(user: SystemUser, request_id):
         command_id=request_id,
         correlation_id=request_id,
         actor=f"user:{user.id}",
-        scope="operations:dispatch:write",
+        scope="operations:dispatch:read",
         reason="Create an expense from a work order",
         idempotency_key=str(request_id),
     )
@@ -189,6 +200,51 @@ def test_staff_command_rejects_missing_exact_work_order_access_evidence(db_sessi
     assert db_session.query(FieldExpenseRequest).count() == 0
 
 
+def test_staff_command_rejects_unassigned_work_order(db_session):
+    user = _user(db_session, "Chidi")
+    work_order = _work_order(
+        db_session,
+        "sub-expense-unassigned",
+        assigned_to_crm_person_id=None,
+    )
+    command = _command(user, work_order)
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("work_order_unassigned")
+    assert exc.value.message == "Assign a technician first."
+    assert db_session.query(FieldExpenseRequest).count() == 0
+
+
+def test_assigned_queue_entry_satisfies_assignment_requirement(db_session):
+    work_order = _work_order(
+        db_session,
+        "sub-expense-queue-assigned",
+        assigned_to_crm_person_id=None,
+    )
+    technician = TechnicianProfile(person_id=uuid4(), is_active=True)
+    db_session.add(technician)
+    db_session.flush()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
+            assigned_technician_id=technician.id,
+        )
+    )
+    db_session.commit()
+
+    eligibility = expense_web.evaluate_expense_work_order_eligibility(
+        db_session,
+        work_order=work_order,
+    )
+
+    assert eligibility.allowed is True
+    assert eligibility.reason is None
+
+
 @pytest.mark.parametrize("amount", ["", "invalid", "0", "-1"])
 def test_form_rejects_invalid_or_non_positive_amounts(amount):
     with pytest.raises(expense_web.WorkOrderExpenseFormError) as exc:
@@ -257,6 +313,37 @@ def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     assert db_session.query(FieldExpenseRequest).count() == 0
 
 
+def test_unassigned_work_order_disables_expense_action(db_session, monkeypatch):
+    monkeypatch.setattr(
+        expense_web,
+        "list_expense_categories",
+        lambda _db, _query: (
+            ExpenseCategoryView(
+                category_code="transport",
+                category_name="Transport",
+                requires_receipt=False,
+                max_amount_per_claim=Decimal("10000"),
+            ),
+        ),
+    )
+    user = _user(db_session, "Dapo")
+    work_order = _work_order(
+        db_session,
+        "sub-expense-panel-unassigned",
+        assigned_to_crm_person_id=None,
+    )
+    db_session.commit()
+
+    panel = expense_web.build_work_order_expense_panel(
+        db_session,
+        work_order_public_id=work_order.public_id,
+        actor_system_user_id=user.id,
+    )
+
+    assert panel.create_action.allowed is False
+    assert panel.create_action.reason == "Assign a technician first."
+
+
 def test_panel_isolates_claims_and_does_not_treat_sent_as_accepted(
     db_session, monkeypatch
 ):
@@ -320,7 +407,7 @@ def test_panel_isolates_claims_and_does_not_treat_sent_as_accepted(
         work_order_public_id=work_order.public_id,
         actor_system_user_id=owner.id,
     )
-    assert panel.create_action.permission == "operations:dispatch:write"
+    assert panel.create_action.permission == "operations:dispatch:read"
     assert [claim.purpose for claim in panel.claims] == ["My transport"]
     assert panel.claims[0].delivery_state is expense_web.ExpenseDeliveryState.PENDING
     assert panel.claims[0].delivery_label == "Delivered; awaiting ERP acceptance"
@@ -388,3 +475,6 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert "data-remove-expense-line" in expense_form
     assert "data-expense-total" in expense_form
     assert "md:grid-cols-2" in expense_form
+    assert source.count(">New Expense Claim<") >= 2
+    assert 'aria-describedby="expense-creation-unavailable"' in source
+    assert 'id="expense-creation-unavailable"' in source

@@ -44,7 +44,7 @@
 {% call card('Expense claims', color='emerald') %}
 <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 <div><p class="text-sm text-slate-600 dark:text-slate-300">Create a reimbursable expense for this exact work order. Approval and payment remain in ERP.</p><p class="mt-1 text-xs text-slate-500">Only claims you created are shown here.</p></div>
-{% if action_permitted(request, expense_panel.create_action) %}<a href="#new-expense-claim" class="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-emerald-700">New Expense Claim</a>{% endif %}
+{% if action_permitted(request, expense_panel.create_action) %}<a href="#new-expense-claim" class="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-emerald-700">New Expense Claim</a>{% else %}<button type="button" disabled aria-disabled="true" aria-describedby="expense-creation-unavailable" class="shrink-0 cursor-not-allowed rounded-xl bg-slate-200 px-3 py-2 text-center text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">New Expense Claim</button>{% endif %}
 </div>
 {% if expense_panel.claims %}<div class="space-y-3">{% for claim in expense_panel.claims %}
 <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
@@ -53,7 +53,8 @@
 {% if claim.rejection_reason %}<p class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200"><strong>Rejected:</strong> {{ claim.rejection_reason }}</p>{% endif %}
 </article>
 {% endfor %}</div>{% else %}<p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/50">You have not created an expense claim for this work order.</p>{% endif %}
-{% if expense_panel.category_message %}<p class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ expense_panel.category_message }}</p>{% endif %}
+{% if not action_permitted(request, expense_panel.create_action) %}<p id="expense-creation-unavailable" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ expense_panel.create_action.reason or 'Expense creation is unavailable.' }}</p>{% endif %}
+{% if expense_panel.category_message and expense_panel.category_message != expense_panel.create_action.reason %}<p class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ expense_panel.category_message }}</p>{% endif %}
 {% if action_permitted(request, expense_panel.create_action) %}
 <details id="new-expense-claim" class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-800 dark:bg-emerald-950/20" {% if expense_panel.form_open %}open{% endif %}>
 <summary class="cursor-pointer font-semibold text-emerald-800 dark:text-emerald-200">New Expense Claim</summary>
