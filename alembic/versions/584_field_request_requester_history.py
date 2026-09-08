@@ -76,10 +76,10 @@ def _repair_requester_identity(table_name: str) -> None:
         sa.text(
             f"""
             UPDATE {table_name} AS request
-            SET requested_by_system_user_id = system_user.id
-            FROM system_users AS system_user
+            SET requested_by_system_user_id = su.id
+            FROM system_users AS su
             WHERE request.requested_by_system_user_id IS NULL
-              AND request.requested_by_person_id = system_user.id
+              AND request.requested_by_person_id = su.id
             """
         )
     )
@@ -89,11 +89,11 @@ def _repair_requester_identity(table_name: str) -> None:
         sa.text(
             f"""
             UPDATE {table_name} AS request
-            SET requested_by_system_user_id = system_user.id
-            FROM system_users AS system_user
+            SET requested_by_system_user_id = su.id
+            FROM system_users AS su
             WHERE request.requested_by_system_user_id IS NULL
-              AND system_user.person_party_id IS NOT NULL
-              AND request.requested_by_person_id = system_user.person_party_id
+              AND su.person_party_id IS NOT NULL
+              AND request.requested_by_person_id = su.person_party_id
             """
         )
     )
@@ -104,11 +104,11 @@ def _repair_requester_identity(table_name: str) -> None:
         sa.text(
             f"""
             UPDATE {table_name} AS request
-            SET requested_by_person_id = system_user.person_party_id
-            FROM system_users AS system_user
-            WHERE request.requested_by_system_user_id = system_user.id
-              AND system_user.person_party_id IS NOT NULL
-              AND request.requested_by_person_id = system_user.id
+            SET requested_by_person_id = su.person_party_id
+            FROM system_users AS su
+            WHERE request.requested_by_system_user_id = su.id
+              AND su.person_party_id IS NOT NULL
+              AND request.requested_by_person_id = su.id
             """
         )
     )
