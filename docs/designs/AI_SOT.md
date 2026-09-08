@@ -173,11 +173,11 @@ classifier-attempt status (`invalid_output`, `unavailable`, or
 (`invalid_model_output`, `schema_validation_failure`, `classifier_unavailable`,
 or `no_accepted_intent`). Deterministic and accepted model facts are merged
 before this branch. An explicit deterministic `human_requested` fact takes
-precedence
-and requests immediate handoff; otherwise both `custom_v1` and `langgraph_v1`
-select `ask_question`, phrase the configured generic clarification through the
-existing customer-response composer, and enter `awaiting_customer`. Composer
-failure uses that same configured question as its safe fallback.
+precedence and requests immediate handoff; otherwise both `custom_v1` and
+`langgraph_v1` select `ask_question`, phrase the configured generic
+clarification through the existing customer-response composer, and enter
+`awaiting_customer`. Composer failure uses that same configured question as its
+safe fallback.
 
 A later customer message is classified with the existing session state. Each
 classifier-failure turn consumes the existing configured clarification-turn

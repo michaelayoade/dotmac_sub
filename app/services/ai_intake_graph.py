@@ -422,9 +422,19 @@ def _load_state(runtime: _GraphRuntime):
             turn_count=dotmac_state.turn_count,
             current_intent=dotmac_state.current_intent,
             classifier_attempt_status=runtime.classifier_attempt.status.value,
+            classifier_failure_reason=(
+                runtime.classifier_attempt.reason.value
+                if runtime.classifier_attempt.reason is not None
+                else None
+            ),
+            classifier_failure_kind=(
+                runtime.classifier_attempt.failure_kind.value
+                if runtime.classifier_attempt.failure_kind is not None
+                else None
+            ),
             classifier_retry_count=runtime.classifier_attempt.retry_count,
             classifier_retry_limit=runtime.classifier_attempt.retry_limit,
-            classifier_retries_exhausted=(runtime.classifier_attempt.retries_exhausted),
+            classifier_retries_exhausted=runtime.classifier_attempt.retries_exhausted,
         )
         return _trace(state, "load_state", updates)
 

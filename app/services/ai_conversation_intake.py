@@ -3713,9 +3713,9 @@ def _process_one_session(
         conversation_metadata["ai_intake"] = intake_metadata
         conversation.metadata_ = conversation_metadata
         logger.info(
-            "ai intake engine decision selected",
+            "ai intake conversation decision selected",
             extra={
-                "event": "ai_intake_engine_decision_selected",
+                "event": "ai_intake_conversation_decision_selected",
                 "conversation_id": str(conversation.id),
                 "session_id": str(session.id),
                 "inbound_message_id": str(inbound.id),
@@ -3731,7 +3731,7 @@ def _process_one_session(
                 ),
                 "delivery_action": decision.action,
                 "reason": decision.metadata.get("reason"),
-                "classifier_attempt_status": (outcome.classifier_attempt.status.value),
+                "classifier_attempt_status": outcome.classifier_attempt.status.value,
                 "classifier_failure_reason": (
                     outcome.classifier_attempt.reason.value
                     if outcome.classifier_attempt.reason is not None
