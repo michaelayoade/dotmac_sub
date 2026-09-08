@@ -42,6 +42,15 @@ existing records are test expenses and are intentionally excluded. This branch
 contains no migration, startup hook, scheduled scan, or repair command that
 backfills them. Any future historical repair requires a separate reviewed scope.
 
+This prohibition concerns ERP delivery. Revision
+`584_field_request_requester_history` separately repairs exact local requester
+identity links so staff can see claims they raised; it does not approve, enqueue,
+or replay an expense claim. Before rollout, record the count of active expenses
+with a null `requested_by_system_user_id`. After migration, investigate every
+remaining row rather than inferring an owner. Verify a repaired claim appears
+for its requester through `GET /api/v1/field/expense-requests` and that it
+remains invisible to another requester.
+
 ## Rollback
 
 Restore the recorded pre-cutover legacy ownership of `expense_claim` to stop new

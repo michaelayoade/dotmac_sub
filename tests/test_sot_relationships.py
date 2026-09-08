@@ -709,6 +709,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.core_device_archive",
     )
     assert sot_relationships.dependencies_for("operations.material_dependencies") == (
+        "auth.permission_gate",
         "control.settings_spec",
         "events.dispatcher",
         "operations.work_orders",

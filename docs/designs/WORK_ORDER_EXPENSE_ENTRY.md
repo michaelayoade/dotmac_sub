@@ -45,6 +45,12 @@ ERP acceptance, ERP accepted, rejected, failed/dead, approved, and paid facts
 remain distinct. `sent` outbox evidence is not presented as ERP acceptance;
 only an accepted event or ERP claim reference qualifies.
 
+The field app's expense list follows the same requester-owned rule. Ownership
+is resolved from any exact technician-profile, canonical Person Party, or
+authenticated SystemUser link on the claim. Work-order completion or
+reassignment does not remove the claim from the requester's history, and a
+claim created by another staff identity is not exposed.
+
 ## Schema change
 
 `requested_by_technician_id` on expense requests and
@@ -64,6 +70,14 @@ Text values and the stable claim client reference survive validation errors.
 Browsers cannot repopulate file inputs, so a selected receipt is cleared and an
 explicit field error asks the user to reselect it. ERP category or sync
 unavailability never fabricates a usable fallback.
+
+Alembic revision `584_field_request_requester_history` repairs older claims
+whose durable SystemUser link can be proven from their technician profile,
+legacy SystemUser-as-person identifier, or unique Person Party binding. It also
+adds requester lookup indexes. Ambiguous claims remain unchanged and hidden;
+the repair never changes approval, delivery, or payment state and never queues
+an ERP claim. `operations.expense_requests` owns this bounded, idempotent
+repair, with Alembic acting only as its deployment adapter.
 
 ## Non-goals
 
