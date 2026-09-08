@@ -40,6 +40,7 @@ from app.services.network.reconcile import (
     OntDesiredState,
     OntObservedState,
     Plan,
+    ReconcileFailureReason,
     Tr069RemoteAccessParameterPaths,
     Tr181WanParameterPaths,
     compute_plan,
@@ -1063,6 +1064,43 @@ def test_unindexed_matching_management_service_port_is_preserved():
 
     delete_actions = [a for a in plan.actions if isinstance(a, OltDeleteServicePort)]
     assert [a.service_port_index for a in delete_actions] == [99]
+
+
+def test_unallocated_service_port_indices_refuse_full_delete_sweep():
+    """Both indices ``None`` with no unindexed match must not delete every
+    observed port.
+
+    This is the confirmed production hazard: an ONT whose desired mgmt/wan
+    service-port indices are both NULL previously produced an
+    ``OltDeleteServicePort`` for every currently observed port (no
+    recreation, since the create branch requires a real index). Here none of
+    the observed ports matches an unindexed desired slot either (different
+    VLAN/GEM than ``desired.mgmt_vlan``/``desired.wan_vlan``), so the
+    planner must refuse the whole delete sweep and surface a distinct
+    failure reason instead of silently doing nothing or deleting everything.
+    """
+    desired = _desired(mgmt_service_port_index=None, wan_service_port_index=None)
+    olt = _olt_observed(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {"index": 50, "vlan_id": 999, "gem_index": 4, "state": "up"},
+            {"index": 51, "vlan_id": 888, "gem_index": 5, "state": "up"},
+        ),
+    )
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    assert OltDeleteServicePort not in _types(plan)
+    assert plan.olt_wait_reason == ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
 
 
 def test_no_action_when_service_ports_match():

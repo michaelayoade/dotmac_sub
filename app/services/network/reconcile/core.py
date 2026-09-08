@@ -407,13 +407,13 @@ def reconcile_ont(
 
             # ── Apply ───────────────────────────────────────────────────────
             if readback_only:
-                acs_wait = _acs_wait_failure(plan)
-                if acs_wait is not None:
+                plan_wait = _plan_wait_failure(plan)
+                if plan_wait is not None:
                     return _finalise(
                         db,
                         ont,
                         success=False,
-                        failure=acs_wait,
+                        failure=plan_wait,
                         started_monotonic=started_monotonic,
                         observed_after=observed_before,
                         actions_applied=(),
@@ -532,19 +532,19 @@ def reconcile_ont(
             # can re-read and confirm the planner produces an empty plan
             # against the post-apply state. If actions_applied is empty
             # (drift was zero from the start), there is nothing to verify.
-            acs_wait = _acs_wait_failure(plan)
+            plan_wait = _plan_wait_failure(plan)
 
             # A plan whose every action was refused also applies nothing, and
             # must not take the "nothing to verify" shortcut: that path reports
             # zero drift, which is exactly the false convergence this gate
             # exists to prevent.
             if not apply_outcome.actions_applied and not residual_ppp_drift:
-                if acs_wait is not None:
+                if plan_wait is not None:
                     return _finalise(
                         db,
                         ont,
                         success=False,
-                        failure=acs_wait,
+                        failure=plan_wait,
                         started_monotonic=started_monotonic,
                         observed_after=observed_before,
                         actions_applied=(),
@@ -719,16 +719,17 @@ def reconcile_ont(
                     drift_after=verify_plan.drifts,
                 )
 
-            if acs_wait is not None:
-                # The OLT half converged, but the ACS half was never planned:
-                # this device has no ACS document, or no unambiguous GenieACS
-                # ``_id``. Reporting success here would tell an operator the
-                # CPE was configured when nothing was delivered to it.
+            if plan_wait is not None:
+                # Either the ACS half was never planned (no ACS document, or
+                # no unambiguous GenieACS ``_id``) or the OLT half withheld
+                # its service-port deletes (both indices unallocated).
+                # Reporting success here would tell an operator the device
+                # was fully configured when part of the plan was withheld.
                 return _finalise(
                     db,
                     ont,
                     success=False,
-                    failure=acs_wait,
+                    failure=plan_wait,
                     started_monotonic=started_monotonic,
                     observed_after=observed_after,
                     actions_applied=apply_outcome.actions_applied,
@@ -800,6 +801,39 @@ def _acs_wait_failure(plan) -> ReconcileFailure | None:
         message=plan.acs_wait_detail or "ACS configuration could not be delivered.",
         evidence={"acs_wait_reason": plan.acs_wait_reason},
     )
+
+
+def _olt_wait_failure(plan) -> ReconcileFailure | None:
+    """Translate a plan's OLT service-port-index gate into a failure record.
+
+    ``Plan.olt_wait_reason`` is set when ``compute_plan`` withheld every
+    ``OltDeleteServicePort`` action for this ONT because neither the mgmt nor
+    the WAN service-port index has been allocated. Deleting every observed
+    service port in that state would be unconditional and unrecoverable (the
+    create branch requires a real index, so nothing would be recreated), so
+    the planner refuses instead of claiming convergence.
+    """
+    if plan.olt_wait_reason is None:
+        return None
+    return ReconcileFailure(
+        reason=plan.olt_wait_reason,
+        message=(
+            plan.olt_wait_detail
+            or "OLT service-port index is unallocated; refusing to delete "
+            "observed ports."
+        ),
+        evidence={"olt_wait_reason": plan.olt_wait_reason},
+    )
+
+
+def _plan_wait_failure(plan) -> ReconcileFailure | None:
+    """Combine the OLT and ACS wait gates into a single failure, if either fired.
+
+    OLT is checked first: its actions precede ACS in write order, and an
+    unallocated service-port index is a more fundamental refusal (nothing
+    named it, versus ACS merely being unreachable/ambiguous).
+    """
+    return _olt_wait_failure(plan) or _acs_wait_failure(plan)
 
 
 def _resolve_olt_adapter(db: Session, ont: OntUnit) -> Any:

@@ -467,6 +467,16 @@ class ReconcileFailureReason:
     not device faults — the sweeper retries and they clear on their own once the
     CPE informs. Neither is ever "resolved" by inventing a device identifier.
 
+    ``SERVICE_PORT_INDEX_UNALLOCATED`` is the symmetric OLT-side precondition:
+    the planner withheld every ``OltDeleteServicePort`` action for this ONT
+    because neither the mgmt nor the WAN service-port index has been
+    allocated (both are ``None``) and every currently observed service port
+    would otherwise have been planned for deletion, with nothing left
+    standing and nothing to recreate them at. Other OLT/ACS actions in the
+    same plan may still have been applied — only the service-port deletes
+    were withheld. It clears once an owner allocates a real index for at
+    least one of the two slots.
+
     Apply-time failures (``OLT_WRITE_REJECTED``, ``ACS_WRITE_FAULTED``,
     ``ACS_CR_FAILED``, ``VERIFICATION_MISMATCH``) imply zero or more actions
     were applied before the failure; the ``ReconcileResult.actions_applied``
@@ -479,6 +489,7 @@ class ReconcileFailureReason:
     ONT_OFFLINE = "ont_offline"
     ONT_NOT_INFORMING = "ont_not_informing"
     ACS_IDENTITY_UNRESOLVED = "acs_identity_unresolved"
+    SERVICE_PORT_INDEX_UNALLOCATED = "service_port_index_unallocated"
     BLOCKED_OUT_OF_SYNC = "blocked_out_of_sync"
     INVALID_CHANGE = "invalid_change"
 
