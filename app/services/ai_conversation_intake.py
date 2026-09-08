@@ -2156,12 +2156,12 @@ def disable_policy(
 def active_session_for_conversation(
     db: Session, conversation_id: UUID
 ) -> AiIntakeSession | None:
-    return (
-        db.query(AiIntakeSession)
-        .filter(AiIntakeSession.conversation_id == conversation_id)
-        .filter(AiIntakeSession.completed_at.is_(None))
-        .with_for_update()
-        .one_or_none()
+    from app.services import ai_conversation_ownership
+
+    return ai_conversation_ownership.active_session(
+        db,
+        conversation_id=conversation_id,
+        for_update=True,
     )
 
 
@@ -3823,6 +3823,9 @@ def _process_one_session(
             service_team_id=routing.primary_service_team_id,
             reason="AI intake handoff",
             source="routing_rule",
+            provenance=(
+                team_inbox_assignment.InboxAssignmentProvenance.ai_intake_handoff
+            ),
         )
         if assignment.kind == "assigned" or not cleanup_open:
             complete_session(session)

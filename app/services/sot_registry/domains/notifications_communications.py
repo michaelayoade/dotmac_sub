@@ -2649,6 +2649,15 @@ DOMAIN = DomainSOT(
                         source="Approved intent, category, confidence, department, and fallback policy.",
                     ),
                     AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Active-session ownership plus typed AI-handoff provenance; "
+                            "ordinary and generic assignment paths fail closed."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="successful staff session issuance",
                         owner="app_sessions.auth",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -2735,6 +2744,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "communications.team_inbox_routing",
                 "communications.team_inbox_commands",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_automation",
@@ -2746,6 +2756,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Active AI sessions suppress generic automation actions.",
+                    ),
                     AuthorityInput(
                         name="conversation trigger facts",
                         owner="communications.team_inbox_threads",
@@ -3021,6 +3037,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_reply_window",
                 "communications.intents",
                 "communications.channel_policy",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_outbound_intents",
@@ -3035,6 +3052,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "The referenced session must remain active and authoritative "
+                            "immediately before provider delivery."
+                        ),
+                    ),
                     AuthorityInput(
                         name="conversation reply target",
                         owner="communications.team_inbox_threads",
@@ -3121,6 +3147,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_status",
                 "communications.team_inbox_outbound_intents",
                 "communications.team_inbox_operator_state",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_commands",
@@ -3131,6 +3158,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Authoritative active-session identity and state used for "
+                            "mutation admission and expected-state takeover."
+                        ),
+                    ),
                     AuthorityInput(
                         name="authenticated operator command",
                         owner="auth.permission_gate",
@@ -3193,6 +3229,9 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_commands.conversation_busy",
+                    "communications.team_inbox_commands.ai_owned",
+                    "communications.team_inbox_commands.takeover_conflict",
+                    "communications.team_inbox_commands.takeover_permission_denied",
                 ),
                 retryable_codes=(
                     "communications.team_inbox_commands.conversation_busy",
@@ -3613,6 +3652,7 @@ DOMAIN = DomainSOT(
                 "communications.conversation_ticket_handoff",
                 "operations.service_team_lifecycle",
                 "auth.staff_provisioning",
+                "ai.intake",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_projection",
@@ -3639,6 +3679,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="active AI conversation ownership",
+                        owner="ai.intake",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Active-session identity and state define AI Intake, "
+                            "human-actionable, controls, badges, counts, and workload."
+                        ),
+                    ),
                     AuthorityInput(
                         name="conversation records",
                         owner="communications.team_inbox_threads",
@@ -3735,6 +3784,7 @@ DOMAIN = DomainSOT(
                     "tests/test_admin_inbox_workspace_integrity.py",
                     "tests/architecture/test_team_inbox_boundaries.py",
                     "tests/architecture/test_team_inbox_sot_contracts.py",
+                    "tests/architecture/test_team_inbox_ai_ownership_boundary.py",
                 ),
             ),
         ),

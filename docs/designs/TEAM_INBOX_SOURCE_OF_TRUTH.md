@@ -63,6 +63,7 @@ combined Inbox/Support workspace.
 | Meta free-form reply window | `communications.team_inbox_reply_window` | Determines WhatsApp, Facebook Messenger, and Instagram DM free-form reply eligibility from qualifying inbound customer message chronology |
 | Provider receipts | `communications.team_inbox_delivery_receipts` | Applies timestamp-monotonic sent/delivered/read/failed projections |
 | Operator mutations | `communications.team_inbox_commands` | Coordinates one typed owner transaction for replies and collaboration actions |
+| AI conversation control | `ai.intake` | Owns active AI-session state; an active session (`completed_at IS NULL`) is authoritative AI ownership and conversation metadata is only a repairable projection |
 | Composer AI polish | `communications.team_inbox_ai_polish` | Coordinates review-only, context-aware polishing of unsent staff drafts through the existing Team Inbox projection and AI generation owner |
 | Visitor chat mutations | `communications.team_inbox_widget` | Owns authenticated portal and anonymous fiber-site widget session, message, read, and satisfaction commands; anonymous identity is exact-match or Party-backed prospect with ambiguity held for review |
 | List/detail/metrics/actions, media, and location presentation | `communications.team_inbox_projection` | Normalizes filters, sort and pagination, computes KPIs, unread and action eligibility, resolves safe inline-image versus download-only media presentation, and maps validated structured coordinates to Google Maps links |
@@ -77,14 +78,16 @@ Campaign materialization remains the flush-only
 `communications.team_inbox_campaigns` participant under the campaign and
 outbound-intent owners.
 
-The Inbox default queue is the operational active cohort and excludes resolved
-conversations. The explicit **All** view (`view=all`) includes every lifecycle
-status, including resolved conversations, for history review. Explicit status
-filters still narrow the queue to one status. A non-empty search without an
-explicit lifecycle filter searches active and resolved history; `open_only`
-and explicit status filters remain authoritative when present. Historical
-search, All, and Resolved cohorts fetch one bounded page plus a next-page probe;
-they do not scan the full cohort merely to render an exact total.
+The Inbox default and explicit **All / Actionable** view (`view=all`) is the
+active, unresolved, human-actionable cohort. It excludes every conversation
+with an authoritative active AI session. **AI Intake** (`view=ai_intake`) shows
+active AI-owned conversations read-only, including `awaiting_customer`.
+**Queue** (`view=queue`) shows only conversations with an active durable FIFO
+queue entry and no active AI ownership. **History** (`view=history`) preserves
+the prior all-lifecycle contract for review and search. Explicit filters narrow
+their selected ownership/lifecycle cohort; they never make an AI-owned row
+human-actionable. Historical cohorts use bounded pagination rather than scanning
+the full result merely to render an exact total.
 
 The stale-conversation policy may resolve an unassigned conversation only when
 its latest non-internal message is a human agent reply older than the configured
@@ -102,6 +105,26 @@ assignment, or FIFO queue entry. Legacy five-minute wait rows are extended onto
 the long-term lifecycle before any consequence. Human routing still occurs only
 for a recorded explicit handoff reason such as a human request, unsupported
 issue, policy boundary, required tool failure, or exhausted troubleshooting.
+
+An active `AiIntakeSession` is the sole authority for AI control; the
+conversation's `ai_handling` metadata is a rebuildable display projection with
+transaction-current freshness and drift whenever it disagrees with the active
+session query. While AI controls the conversation, ordinary human replies,
+notes, assignment, status/workflow changes, ticket creation, macros, bulk
+operations, workqueue claims, report escalation, and generic automation fail
+closed with `communications.team_inbox_commands.ai_owned`. The typed AI handoff
+provenance is the only exception for AI-authorized routing.
+
+`TakeOverConversationCommand` is the only ordinary human transition out of AI
+control. It locks and rechecks the expected conversation/session/state, stops
+the session as `stopped_human_takeover`, clears customer wait, records actor,
+reason, timestamps and prior state, acquires the agent through existing Inbox
+assignment rules, suppresses pending AI outbox rows, and stages projection and
+realtime effects in one owner transaction. Assignment failure rolls the whole
+operation back. A stable idempotency key replays the completed takeover; stale
+session or state evidence returns a conflict. Delivery workers independently
+revalidate the referenced active AI session immediately before provider contact
+and cancel stale queued AI messages after takeover.
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the
@@ -214,8 +237,11 @@ presence fails closed as offline. Manual assignment to a target-team member uses
 the same availability gate. The default capacity is ten active
 conversations per agent unless `InboxAgentPresence.max_concurrent_conversations`
 overrides it. Capacity counts active human assignments on `open`, human-owned
-`pending`, and `snoozed` conversations while ownership remains active. It
-excludes resolved conversations and unassigned AI-pending conversations.
+`pending`, and `snoozed` conversations while human ownership remains active. It
+excludes resolved and AI-owned conversations even if legacy drift left an
+assignment projection behind. Default/actionable, unassigned, pending-response,
+needs-response, unread-work, and manager workload counts apply the same
+authoritative exclusion; AI Intake has its own count.
 
 Successful staff session issuance submits one typed, flush-only sign-in command
 to the routing owner in the same transaction. That command sets the signed-in
@@ -253,6 +279,14 @@ error, never to an HTTP 500. Dispatch occurs after commit through the canonical
 notification delivery point. SMTP, WhatsApp, and social integrations translate
 the intent and later return normalized receipt observations; they cannot change
 conversation or ticket lifecycle state.
+
+Before any queued AI Intake intent contacts a provider, the delivery worker
+rechecks that the referenced AI session still exists, is incomplete, belongs to
+the same active unresolved conversation, and has not reached
+`stopped_human_takeover`. A failed recheck cancels the notification and marks the
+Inbox attempt with a bounded suppression reason. This second admission check is
+required even when takeover already canceled known queued rows because it closes
+the enqueue/takeover/worker race.
 
 For email, the thread owner derives one stable RFC `Message-ID` from the local
 outbound Inbox message UUID before the intent is staged. It also derives

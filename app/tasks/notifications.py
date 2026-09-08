@@ -21,7 +21,9 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
+from app.models.team_inbox import InboxMessage
 from app.services import (
+    ai_conversation_ownership,
     communication_attachments,
     communication_eligibility,
     team_inbox_media,
@@ -68,6 +70,41 @@ _DELIVERABLE_CHANNELS = (
     NotificationChannel.instagram_comment,
     NotificationChannel.push,
 )
+
+
+def _suppress_ai_outbound_without_ownership(
+    db: Session,
+    notification: Notification,
+) -> bool:
+    metadata = dict(notification.metadata_ or {})
+    try:
+        conversation_id = UUID(str(metadata.get("conversation_id")))
+    except (TypeError, ValueError):
+        conversation_id = None
+    decision = ai_conversation_ownership.decide_ai_outbound_delivery(
+        db,
+        conversation_id=conversation_id,
+        metadata=metadata,
+    )
+    if not decision.applicable or decision.allowed:
+        return False
+    reason = decision.reason or "ai_ownership_ended"
+    notification.status = NotificationStatus.canceled
+    notification.last_error = reason
+    notification.send_at = None
+    message = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.notification_id == notification.id)
+        .one_or_none()
+    )
+    if message is not None:
+        message_metadata = dict(message.metadata_ or {})
+        message_metadata["delivery_status"] = "canceled"
+        message_metadata["suppression_reason"] = reason
+        message.metadata_ = message_metadata
+    record_delivery_outcome(db, notification)
+    db.commit()
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +603,9 @@ def _deliver_notification_queue_stats(
             .one_or_none()
         )
         if notification is None:
+            continue
+        if _suppress_ai_outbound_without_ownership(db, notification):
+            suppressed += 1
             continue
         channel_counts[notification.channel] = current_count + 1
         # Reclaim handling: a notification still in "sending" was stuck past the

@@ -236,6 +236,7 @@ DOMAIN = DomainSOT(
                 "AI conversational intake configuration lifecycle",
                 "AI conversational intake policy-version lifecycle",
                 "AI conversational intake session lifecycle",
+                "active AI conversation ownership resolution",
                 "AI conversational intake structured operational state",
                 "AI conversational intake LangGraph orchestration",
                 "AI intake approved tool catalogue policy",
@@ -311,6 +312,11 @@ DOMAIN = DomainSOT(
                             "normalized inbound conversation state",
                         ),
                         canonical_writer="ai.intake",
+                    ),
+                    ConcernContract(
+                        name="active AI conversation ownership resolution",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("active AI intake session state",),
                     ),
                     ConcernContract(
                         name="AI conversational intake structured operational state",
@@ -424,6 +430,16 @@ DOMAIN = DomainSOT(
                         owner="ai.intake",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Most-specific AiIntakeConfig for provider/account/channel scope.",
+                    ),
+                    AuthorityInput(
+                        name="active AI intake session state",
+                        owner="ai.intake",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "The unique AiIntakeSession for the conversation whose "
+                            "completed_at is null; conversation metadata is only a "
+                            "repairable projection."
+                        ),
                     ),
                     AuthorityInput(
                         name="active AI intake policy version",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -34,9 +35,7 @@ from app.schemas.team_inbox import (
     InboxConversationTimelineRead,
 )
 from app.services import (
-    support as support_service,
-)
-from app.services import (
+    ai_conversation_ownership,
     team_inbox_assignment,
     team_inbox_contact_links,
     team_inbox_filters,
@@ -45,12 +44,16 @@ from app.services import (
     ticket_validation,
     ticket_work_order_handoff,
 )
+from app.services import (
+    support as support_service,
+)
 from app.services.auth_dependencies import (
     require_permission,
     require_user_auth,
 )
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -360,15 +363,21 @@ def escalate_inbox_conversation(
 ):
     actor_id = _actor_id(auth)
     finish_read_transaction(db)
-    result = team_inbox_assignment.escalate_conversation_committed(
-        db,
-        conversation_id=conversation_id,
-        service_team_id=payload.service_team_id,
-        assigned_person_id=payload.assigned_person_id,
-        auto_assign=payload.auto_assign,
-        assigned_by_person_id=actor_id,
-        reason=payload.reason,
-    )
+    try:
+        result = team_inbox_assignment.escalate_conversation_committed(
+            db,
+            conversation_id=conversation_id,
+            service_team_id=payload.service_team_id,
+            assigned_person_id=payload.assigned_person_id,
+            auto_assign=payload.auto_assign,
+            assigned_by_person_id=actor_id,
+            reason=payload.reason,
+        )
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
     if result.kind == "conversation_not_found":
         raise HTTPException(status_code=404, detail=result.reason)
     if result.kind == "conversation_resolved":
@@ -398,6 +407,7 @@ def escalate_inbox_conversation(
     dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def list_inbox_conversations(
+    view: Literal["all", "ai_intake", "queue", "history"] = Query(default="all"),
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
@@ -452,6 +462,12 @@ def list_inbox_conversations(
         priority_at_most=clean_priority_at_most,
         muted=clean_muted,
         snoozed=clean_snoozed,
+        ownership_cohort={
+            "all": ai_conversation_ownership.ConversationOwnershipCohort.actionable,
+            "ai_intake": ai_conversation_ownership.ConversationOwnershipCohort.ai_intake,
+            "queue": ai_conversation_ownership.ConversationOwnershipCohort.queue,
+            "history": ai_conversation_ownership.ConversationOwnershipCohort.history,
+        }[view],
         limit=limit,
         offset=offset,
     )
@@ -493,17 +509,23 @@ def reply_to_inbox_conversation(
     db: Session = Depends(get_db),
 ):
     finish_read_transaction(db)
-    result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
-        db,
-        conversation_id=conversation_id,
-        payload=team_inbox_outbound.InboxReplyPayload(
-            body_html=payload.body_html,
-            body_text=payload.body_text,
-            subject=payload.subject,
-            to_email=payload.to_email,
-            sent_by_person_id=_actor_id(auth),
-        ),
-    )
+    try:
+        result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
+            db,
+            conversation_id=conversation_id,
+            payload=team_inbox_outbound.InboxReplyPayload(
+                body_html=payload.body_html,
+                body_text=payload.body_text,
+                subject=payload.subject,
+                to_email=payload.to_email,
+                sent_by_person_id=_actor_id(auth),
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
     if result.kind == "conversation_not_found":
         raise HTTPException(status_code=404, detail=result.reason)
     if result.kind == "invalid_conversation":

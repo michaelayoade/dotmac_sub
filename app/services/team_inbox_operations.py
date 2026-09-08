@@ -29,6 +29,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.services import (
+    ai_conversation_ownership,
     team_inbox_assignment,
     team_inbox_filters,
     team_inbox_outbound,
@@ -1094,6 +1095,7 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
         )
         .filter(InboxConversation.is_active.is_(True))
         .filter(InboxConversation.status != "resolved")
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
         .one()
     )
     return InboxQueueMetrics(

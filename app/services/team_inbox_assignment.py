@@ -33,7 +33,11 @@ from app.models.team_inbox import (
     InboxTeamRoundRobinCursor,
     InboxTeamSource,
 )
-from app.services import team_inbox_agent_introduction, team_inbox_queue_notifications
+from app.services import (
+    ai_conversation_ownership,
+    team_inbox_agent_introduction,
+    team_inbox_queue_notifications,
+)
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -96,6 +100,11 @@ class InboxPresenceReason(StrEnum):
 class InboxAgentUnavailabilityReason(StrEnum):
     presence_unavailable = "presence_unavailable"
     at_capacity = "at_capacity"
+
+
+class InboxAssignmentProvenance(StrEnum):
+    human_or_generic = "human_or_generic"
+    ai_intake_handoff = "ai_intake_handoff"
 
 
 @dataclass(frozen=True)
@@ -382,6 +391,7 @@ def agent_availability_snapshots(
         .filter(InboxConversationAssignment.person_id.in_(person_ids))
         .filter(InboxConversation.status.in_(COUNTABLE_CAPACITY_STATUSES))
         .filter(InboxConversation.is_active.is_(True))
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
         .group_by(InboxConversationAssignment.person_id)
         .all()
     )
@@ -888,6 +898,7 @@ def assign_conversation_to_agent(
     decision_mode: InboxRoutingDecisionMode = InboxRoutingDecisionMode.manual,
     decision_evidence: InboxAgentCandidate | None = None,
     require_team_membership: bool = True,
+    provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
     person_uuid = _coerce_uuid(person_id)
@@ -955,6 +966,12 @@ def assign_conversation_to_agent(
             reason="Conversation not found",
         )
     conversation = locked_conversation
+    if provenance is not InboxAssignmentProvenance.ai_intake_handoff:
+        ai_conversation_ownership.require_human_control(
+            db,
+            conversation_id=conversation.id,
+            mutation=ai_conversation_ownership.HumanConversationMutation.assignment,
+        )
 
     previous_assignment = _active_assignment(db, conversation)
     if (
@@ -1032,21 +1049,6 @@ def assign_conversation_to_agent(
         metadata_={"reason": reason, "source": source},
     )
     db.add(assignment)
-    try:
-        from app.services import ai_conversation_intake
-
-        session = ai_conversation_intake.active_session_for_conversation(
-            db, conversation.id
-        )
-        if session is not None:
-            ai_conversation_intake.complete_session(
-                session, state="stopped_human_takeover"
-            )
-            ai_conversation_intake.mark_conversation_ai_metadata(
-                conversation, session=session, active=False
-            )
-    except Exception:
-        pass
     queued_entry = _queue_entry(db, conversation.id)
     _settle_queue_entry(
         db,
@@ -1093,6 +1095,7 @@ def queue_conversation_for_team(
     decision_mode: InboxRoutingDecisionMode = InboxRoutingDecisionMode.manual,
     event_type: InboxRoutingEventType | None = None,
     reason_code: str = "manual_queue",
+    provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
     actor_uuid = _coerce_uuid(assigned_by_person_id)
@@ -1120,6 +1123,12 @@ def queue_conversation_for_team(
             reason="Conversation not found",
         )
     conversation = locked_conversation
+    if provenance is not InboxAssignmentProvenance.ai_intake_handoff:
+        ai_conversation_ownership.require_human_control(
+            db,
+            conversation_id=conversation.id,
+            mutation=ai_conversation_ownership.HumanConversationMutation.assignment,
+        )
 
     previous_assignment = _active_assignment(db, conversation)
     set_conversation_owner_team(
@@ -1186,6 +1195,7 @@ def assign_conversation_to_available_agent(
     reason: str | None = None,
     source: str = InboxTeamSource.escalation.value,
     now: datetime | None = None,
+    provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
     actor_uuid = _coerce_uuid(assigned_by_person_id)
@@ -1217,6 +1227,7 @@ def assign_conversation_to_available_agent(
             decision_mode=InboxRoutingDecisionMode.automatic,
             event_type=InboxRoutingEventType.auto_assignment_declined,
             reason_code="no_available_agent",
+            provenance=provenance,
         )
         return InboxAssignmentResult(
             kind=result.kind,
@@ -1240,6 +1251,7 @@ def assign_conversation_to_available_agent(
         source_id=source_id,
         decision_mode=InboxRoutingDecisionMode.automatic,
         decision_evidence=selected,
+        provenance=provenance,
     )
 
 

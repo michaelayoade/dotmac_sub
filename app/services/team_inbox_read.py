@@ -31,6 +31,7 @@ from app.models.team_inbox import (
     InboxQueueEntryStatus,
 )
 from app.services import (
+    ai_conversation_ownership,
     service_team_composition,
     team_inbox_assignment,
     team_inbox_field_job,
@@ -214,6 +215,11 @@ class InboxConversationListRow:
     unread_count: int
     team_count: int
     labels: tuple[InboxConversationListLabel, ...]
+    ai_owned: bool = False
+    control_owner: str = "human"
+    ai_session_id: str | None = None
+    ai_session_state: str | None = None
+    waiting_for_customer: bool = False
     reply_window_status: str = "not_applicable"
 
 
@@ -339,7 +345,26 @@ def _base_queue_query(db: Session):
 
 def queue_conversation_count(db: Session) -> int:
     return int(
-        _base_queue_query(db).with_entities(func.count(InboxConversation.id)).scalar()
+        _base_queue_query(db)
+        .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
+        .with_entities(func.count(InboxConversation.id))
+        .scalar()
+        or 0
+    )
+
+
+def queued_conversation_count(db: Session) -> int:
+    queued_ids = select(InboxConversationQueueEntry.conversation_id).where(
+        InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value
+    )
+    return int(
+        _base_queue_query(db)
+        .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
+        .filter(InboxConversation.id.in_(queued_ids))
+        .with_entities(func.count(InboxConversation.id))
+        .scalar()
         or 0
     )
 
@@ -354,6 +379,8 @@ def assigned_conversation_count(
         return 0
     return int(
         _base_queue_query(db)
+        .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
         .filter(
             InboxConversation.id.in_(
                 select(InboxConversationAssignment.conversation_id).where(
@@ -372,6 +399,7 @@ def needs_response_conversation_count(db: Session) -> int:
     return int(
         _base_queue_query(db)
         .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
         .filter(_latest_visible_direction() == InboxMessageDirection.inbound.value)
         .with_entities(func.count(InboxConversation.id))
         .scalar()
@@ -380,12 +408,22 @@ def needs_response_conversation_count(db: Session) -> int:
 
 
 def needs_attention_conversation_count(db: Session) -> int:
-    return len(needs_attention_conversation_ids(db))
+    conversation_ids = needs_attention_conversation_ids(db)
+    if not conversation_ids:
+        return 0
+    return int(
+        _base_queue_query(db)
+        .filter(InboxConversation.id.in_(conversation_ids))
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
+        .with_entities(func.count(InboxConversation.id))
+        .scalar()
+        or 0
+    )
 
 
 def _ai_handling_clause(*, active: bool) -> ColumnElement[bool]:
-    flag = InboxConversation.metadata_["ai_handling"].as_boolean()
-    return flag.is_(True) if active else flag.isnot(True)
+    clause = ai_conversation_ownership.ai_owned_conversation_clause()
+    return clause if active else ~clause
 
 
 def ai_handling_conversation_count(db: Session) -> int:
@@ -394,7 +432,7 @@ def ai_handling_conversation_count(db: Session) -> int:
     return int(
         _base_queue_query(db)
         .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
-        .filter(_ai_handling_clause(active=True))
+        .filter(ai_conversation_ownership.ai_owned_conversation_clause())
         .with_entities(func.count(InboxConversation.id))
         .scalar()
         or 0
@@ -1070,6 +1108,9 @@ def list_conversations(
     unread_only: bool = False,
     reply_window_status: str | None = None,
     ai_handling: bool | None = None,
+    ownership_cohort: (
+        ai_conversation_ownership.ConversationOwnershipCohort | None
+    ) = None,
     has_ticket: bool | None = None,
     activity_from: datetime | None = None,
     activity_to: datetime | None = None,
@@ -1148,6 +1189,33 @@ def list_conversations(
         query = query.filter(InboxConversation.status == status)
     if open_only:
         query = query.filter(InboxConversation.status != "resolved")
+    if (
+        ownership_cohort
+        is ai_conversation_ownership.ConversationOwnershipCohort.actionable
+    ):
+        query = query.filter(
+            InboxConversation.status != InboxConversationStatus.resolved.value,
+            ~ai_conversation_ownership.ai_owned_conversation_clause(),
+        )
+    elif (
+        ownership_cohort
+        is ai_conversation_ownership.ConversationOwnershipCohort.ai_intake
+    ):
+        query = query.filter(
+            InboxConversation.status != InboxConversationStatus.resolved.value,
+            ai_conversation_ownership.ai_owned_conversation_clause(),
+        )
+    elif (
+        ownership_cohort is ai_conversation_ownership.ConversationOwnershipCohort.queue
+    ):
+        queued_ids = select(InboxConversationQueueEntry.conversation_id).where(
+            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value
+        )
+        query = query.filter(
+            InboxConversation.status != InboxConversationStatus.resolved.value,
+            ~ai_conversation_ownership.ai_owned_conversation_clause(),
+            InboxConversation.id.in_(queued_ids),
+        )
     clean_channel_types = tuple(
         str(item).strip() for item in (channel_types or ()) if str(item).strip()
     )
@@ -1392,6 +1460,11 @@ def list_conversations(
             total = query.count()
     conversations = [conversation for conversation, _team in rows]
     conversation_ids = [conversation.id for conversation in conversations]
+    ownership_by_conversation = (
+        ai_conversation_ownership.ownership_by_conversation_ids(db, conversation_ids)
+        if conversation_ids
+        else {}
+    )
     messages_by_conversation = _messages_by_conversation(db, conversation_ids)
     latest_messages = {
         conversation_id: latest
@@ -1505,6 +1578,7 @@ def list_conversations(
         contact_identity = contact_identities[conversation.id]
         active_assignment = active_assignments.get(conversation.id)
         queue_projection = queue_by_conversation.get(conversation.id)
+        ownership = ownership_by_conversation[conversation.id]
         resolution_status = _contact_resolution_status(conversation)
         cohort = response_cohort(
             conversation,
@@ -1586,6 +1660,15 @@ def list_conversations(
                 unread_count=unread_count,
                 team_count=int(team_counts.get(conversation.id, 0)),
                 labels=tuple(labels_by_conversation.get(conversation.id, [])),
+                ai_owned=ownership.ai_owned,
+                control_owner=ownership.control_owner.value,
+                ai_session_id=(
+                    str(ownership.ai_session_id)
+                    if ownership.ai_session_id is not None
+                    else None
+                ),
+                ai_session_state=ownership.ai_session_state,
+                waiting_for_customer=ownership.waiting_for_customer,
                 reply_window_status=reply_window_statuses.get(
                     conversation.id, "not_applicable"
                 ),

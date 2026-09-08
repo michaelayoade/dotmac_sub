@@ -265,6 +265,18 @@ Explicit escalation uses `handoff_requested -> completed`. `queued` and
 `assigned` are not AI states; they are Team Inbox routing outcomes and may
 appear only as derived audit metadata.
 
+An active session (`AiIntakeSession.completed_at IS NULL`) is also the
+authoritative conversation-control fact. `app.services.ai_conversation_ownership`
+exposes the typed resolver consumed by Team Inbox; `ai_handling` metadata is
+only a repairable projection. Humans may observe AI-owned threads but normal
+mutations fail closed. The sole deliberate human transition is the typed Team
+Inbox `TakeOverConversationCommand`, which rechecks the expected AI session,
+sets `stopped_human_takeover`, and atomically acquires human ownership through
+the existing routing owner. AI-authorized handoff uses a distinct typed
+provenance and remains able to route or queue; there is no generic bypass flag.
+Queued AI outbound is admitted again at delivery time and suppressed when its
+referenced session is no longer active, ensuring AI cannot reply after takeover.
+
 The contact-data cleaning flow is independent and disabled by default for
 production collection. AI may collect candidate values only when the
 conversation is reliably linked to a directly managed residential

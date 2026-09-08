@@ -508,6 +508,24 @@ implementation.
   the note, and provides a temporary accessible highlight. Mentioning never
   assigns, transfers, or changes conversation status.
 
+## Inbox AI Ownership Contract
+
+- Authority: `ai.intake` owns active AI-session state. Team Inbox projection
+  consumes that typed fact and supplies `control_owner`, `ai_session_state`,
+  `can_take_over`, action booleans, and a denial reason; templates never infer
+  ownership from lifecycle status or metadata.
+- The default All/Actionable view excludes AI-owned work. AI Intake is a
+  separate read-only view with an `AI handling` or `Waiting on customer` badge;
+  Queue contains only durable active queue entries, and History preserves
+  lifecycle review.
+- While AI owns the thread, Reply, Private Note, assignment, status/workflow,
+  ticket, macro, and bulk controls are absent or disabled with an explanation.
+  Authorized operators receive one explicit `Take Over Conversation` control
+  with confirmation and expected-session evidence.
+- UI gating is presentation only. Every mutation rechecks ownership at its
+  backend owner and returns the stable AI-owned conflict; a normal reply never
+  becomes implicit takeover.
+
 ## ONT Configure Page Contract
 
 - Audience and task: authorized network staff submit one customer-service
