@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+import operator
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -220,6 +221,43 @@ def _typed_value(field: AutomationConditionField, value: object) -> object:
     raise ValueError
 
 
+
+def _stored_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _stored_mapping_list(
+    value: object,
+) -> tuple[Mapping[str, object], ...] | None:
+    if not isinstance(value, list):
+        return None
+    items: list[Mapping[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        items.append(item)
+    return tuple(items)
+
+
+_ORDERED_COMPARISONS: dict[
+    AutomationOperator, Callable[[object, object], bool]
+] = {
+    AutomationOperator.greater_than: operator.gt,
+    AutomationOperator.greater_than_or_equal: operator.ge,
+    AutomationOperator.less_than: operator.lt,
+    AutomationOperator.less_than_or_equal: operator.le,
+}
+
+
 def _matches_condition(
     *,
     field: AutomationConditionField,
@@ -248,14 +286,12 @@ def _matches_condition(
         return isinstance(right, tuple) and left not in right
     if left is None or right is None:
         return False
-    if operator is AutomationOperator.greater_than:
-        return left > right
-    if operator is AutomationOperator.greater_than_or_equal:
-        return left >= right
-    if operator is AutomationOperator.less_than:
-        return left < right
-    if operator is AutomationOperator.less_than_or_equal:
-        return left <= right
+    comparison = _ORDERED_COMPARISONS.get(operator)
+    if comparison is not None:
+        try:
+            return comparison(left, right)
+        except TypeError:
+            return False
     if operator is AutomationOperator.contains:
         return str(right) in str(left)
     return False
@@ -291,22 +327,45 @@ def _prepared_steps(
             .order_by(AutomationStepRun.step_index)
         )
     )
-    definitions = {int(item["position"]): item for item in version.actions}
-    return tuple(
-        PreparedAutomationStep(
-            step_id=row.id,
-            step_index=row.step_index,
-            action_key=row.action_key,
-            inputs=tuple(
-                automation_actions.AutomationActionInputValue(
-                    key=str(item["key"]), value=item.get("value")
-                )
-                for item in definitions[row.step_index].get("inputs", [])
-            ),
+    definitions: dict[int, Mapping[str, object]] = {}
+    for item in version.actions:
+        position = _stored_int(item.get("position"))
+        if position is None or position in definitions:
+            raise _error(
+                "stored_action_invalid",
+                "A stored action has an invalid position.",
+            )
+        definitions[position] = item
+    prepared: list[PreparedAutomationStep] = []
+    for row in rows:
+        if row.status == AutomationStepStatus.succeeded.value:
+            continue
+        definition = definitions.get(row.step_index)
+        inputs = (
+            _stored_mapping_list(definition.get("inputs"))
+            if definition is not None
+            else None
         )
-        for row in rows
-        if row.status != AutomationStepStatus.succeeded.value
-    )
+        if definition is None or inputs is None:
+            raise _error(
+                "stored_action_invalid",
+                "A stored action no longer matches its execution step.",
+                step_index=row.step_index,
+            )
+        prepared.append(
+            PreparedAutomationStep(
+                step_id=row.id,
+                step_index=row.step_index,
+                action_key=row.action_key,
+                inputs=tuple(
+                    automation_actions.AutomationActionInputValue(
+                        key=str(item.get("key") or ""), value=item.get("value")
+                    )
+                    for item in inputs
+                ),
+            )
+        )
+    return tuple(prepared)
 
 
 def prepare_event_runs(
@@ -399,7 +458,12 @@ def prepare_event_runs(
             if not matched:
                 continue
             for step in version.actions:
-                position = int(step["position"])
+                position = _stored_int(step.get("position"))
+                if position is None:
+                    raise _error(
+                        "stored_action_invalid",
+                        "A stored action has an invalid position.",
+                    )
                 db.add(
                     AutomationStepRun(
                         tenant_id=command.event.tenant_id,

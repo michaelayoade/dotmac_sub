@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -247,6 +248,33 @@ def _stored_value_matches(field: AutomationConditionField, value: object) -> boo
     return False
 
 
+
+def _stored_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _stored_mapping_list(
+    value: object,
+) -> tuple[Mapping[str, object], ...] | None:
+    if not isinstance(value, list):
+        return None
+    items: list[Mapping[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        items.append(item)
+    return tuple(items)
+
+
 def _validate_conditions(
     trigger_key: str, conditions: tuple[AutomationCondition, ...]
 ) -> list[dict[str, object]]:
@@ -427,9 +455,12 @@ def _validate_persisted_definition(
                 "A stored action no longer matches the trigger target.",
                 action_key=action_key,
             )
-        if int(step.get("position", -1)) != position:
+        if _stored_int(step.get("position")) != position:
             raise _error("action_order_invalid", "Stored action order is invalid.")
-        if int(step.get("schema_version", 0)) != capability.input_schema_version:
+        if (
+            _stored_int(step.get("schema_version"))
+            != capability.input_schema_version
+        ):
             raise _error(
                 "action_schema_stale",
                 "A stored action schema is no longer current.",
@@ -437,9 +468,16 @@ def _validate_persisted_definition(
             )
         _require_permission(permission_keys, capability.author_permission)
         declared = {item.key: item for item in capability.inputs}
+        stored_inputs = _stored_mapping_list(step.get("inputs"))
+        if stored_inputs is None:
+            raise _error(
+                "action_contract_stale",
+                "Stored action inputs no longer match their contract.",
+                action_key=action_key,
+            )
         supplied = {
             str(item.get("key") or ""): item.get("value")
-            for item in step.get("inputs", [])
+            for item in stored_inputs
         }
         if set(supplied) - set(declared) or any(
             item.required and key not in supplied for key, item in declared.items()
