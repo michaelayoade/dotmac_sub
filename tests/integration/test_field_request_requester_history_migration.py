@@ -12,10 +12,12 @@ import psycopg
 import pytest
 from alembic.config import Config
 from psycopg import sql
+from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 
 from alembic import command
 from app import config as app_config
+from scripts.ci.migrated_test_database import require_migrated_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "583_staff_expense_requesters"
@@ -39,7 +41,7 @@ def fresh_migration_database(
 ) -> Iterator[URL]:
     """Create an empty database so this test replays the real migration chain."""
 
-    name = f"dotmac_requester_history_{uuid4().hex}"
+    name = f"dotmac_test_requester_history_{uuid4().hex}"
     maintenance = template_base_url.set(drivername="postgresql", database="postgres")
     with psycopg.connect(_render(maintenance), autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
@@ -234,3 +236,12 @@ def test_predecessor_to_candidate_repairs_exact_requester_links(
         "ix_field_expense_requests_requested_by_person",
         "ix_field_expense_requests_requested_by_system_user",
     } <= indexes
+
+    # Rehearse the remaining release and composed-module migrations after
+    # verifying the historical rows survived the requester repair.
+    _upgrade("heads")
+    engine = create_engine(database_url)
+    try:
+        require_migrated_schema(engine)
+    finally:
+        engine.dispose()
