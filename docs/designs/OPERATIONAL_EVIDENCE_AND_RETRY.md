@@ -95,6 +95,24 @@ request ID, and nearest application caller. SQL text, parameters, results,
 credentials, and customer data are never logged. Transactions lasting at least
 thirty seconds emit a request-correlated duration span.
 
+## Structured operational summaries
+
+Completed ERP synchronization, notification-queue, and billing-enforcement
+runs emit one `operational_task_outcome` record through
+`observability.structured_operational_logs`. The event carries only a closed
+event name, closed outcome, component, and numeric counters. Routine retries,
+domain refusals, and zero/non-zero bookkeeping counters remain INFO evidence;
+they are not application-error alerts.
+
+Log alerts must select structured `ERROR` or `CRITICAL` records and group by a
+stable exception fingerprint. They must not search arbitrary message text for
+`failed`, `rejected`, `errors`, or `retry_failed`. A multiline traceback is
+attached to its one root event and must be counted by that root fingerprint,
+not by individual lines. Resource alerts use exact runtime evidence such as
+`OOMKilled` or a structured `resource_exhausted` event; where a temporary
+text query is unavoidable, it must use `\\boom\\b` rather than a substring
+match.
+
 ## UI cutover
 
 The NOC page shows the three operational evidence checks and exact per-router

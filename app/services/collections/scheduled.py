@@ -13,6 +13,12 @@ from sqlalchemy.orm import Session
 from app.schemas.collections import BillingEnforcementRunRequest
 from app.services.collections import billing_enforcement_reconciler
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import (
+    OperationalEventName,
+    OperationalLogEvent,
+    OperationalOutcome,
+    log_operational_event,
+)
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -37,14 +43,20 @@ def run_billing_enforcement() -> dict[str, int | str]:
             "credit_settlement_errors": int(result.credit_settlement_errors),
             "credit_applied": str(result.credit_applied),
         }
-        logger.info(
-            "Billing enforcement run completed: accounts_scanned=%d cases_created=%d "
-            "actions_created=%d skipped=%d errors=%d",
-            summary["accounts_scanned"],
-            summary["cases_created"],
-            summary["actions_created"],
-            summary["skipped"],
-            summary["dunning_errors"],
+        log_operational_event(
+            logger,
+            OperationalLogEvent(
+                name=OperationalEventName.BILLING_ENFORCEMENT_COMPLETED,
+                outcome=OperationalOutcome.COMPLETED,
+                component="collections",
+                counters={
+                    "accounts_scanned": int(summary["accounts_scanned"]),
+                    "cases_created": int(summary["cases_created"]),
+                    "actions_created": int(summary["actions_created"]),
+                    "skipped": int(summary["skipped"]),
+                    "dunning_errors": int(summary["dunning_errors"]),
+                },
+            ),
         )
         session.commit()
         return summary

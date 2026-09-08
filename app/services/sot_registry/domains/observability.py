@@ -213,6 +213,45 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="observability.structured_operational_logs",
+            module="app.services.observability",
+            owns=("structured operational task-summary observations",),
+            depends_on=("observability.recording",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="structured operational task-summary observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("typed operational task outcome",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed operational task outcome",
+                        owner="observability.structured_operational_logs",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="closed event name, outcome, component, and bounded counters emitted after task completion",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="The observer writes one structured log event and no domain state.",
+                    locking="No application lock or database transaction is acquired.",
+                    idempotency="Each task completion emits one independent observation.",
+                    retries="The observer never retries task work or alters task outcomes.",
+                ),
+                errors=ErrorContract(domain_codes=(), mapping_owner="task adapters"),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="observability.structured_operational_logs",
+                    verification="Focused structured operational logging tests.",
+                ),
+                steward="platform operations",
+                design_refs=("docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",),
+                test_refs=("tests/test_structured_operational_logging.py",),
+            ),
+        ),
+        SOTService(
             name="observability.database_diagnostics",
             module="app.services.db_error_observability",
             owns=(
