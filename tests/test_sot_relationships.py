@@ -20,6 +20,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "observability",
         "workforce_operations",
         "support_operations",
+        "automation_control_plane",
         "tenancy",
         "ai_advisory",
         "provisioning_operations",
@@ -1251,3 +1252,4 @@ def test_domain_sot_relationship_modules_are_importable():
     for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS:
         for service in domain.services:
             importlib.import_module(service.module)
+
