@@ -135,6 +135,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "quote-payment-review",
+        "Sales",
+        "Review an installation Quote for payment",
+        "Sales staff, feasibility reviewers",
+        "Approve or reject a customer installation estimate before payment is allowed.",
+        ("/admin/sales/quotes",),
+        "Open the Draft or Sent Quote that is awaiting staff review.",
+        "Confirm the customer, pinned installation address, feasibility result, price, deposit, and expiry.",
+        "Choose Approve for payment when the estimate is correct, or reject it with a clear reason.",
+        "After approval, confirm the page shows Approved and the customer notification has been queued.",
+        notes=(
+            "Customers can see the estimate while it is under review, but payment remains unavailable.",
+            "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
+        ),
+    ),
+    _guide(
         "change-plan",
         "Subscriptions",
         "Change a customer plan",
