@@ -18,7 +18,6 @@ def test_every_guide_has_plain_language_content_and_a_route() -> None:
         assert all(route.startswith("/admin") for route in guide.route_prefixes)
 
 
-
 def test_automation_center_guidance_explains_the_read_only_boundary() -> None:
     guide = guidance_for_path("/admin/automation")
 
@@ -29,6 +28,7 @@ def test_automation_center_guidance_explains_the_read_only_boundary() -> None:
     assert "recent execution evidence" in content
     assert "read-only" in content
     assert "custom fields" in content
+
 
 def test_change_plan_guide_is_searchable_and_contextual() -> None:
     guide = guidance_for_path("/admin/catalog/subscriptions/123")
