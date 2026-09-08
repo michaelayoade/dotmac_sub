@@ -121,11 +121,10 @@ def _seed_legacy_requesters(url: URL) -> tuple[UUID, UUID, tuple[UUID, ...]]:
             connection.execute(
                 """
                 INSERT INTO work_order (
-                    id, public_id, crm_work_order_id, subscriber_id, title,
-                    status, requires_as_built_evidence, is_active,
-                    created_at, updated_at
-                ) VALUES (%s, %s, NULL, %s, 'Requester history repair',
-                          'scheduled', TRUE, TRUE, %s, %s)
+                    id, public_id, subscriber_id, title, status,
+                    requires_as_built_evidence, is_active, created_at, updated_at
+                ) VALUES (%s, %s, %s, 'Requester history repair', 'scheduled',
+                          TRUE, TRUE, %s, %s)
                 """,
                 (
                     work_order_id,
