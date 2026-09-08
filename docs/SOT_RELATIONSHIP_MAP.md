@@ -3734,6 +3734,12 @@ in forms, or rotate key material directly.
    eligibility claim before
    provider delivery, and committed status changes publish bounded realtime
    invalidations so clients refetch the authoritative Inbox projection.
+   For Facebook Messenger and Instagram DM media, the committed intent retains
+   durable private Inbox asset IDs; the notification worker materializes those
+   facts and asks the version-pinned `meta.social` capability to upload one
+   asset and send one provider attachment leg at a time. Accepted leg receipts
+   are durable retry checkpoints. Meta remains a transport and its attachment
+   ID is evidence, never the authority for Inbox media identity or content.
    `app.team_inbox_smtp` owns only the dedicated SMTP process lifecycle,
    readiness check, and continuous/deployment probe orchestration; it delegates
    every inbound write and exact-probe verification to

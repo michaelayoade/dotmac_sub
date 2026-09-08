@@ -562,6 +562,7 @@ def _reply_replay(
     reply_to_message_id: UUID | None,
     cc_addresses: tuple[str, ...],
     bcc_addresses: tuple[str, ...],
+    attachment_ids: tuple[str, ...],
 ) -> ReplyOutcome | None:
     if not idempotency_key:
         return None
@@ -592,12 +593,23 @@ def _reply_replay(
         if isinstance(raw_previous_bcc, list)
         else ()
     )
+    raw_previous_attachment_ids = (previous.metadata_ or {}).get("inbox_attachment_ids")
+    previous_attachment_ids = (
+        tuple(
+            str(value)
+            for value in raw_previous_attachment_ids
+            if isinstance(value, str)
+        )
+        if isinstance(raw_previous_attachment_ids, list)
+        else ()
+    )
     if (
         previous_body
         and previous_body != body_text
         or previous_reply_id != requested_reply_id
         or previous_cc != cc_addresses
         or previous_bcc != bcc_addresses
+        or previous_attachment_ids != attachment_ids
     ):
         raise InboxCommandRejected(
             "This send key was already used for a different reply.",
@@ -621,6 +633,9 @@ def reply(
     def action() -> ReplyOutcome:
         conversation = _active_conversation(db, command.conversation_id)
         clean_body = command.body_text.strip()
+        submitted_attachment_ids = tuple(
+            str(item).strip() for item in command.attachment_ids if str(item).strip()
+        )
         copy_recipients = command.email_copy_recipients
         clean_cc: tuple[str, ...] = ()
         clean_bcc: tuple[str, ...] = ()
@@ -647,6 +662,7 @@ def reply(
             reply_to_message_id=reply_to_uuid,
             cc_addresses=clean_cc,
             bcc_addresses=clean_bcc,
+            attachment_ids=submitted_attachment_ids,
         )
         if replay is not None:
             return replay
@@ -695,7 +711,7 @@ def reply(
                 )
                 if not clean_body:
                     clean_body = f"[WhatsApp template: {clean_provider_template_name}]"
-        if not clean_body:
+        if not clean_body and not submitted_attachment_ids:
             raise InboxCommandError("Reply body is required.")
 
         # The provider/template preparation above may perform external I/O. Do
@@ -717,6 +733,7 @@ def reply(
             reply_to_message_id=reply_to_uuid,
             cc_addresses=clean_cc,
             bcc_addresses=clean_bcc,
+            attachment_ids=submitted_attachment_ids,
         )
         if replay is not None:
             return replay
@@ -726,15 +743,12 @@ def reply(
             + "<br>".join(escape(line) for line in clean_body.splitlines())
             + "</p>"
         )
-        submitted_attachment_ids = [
-            str(item).strip() for item in command.attachment_ids if str(item).strip()
-        ]
         try:
             staged_attachment_ids = list(
                 team_inbox_media.validate_staged_asset_ids(
                     db,
                     conversation_id=conversation.id,
-                    asset_ids=submitted_attachment_ids,
+                    asset_ids=list(submitted_attachment_ids),
                 )
             )
         except team_inbox_media.MediaUploadError as exc:

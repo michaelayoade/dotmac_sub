@@ -3069,7 +3069,11 @@ DOMAIN = DomainSOT(
                 "stays on notifications as the durable recovery sweep; each worker locks "
                 "and claims the exact eligible row before provider delivery. Email "
                 "intents persist the thread-owner-derived Message-ID, In-Reply-To and "
-                "bounded References values; every retry serializes the same identity."
+                "bounded References values; every retry serializes the same identity. "
+                "Meta direct-message intents retain private Inbox asset IDs; the "
+                "delivery worker materializes each asset, delegates account-scoped "
+                "upload/send transport to meta.social, and checkpoints each accepted "
+                "provider message leg before continuing."
             ),
         ),
         SOTService(

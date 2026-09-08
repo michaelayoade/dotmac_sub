@@ -640,11 +640,13 @@ def _send_meta_direct_reply(
     now: datetime | None,
 ) -> InboxReplyResult:
     body_text = _plain_text_reply(payload)
-    if not body_text:
+    attachment_ids = (payload.metadata or {}).get("inbox_attachment_ids")
+    has_attachments = isinstance(attachment_ids, list) and bool(attachment_ids)
+    if not body_text and not has_attachments:
         return InboxReplyResult(
             kind="empty_body",
             conversation_id=str(conversation.id),
-            reason="Reply body is required",
+            reason="Reply body or attachment is required",
         )
     window = team_inbox_reply_window.decide_reply_window(
         db, conversation=conversation, now=now
