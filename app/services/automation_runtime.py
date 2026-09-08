@@ -221,7 +221,6 @@ def _typed_value(field: AutomationConditionField, value: object) -> object:
     raise ValueError
 
 
-
 def _stored_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -248,9 +247,7 @@ def _stored_mapping_list(
     return tuple(items)
 
 
-_ORDERED_COMPARISONS: dict[
-    AutomationOperator, Callable[[object, object], bool]
-] = {
+_ORDERED_COMPARISONS: dict[AutomationOperator, Callable[[object, object], bool]] = {
     AutomationOperator.greater_than: operator.gt,
     AutomationOperator.greater_than_or_equal: operator.ge,
     AutomationOperator.less_than: operator.lt,

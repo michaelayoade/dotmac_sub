@@ -248,7 +248,6 @@ def _stored_value_matches(field: AutomationConditionField, value: object) -> boo
     return False
 
 
-
 def _stored_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -457,10 +456,7 @@ def _validate_persisted_definition(
             )
         if _stored_int(step.get("position")) != position:
             raise _error("action_order_invalid", "Stored action order is invalid.")
-        if (
-            _stored_int(step.get("schema_version"))
-            != capability.input_schema_version
-        ):
+        if _stored_int(step.get("schema_version")) != capability.input_schema_version:
             raise _error(
                 "action_schema_stale",
                 "A stored action schema is no longer current.",
@@ -476,8 +472,7 @@ def _validate_persisted_definition(
                 action_key=action_key,
             )
         supplied = {
-            str(item.get("key") or ""): item.get("value")
-            for item in stored_inputs
+            str(item.get("key") or ""): item.get("value") for item in stored_inputs
         }
         if set(supplied) - set(declared) or any(
             item.required and key not in supplied for key, item in declared.items()
