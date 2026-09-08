@@ -1288,17 +1288,170 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="sales.quote_payment_review",
+        module="app.services.sales.quote_payment_review",
+        owns=(
+            "request customer Quote payment review",
+            "staff approval of customer Quote payment",
+        ),
+        depends_on=(
+            "auth.permission_gate",
+            "communications.intents",
+            "communications.staff_notifications",
+            "events.dispatcher",
+            "observability.audit_log",
+            "sales.service",
+        ),
+        notes=(
+            "This command owner records the reviewer, decision time, revision, "
+            "and SHA-256 fingerprint of the exact address, feasibility, lines, "
+            "discounts, taxes, total, and deposit policy reviewed by staff. A "
+            "later commercial change makes approval stale without trusting a UI "
+            "flag. It resolves the staff review alert and queues the customer "
+            "decision notification in the same transaction."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="request customer Quote payment review",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed payment-review request",
+                        "canonical Quote commercial state",
+                    ),
+                    canonical_writer="sales.quote_payment_review",
+                ),
+                ConcernContract(
+                    name="staff approval of customer Quote payment",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed payment-review command",
+                        "canonical Quote commercial state",
+                        "authorized staff reviewer",
+                    ),
+                    canonical_writer="sales.quote_payment_review",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="typed payment-review request",
+                    owner="sales.quote_payment_review",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed Quote id, Subscriber id, and customer command context"
+                    ),
+                ),
+                AuthorityInput(
+                    name="typed payment-review command",
+                    owner="sales.quote_payment_review",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed Quote id, expected revision, approve/reject decision, "
+                        "reason, reviewer id, and command context"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Quote commercial state",
+                    owner="sales.service",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked Quote, install pin, feasibility, line items, "
+                        "discount, tax, total, expiry, and deposit policy"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authorized staff reviewer",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="active SystemUser holding crm:quote:review",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "request_quote_payment_review or review_quote_payment enters "
+                    "execute_owner_command once; the "
+                    "current Quote decision, append-only review evidence, audit, "
+                    "domain event, staff-alert resolution, and customer notification "
+                    "commit or roll back together"
+                ),
+                locking=(
+                    "The reviewer and Quote are selected FOR UPDATE; expected "
+                    "revision rejects concurrent decisions."
+                ),
+                idempotency=(
+                    "Command UUID plus a canonical command fingerprint replays the "
+                    "same review and rejects changed reuse."
+                ),
+                retries="Equivalent command retries return append-only review evidence.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes("sales.quote_payment_review"),
+                    "sales.quote_payment_review.already_approved",
+                    "sales.quote_payment_review.command_conflict",
+                    "sales.quote_payment_review.customer_required",
+                    "sales.quote_payment_review.quote_not_found",
+                    "sales.quote_payment_review.quote_status_invalid",
+                    "sales.quote_payment_review.reason_invalid",
+                    "sales.quote_payment_review.reason_required",
+                    "sales.quote_payment_review.review_not_pending",
+                    "sales.quote_payment_review.reviewer_not_authorized",
+                    "sales.quote_payment_review.revision_conflict",
+                ),
+                mapping_owner="admin Quote payment-review adapter",
+                fail_closed_on=(
+                    "missing, inactive, terminal, or customerless Quote",
+                    "inactive or unauthorized reviewer",
+                    "stale expected revision",
+                    "changed idempotency evidence",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "quote.payment_review_requested",
+                    "quote.payment_approved",
+                    "quote.payment_rejected",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 identifies the Quote, Subscriber, reviewer, revision, "
+                    "snapshot fingerprint, and optional reason."
+                ),
+                replay="Command replay does not stage duplicate events.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="sales.quote_payment_review",
+            ),
+            steward="sales operations",
+            design_refs=(
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+            ),
+            test_refs=(
+                "tests/test_quote_payment_review.py",
+                "tests/test_customer_quote_payments.py",
+                "mobile/test/quote_model_test.dart",
+            ),
+        ),
+    ),
+    SOTService(
         name="sales.quote_payment_eligibility",
         module="app.services.quote_deposits",
         owns=("authenticated customer Quote payment eligibility and payable amount",),
         depends_on=(
             "financial.invoices",
             "financial.payment_routing",
+            "sales.quote_payment_review",
             "sales.service",
         ),
         notes=(
             "This read owner resolves authorized Subscriber ownership, active "
-            "Draft/Sent state, expiry, paid-deposit evidence, the authoritative "
+            "Draft/Sent state, current staff approval of the exact commercial "
+            "snapshot, expiry, paid-deposit evidence, the authoritative "
             "deposit amount, and Paystack availability. Quote email delivery "
             "consumes the same typed query before presenting the immutable PDF "
             "payment route; GET rendering creates no invoice or payment intent."
@@ -1314,6 +1467,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "authorized customer Quote payment scope",
                         "canonical Quote commercial state",
+                        "canonical Quote payment-review state",
                         "canonical Quote deposit settlement state",
                         "installation-backed Paystack availability",
                     ),
@@ -1336,6 +1490,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "active Quote ownership, status, expiry, currency, and "
                         "server-derived deposit policy inputs"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Quote payment-review state",
+                    owner="sales.quote_payment_review",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "current approved review revision and exact Quote snapshot "
+                        "fingerprint"
                     ),
                 ),
                 AuthorityInput(
@@ -1370,6 +1533,7 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "sales.quote_deposits.already_paid",
+                    "sales.quote_deposits.approval_required",
                     "sales.quote_deposits.amount_unavailable",
                     "sales.quote_deposits.paystack_unavailable",
                     "sales.quote_deposits.quote_expired",
@@ -1383,6 +1547,7 @@ SERVICES: tuple[SOTService, ...] = (
                 fail_closed_on=(
                     "missing or unauthorized customer portal identity",
                     "inactive, rejected, expired, cancelled, or paid Quote",
+                    "pending, rejected, missing, or stale staff payment approval",
                     "missing positive authoritative deposit amount",
                     "unavailable Paystack capability",
                 ),

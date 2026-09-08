@@ -115,6 +115,16 @@ deposit reference, amount, and provider evidence. An exact verification retry
 replays the same conversion and SalesOrder bookkeeping; changed evidence fails
 closed before SalesOrder money can be overwritten.
 
+Before that deposit path can begin, a self-serve Quote is visible to the
+customer as `Draft — Awaiting staff review`. `sales.quote_payment_review`
+requires an authorized staff user to review the install address, feasibility,
+line items, price, tax, discount, and deposit policy, then approve or reject the
+exact SHA-256 snapshot. Approval records the reviewer, time, and revision. Any
+later commercial change makes that approval stale and every payment endpoint
+fails closed until the revised snapshot is approved. Approval changes the
+customer projection to `Approved — Payment required`; it does not create an
+Invoice, SalesOrder, or Project. Those remain consequences of verified payment.
+
 ## Named owners
 
 | Decision or fact | Owner |
@@ -124,6 +134,8 @@ closed before SalesOrder money can be overwritten.
 | Atomic admin Person and Lead authoring and maintenance | `sales.lead_authoring` |
 | Immutable origin | `sales.lead_lifecycle` |
 | Atomic Lead-backed New Quote authoring | `sales.quote_authoring` |
+| Staff approval of the exact Quote snapshot for customer payment | `sales.quote_payment_review` |
+| Customer Quote payment eligibility and payable deposit | `sales.quote_payment_eligibility` |
 | Atomic Quote acceptance and sales conversion | `sales.quote_acceptance` |
 | Flush-only exact Lead/Party account conversion participant | `sales.account_conversion` |
 | Pipeline and Quote | `sales.service` |
