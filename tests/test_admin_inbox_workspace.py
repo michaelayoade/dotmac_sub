@@ -124,6 +124,87 @@ def test_inbox_workspace_templates_compile():
         assert environment.get_template(template_name) is not None
 
 
+def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert 'role="tablist" aria-label="Analysis mode"' in template
+    assert "selectMode(nextMode)" in template
+    assert "selectMode(nextMode) { this.mode = nextMode;" in template
+    assert "selectMode(nextMode) { mode = nextMode;" not in template
+    assert template.count("@click=\"selectMode('") == 3
+    assert "@click=\"selectMode('conversation')\"" in template
+    assert "@click=\"selectMode('recent_queue')\"" in template
+    assert "@click=\"selectMode('period')\"" in template
+    assert 'name="mode" x-bind:value="mode"' in template
+    assert (
+        'x-bind:action="`/admin/inbox/manager-ai?mode=${encodeURIComponent(mode)}`"'
+        in template
+    )
+    assert 'name="channel_type" x-bind:disabled="mode !== \'period\'"' in template
+    assert '<input name="channel_type"' not in template
+    assert "state.channel_options" in template
+    assert 'name="status" x-bind:disabled="mode !== \'period\'"' in template
+    assert '<input name="status"' not in template
+    assert "state.status_options" in template
+    assert "x-show=\"period === 'custom'\"" in template
+    assert (
+        template.count("x-bind:disabled=\"mode !== 'period' || period !== 'custom'\"")
+        == 2
+    )
+
+
+def test_manager_ai_modes_limit_filters_and_require_conversation():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert "x-show=\"mode === 'period'\"" in template
+    assert "x-show=\"mode === 'conversation'\"" in template
+    assert "x-show=\"mode === 'recent_queue'\"" in template
+    assert "x-bind:required=\"mode === 'conversation'\"" in template
+    assert "x-bind:disabled=\"mode !== 'conversation'\"" in template
+    assert "Select a conversation to analyze." in template
+    assert "Analysis scope" not in template
+
+
+def test_manager_ai_submit_button_reflects_availability_and_pending_state():
+    template = Path("templates/admin/inbox/manager_ai.html").read_text()
+
+    assert (
+        "{% set ai_available = state.provider_enabled and state.generation_enabled %}"
+        in template
+    )
+    assert "submitting: false" in template
+    assert "aiAvailable: {{ ai_available | tojson }}" in template
+    assert (
+        '@submit="if (!aiAvailable) { $event.preventDefault(); return; } submitting = true"'
+        in template
+    )
+    assert 'x-bind:disabled="submitting || !aiAvailable"' in template
+    assert 'x-bind:aria-busy="submitting.toString()"' in template
+    assert (
+        '{% if not ai_available %}disabled aria-describedby="manager-ai-unavailable"{% endif %}'
+        in template
+    )
+    assert "AI generation is off." in template
+    assert "AI provider is disabled." in template
+    assert "Asking..." in template
+
+
+def test_manager_ai_answer_renderer_formats_markdown_without_trusting_html():
+    from app.web.templates import render_manager_ai_answer
+
+    rendered = render_manager_ai_answer(
+        "**Urgency:** High\n\n- Confirm outage duration\n- <script>alert(1)</script>"
+    )
+
+    assert "<strong>Urgency:</strong> High" in rendered
+    assert (
+        '<ul class="mb-4 list-disc space-y-1 pl-5"><li>Confirm outage duration</li>'
+        in rendered
+    )
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "<script>" not in rendered
+
+
 @pytest.mark.parametrize(
     ("page", "total_items", "previous_page", "next_page"),
     (
@@ -160,6 +241,26 @@ def test_inbox_pagination_builds_only_available_navigation_links(
         assert f"page={previous_page}" in rendered
     if next_page is not None:
         assert f"page={next_page}" in rendered
+
+
+def test_inbox_lazy_pagination_does_not_claim_an_exact_history_total():
+    environment = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    pagination = environment.get_template(
+        "admin/inbox/_queue_macros.html"
+    ).module.inbox_pagination
+    list_query = team_inbox_projection.INBOX_LIST_DEFINITION.build_query(
+        search="router",
+        filters={},
+        page=1,
+        per_page=25,
+    )
+    page_meta = PageMeta.from_query(list_query, 26, total_is_exact=False)
+
+    rendered = str(pagination(list_query, page_meta, "/admin/inbox"))
+
+    assert "1&ndash;25 conversations &middot; more available" in rendered
+    assert "of 26 conversations" not in rendered
+    assert "page=2" in rendered
 
 
 def test_inbox_pagination_renders_compact_page_numbers_and_preserves_selection():
@@ -206,6 +307,12 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'role="dialog"' in Path("templates/admin/inbox/_overlays.html").read_text()
     assert "@input.debounce.300ms" in sidebar
     assert "/admin/inbox/presence" in sidebar
+    assert 'aria-describedby="inbox-availability-help"' in sidebar
+    assert 'id="inbox-availability-help" role="tooltip"' in sidebar
+    assert (
+        'class="mt-2 flex flex-wrap gap-1" aria-label="Inbox availability"'
+        not in sidebar
+    )
     assert (
         "Only online agents with recent presence evidence receive auto-assigned "
         "inbox conversations." in sidebar
@@ -213,8 +320,8 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
     assert sidebar.count('name="inbox-filter-section"') == 2
-    assert '<details open class="group' not in sidebar
-    assert '<details hidden class="group' in sidebar
+    assert '<details open class="group' in sidebar
+    assert sidebar.count('<details hidden class="group') >= 2
     assert sidebar.count("applyAssignmentFilter('attention')") == 1
     assert "Needs attention <span" in sidebar
     assert "\n                        Resolved\n" in sidebar

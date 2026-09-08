@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+import app.services.runtime_durable_timers as durable_timers
 from app.models.durable_timer import DurableTimer, TimerStatus
 from app.models.event_store import EventStore
 from app.services.owner_commands import (
@@ -109,6 +110,72 @@ def test_rescheduling_supersedes_and_bumps_the_generation(db_session):
         purpose="renewal",
     )
     assert live.id == second.id
+
+
+def test_generation_lock_emits_postgres_transaction_advisory_lock():
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    entity_id = uuid4()
+
+    durable_timers._lock_timer_generation(
+        db,
+        owner="financial.unwall_paid_accounts",
+        entity_kind="subscriber",
+        entity_id=entity_id,
+        purpose="financial.walled_account_healing",
+    )
+
+    assert db.execute.call_count == 1
+    statement, params = db.execute.call_args.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert "hashtextextended" in str(statement)
+    assert params == {
+        "key": (
+            "runtime.durable_timers:generation:"
+            f"financial.unwall_paid_accounts:subscriber:{entity_id}:"
+            "financial.walled_account_healing"
+        )
+    }
+
+
+def test_generation_lock_is_noop_on_sqlite(db_session):
+    durable_timers._lock_timer_generation(
+        db_session,
+        owner="financial.unwall_paid_accounts",
+        entity_kind="subscriber",
+        entity_id=uuid4(),
+        purpose="financial.walled_account_healing",
+    )
+
+
+def test_scheduling_serializes_generation_before_reading_latest_timer(
+    db_session, monkeypatch
+):
+    """The race guard must protect the read that chooses the next generation."""
+
+    order: list[tuple[str, dict[str, object]]] = []
+    original_lock = durable_timers._lock_timer_generation
+    original_latest = durable_timers._latest_timer
+
+    def record_lock(db, **kwargs):
+        order.append(("lock", kwargs))
+        return original_lock(db, **kwargs)
+
+    def record_latest(db, **kwargs):
+        order.append(("latest", kwargs))
+        return original_latest(db, **kwargs)
+
+    monkeypatch.setattr(durable_timers, "_lock_timer_generation", record_lock)
+    monkeypatch.setattr(durable_timers, "_latest_timer", record_latest)
+
+    entity_id = uuid4()
+    timer = _schedule(db_session, entity_id=entity_id, due_at=NOW)
+
+    assert timer.generation == 1
+    assert [event for event, _ in order[:2]] == ["lock", "latest"]
+    assert order[0][1] == order[1][1]
 
 
 def test_cancel_is_idempotent(db_session):

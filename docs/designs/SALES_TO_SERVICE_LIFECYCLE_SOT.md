@@ -283,6 +283,38 @@ depend on HTTP request/response or exception types.
   keyboard focus, accessible labels, and light/dark variants use shared admin
   design tokens.
 
+## Selfcare mobile installation quote page contract
+
+- Screen identifiers and routes: the quote list at `/quotes` and the
+  map-pinned request form at `/quotes/request`.
+- Audience and job: an authenticated subscriber reviews installation quotes
+  and, only when eligible, requests an estimate for a precisely pinned service
+  location.
+- Authoritative owners: the selected quote read owner supplies
+  `source_state`, `actions_available`, and an optional customer-safe
+  `actions_unavailable_message`. The mobile adapter renders those values and
+  never infers business eligibility. The selected command owner rechecks the
+  native write control and all quote prerequisites at submission time.
+- Action states: while native quoting is available the list exposes one
+  Request installation action. When unavailable, the action is absent and the
+  owner message is visible; direct navigation to the form fails closed on the
+  same read contract. Loading and read failure expose no write action.
+- Cutover: the environment-scoped controls remain fail-closed by default. An
+  operator enables `quotes.native_read`, validates the native projection, and
+  only then enables `quotes.native_write`; source deployment alone does not
+  mutate those controls.
+- Location input: coordinates from the selected map pin remain mandatory. The
+  reverse-geocoded installation address is a user-editable address field and
+  is submitted separately from optional building, floor, gate, and landmark
+  notes. Moving the pin clears an earlier address, and a delayed geocode result
+  cannot overwrite manual input.
+- Interaction and presentation: the selected pin uses the primary blue theme
+  token, submission rejects an in-flight duplicate, and the keyboard can
+  advance from address to notes and submit from the final field.
+- Errors: the mobile transport accepts the shared top-level domain-error
+  envelope (`code`, `message`, `request_id`) and the legacy `detail` envelope;
+  the customer sees the owner-provided message rather than a status-only 409.
+
 ## Quote discounts history page contract
 
 The complete command, evidence, migration, and page contract is
@@ -313,6 +345,11 @@ configuration. Changing one requires a migration/versioned contract and tests.
 1. Capture never creates a Subscriber implicitly and never deduplicates a
    person by email, phone, name, or social handle. Exact provider-event replay
    is idempotent; different content under the same event identity is rejected.
+   A Meta Lead may receive a rebuildable customer-match suggestion based only
+   on existing verified Party contact points. That suggestion is review-only
+   and never binds Party, Subscriber, authentication, consent, or ownership.
+   One exact active-customer match may project the customer lifecycle stage to
+   Meta; ambiguous and unverified matches cannot.
 2. A Quote is authored manually from an exact Lead or Customer and requires a selected
    Project Type. The typed `Quote.project_type` column is the authoritative
    downstream input; the metadata key is a compatibility projection only. The Lead

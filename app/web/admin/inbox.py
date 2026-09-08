@@ -27,7 +27,6 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -81,10 +80,10 @@ from app.services.owner_commands import CommandContext
 from app.services.sales import lead_intake
 from app.services.workqueue import principal_from_auth
 from app.services.workqueue.scope import WorkqueuePermissionError, get_workqueue_scope
+from app.web.templates import templates
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 settings_router = APIRouter(prefix="/crm/inbox", tags=["web-admin-inbox"])
-templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
 INBOX_HTML_RESPONSE_HEADERS: dict[str, str] = {
     "Cache-Control": "private, no-store, no-cache, must-revalidate",
@@ -355,8 +354,9 @@ def team_inbox_queue(
                     if is_sidebar_request
                     else team_inbox_projection.InboxQueueComposition.full_workspace
                 ),
-                # Numbered pagination requires exact filtered bounds from the
-                # projection owner, including a truthful final-page link.
+                # Ask the projection owner for pagination evidence. It keeps
+                # active queues exact and may use bounded next-page evidence
+                # for demand-loaded historical cohorts.
                 include_total_count=True,
             ),
         )
@@ -2949,6 +2949,8 @@ def team_inbox_ai_intake_policy_draft_update(
     allow_followup_questions: bool = Form(default=True),
     max_clarification_turns: int = Form(default=1),
     escalate_after_minutes: int = Form(default=5),
+    customer_response_timeout_minutes: int | None = Form(default=None),
+    customer_wait_expiry_hours: int = Form(default=72),
     exclude_campaign_attribution: bool = Form(default=True),
     conversational_engine_enabled: bool = Form(default=False),
     conversation_engine_mode: str = Form(default="custom_v1"),
@@ -3118,11 +3120,29 @@ def team_inbox_ai_intake_policy_draft_update(
             ),
             "heartbeat_minutes": max(5, min(int(queue_heartbeat_minutes), 240)),
         }
+        clean_escalate_after_minutes = max(1, min(int(escalate_after_minutes), 1440))
+        if customer_response_timeout_minutes is None:
+            clean_customer_response_timeout_minutes = (
+                ai_conversation_intake.configured_customer_response_timeout_minutes(
+                    db,
+                    channel_type=channel_type,
+                    provider=provider,
+                    account_scope=account_scope,
+                )
+            )
+        else:
+            clean_customer_response_timeout_minutes = max(
+                1, min(int(customer_response_timeout_minutes), 1440)
+            )
         escalation_rules = {
             "confidence_threshold": min(max(float(confidence_threshold), 0.0), 1.0),
             "allow_followup_questions": bool(allow_followup_questions),
             "max_clarification_turns": max(0, min(int(max_clarification_turns), 5)),
-            "escalate_after_minutes": max(1, min(int(escalate_after_minutes), 1440)),
+            "escalate_after_minutes": clean_escalate_after_minutes,
+            "customer_response_timeout_minutes": clean_customer_response_timeout_minutes,
+            "customer_wait_expiry_hours": max(
+                24, min(int(customer_wait_expiry_hours), 720)
+            ),
             "exclude_campaign_attribution": bool(exclude_campaign_attribution),
         }
         data_cleanup_policy = {
@@ -3186,6 +3206,8 @@ def team_inbox_ai_intake_policy_draft_update(
                 condition["turn_count"] = int(condition_value or "0")
             elif clean_type == "monitoring_status":
                 condition["monitoring_status"] = condition_value
+            elif clean_type in {"radius_status", "ont_status"}:
+                condition["value"] = condition_value
             elif clean_type.startswith("field:"):
                 condition["type"] = "field_value"
                 condition["field"] = clean_type.removeprefix("field:")

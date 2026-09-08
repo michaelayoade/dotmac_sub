@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import html
 import re
@@ -292,7 +292,9 @@ def _queue_outbox_reply(
     if existing_message is None:
         db.add(message)
     conversation.last_message_at = queued_at
-    inbox_sla.record_outbound(db, message, occurred_at=message.sent_at or message.created_at)
+    inbox_sla.record_outbound(
+        db, message, occurred_at=message.sent_at or message.created_at
+    )
     db.flush()
     author_name = str(
         intent_metadata.get("author_name")
@@ -422,6 +424,7 @@ def _send_field_job_reply(
     message.cc_addresses = []
     message.sent_at = sent_at
     author_name = str((payload.metadata or {}).get("author_name") or "Technician")
+    sender_type = str((payload.metadata or {}).get("sender_type") or "agent")
     message.metadata_ = {
         **(payload.metadata or {}),
         "channel_type": conversation.channel_type,
@@ -447,7 +450,7 @@ def _send_field_job_reply(
             created_at=message.created_at,
             author_name=author_name,
             extra={
-                "sender_type": "agent",
+                "sender_type": sender_type,
                 "from_customer": False,
                 "delivery_status": "delivered",
             },
@@ -874,6 +877,7 @@ def send_ai_intake_follow_up(
         )
     if conversation.channel_type not in {
         InboxChannelType.whatsapp.value,
+        InboxChannelType.chat_widget.value,
         *_META_DM_CHANNELS,
     }:
         return InboxReplyResult(
@@ -929,6 +933,7 @@ def send_ai_intake_message(
 
     if conversation.channel_type not in {
         InboxChannelType.whatsapp.value,
+        InboxChannelType.chat_widget.value,
         *_META_DM_CHANNELS,
     }:
         return InboxReplyResult(
@@ -1342,4 +1347,3 @@ def send_transcript(
         conversation_id=str(conversation.id),
         to_email=recipient,
     )
-

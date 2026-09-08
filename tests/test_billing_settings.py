@@ -58,13 +58,13 @@ def test_billing_config_context_backfills_notification_defaults(db_session):
     assert context["billing"]["expiry_reminder_days"] == "7"
     assert context["billing"]["invoice_reminder_days"] == "7,1"
     assert context["billing"]["minimum_balance"] == "0"
-    assert context["billing"]["invoice_pdf_payment_presentment"] == "bank_account"
+    assert context["billing"]["invoice_pdf_payment_presentment"] == "paystack"
 
 
 def test_billing_policy_settings_have_specs():
     expected = {
         "minimum_balance": "0",
-        "invoice_pdf_payment_presentment": "bank_account",
+        "invoice_pdf_payment_presentment": "paystack",
     }
 
     for key, default in expected.items():
@@ -125,7 +125,7 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
         (
             "invoice_pdf_payment_presentment",
             "cash",
-            "Invoice PDF Payment Presentment must be one of: bank_account, both, paystack.",
+            "Invoice PDF Payment Fallback must be one of: bank_account, both, paystack.",
         ),
     ],
 )

@@ -270,6 +270,60 @@ def test_network_map_layout_is_map_first_and_responsive() -> None:
     assert '<details class="network-map-legend' in source
 
 
+def test_network_map_layers_are_opt_in_on_initial_load() -> None:
+    source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
+    layer_ids = (
+        "pop",
+        "fdh",
+        "closures",
+        "access-points",
+        "support-structures",
+        "network-devices",
+        "onts",
+        "customers-connected",
+        "customers-not-connected",
+        "feeder",
+        "distribution",
+        "drop",
+    )
+
+    for layer_id in layer_ids:
+        checkbox = source.split(
+            f'<input type="checkbox" id="layer-{layer_id}"', maxsplit=1
+        )[1].split(">", maxsplit=1)[0]
+        assert " checked" not in checkbox
+
+    layer_groups = source.split("const layers = {", maxsplit=1)[1].split(
+        "};", maxsplit=1
+    )[0]
+    assert ".addTo(map)" not in layer_groups
+    assert 'id="layers-all" type="button" aria-pressed="false"' in source
+    assert 'id="layers-none" type="button" aria-pressed="true"' in source
+
+
+def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
+    source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
+
+    assert "let layersSuppressed = true;" in source
+    assert "function layersRequiredByFilters()" in source
+    assert "function applyLayerFilterBypass(requiredLayers)" in source
+    assert "if (!enabled) applyMapFilters();" in source
+    assert "config.selected.size > 0 && config.selected.has(key)" in source
+    assert (
+        "directFilters.device.active && directFilters.device.selected.size > 0"
+        in source
+    )
+    assert "directFilters.ont.active && directFilters.ont.selected.size > 0" in source
+    assert (
+        "directFilters.customer.active && directFilters.customer.selected.size > 0"
+        in source
+    )
+    assert "if (key.startsWith('connected|'))" in source
+    assert "if (key.startsWith('not_connected|'))" in source
+    assert "if (map.hasLayer(group)) visible += 1;" in source
+    assert "!item.filteredOut && map.hasLayer(layers[item.layerName])" in source
+
+
 def test_shared_confirmation_assets_and_critical_actions_are_wired():
     base = (TEMPLATES / "base.html").read_text()
     confirmation_js = Path("static/js/action-confirmations.js").read_text()

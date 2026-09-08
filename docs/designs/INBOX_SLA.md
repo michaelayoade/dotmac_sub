@@ -26,4 +26,3 @@ maps.  It is dry-run by default and rejects unresolved mappings.  It must not
 copy CRM conversations, messages, users, customers, breach history, or
 credentials.  Operators must retain the sanitised dry-run output and a
 configuration backup before applying a reviewed import.
-

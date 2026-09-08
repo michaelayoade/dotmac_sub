@@ -4,11 +4,14 @@ import os
 import secrets
 import warnings
 from contextlib import asynccontextmanager
+from html import escape
 from http.cookies import SimpleCookie
 from importlib import import_module
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
+from urllib.parse import urlparse
+from uuid import UUID
 
 warnings.filterwarnings(
     "ignore",
@@ -79,6 +82,7 @@ _CORE_ROUTER_SPECS = [
     ("app.api.meta_inbox_webhooks", "router", "api", "none"),
     ("app.api.fiber_inquiry_webhooks", "router", "api", "none"),
     ("app.api.erp_material_webhooks", "router", "api", "none"),
+    ("app.api.erp_staff_access_webhooks", "router", "api", "none"),
     ("app.api.lead_capture_webhooks", "router", "api", "none"),
     # Inbound like the webhooks above and must not 404 during the deferred
     # load window. Its guard is per-route (a scoped ApiKey), so the
@@ -984,6 +988,25 @@ def _web_auth_refresh_candidate(request: Request) -> bool:
     return any(path.startswith(prefix) for prefix in _WEB_AUTH_REFRESH_PATHS)
 
 
+def _csrf_safe_return_url(request: Request) -> str | None:
+    referer = str(request.headers.get("referer") or "").strip()
+    if not referer:
+        return None
+
+    parsed = urlparse(referer)
+    same_host = not parsed.netloc or parsed.netloc == request.url.netloc
+    same_scheme = not parsed.scheme or parsed.scheme == request.url.scheme
+    if not same_host or not same_scheme:
+        return None
+
+    referer_path = str(parsed.path or "").strip()
+    if not referer_path.startswith("/"):
+        return None
+    if parsed.query:
+        return f"{referer_path}?{parsed.query}"
+    return referer_path
+
+
 async def _terminated_request_response(
     request: Request, method: str, path: str
 ) -> Response:
@@ -1145,6 +1168,7 @@ async def csrf_middleware(request: Request, call_next):
         from fastapi.responses import HTMLResponse
 
         def _csrf_forbidden(reason: str) -> HTMLResponse:
+            return_url = _csrf_safe_return_url(request)
             logger.warning(
                 "CSRF validation failed for %s %s: %s",
                 method,
@@ -1160,10 +1184,18 @@ async def csrf_middleware(request: Request, call_next):
 
                 env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
                 template = env.get_template("errors/csrf.html")
-                content = template.render(request_id=request_id)
+                content = template.render(
+                    request_id=request_id,
+                    return_url=return_url,
+                )
                 return HTMLResponse(content=content, status_code=403)
             except Exception:
                 # Fallback to simple HTML if template rendering fails
+                refresh_control = (
+                    f'<a href="{escape(return_url, quote=True)}" style="margin-top:16px;padding:12px 24px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;text-decoration:none;display:inline-block">Refresh Page</a>'
+                    if return_url
+                    else '<button onclick="location.reload()" style="margin-top:16px;padding:12px 24px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">Refresh Page</button>'
+                )
                 return HTMLResponse(
                     content=f"""<!DOCTYPE html>
 <html><head><title>Session Expired</title></head>
@@ -1172,7 +1204,7 @@ async def csrf_middleware(request: Request, call_next):
 <h1 style="color:#1e293b">Session Expired</h1>
 <p style="color:#64748b">Your session has expired or the security token is invalid. Please refresh the page and try again.</p>
 <p style="color:#94a3b8;font-size:12px">Reference: {request_id}</p>
-<button onclick="location.reload()" style="margin-top:16px;padding:12px 24px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">Refresh Page</button>
+{refresh_control}
 </div></body></html>""",
                     status_code=403,
                 )
@@ -1319,6 +1351,9 @@ _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/webhooks/",
 )
 _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_API_SYNC_PRESSURE_DEFAULT_SERVICE_CLIENTS = ("dotmac-erp",)
+_API_SYNC_PRESSURE_DEFAULT_SERVICE_IPS = ("149.102.158.167",)
+_API_SYNC_PRESSURE_SERVICE_CLIENT_HEADER = "X-Dotmac-Integration-Client"
 _PAYMENT_PROVIDER_WEBHOOK_PATHS = {
     "/api/v1/payment-events/paystack": "paystack",
     "/payment-events/paystack": "paystack",
@@ -1336,6 +1371,10 @@ _API_SYNC_FEED_PATHS = frozenset(
         "/api/v1/subscribers/sync",
         "/api/v1/tax-rates/sync",
     }
+)
+_API_SYNC_SERVICE_DETAIL_PREFIXES = (
+    "/api/v1/subscribers/",
+    "/api/v1/billing-accounts/",
 )
 
 
@@ -1366,6 +1405,46 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
 def _path_matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _is_exact_uuid_detail_path(path: str) -> bool:
+    for prefix in _API_SYNC_SERVICE_DETAIL_PREFIXES:
+        if not path.startswith(prefix):
+            continue
+        identifier = path.removeprefix(prefix)
+        if not identifier or "/" in identifier:
+            return False
+        try:
+            UUID(identifier)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _sync_service_client(request: Request, ip_address: str) -> str | None:
+    """Identify a bounded ERP traffic lane; downstream auth remains mandatory."""
+    if request.method != "GET":
+        return None
+    path = request.url.path
+    if path not in _API_SYNC_FEED_PATHS and not _is_exact_uuid_detail_path(path):
+        return None
+    client_name = request.headers.get(_API_SYNC_PRESSURE_SERVICE_CLIENT_HEADER, "")
+    allowed_clients = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_SERVICE_CLIENTS",
+            _API_SYNC_PRESSURE_DEFAULT_SERVICE_CLIENTS,
+        )
+    )
+    allowed_ips = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_SERVICE_IPS",
+            _API_SYNC_PRESSURE_DEFAULT_SERVICE_IPS,
+        )
+    )
+    if client_name in allowed_clients and ip_address in allowed_ips:
+        return client_name
+    return None
 
 
 def _request_is_https(request: Request) -> bool:
@@ -1523,18 +1602,26 @@ async def api_sync_pressure_guard_middleware(request: Request, call_next):
             _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS,
         )
     )
-    if path in _API_SYNC_FEED_PATHS:
+    service_client = _sync_service_client(request, ip_address)
+    if service_client is not None:
+        bucket = "service"
+        limit = _env_int("API_SYNC_PRESSURE_SERVICE_LIMIT", 300)
+        rate_key = f"api-v1-pressure:{bucket}:{service_client}:{ip_address}"
+    elif path in _API_SYNC_FEED_PATHS:
         bucket = "feed"
         limit = _env_int("API_SYNC_PRESSURE_FEED_LIMIT", 60)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
     elif ip_address in offender_ips:
         bucket = "listed"
         limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 10)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
     else:
         bucket = "general"
         limit = _env_int("API_SYNC_PRESSURE_PER_IP_LIMIT", 300)
+        rate_key = f"api-v1-pressure:{bucket}:{ip_address}"
 
     decision = allow_operation(
-        f"api-v1-pressure:{bucket}:{ip_address}",
+        rate_key,
         limit=limit,
         window_seconds=window,
     )

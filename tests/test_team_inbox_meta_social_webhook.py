@@ -6,6 +6,7 @@ import hmac
 import json
 import threading
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -21,6 +22,7 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_read
 from app.services.integrations import installations
+from app.services.integrations.meta_social_contracts import MetaLeadObservation
 from app.services.integrations.meta_social_installation import (
     META_SOCIAL_CONFIGURATION_SCOPE,
     ConfigureMetaSocialInstallationCommand,
@@ -225,6 +227,75 @@ def test_meta_inbox_webhook_creates_facebook_messenger_message(db_session, monke
     assert message.metadata_["provider_account_id"] == "page-1"
     assert message.metadata_["contact_profile"]["display_name"] == "Jane Customer"
     assert "platform" not in message.metadata_
+
+
+def test_meta_leadgen_webhook_fetches_and_delegates_typed_capture(
+    db_session, monkeypatch
+):
+    _install_meta_social(db_session)
+    monkeypatch.setattr(
+        meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
+    )
+    observation = MetaLeadObservation(
+        leadgen_id="leadgen-1",
+        created_at="2026-09-01T10:00:00Z",
+        page_id="page-1",
+        form_id="form-1",
+        campaign_id="campaign-1",
+        fields=(),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        meta_inbox_webhooks,
+        "fetch_lead",
+        lambda db, *, leadgen_id, page_id: observation,
+    )
+
+    def capture(db, *, receipt_id, observation):
+        captured["receipt_id"] = receipt_id
+        captured["observation"] = observation
+        return SimpleNamespace(
+            lead_id=uuid4(),
+            party_id=uuid4(),
+            replayed=False,
+            customer_match=SimpleNamespace(status=SimpleNamespace(value="unmatched")),
+        )
+
+    monkeypatch.setattr(meta_inbox_webhooks, "capture_meta_lead", capture)
+    payload = {
+        "object": "page",
+        "entry": [
+            {
+                "id": "page-1",
+                "changes": [
+                    {
+                        "field": "leadgen",
+                        "value": {
+                            "leadgen_id": "leadgen-1",
+                            "page_id": "page-1",
+                            "form_id": "form-1",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode()
+
+    response = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(
+            _request(body, {"X-Hub-Signature-256": _sign(body)}), db_session
+        )
+    )
+
+    assert captured["observation"] is observation
+    assert response["leads"][0]["customer_match"] == "unmatched"
+    lead_receipt = (
+        db_session.query(IntegrationInbox)
+        .filter(IntegrationInbox.event_type == "meta.leadgen.webhook.v1")
+        .one()
+    )
+    assert lead_receipt.provider_event_id == "leadgen-1"
 
 
 def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch):

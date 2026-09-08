@@ -535,6 +535,35 @@ def _plan_service_ports(
     actions: list[Action],
     drifts: list[Drift],
 ) -> None:
+    def _sp_int(sp: dict, *names: str) -> int | None:
+        for name in names:
+            value = sp.get(name)
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _matches_unindexed_desired_slot(sp: dict) -> bool:
+        if desired.mgmt_service_port_index is None and desired.mgmt_vlan is not None:
+            if (
+                _sp_int(sp, "vlan_id", "vlan") == int(desired.mgmt_vlan)
+                and _sp_int(sp, "gem_index", "gem") == 2
+            ):
+                return True
+        if (
+            desired.wan_service_port_index is None
+            and desired.wan_vlan is not None
+            and desired.wan_mode == "pppoe"
+        ):
+            if _sp_int(sp, "vlan_id", "vlan") == int(desired.wan_vlan) and _sp_int(
+                sp, "gem_index", "gem"
+            ) == int(desired.wan_gem_index or 1):
+                return True
+        return False
+
     desired_indices = {
         desired.mgmt_service_port_index,
         desired.wan_service_port_index,
@@ -546,11 +575,13 @@ def _plan_service_ports(
         idx = sp.get("index") if isinstance(sp, dict) else None
         if idx is None or idx in desired_indices:
             continue
+        if _matches_unindexed_desired_slot(sp):
+            continue
         # Recover the slot from the observed VLAN. A stale port matches neither
         # desired index, so the desired state cannot name it; the VLAN is the
         # only evidence of what it was for. Unrecoverable stays "unknown",
         # which PPP delivery authorization treats as fail-closed.
-        observed_vlan = sp.get("vlan_id") if isinstance(sp, dict) else None
+        observed_vlan = _sp_int(sp, "vlan_id", "vlan") if isinstance(sp, dict) else None
         slot = "unknown"
         if observed_vlan is not None:
             if desired.mgmt_vlan is not None and int(observed_vlan) == int(

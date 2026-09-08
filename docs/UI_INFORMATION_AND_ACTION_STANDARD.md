@@ -223,6 +223,12 @@ domain rules; they must not silently become zero.
   consistent overflow menu.
 - Hide unauthorized actions. Show a disabled action only when explaining its
   state-based unavailability helps the user.
+- Navigation follows the same default-deny RBAC contract as its destination:
+  do not render a link, shortcut, submenu, or section heading unless the
+  principal holds a permission accepted by the destination route. Module
+  enablement and authorization are independent gates and both must pass. Hide
+  a navigation group when none of its children remain visible; route guards
+  remain mandatory even when discovery is suppressed.
 - Read eligibility, required amount, restoration possibility, completion
   readiness, and destructive impact from the owning backend service.
 - Never rely on hidden UI controls as enforcement; the command owner rechecks
@@ -239,7 +245,11 @@ request with its target plan, effective date, execution state, request identity,
 and submission time. Operators with `catalog:write` may cancel that pending
 request only after entering a reason and confirming that the subscription stays
 on its current plan. The action is absent after approval or application and does
-not offer a revoke path.
+not offer a revoke path. While the request is outstanding, subscription and
+customer detail views show a prominent `Pending plan change` badge, and the
+subscription lifecycle owner refuses cancellation of the live subscription.
+Operators must cancel the pending request first; the UI explains that ordering
+instead of offering a second, replacement subscription as a workaround.
 
 For prepaid recovery, the service page consumes the recovery eligibility
 owner's typed next action. An unresolved service invoice disables Bill Now,
@@ -525,3 +535,34 @@ implementation.
 - Responsive behavior: desktop and mobile keep assignment, revision,
   operation, phase, reason, and action visible; HTMX refreshes the same owner
   projection rather than inferring progress in the browser.
+
+## Admin Work-Order Expense Entry Page Contract
+
+- Audience and task: authenticated staff with read access to the exact work order
+  can track their own work-order expense claims. Creating a claim additionally
+  requires the matching write-tier dispatch access. Technician assignment is
+  not required on this admin web surface.
+- Authority: `ui.work_order_expense_projection` owns the form, validation
+  presentation, requester-owned list, action eligibility, and ERP delivery
+  labels. `operations.expense_requests` owns the atomic claim and durable ERP
+  staging; ERP owns approval routing and reimbursement.
+- First viewport: the work-order identity remains the page context. The expense
+  card explains that approval and payment happen in ERP, shows the actor's
+  existing claims, and exposes one New Expense Claim action when ERP categories
+  are available.
+- Mutation: the multipart POST is explicitly CSRF protected, write-tier guarded,
+  and scoped to the work order in the URL. No work-order, requester, person,
+  user, or requester email input is accepted. A stable client reference prevents
+  double creation.
+- Form: purpose and expense date are required, currency defaults to NGN, notes
+  are optional, and at least one stacked repeatable item remains. Items expose
+  ERP category, description, positive amount, optional date/vendor/receipt
+  URL or upload/notes, category receipt rules, and category maximums. Server
+  validation is authoritative; the running total is browser assistance.
+- States: locally submitted, pending delivery, delivered but awaiting ERP
+  acceptance, accepted, approved, rejected with reason, paid, and sync
+  unavailable/failed remain distinct. A sent outbox event is never labelled
+  accepted by ERP.
+- Responsive behavior: line items are stacked cards at every width, controls
+  retain labels and text errors, totals name their currency, and add/remove and
+  submit actions remain accessible without relying on colour.

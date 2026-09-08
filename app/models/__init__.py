@@ -240,6 +240,11 @@ from app.models.cross_app_drift import (  # noqa: F401
     CrossAppDriftRun,
     CrossAppDriftWaiver,
 )
+from app.models.csat import (  # noqa: F401
+    CsatRequestStatus,
+    CsatSourceType,
+    SupportCsatRequest,
+)
 from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoff,
     CustomerExperienceHandoffEvent,
@@ -290,6 +295,10 @@ from app.models.erp_billing_export import (  # noqa: F401
     ErpExportStatus,
 )
 from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
+from app.models.erp_staff_access import (  # noqa: F401
+    ErpStaffAccountStatusProjection,
+    ErpStaffLeaveRestriction,
+)
 from app.models.event_store import (  # noqa: F401
     EventHandlerAttempt,
     EventStatus,
@@ -425,6 +434,12 @@ from app.models.imports import (  # noqa: F401
     ImportRunStatus,
     PaymentImportBatchReversal,
     PaymentImportBatchReversalItem,
+)
+from app.models.inbox_sla import (  # noqa: F401
+    InboxSlaClock,
+    InboxSlaEvent,
+    InboxSlaPolicy,
+    InboxSlaRule,
 )
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
@@ -1114,5 +1129,3 @@ from app.models.work_link import (  # noqa: F401
 )
 from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401
-
-from app.models.inbox_sla import InboxSlaClock, InboxSlaEvent, InboxSlaPolicy, InboxSlaRule  # noqa: F401

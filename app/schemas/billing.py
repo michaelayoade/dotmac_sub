@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
@@ -35,6 +35,7 @@ from app.models.billing import (
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
+from app.models.subscriber import SubscriberCategory, SubscriberStatus
 from app.schemas.status_presentation import StatusPresentation
 
 
@@ -208,6 +209,36 @@ class InvoiceSyncLineRead(BaseModel):
     tax_application: TaxApplication = TaxApplication.exclusive
 
 
+class InvoiceSyncAccountRead(BaseModel):
+    """Subscriber identity embedded in the ERP invoice sync feed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    first_name: str
+    last_name: str
+    display_name: str | None = None
+    company_name: str | None = None
+    legal_name: str | None = None
+    email: str
+    phone: str | None = None
+    status: SubscriberStatus
+    category: SubscriberCategory
+    is_active: bool
+    reseller_id: UUID | None = None
+    tax_id: str | None = None
+    subscriber_number: str | None = None
+    account_number: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class InvoiceSyncRead(BaseModel):
     """Accounting fields required to mirror an invoice into DotMac ERP.
 
@@ -220,6 +251,7 @@ class InvoiceSyncRead(BaseModel):
 
     id: UUID
     account_id: UUID
+    account: InvoiceSyncAccountRead
     invoice_number: str | None = None
     status: InvoiceStatus
     currency: str
@@ -240,6 +272,94 @@ class InvoiceSyncRead(BaseModel):
     is_proforma: bool = False
     updated_at: datetime
     lines: list[InvoiceSyncLineRead] = Field(default_factory=list)
+
+
+class InvoiceAccountingSyncDisposition(StrEnum):
+    """Whether ERP may post, must quarantine, or should ignore an invoice."""
+
+    READY = "ready"
+    BLOCKED = "blocked"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class InvoiceAccountingSyncSourceKind(StrEnum):
+    """Provenance classification for an invoice accounting projection."""
+
+    NATIVE = "native"
+    SPLYNX_LEGACY = "splynx_legacy"
+
+
+class InvoiceAccountingSyncIssueCode(StrEnum):
+    """Stable, machine-actionable reasons an invoice cannot be posted."""
+
+    NO_ACTIVE_LINES = "no_active_lines"
+    LINE_AMOUNT_MISMATCH = "line_amount_mismatch"
+    MISSING_TAX_RATE_REFERENCE = "missing_tax_rate_reference"
+    TAX_SNAPSHOT_MISSING = "tax_snapshot_missing"
+    HEADER_SUBTOTAL_MISMATCH = "header_subtotal_mismatch"
+    TAXED_HEADER_WITHOUT_LINE_TAX = "taxed_header_without_line_tax"
+    HEADER_TAX_MISMATCH = "header_tax_mismatch"
+    HEADER_TOTAL_MISMATCH = "header_total_mismatch"
+    LEGACY_HEADER_TOTALS_MISSING = "legacy_header_totals_missing"
+    DISCOUNT_ALLOCATION_UNDEFINED = "discount_allocation_undefined"
+
+
+class InvoiceAccountingSyncIssueRead(BaseModel):
+    """Typed evidence for one accounting projection contradiction."""
+
+    code: InvoiceAccountingSyncIssueCode
+    line_id: UUID | None = None
+    expected_amount: Decimal | None = None
+    actual_amount: Decimal | None = None
+
+
+class InvoiceAccountingSyncLineRead(BaseModel):
+    """Immutable source line facts with explicit tax-inclusive semantics."""
+
+    id: UUID
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    source_amount: Decimal
+    net_amount_before_discount: Decimal
+    tax_amount_before_discount: Decimal
+    gross_amount_before_discount: Decimal
+    tax_rate_id: UUID | None = None
+    tax_rate_code: str | None = None
+    tax_rate_percent: Decimal | None = None
+    tax_rate_is_active: bool | None = None
+    tax_application: TaxApplication
+
+
+class InvoiceAccountingSyncRead(BaseModel):
+    """Versioned, fail-closed invoice projection for Dotmac ERP accounting."""
+
+    contract_version: Literal["invoice-accounting-sync.v2"]
+    source_kind: InvoiceAccountingSyncSourceKind
+    source_invoice_id: UUID
+    source_splynx_invoice_id: int | None = None
+    account_id: UUID
+    account: InvoiceSyncAccountRead
+    invoice_number: str | None = None
+    status: InvoiceStatus
+    currency: str
+    subtotal_before_discount: Decimal
+    discount_type: InvoiceDiscountType | None = None
+    discount_value: Decimal | None = None
+    discount_amount: Decimal
+    discounted_subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    balance_due: Decimal
+    issued_at: datetime | None = None
+    due_at: datetime | None = None
+    paid_at: datetime | None = None
+    memo: str | None = None
+    is_proforma: bool
+    updated_at: datetime
+    disposition: InvoiceAccountingSyncDisposition
+    issues: list[InvoiceAccountingSyncIssueRead] = Field(default_factory=list)
+    lines: list[InvoiceAccountingSyncLineRead] = Field(default_factory=list)
 
 
 class CreditNoteBase(BaseModel):
@@ -642,6 +762,34 @@ class PaymentCreationPreviewRead(BaseModel):
 class PaymentCreationConfirm(PaymentCreationPreviewRequest):
     preview_fingerprint: str = Field(min_length=64, max_length=64)
     idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class ManualPaymentRecordingPreviewRequest(PaymentCreationPreviewRequest):
+    """Administrative payment request assessed against proof/payment evidence."""
+
+
+class ManualPaymentDuplicateRiskRead(BaseModel):
+    kind: str
+    evidence_id: UUID
+    evidence_status: str
+    amount: Decimal
+    currency: str
+    reference: str | None = None
+    observed_at: datetime
+
+
+class ManualPaymentRecordingPreviewRead(BaseModel):
+    payment_preview: PaymentCreationPreviewRead
+    duplicate_risks: list[ManualPaymentDuplicateRiskRead]
+    requires_duplicate_acknowledgement: bool
+    control_fingerprint: str
+
+
+class ManualPaymentRecordingConfirm(ManualPaymentRecordingPreviewRequest):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+    control_fingerprint: str = Field(min_length=64, max_length=64)
+    duplicate_risk_acknowledged: bool = False
 
 
 class PaymentSettlementRead(BaseModel):
@@ -1201,9 +1349,8 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
-    # The customer pay-with selector: online gateways (Paystack/Flutterwave)
-    # plus saved-card flows. Direct bank transfer is returned only as a disabled
-    # compatibility projection because transfer payment is reseller-only.
+    # The customer pay-with selector: online gateways (Paystack/Flutterwave),
+    # saved-card flows, and configured direct bank transfer.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
 
@@ -1237,6 +1384,7 @@ class TopupInitiateResponse(BaseModel):
     # the gateway webview and go straight to verify.
     charged: bool = False
     checkout_url: str | None = None
+    redirect_url: str | None = None
     purpose: str = "account_credit_deposit"
     allocation_policy: str = "credit_only"
     credit_application_policy: str = "pay_eligible_invoices"

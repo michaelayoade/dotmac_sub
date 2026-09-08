@@ -7,6 +7,8 @@ thousands of PostgreSQL samples, so the portal's "total data used" showed 0.
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.models.bandwidth import BandwidthSample
 from app.services.bandwidth import bandwidth_samples
 
@@ -42,3 +44,61 @@ def test_estimate_returns_zero_without_samples(db_session, subscription):
     )
     assert rx == 0
     assert tx == 0
+
+
+@pytest.mark.asyncio
+async def test_stats_releases_read_transaction_before_metrics_store(
+    db_session, subscription, monkeypatch
+):
+    sample_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(
+        BandwidthSample(
+            subscription_id=subscription.id,
+            rx_bps=12000,
+            tx_bps=3000,
+            sample_at=sample_at,
+        )
+    )
+    db_session.commit()
+
+    original_rollback = db_session.rollback
+    rollback_count = 0
+
+    def observed_rollback():
+        nonlocal rollback_count
+        rollback_count += 1
+        original_rollback()
+
+    class FakeMetricsStore:
+        async def get_current_bandwidth(self, subscription_id: str) -> dict[str, float]:
+            assert subscription_id == str(subscription.id)
+            assert rollback_count == 1
+            return {"rx_bps": 0.0, "tx_bps": 0.0}
+
+        async def get_peak_bandwidth(
+            self, subscription_id: str, start: datetime, end: datetime
+        ) -> dict[str, float]:
+            assert subscription_id == str(subscription.id)
+            return {"rx_peak_bps": 0.0, "tx_peak_bps": 0.0}
+
+        async def get_total_bytes(
+            self, subscription_id: str, start: datetime, end: datetime
+        ) -> dict[str, float]:
+            assert subscription_id == str(subscription.id)
+            return {"rx_bytes": 0.0, "tx_bytes": 0.0}
+
+    monkeypatch.setattr(db_session, "rollback", observed_rollback)
+    monkeypatch.setattr(
+        "app.services.metrics_store.get_metrics_store", lambda: FakeMetricsStore()
+    )
+
+    stats = await bandwidth_samples.get_bandwidth_stats(
+        db_session, subscription.id, "24h"
+    )
+
+    assert rollback_count == 1
+    assert stats["sample_count"] == 1
+    assert stats["current_rx_bps"] == 12000.0
+    assert stats["current_tx_bps"] == 3000.0
+    assert stats["peak_rx_bps"] == 12000.0
+    assert stats["peak_tx_bps"] == 3000.0

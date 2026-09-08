@@ -110,3 +110,14 @@ def test_clear_snooze_api_maps_owner_scope_error(monkeypatch):
 
     assert error.value.status_code == 403
     assert error.value.detail == "Item is outside native team scope"
+
+
+def test_workqueue_api_maps_permission_denial_to_forbidden():
+    error = workqueue_api._map_action_error(
+        WorkqueueActionError(
+            code="permission_denied",
+            message="You do not have permission to change this workqueue item.",
+        )
+    )
+
+    assert error.status_code == 403

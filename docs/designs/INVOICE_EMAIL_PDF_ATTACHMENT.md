@@ -48,10 +48,13 @@ by admin and customer portal downloads.
 
 ## PDF payment presentment
 
-Current invoice renders read `billing.invoice_pdf_payment_presentment` from the
-settings owner. The closed values are `bank_account`, `paystack`, and `both`;
-the default is `bank_account` so fresh or unconfigured deployments print the
-owned receiving account number.
+Current invoice renders first read the customer account `payment_method`.
+`transfer` and `bank_transfer` print bank details; `paystack` and card-like
+values print the Paystack link. Blank customer methods and accountless renders
+fall back to `billing.invoice_pdf_payment_presentment` from the settings owner.
+The closed fallback values are `bank_account`, `paystack`, and `both`; the
+default is `paystack` so fresh or unconfigured deployments print the stable
+invoice-scoped Paystack payment link.
 
 Bank-transfer details are resolved from `financial.collection_accounts` through
 `invoice_bank_details.get_invoice_bank_details()`. The PDF never stores or
@@ -64,8 +67,9 @@ path remains the settlement authority.
 
 Changing the invoice template freshness marker invalidates cached exports so
 new downloads and invoice email attachments do not retain the previous payment
-surface. A later operator change to `invoice_pdf_payment_presentment` also makes
-older cached exports stale against that setting timestamp.
+surface. A later customer payment-method change or operator change to
+`invoice_pdf_payment_presentment` also makes older cached exports stale against
+that decision timestamp.
 
 ## Failure and retry
 

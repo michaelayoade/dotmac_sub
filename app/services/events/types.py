@@ -61,8 +61,9 @@ class EventType(enum.Enum):
     invoice_discount_removed = "invoice.discount_removed"
     invoice_discount_inherited = "invoice.discount_inherited"
 
-    # Billing - Payment events (4)
+    # Billing - Payment events (5)
     payment_received = "payment.received"
+    manual_payment_recorded = "manual_payment.recorded"
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
     payment_reversed = "payment.reversed"
@@ -87,6 +88,7 @@ class EventType(enum.Enum):
         "integration.installation.meta_social_configured"
     )
     integration_job_capability_activated = "integration.job.capability_activated"
+    erp_operational_context_retry_deferred = "erp.operational_context.retry_deferred"
     erp_operational_context_watermark_advanced = (
         "erp.operational_context.watermark_advanced"
     )
@@ -238,6 +240,7 @@ class EventType(enum.Enum):
     lead_created = "lead.created"
     lead_updated = "lead.updated"
     lead_account_converted = "lead.account_converted"
+    meta_lead_customer_match_reconciled = "meta_lead.customer_match_reconciled"
     quote_created = "quote.created"
     quote_accepted = "quote.accepted"
     quote_discount_applied = "quote.discount_applied"
@@ -273,6 +276,7 @@ class EventType(enum.Enum):
     olt_updated = "olt.updated"
     olt_deleted = "olt.deleted"
     olt_topology_imported = "olt.topology_imported"
+    lldp_observations_reconciled = "lldp.observations_reconciled"
 
     # ONT events (5)
     ont_discovered = "ont.discovered"

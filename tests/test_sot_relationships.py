@@ -476,6 +476,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "financial.access_resolution",
         "financial.billing_health",
+        "financial.billing_automation",
     )
     financial_services = sot_relationships.service_names_for_domain("financial_access")
     assert "financial.payment_arrangements" in financial_services
@@ -548,7 +549,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
+        "access.subscription_lifecycle",
+        "customer.accounts",
         "financial.access_resolution",
+        "financial.billing_profile",
         "customer.financial_position",
         "financial.grace_policy",
     )
@@ -786,11 +790,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "auth.permission_gate",
         "auth.staff_provisioning",
         "communications.intents",
+        "customer.accounts",
         "events.dispatcher",
         "communications.notification_service",
         "communications.staff_notifications",
         "communications.nextcloud_talk_staff",
         "operations.work_order_commands",
+        "network.infrastructure_catalogue",
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",

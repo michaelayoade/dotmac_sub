@@ -385,6 +385,7 @@ def _payment_create_error_response(
     invoice_id: str | None,
     payment_method_id: str | None,
     idempotency_token: str | None,
+    reference: str | None,
 ) -> Response:
     from fastapi import HTTPException as _HTTPException
     from pydantic import ValidationError as _ValidationError
@@ -442,6 +443,7 @@ def _payment_create_error_response(
         {
             "request": request,
             **error_state,
+            "reference": reference,
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "balance_value": balance_value,
@@ -465,6 +467,7 @@ def payment_create_preview(
     invoice_id: str | None = Form(None),
     collection_account_id: str | None = Form(None),
     payment_method_id: str | None = Form(None),
+    reference: str | None = Form(None),
     memo: str | None = Form(None),
     idempotency_token: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -479,6 +482,7 @@ def payment_create_preview(
             invoice_id=invoice_id,
             collection_account_id=collection_account_id,
             payment_method_id=payment_method_id,
+            reference=reference,
             memo=memo,
         )
     except Exception as exc:
@@ -491,6 +495,7 @@ def payment_create_preview(
             invoice_id=invoice_id,
             payment_method_id=payment_method_id,
             idempotency_token=idempotency_token,
+            reference=reference,
         )
     idempotency_token = (
         idempotency_token
@@ -502,7 +507,8 @@ def payment_create_preview(
         "admin/billing/payment_create_confirm.html",
         {
             "request": request,
-            "preview": result["preview"],
+            "preview": result["preview"].payment_preview,
+            "duplicate_control": result["preview"],
             "account_id": account_id,
             "amount": amount,
             "currency": currency,
@@ -510,6 +516,7 @@ def payment_create_preview(
             "invoice_id": invoice_id,
             "collection_account_id": collection_account_id,
             "payment_method_id": payment_method_id,
+            "reference": reference,
             "memo": memo,
             "idempotency_token": idempotency_token,
             "current_user": get_current_user(request),
@@ -534,9 +541,12 @@ def payment_create(
     invoice_id: str | None = Form(None),
     collection_account_id: str | None = Form(None),
     payment_method_id: str | None = Form(None),
+    reference: str | None = Form(None),
     memo: str | None = Form(None),
     idempotency_token: str | None = Form(None),
     preview_fingerprint: str = Form(...),
+    control_fingerprint: str = Form(...),
+    duplicate_risk_acknowledged: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     resolved_invoice = None
@@ -553,9 +563,12 @@ def payment_create(
             invoice_id=invoice_id,
             collection_account_id=collection_account_id,
             payment_method_id=payment_method_id,
+            reference=reference,
             memo=memo,
             idempotency_token=idempotency_token,
             preview_fingerprint=preview_fingerprint,
+            control_fingerprint=control_fingerprint,
+            duplicate_risk_acknowledged=duplicate_risk_acknowledged,
         )
         payment = cast(Payment, result["payment"])
         resolved_invoice = result["resolved_invoice"]
@@ -622,6 +635,7 @@ def payment_create(
             {
                 "request": request,
                 **error_state,
+                "reference": reference,
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 "balance_value": balance_value,

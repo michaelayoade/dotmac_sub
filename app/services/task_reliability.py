@@ -281,6 +281,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Watermarked Sub project/ticket/work-order context feed to ERP; ERP upserts by source UUID.",
     ),
+    "app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Daily typed ERP snapshot repair; monotonic source versions make reruns safe.",
+    ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
@@ -337,6 +344,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         REDRIVE,
         "Persisted delivery identity and state gate retries; terminal failures "
         "are visible and replayable from integration administration.",
+    ),
+    "app.tasks.integration_delivery.deliver_meta_lead_conversion": _c(
+        "integrations",
+        STATE,
+        STATEFUL,
+        DEAD,
+        "Durable delivery state, stable Meta event ID, bounded retry, and "
+        "dead-letter evidence.",
     ),
     "app.tasks.invoice_pdf.generate_invoice_pdf_export": _c(
         "billing", MANUAL, IDEMP, STATUS

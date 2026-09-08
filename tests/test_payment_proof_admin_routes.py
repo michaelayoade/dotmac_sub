@@ -1,6 +1,7 @@
 """Admin payment-proof back office: page registration + receipt file auth."""
 
 import uuid
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -369,18 +370,65 @@ def _customer_principal(sub) -> dict:
     }
 
 
-def test_customer_payment_proof_upload_is_disabled(db_session) -> None:
-    owner = _subscriber(db_session, "proof.disabled@example.com")
+def test_customer_payment_proof_upload_links_started_direct_transfer_intent(
+    monkeypatch, db_session
+) -> None:
+    from app.models.billing import TopupIntent
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+    from app.services import customer_portal_flow_payments
+    from app.services.topup_intents import DIRECT_TRANSFER_PROVIDER, TopupIntentStatus
+
+    owner = _subscriber(db_session, "proof.customer@example.com")
+    intent = TopupIntent(
+        account_id=owner.id,
+        reference="TRF-CUSTOMER-API",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status=TopupIntentStatus.pending.value,
+        metadata_={"payment_flow": "account_credit_deposit"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    monkeypatch.setattr(
+        customer_portal_flow_payments,
+        "enabled_direct_bank_transfer_accounts",
+        lambda _db: [
+            {
+                "id": "bank-primary",
+                "bank_name": "Dotmac Test Bank",
+                "account_name": "Dotmac Payments",
+                "account_number": "0123456789",
+                "sort_code": "",
+            }
+        ],
+    )
+
+    async def fake_save_proof_file(_file) -> str:
+        return "uploads/payment_proofs/customer-api.png"
+
+    monkeypatch.setattr(svc, "save_proof_file", fake_save_proof_file)
     client = _client(db_session, _customer_principal(owner))
 
     response = client.post(
         "/api/v1/payment-proofs/me",
-        data={"amount": "5000", "reference": "TRF-DISABLED"},
+        data={
+            "amount": "5000",
+            "reference": "TRF-CUSTOMER-API",
+            "intent_id": str(intent.id),
+            "selected_account_id": "bank-primary",
+        },
         files={"file": ("receipt.png", b"receipt", "image/png")},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Bank transfer is available to resellers only"
+    assert response.status_code == 200
+    proof = db_session.get(PaymentProof, response.json()["id"])
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert proof is not None
+    assert proof.status is PaymentProofStatus.submitted
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
+    assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 
 
 class TestProofFileEndpointAuth:

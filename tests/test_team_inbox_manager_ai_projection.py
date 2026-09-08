@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.models.service_team import ServiceTeam
@@ -17,6 +18,7 @@ from app.models.team_inbox import (
     InboxStatusTransitionEvent,
 )
 from app.services import team_inbox_analysis_projection as projection
+from app.services import team_inbox_manager_ai_chat as manager_chat
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from app.services.workqueue.scope import WorkqueueScope
 from app.services.workqueue.types import WorkqueueAudience
@@ -260,3 +262,86 @@ def test_period_projection_returns_an_empty_safe_cohort(db_session):
     assert result.facts is not None
     assert result.facts.total_conversations == 0
     assert result.evidence_conversations == ()
+
+
+def test_manager_ai_answer_uses_custom_dates_only_for_custom_period(
+    db_session, monkeypatch
+):
+    captured: list[projection.ManagerAnalysisRequest] = []
+
+    monkeypatch.setattr(manager_chat.control_registry, "is_enabled", lambda *_: True)
+    monkeypatch.setattr(manager_chat.ai_gateway, "enabled", lambda _db: True)
+    monkeypatch.setattr(
+        manager_chat.ai_gateway,
+        "generate_with_fallback",
+        lambda *_args, **_kwargs: (SimpleNamespace(content="ok"), None),
+    )
+
+    def fake_projection(db, request, *, now=None):
+        captured.append(request)
+        return projection.ManagerAnalysisProjection(request.mode, None, None, (), ())
+
+    monkeypatch.setattr(projection, "build_projection", fake_projection)
+
+    answer = manager_chat.answer_manager_question(
+        db_session,
+        scope=_scope(org_wide=True),
+        question="What changed?",
+        mode="period",
+        period="last_7_days",
+        custom_start="not-a-date",
+        custom_end="also-not-a-date",
+    )
+
+    assert answer == "ok"
+    assert captured[0].period is projection.ManagerAnalysisPeriod.last_7_days
+    assert captured[0].custom_start is None
+    assert captured[0].custom_end is None
+
+    manager_chat.answer_manager_question(
+        db_session,
+        scope=_scope(org_wide=True),
+        question="What changed?",
+        mode="period",
+        period="custom",
+        custom_start="2026-08-01",
+        custom_end="2026-08-10",
+        channel_type="whatsapp",
+        status="resolved",
+    )
+
+    assert captured[1].period is projection.ManagerAnalysisPeriod.custom
+    assert captured[1].custom_start == date(2026, 8, 1)
+    assert captured[1].custom_end == date(2026, 8, 10)
+    assert captured[1].channel_type == "whatsapp"
+    assert captured[1].status == "resolved"
+
+
+def test_manager_ai_page_state_exposes_bounded_filter_options(db_session, monkeypatch):
+    monkeypatch.setattr(
+        manager_chat,
+        "recent_conversation_options",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(manager_chat.control_registry, "is_enabled", lambda *_: True)
+    monkeypatch.setattr(manager_chat.ai_gateway, "enabled", lambda _db: True)
+
+    state = manager_chat.build_page_state(
+        db_session,
+        scope=_scope(org_wide=True),
+        channel_type="whatsapp",
+        status="resolved",
+    )
+
+    assert ("", "All channels") not in {
+        (option.value, option.label) for option in state.channel_options
+    }
+    assert ("whatsapp", "WhatsApp") in {
+        (option.value, option.label) for option in state.channel_options
+    }
+    assert "note" not in {option.value for option in state.channel_options}
+    assert ("resolved", "Resolved") in {
+        (option.value, option.label) for option in state.status_options
+    }
+    assert state.channel_type == "whatsapp"
+    assert state.status_filter == "resolved"

@@ -28,11 +28,13 @@ from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_errors import VendorPortalOperationError
 from app.services.vendor_portal_operations import (
     _EDITABLE_QUOTES,
+    _QUOTE_TAX_EDITABLE_STATUSES,
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
     DeleteVendorQuoteLineCommand,
     ReviewVendorQuoteCommand,
+    SetVendorQuoteTaxCommand,
     StageVendorAsBuiltSubmission,
     StageVendorQuoteSubmission,
     SubmitVendorRouteRevisionCommand,
@@ -108,6 +110,30 @@ def _recalculate(quote: ProjectQuote) -> None:
     quote.subtotal = _money(subtotal)
     quote.tax_total = _money(subtotal * Decimal(str(quote.vat_rate_percent or 0)) / 100)
     quote.total = _money(quote.subtotal + quote.tax_total)
+
+
+def stage_set_quote_tax(db: Session, command: SetVendorQuoteTaxCommand) -> dict:
+    quote = _quote(db, command.quote_id, for_update=True)
+    if quote.status not in _QUOTE_TAX_EDITABLE_STATUSES:
+        raise _error("quote_not_editable", "Quote tax cannot be changed after review.")
+    rate = Decimal(str(command.vat_rate_percent))
+    if rate < Decimal("0") or rate > Decimal("100"):
+        raise _error(
+            "invalid_write_evidence", "Tax rate must be between 0 and 100 percent."
+        )
+    quote.vat_rate_percent = rate.quantize(Decimal("0.01"))
+    _recalculate(quote)
+    db.flush()
+    _emit_change(
+        db,
+        EventType.vendor_quote_changed,
+        command.context,
+        action="tax_updated",
+        aggregate_id=quote.id,
+        project_id=quote.project_id,
+        vendor_id=quote.vendor_id,
+    )
+    return _serialize_quote(_quote(db, command.quote_id))
 
 
 def stage_create_quote(db: Session, command: CreateVendorQuoteCommand) -> dict:

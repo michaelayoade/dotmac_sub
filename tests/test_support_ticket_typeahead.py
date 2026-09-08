@@ -85,6 +85,26 @@ def test_subscriber_typeahead_finds_records_beyond_preloaded_people_limit(
     assert results[0]["service_address"] == "1 Search Way, Lagos, LA"
 
 
+def test_customer_typeahead_people_searches_display_name_and_subscriber_number(
+    db_session,
+) -> None:
+    target = Subscriber(
+        first_name="Hidden",
+        last_name="Customer",
+        display_name="NOC Search Alias",
+        email=f"{uuid4().hex}@example.com",
+        subscriber_number="SUB-NOC-777",
+    )
+    db_session.add(target)
+    db_session.commit()
+
+    display_name_results = typeahead_service.people(db_session, "NOC Search", 8)
+    subscriber_number_results = typeahead_service.people(db_session, "SUB-NOC", 8)
+
+    assert str(target.id) in {str(item["id"]) for item in display_name_results}
+    assert str(target.id) in {str(item["id"]) for item in subscriber_number_results}
+
+
 def test_ticket_form_context_prefills_selected_person_labels(db_session) -> None:
     subscriber = Subscriber(
         first_name="Typeahead",
@@ -151,7 +171,10 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
         ),
     )
 
-    context = web_support_tickets.build_ticket_form_context(db_session)
+    context = web_support_tickets.build_ticket_form_context(
+        db_session,
+        can_assign_ticket=True,
+    )
 
     assert context["region_manager_routing"] == {"test-region": str(manager.id)}
 
@@ -189,6 +212,27 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
     assert 'x-model="selectedTicketType"' in html
     assert '"access point outage"' in html
     assert ':required="requiresBaseStation"' in html
+
+    restricted_html = admin_support_tickets.templates.env.get_template(
+        "admin/support/tickets/new.html"
+    ).render(
+        request=request,
+        csrf_token="test-csrf-token",
+        current_user={"name": "Test Admin", "email": "admin@example.com"},
+        sidebar_stats={},
+        active_menu="support",
+        active_page="support-tickets",
+        page_title="New Ticket",
+        form_mode="create",
+        ticket=None,
+        error=None,
+        duplicate_warning=None,
+        **{**context, "can_assign_ticket": False},
+    )
+    assert 'name="technician_person_id"' not in restricted_html
+    assert 'name="ticket_manager_person_id"' not in restricted_html
+    assert 'name="service_team_id"' not in restricted_html
+    assert 'name="assignee_person_ids"' not in restricted_html
 
 
 def test_list_assignment_people_keeps_legacy_subscriber_assignments_visible(

@@ -23,6 +23,7 @@ def test_network_map_projection_has_registered_typed_owner():
     assert service.module == "app.services.network_map"
     assert service.contract is not None
     assert "network.radius_sessions" in service.depends_on
+    assert "customer.accounts" in service.depends_on
     assert "ui.status_presentation" in service.depends_on
     assert get_type_hints(network_map.build_network_map_projection)["return"] is (
         NetworkMapProjection
@@ -53,6 +54,8 @@ def test_network_map_template_does_not_derive_customer_session_semantics():
 
     assert "p.connectivity.presentation" in template
     assert "p.connectivity.layer" in template
+    assert "p.customer_status" in template
+    assert "customerVisualStatus" in template
     assert "p.is_online" not in template
     assert "Customer (Online)" not in template
     assert "Customer (Offline)" not in template

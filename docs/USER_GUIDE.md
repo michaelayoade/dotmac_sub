@@ -360,6 +360,11 @@ Interactive Leaflet.js map with:
 
 ![Bandwidth Report](guide_screenshots/21_reports_bandwidth.png)
 
+Every report opened from the Reports Hub provides an export or regulatory
+download action. CSV exports preserve the report's active filters and include
+the complete matching result set where the screen is paginated. Regulatory
+filing reports retain their purpose-built XLSX or PDF downloads.
+
 ---
 
 ## 13. Notifications

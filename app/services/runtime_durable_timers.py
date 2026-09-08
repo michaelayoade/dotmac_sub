@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.durable_timer import DurableTimer, TimerStatus
@@ -81,6 +81,22 @@ def _require_participant(db: Session, *, action: str) -> None:
             "Timers are staged only inside the owning transition's command.",
             action=action,
         )
+
+
+def _lock_timer_generation(
+    db: Session, *, owner: str, entity_kind: str, entity_id: UUID, purpose: str
+) -> None:
+    """Serialize generation assignment for one timer identity on PostgreSQL."""
+
+    bind = db.get_bind()
+    if not bind.dialect.name.startswith("postgres"):
+        return
+
+    key = f"{OWNER}:generation:{owner}:{entity_kind}:{entity_id}:{purpose}"
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": key},
+    )
 
 
 def _latest_timer(
@@ -144,6 +160,13 @@ def schedule_timer(
             "A timer must declare its output event type.",
         )
 
+    _lock_timer_generation(
+        db,
+        owner=command.owner,
+        entity_kind=command.entity_kind,
+        entity_id=command.entity_id,
+        purpose=command.purpose,
+    )
     latest = _latest_timer(
         db,
         owner=command.owner,

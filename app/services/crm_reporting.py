@@ -19,8 +19,8 @@ from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import Invoice, Payment, PaymentStatus
@@ -30,6 +30,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.collections import DunningCase
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.network import (
     FdhCabinet,
     FiberStrand,
@@ -42,10 +44,10 @@ from app.models.network import (
     Splitter,
     Vlan,
 )
-from app.models.network_monitoring import CustomerOutageInterval
+from app.models.network_monitoring import CustomerOutageInterval, PopSite
 from app.models.project import Project, ProjectTask
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Address, Subscriber
 from app.models.support import Ticket
 from app.models.team_inbox import InboxConversation, InboxConversationQueueEntry
 from app.models.work_order import WorkOrder
@@ -55,6 +57,7 @@ from app.services import (
     team_inbox_metrics,
     ticket_sla_reports,
 )
+from app.services.invoice_collectibility import open_invoice_filters
 
 
 class CrmReportSlug(StrEnum):
@@ -477,6 +480,342 @@ def _duration_label(value: float | None) -> str:
     if hours < 24:
         return f"{hours:.1f}h"
     return f"{hours / 24:.1f}d"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExportQuery:
+    search: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionExport:
+    filename: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionPageQuery:
+    search: str | None = None
+    page: int = 1
+    per_page: int = 20
+
+    def __post_init__(self) -> None:
+        if self.page < 1:
+            raise CrmReportQueryError("Customer retention page must be at least 1.")
+        if self.per_page != 20:
+            raise CrmReportQueryError("Customer retention page size must be 20.")
+
+
+class CustomerRetentionRiskSegment(StrEnum):
+    SUSPENDED = "Suspended"
+    DUE_SOON = "Due Soon"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionRow:
+    customer_id: str
+    name: str
+    phone: str
+    email: str
+    status: str
+    location: str
+    plan: str
+    balance: Decimal
+    next_bill_date: str
+    billing_start_date: str
+    blocked_date: str
+    risk_segment: CustomerRetentionRiskSegment
+    recommended_action: str
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionPage:
+    rows: tuple[CustomerRetentionRow, ...]
+    page: int
+    per_page: int
+    total_count: int
+    total_pages: int
+    tracked_count: int
+    revenue_at_risk: Decimal
+    suspended_count: int
+    due_soon_count: int
+
+    @property
+    def has_previous(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page < self.total_pages
+
+
+def _retention_action(segment: CustomerRetentionRiskSegment, balance: Decimal) -> str:
+    if segment is CustomerRetentionRiskSegment.SUSPENDED:
+        return "Review the blocked account and confirm restore conditions."
+    if balance >= 50000:
+        return "Prioritize the account for billing follow-up."
+    return "Review billing position and keep the account under observation."
+
+
+def get_customer_retention_page(
+    db: Session, *, query: CustomerRetentionPageQuery
+) -> CustomerRetentionPage:
+    """Return one SQL-bounded page of authoritative billing-risk accounts."""
+
+    balances = (
+        select(
+            Invoice.account_id.label("subscriber_id"),
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("balance"),
+        )
+        .where(*open_invoice_filters())
+        .group_by(Invoice.account_id)
+        .subquery()
+    )
+    lock_dates = (
+        select(
+            EnforcementLock.subscriber_id.label("subscriber_id"),
+            func.max(EnforcementLock.created_at).label("blocked_date"),
+        )
+        .where(
+            EnforcementLock.reason.in_(
+                (EnforcementReason.overdue, EnforcementReason.prepaid)
+            )
+        )
+        .group_by(EnforcementLock.subscriber_id)
+        .subquery()
+    )
+    dunning_dates = (
+        select(
+            DunningCase.account_id.label("subscriber_id"),
+            func.max(DunningCase.started_at).label("blocked_date"),
+        )
+        .group_by(DunningCase.account_id)
+        .subquery()
+    )
+    balance_value = func.coalesce(balances.c.balance, 0)
+    blocked_value = func.coalesce(
+        lock_dates.c.blocked_date, dunning_dates.c.blocked_date
+    )
+    risk_rank = case((blocked_value.is_not(None), 0), else_=1)
+    name_value = func.lower(
+        func.coalesce(
+            Subscriber.company_name,
+            Subscriber.display_name,
+            Subscriber.first_name + " " + Subscriber.last_name,
+        )
+    )
+    cohort = (
+        select(
+            Subscriber.id.label("subscriber_id"),
+            balance_value.label("balance"),
+            blocked_value.label("blocked_date"),
+            risk_rank.label("risk_rank"),
+            name_value.label("name_sort"),
+        )
+        .outerjoin(balances, balances.c.subscriber_id == Subscriber.id)
+        .outerjoin(lock_dates, lock_dates.c.subscriber_id == Subscriber.id)
+        .outerjoin(dunning_dates, dunning_dates.c.subscriber_id == Subscriber.id)
+        .outerjoin(PopSite, PopSite.id == Subscriber.pop_site_id)
+        .where(or_(blocked_value.is_not(None), balance_value > 0))
+    )
+    term = str(query.search or "").strip()
+    if term:
+        like = f"%{term}%"
+        cohort = cohort.where(
+            or_(
+                cast(Subscriber.id, String).ilike(like),
+                Subscriber.first_name.ilike(like),
+                Subscriber.last_name.ilike(like),
+                Subscriber.display_name.ilike(like),
+                Subscriber.company_name.ilike(like),
+                Subscriber.phone.ilike(like),
+                Subscriber.email.ilike(like),
+                Subscriber.city.ilike(like),
+                Subscriber.region.ilike(like),
+                Subscriber.address_line1.ilike(like),
+                Subscriber.address_line2.ilike(like),
+                Subscriber.postal_code.ilike(like),
+                PopSite.name.ilike(like),
+                select(Address.id)
+                .where(
+                    Address.subscriber_id == Subscriber.id,
+                    or_(
+                        Address.label.ilike(like),
+                        Address.address_line1.ilike(like),
+                        Address.address_line2.ilike(like),
+                        Address.city.ilike(like),
+                        Address.region.ilike(like),
+                        Address.postal_code.ilike(like),
+                    ),
+                )
+                .exists(),
+            )
+        )
+    cohort_sq = cohort.subquery()
+    totals = db.execute(
+        select(
+            func.count(cohort_sq.c.subscriber_id),
+            func.coalesce(func.sum(cohort_sq.c.balance), 0),
+            func.coalesce(func.sum(case((cohort_sq.c.risk_rank == 0, 1), else_=0)), 0),
+        )
+    ).one()
+    total_count = int(totals[0] or 0)
+    revenue_at_risk = Decimal(str(totals[1] or 0))
+    suspended_count = int(totals[2] or 0)
+    total_pages = max(1, (total_count + query.per_page - 1) // query.per_page)
+    effective_page = min(query.page, total_pages)
+    selected = (
+        db.execute(
+            select(cohort_sq.c.subscriber_id)
+            .order_by(
+                cohort_sq.c.risk_rank,
+                cohort_sq.c.balance.desc(),
+                cohort_sq.c.name_sort,
+                cohort_sq.c.subscriber_id,
+            )
+            .offset((effective_page - 1) * query.per_page)
+            .limit(query.per_page)
+        )
+        .scalars()
+        .all()
+    )
+    subscribers_by_id = {
+        subscriber.id: subscriber
+        for subscriber in db.scalars(
+            select(Subscriber)
+            .where(Subscriber.id.in_(selected))
+            .options(selectinload(Subscriber.addresses))
+        ).all()
+    }
+    subscribers = [
+        subscribers_by_id[item] for item in selected if item in subscribers_by_id
+    ]
+    raw_rows = crm_api.billing_risk_rows_for_subscribers(db, subscribers)
+    rows = tuple(
+        CustomerRetentionRow(
+            customer_id=str(raw.get("id") or ""),
+            name=str(raw.get("name") or "Unknown customer"),
+            phone=str(raw.get("phone") or ""),
+            email=str(raw.get("email") or ""),
+            status=str(raw.get("status") or "Unknown"),
+            location=str(raw.get("location") or "Unknown location"),
+            plan=str(raw.get("service_plan") or "N/A"),
+            balance=Decimal(str(raw.get("balance") or 0)),
+            next_bill_date=str(raw.get("next_bill_date") or ""),
+            billing_start_date=str(raw.get("billing_start_date") or ""),
+            blocked_date=str(raw.get("blocked_date") or ""),
+            risk_segment=(
+                CustomerRetentionRiskSegment.SUSPENDED
+                if str(raw.get("blocked_date") or "").strip()
+                else CustomerRetentionRiskSegment.DUE_SOON
+            ),
+            recommended_action=_retention_action(
+                (
+                    CustomerRetentionRiskSegment.SUSPENDED
+                    if str(raw.get("blocked_date") or "").strip()
+                    else CustomerRetentionRiskSegment.DUE_SOON
+                ),
+                Decimal(str(raw.get("balance") or 0)),
+            ),
+        )
+        for raw in raw_rows
+    )
+    return CustomerRetentionPage(
+        rows=rows,
+        page=effective_page,
+        per_page=query.per_page,
+        total_count=total_count,
+        total_pages=total_pages,
+        tracked_count=total_count,
+        revenue_at_risk=revenue_at_risk.quantize(Decimal("0.01")),
+        suspended_count=suspended_count,
+        due_soon_count=total_count - suspended_count,
+    )
+
+
+def build_customer_retention_export(
+    db: Session, query: CustomerRetentionExportQuery
+) -> CustomerRetentionExport:
+    """Export the billing-risk cohort shown by the retention work queue."""
+
+    raw_rows, _ = crm_api.billing_risk_rows(db, page=1, per_page=10000)
+    term = (query.search or "").strip().casefold()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        (
+            "customer_id",
+            "customer",
+            "phone",
+            "email",
+            "status",
+            "location",
+            "plan",
+            "balance",
+            "next_bill_date",
+            "billing_start_date",
+            "blocked_date",
+            "risk_segment",
+            "recommended_action",
+        )
+    )
+    rows: list[tuple[object, ...]] = []
+    for raw in raw_rows:
+        balance = float(raw.get("balance") or 0)
+        blocked = bool(str(raw.get("blocked_date") or "").strip())
+        if not blocked and balance <= 0:
+            continue
+        customer_id = str(raw.get("id") or "").strip()
+        if not customer_id:
+            continue
+        searchable = (
+            customer_id,
+            str(raw.get("name") or ""),
+            str(raw.get("phone") or ""),
+            str(raw.get("email") or ""),
+            str(raw.get("location") or ""),
+        )
+        if term and not any(term in value.casefold() for value in searchable):
+            continue
+        segment = "Suspended" if blocked else "Due Soon"
+        action = (
+            "Review the blocked account and confirm restore conditions."
+            if blocked
+            else "Prioritize the account for billing follow-up."
+            if balance >= 50000
+            else "Review billing position and keep the account under observation."
+        )
+        rows.append(
+            (
+                customer_id,
+                raw.get("name") or "Unknown customer",
+                raw.get("phone") or "",
+                raw.get("email") or "",
+                raw.get("status") or "Unknown",
+                raw.get("location") or "Unknown location",
+                raw.get("service_plan") or "N/A",
+                balance,
+                raw.get("next_bill_date") or "",
+                raw.get("billing_start_date") or "",
+                raw.get("blocked_date") or "",
+                segment,
+                action,
+            )
+        )
+
+    def sort_key(row: tuple[object, ...]) -> tuple[int, float, str]:
+        balance_value = row[7]
+        if not isinstance(balance_value, float):
+            raise TypeError("Customer retention export balance must be a float.")
+        return (
+            0 if row[11] == "Suspended" else 1,
+            -balance_value,
+            str(row[1]).casefold(),
+        )
+
+    rows.sort(key=sort_key)
+    writer.writerows(rows)
+    return CustomerRetentionExport("customer-retention.csv", output.getvalue())
 
 
 def _subscriber_name(subscriber: Subscriber | None) -> str:

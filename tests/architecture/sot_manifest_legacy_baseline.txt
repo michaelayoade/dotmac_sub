@@ -38,7 +38,6 @@ customer.location_capture
 customer.location_verification
 customer.network_context
 customer.profile_commands
-customer.service_status
 customer.usage_summary
 customer.work_order_selfcare
 events.dispatcher

@@ -169,6 +169,94 @@ def test_api_sync_pressure_guard_uses_bounded_feed_bucket(monkeypatch):
     assert calls == [("api-v1-pressure:feed:149.102.158.167", 75, 60)]
 
 
+def test_api_sync_pressure_guard_gives_trusted_erp_detail_calls_service_lane(
+    monkeypatch,
+):
+    subscriber_id = "8bc9c8a0-af61-4b37-a352-f5d1dfe97d11"
+    request = _build_request(
+        path=f"/api/v1/subscribers/{subscriber_id}",
+        headers=[
+            (b"x-forwarded-for", b"149.102.158.167"),
+            (b"x-dotmac-integration-client", b"dotmac-erp"),
+        ],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=True, retry_after_seconds=None)
+
+    monkeypatch.setenv("API_SYNC_PRESSURE_SERVICE_LIMIT", "280")
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+    assert calls == [("api-v1-pressure:service:dotmac-erp:149.102.158.167", 280, 60)]
+
+
+def test_api_sync_pressure_guard_rejects_spoofed_service_ip(monkeypatch):
+    subscriber_id = "8bc9c8a0-af61-4b37-a352-f5d1dfe97d11"
+    request = _build_request(
+        path=f"/api/v1/subscribers/{subscriber_id}",
+        headers=[
+            (b"x-forwarded-for", b"203.0.113.9"),
+            (b"x-dotmac-integration-client", b"dotmac-erp"),
+        ],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=True, retry_after_seconds=None)
+
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+    assert calls == [("api-v1-pressure:general:203.0.113.9", 300, 60)]
+
+
+def test_api_sync_pressure_guard_does_not_expand_service_lane_to_other_routes(
+    monkeypatch,
+):
+    request = _build_request(
+        path="/api/v1/system-users",
+        headers=[
+            (b"x-forwarded-for", b"149.102.158.167"),
+            (b"x-dotmac-integration-client", b"dotmac-erp"),
+        ],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=True, retry_after_seconds=None)
+
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+    assert calls == [("api-v1-pressure:listed:149.102.158.167", 10, 60)]
+
+
 def test_api_sync_pressure_guard_allows_admin_without_rate_limit(monkeypatch):
     request = _build_request(path="/admin/customers")
 
@@ -318,6 +406,51 @@ def test_attendance_check_in_requires_csrf_header():
     response = _run_async(csrf_middleware(request, call_next))
 
     assert response.status_code == 403
+
+
+def test_csrf_error_refresh_links_to_same_site_referer_for_failed_post():
+    request = _build_request(
+        path="/admin/network/cpes",
+        method="POST",
+        headers=[
+            (b"host", b"testserver"),
+            (
+                b"referer",
+                b"http://testserver/admin/network/cpes/new?subscriber_id=123",
+            ),
+        ],
+    )
+
+    async def call_next(_request: Request) -> Response:
+        raise AssertionError("invalid CSRF must not reach its route")
+
+    response = _run_async(csrf_middleware(request, call_next))
+    body = response.body.decode("utf-8")
+
+    assert response.status_code == 403
+    assert 'href="/admin/network/cpes/new?subscriber_id=123"' in body
+    assert "window.location.reload()" in body
+
+
+def test_csrf_error_refresh_does_not_trust_cross_site_referer():
+    request = _build_request(
+        path="/admin/network/cpes",
+        method="POST",
+        headers=[
+            (b"host", b"testserver"),
+            (b"referer", b"https://example.invalid/admin/network/cpes/new"),
+        ],
+    )
+
+    async def call_next(_request: Request) -> Response:
+        raise AssertionError("invalid CSRF must not reach its route")
+
+    response = _run_async(csrf_middleware(request, call_next))
+    body = response.body.decode("utf-8")
+
+    assert response.status_code == 403
+    assert "example.invalid" not in body
+    assert "window.location.reload()" in body
 
 
 def test_attendance_check_out_accepts_matching_double_submit_csrf():

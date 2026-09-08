@@ -73,7 +73,8 @@
 {% set cls_link = 'flex min-h-[40px] items-center gap-3 rounded-r-xl pl-3 pr-3 py-2 text-sm font-medium transition-colors' %}
 
 {# ── Macros ── #}
-{% macro nav_link(label, href, icon_svg, page_id, badge=None, active_pages=[], tour_id=None) %}
+{% macro nav_link(label, href, icon_svg, page_id, badge=None, active_pages=[], tour_id=None, permission=None) %}
+{% if not permission or can(request, permission) %}
 {% if active_pages %}
 {% set is_active = active_page == page_id or active_page in active_pages %}
 {% else %}
@@ -122,6 +123,7 @@
         </div>
     </template>
 </div>
+{% endif %}
 {% endmacro %}
 
 {% macro section_label(label) %}
@@ -129,7 +131,8 @@
 <div x-show="sidebarCollapsed" x-cloak class="mt-4 mb-1.5 mx-3 border-t border-slate-200 dark:border-slate-700/50"></div>
 {% endmacro %}
 
-{% macro subnav_link(label, href, page_id) %}
+{% macro subnav_link(label, href, page_id, permission=None) %}
+{% if not permission or can(request, permission) %}
 {% set is_active = active_page == page_id %}
 <a href="{{ href }}"
    {% if is_active %}aria-current="page"{% endif %}
@@ -137,6 +140,7 @@
     <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-current opacity-70" aria-hidden="true"></span>
     <span class="truncate">{{ label }}</span>
 </a>
+{% endif %}
 {% endmacro %}
 
 {# ── Icons (h-5 w-5) ── #}
@@ -199,45 +203,55 @@
 {% set pending_orders_count = sidebar_stats.pending_orders if sidebar_stats is defined and sidebar_stats and sidebar_stats.pending_orders is defined and sidebar_stats.pending_orders > 0 else None %}
 {% set overdue_count = sidebar_stats.overdue_invoices if sidebar_stats is defined and sidebar_stats and sidebar_stats.overdue_invoices is defined and sidebar_stats.overdue_invoices > 0 else None %}
 
+{# Permission-aware group visibility. Routes remain the enforcement authority. #}
+{% set show_dashboard = can(request, 'billing:invoice:read') or can(request, 'monitoring:read') or can(request, 'customer:read') %}
+{% set show_core = can(request, 'customer:read') or can(request, 'support:ticket:read') or can(request, 'crm:lead:read') or can(request, 'provisioning:read') %}
+{% set show_operations = can(request, 'project:read') or can(request, 'billing_account:read') or can(request, 'catalog:read') or can(request, 'network:hub:read') or can(request, 'network:vpn:read') or can(request, 'operations:dispatch:read') or can(request, 'operations:material_request:read') or can(request, 'inventory:read') or can(request, 'network:fiber:read') %}
+{% set show_reports = can(request, 'reports:billing:read') or can(request, 'reports:network:read') or can(request, 'reports:support:read') or can(request, 'customer:read') or can(request, 'reports:ncc:read') %}
+{% set show_admin = show_reports or can(request, 'gis:map:view') or can(request, 'system:settings:read') or can(request, 'notification:read') or can(request, 'provisioning:read') or can(request, 'crm:conversation:read') or can(request, 'support:ticket:read') %}
+
 {# ── Navigation ── #}
 <div class="space-y-0.5">
 
+    {% if show_dashboard %}
     {{ nav_link("Dashboard", "/admin/dashboard", icon_dashboard, "dashboard") }}
-
-    {{ section_label("Core") }}
-    {% if module_states.get('customer', True) %}
-    {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers") }}
     {% endif %}
-    {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
-    {{ nav_link("Workqueue", "/admin/workqueue", icon_workqueue, "agent-workqueue") }}
-    {{ nav_link("Inbox", "/admin/inbox", icon_inbox, "team-inbox") }}
-    {{ nav_link("Surveys", "/admin/surveys", icon_reports, "surveys") }}
-    {{ nav_link("Sales", "/admin/sales", icon_sales, "sales") }}
-    {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests") }}
-    {{ nav_link("Referrals", "/admin/referrals", icon_referrals, "referrals") }}
 
-    {{ section_label("Operations") }}
-    {{ nav_link("Projects", "/admin/projects", icon_projects, "projects") }}
+    {% if show_core %}{{ section_label("Core") }}{% endif %}
+    {% if module_states.get('customer', True) %}
+    {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers", permission="customer:read") }}
+    {% endif %}
+    {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets", permission="support:ticket:read") }}
+    {{ nav_link("Workqueue", "/admin/workqueue", icon_workqueue, "agent-workqueue", permission="support:ticket:read") }}
+    {{ nav_link("Inbox", "/admin/inbox", icon_inbox, "team-inbox", permission="support:ticket:read") }}
+    {{ nav_link("Surveys", "/admin/surveys", icon_reports, "surveys", permission="customer:read") }}
+    {{ nav_link("Sales", "/admin/sales", icon_sales, "sales", permission="crm:lead:read") }}
+    {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests", permission="provisioning:read") }}
+    {{ nav_link("Referrals", "/admin/referrals", icon_referrals, "referrals", permission="crm:lead:read") }}
+
+    {% if show_operations %}{{ section_label("Operations") }}{% endif %}
+    {{ nav_link("Projects", "/admin/projects", icon_projects, "projects", permission="project:read") }}
     {% if module_states.get('billing', True) %}
-    {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count, tour_id="nav-billing") }}
+    {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count, tour_id="nav-billing", permission="billing_account:read") }}
     {% endif %}
     {% if module_states.get('catalog', True) %}
-    {{ nav_link("Catalog", "/admin/catalog/offers", icon_catalog, "catalog") }}
+    {{ nav_link("Catalog", "/admin/catalog/offers", icon_catalog, "catalog", permission="catalog:read") }}
     {% endif %}
     {% if module_states.get('network', True) %}
-    {{ nav_link("Network", "/admin/network", icon_network, "network", tour_id="nav-network") }}
+    {{ nav_link("Network", "/admin/network", icon_network, "network", tour_id="nav-network", permission="network:hub:read") }}
     {% endif %}
     {% if module_states.get('vpn', True) %}
-    {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}
+    {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn", permission="network:vpn:read") }}
     {% endif %}
-    {{ nav_link("Work Orders", "/admin/dispatch/work-orders", icon_projects, "dispatch-work-orders") }}
-    {{ nav_link("Material Requests", "/admin/operations/material-requests", icon_projects, "material-requests") }}
+    {{ nav_link("Work Orders", "/admin/dispatch/work-orders", icon_projects, "dispatch-work-orders", permission="operations:dispatch:read") }}
+    {{ nav_link("Material Requests", "/admin/operations/material-requests", icon_projects, "material-requests", permission="operations:material_request:read") }}
     {% if can(request, "operations:dispatch:read") %}
     {{ nav_link("Field Live Map", "/admin/dispatch/live-map", icon_gis, "field-live-map",
         active_pages=["field-live-map", "field-movement-playback"]) }}
     {% endif %}
     {% set vendor_pages = ['vendors', 'vendor-operations', 'vendor-routes'] %}
     {% set vendor_group_active = active_page in vendor_pages %}
+    {% if can(request, "inventory:read") or can(request, "network:fiber:read") %}
     <div x-data="{ vendorMenuOpen: {{ vendor_group_active | tojson }} }" class="relative">
         <button type="button"
                 @click="if (sidebarCollapsed) { sidebarCollapsed = false; vendorMenuOpen = true } else { vendorMenuOpen = !vendorMenuOpen }"
@@ -260,27 +274,28 @@
              x-show="vendorMenuOpen && !sidebarCollapsed"
              x-cloak
              class="mt-1 space-y-0.5">
-            {{ subnav_link("Vendor Records", "/admin/vendors", "vendors") }}
-            {{ subnav_link("Vendor Review Quotes", "/admin/vendors/operations", "vendor-operations") }}
-            {{ subnav_link("Vendor Routes", "/admin/vendors/routes", "vendor-routes") }}
+            {{ subnav_link("Vendor Records", "/admin/vendors", "vendors", permission="inventory:read") }}
+            {{ subnav_link("Vendor Review Quotes", "/admin/vendors/operations", "vendor-operations", permission="inventory:read") }}
+            {{ subnav_link("Vendor Routes", "/admin/vendors/routes", "vendor-routes", permission="network:fiber:read") }}
         </div>
     </div>
+    {% endif %}
 
-    {{ section_label("ADMIN") }}
-    {% if module_states.get('reports', True) %}
+    {% if show_admin %}{{ section_label("ADMIN") }}{% endif %}
+    {% if module_states.get('reports', True) and show_reports %}
     {{ nav_link("Reports", "/admin/reports", icon_reports, "reports") }}
     {% endif %}
     {% if module_states.get('gis', True) %}
-    {{ nav_link("GIS / Map", "/admin/gis", icon_gis, "gis", badge=(pending_location_requests or None)) }}
+    {{ nav_link("GIS / Map", "/admin/gis", icon_gis, "gis", badge=(pending_location_requests or None), permission="gis:map:view") }}
     {% endif %}
     {% if module_states.get('integrations', True) %}
-    {{ nav_link("Integrations", "/admin/integrations", icon_integrations, "integrations") }}
+    {{ nav_link("Integrations", "/admin/integrations", icon_integrations, "integrations", permission="system:settings:read") }}
     {% endif %}
     {% if module_states.get('notifications', True) %}
-    {{ nav_link("Notifications", "/admin/notifications/templates", icon_notifications, "notifications") }}
+    {{ nav_link("Notifications", "/admin/notifications/templates", icon_notifications, "notifications", permission="notification:read") }}
     {% endif %}
     {% if module_states.get('provisioning', True) %}
-    {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
+    {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count, permission="provisioning:read") }}
     {% endif %}
     {{ nav_link("System Overview", "/admin/system", icon_settings, "system",
         active_pages=[
@@ -300,7 +315,7 @@
             "system-db-inspector",
             "legal",
             "design-system"
-        ]) }}
+        ], permission="system:settings:read") }}
     {{ nav_link("Settings", "/admin/settings", icon_settings, "settings-hub",
         active_pages=[
             "settings-hub",
@@ -313,7 +328,7 @@
             "company-info",
             "system-branding",
             "system-email"
-        ]) }}
-    {{ nav_link("Meta connection", "/admin/crm/meta", icon_integrations, "meta-connection") }}
-    {{ nav_link("Help center", "/admin/help", icon_support, "help-center") }}
+        ], permission="system:settings:read") }}
+    {{ nav_link("Meta connection", "/admin/crm/meta", icon_integrations, "meta-connection", permission="crm:conversation:read") }}
+    {{ nav_link("Help center", "/admin/help", icon_support, "help-center", permission="support:ticket:read") }}
 </div>

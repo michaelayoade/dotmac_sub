@@ -1822,9 +1822,187 @@ DOMAIN = DomainSOT(
                 "payment-restores-service claims",
             ),
             depends_on=(
+                "access.subscription_lifecycle",
+                "customer.accounts",
                 "financial.access_resolution",
+                "financial.billing_profile",
                 "customer.financial_position",
                 "financial.grace_policy",
+            ),
+            notes=(
+                "This read owner consumes the lifecycle-owned operationally-current "
+                "cohort at one explicit evaluation instant. Past-ended disabled or "
+                "stopped rows remain lifecycle history but cannot override a healthy "
+                "current service. It never repairs lifecycle state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer-visible service health",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical account state",
+                            "operationally-current subscription cohort",
+                            "canonical billing profile",
+                            "canonical customer financial position",
+                            "canonical service access decision",
+                            "canonical grace decision",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer financial action hints",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "canonical billing profile",
+                            "canonical customer financial position",
+                            "canonical service access decision",
+                            "canonical grace decision",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="payment-restores-service claims",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "canonical customer financial position",
+                            "canonical service access decision",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical account state",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber identity, lifecycle, and account state",
+                    ),
+                    AuthorityInput(
+                        name="operationally-current subscription cohort",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "typed lifecycle status plus explicit end instant, "
+                            "classified by subscription_lifecycle_policy at one "
+                            "timezone-aware as_of instant"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical billing profile",
+                        owner="financial.billing_profile",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="effective account billing mode and provenance",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer financial position",
+                        owner="customer.financial_position",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "reviewed prepaid funding and currency-separated open "
+                            "receivables"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical service access decision",
+                        owner="financial.access_resolution",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "subscription access restriction plus exact active "
+                            "enforcement-lock evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical grace decision",
+                        owner="financial.grace_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="effective prepaid grace interval at evaluation time",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The resolver reads on the adapter session and never mutates, "
+                        "commits, rolls back, or transitions subscription state."
+                    ),
+                    locking="Read projections acquire no mutation locks.",
+                    idempotency=(
+                        "The same subscriber, authoritative evidence, and explicit "
+                        "as_of instant produce the same cohort and actions."
+                    ),
+                    retries="Read-only status and drift reports are safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="customer and reseller portal adapters",
+                    fail_closed_on=(
+                        "a naive or otherwise ambiguous evaluation instant",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="customer service-health projection",
+                        input_names=(
+                            "canonical account state",
+                            "operationally-current subscription cohort",
+                            "canonical billing profile",
+                            "canonical customer financial position",
+                            "canonical service access decision",
+                            "canonical grace decision",
+                        ),
+                        writer="customer.service_status",
+                        freshness=(
+                            "Computed on demand at the caller-supplied timezone-aware "
+                            "as_of instant; no result cache is authoritative."
+                        ),
+                        stale_behavior=(
+                            "Historical ended paused rows are omitted from health only; "
+                            "other past-ended non-terminal rows remain visible for "
+                            "operator review."
+                        ),
+                        drift_signal=(
+                            "build_subscription_end_drift_report returns a stable "
+                            "fingerprint and fail-closed replacement classification "
+                            "for every non-terminal row past its explicit end."
+                        ),
+                        rebuild_operation=(
+                            "Re-run build_service_status with the same subscriber and "
+                            "explicit as_of instant."
+                        ),
+                        repair_owner="access.subscription_lifecycle",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "service_status._CURRENT_STATUSES plus an independent Account "
+                        "Health current-subscription read"
+                    ),
+                    new_owner="customer.service_status",
+                    verification=(
+                        "Focused tests pin historical sibling exclusion, current "
+                        "disabled warnings, action parity, shared Account Health "
+                        "cohort use, stable drift evidence, and ambiguous repair "
+                        "classification."
+                    ),
+                    cutover_gate=(
+                        "Service Status and Account Health consume the same typed "
+                        "lifecycle policy with one evaluation instant."
+                    ),
+                    fallback_retirement=(
+                        "The private status tuple and Account Health's independently "
+                        "timed cohort rule are absent."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md",
+                    "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_shared_policy_services.py",
+                    "tests/test_service_status.py",
+                    "tests/test_portal_account_health.py",
+                    "tests/architecture/test_operational_subscription_cohort_boundary.py",
+                ),
             ),
         ),
         SOTService(

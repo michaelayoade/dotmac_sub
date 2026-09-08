@@ -1015,6 +1015,8 @@ def test_sales_orders_table_uses_compact_disclosed_layout():
     assert "data-order-search" in template
     assert "data-order-search-text" in template
     assert "data-order-no-results" in template
+    assert 'class="!hidden sm:table-row" data-order-no-results' in template
+    assert "empty.classList.toggle('!hidden', !query || matches > 0)" in template
     assert "data-mobile-order-list" in template
     assert "data-mobile-order-card" in template
     assert "data-mobile-order-statuses" in template

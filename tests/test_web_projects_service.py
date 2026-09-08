@@ -14,7 +14,7 @@ from app.models.project import (
     ProjectTemplateTaskDependency,
     ProjectType,
 )
-from app.models.subscriber import SubscriberCategory
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.schemas.project import ProjectCreate, ProjectTaskCreate
 from app.services import web_dispatch_work_orders, web_projects
 from app.services.project_filters import (
@@ -118,6 +118,105 @@ def test_project_list_query_normalizes_sort_filters_and_page_size():
     assert (
         web_projects.build_project_list_query(order_by="priority").sort_by == "priority"
     )
+
+
+class TestProjectCustomerPicker:
+    def test_searches_by_account_and_returns_native_uuid(self, db_session, subscriber):
+        subscriber.first_name = "Typeahead"
+        subscriber.last_name = "Customer"
+        subscriber.email = "project-picker-unique@example.test"
+        subscriber.account_number = "ACC-TYPEAHEAD-420"
+        subscriber.subscriber_number = "SUB-TYPEAHEAD-420"
+        db_session.commit()
+
+        for term in (
+            "Typeahead Customer",
+            "ACC-TYPEAHEAD-420",
+            "project-picker-unique",
+            str(subscriber.id),
+        ):
+            result = web_projects.search_project_customers(
+                db_session,
+                web_projects.ProjectCustomerSearchQuery(term=term, limit=20),
+            )
+
+            assert result.count == 1
+            assert result.items[0].id == subscriber.id
+        assert result.items[0].account_number == "ACC-TYPEAHEAD-420"
+        assert str(subscriber.id) not in result.items[0].label
+        assert result.as_response().items == list(result.items)
+
+    @pytest.mark.parametrize(
+        "query",
+        (
+            web_projects.ProjectCustomerSearchQuery(term="x", limit=20),
+            web_projects.ProjectCustomerSearchQuery(term="valid", limit=21),
+        ),
+    )
+    def test_rejects_unbounded_search_requests(self, db_session, query):
+        with pytest.raises(ProjectProjectionError):
+            web_projects.search_project_customers(db_session, query)
+
+    def test_form_context_resolves_only_selected_customer(self, db_session, subscriber):
+        context = web_projects.build_project_form_context(
+            db_session, form={"subscriber_id": str(subscriber.id)}
+        )
+
+        assert "subscriber_options" not in context
+        assert context["selected_customer"].id == subscriber.id
+
+    def test_malformed_customer_selection_fails_closed(self, db_session):
+        with pytest.raises(ValueError, match="search results"):
+            web_projects.create_project_from_form(
+                db_session,
+                request=None,
+                actor_id=None,
+                name="Invalid customer project",
+                subscriber_id="typed display text",
+            )
+
+    def test_customer_search_excludes_inactive_accounts(self, db_session, subscriber):
+        inactive = Subscriber(
+            first_name="Inactive",
+            last_name="Picker",
+            email="inactive-picker@example.test",
+            account_number="ACC-INACTIVE-PICKER",
+            is_active=False,
+            reseller_id=subscriber.reseller_id,
+        )
+        db_session.add(inactive)
+        db_session.commit()
+
+        result = web_projects.search_project_customers(
+            db_session,
+            web_projects.ProjectCustomerSearchQuery(
+                term="ACC-INACTIVE-PICKER", limit=20
+            ),
+        )
+
+        assert result.items == ()
+
+    def test_customer_search_caps_large_result_set(self, db_session, subscriber):
+        db_session.add_all(
+            [
+                Subscriber(
+                    first_name="BulkPicker",
+                    last_name=f"Customer {index:02d}",
+                    email=f"bulk-picker-{index:02d}@example.test",
+                    reseller_id=subscriber.reseller_id,
+                )
+                for index in range(35)
+            ]
+        )
+        db_session.commit()
+
+        result = web_projects.search_project_customers(
+            db_session,
+            web_projects.ProjectCustomerSearchQuery(term="BulkPicker", limit=20),
+        )
+
+        assert result.count == 20
+        assert len(result.items) == 20
 
 
 class TestListContext:
@@ -312,6 +411,20 @@ class TestFormHandlers:
             )
         assert exc_info.value.code == "ui.project_list_projection.invalid_filter"
 
+    def test_edit_can_clear_selected_customer(self, db_session, subscriber):
+        project = _create_project(db_session, subscriber)
+
+        updated = web_projects.update_project_from_form(
+            db_session,
+            request=None,
+            project_id=str(project.id),
+            actor_id=None,
+            name=project.name,
+            subscriber_id="",
+        )
+
+        assert updated.subscriber_id is None
+
     def test_comment_edit_requires_author(self, db_session, subscriber):
         project = _create_project(db_session, subscriber)
         author_id = str(uuid.uuid4())
@@ -416,6 +529,77 @@ class TestDetailContext:
             direct.public_id,
             via_task.public_id,
         }
+
+    def test_project_detail_exposes_create_work_order_action_for_each_task(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+        first = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="First field task"),
+        )
+        second = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Second field task"),
+        )
+        web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-existing-task-work",
+                "subscriber_id": str(subscriber.id),
+                "project_task_id": str(first.id),
+                "title": "Existing task work",
+                "status": "scheduled",
+            },
+        )
+
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=True
+        )
+
+        projected = context["task_work_order_create_projections"]
+        assert set(projected) == {str(first.id), str(second.id)}
+        assert projected[str(first.id)].action.label == "Create Work Order"
+        assert projected[str(first.id)].action.allowed is True
+        assert projected[str(first.id)].action_url.endswith(
+            f"project_task_id={first.id}"
+        )
+        assert projected[str(second.id)].action.label == "Create Work Order"
+        assert projected[str(second.id)].action_url.endswith(
+            f"project_task_id={second.id}"
+        )
+
+    def test_terminal_project_locks_work_order_create_actions(
+        self, db_session, subscriber
+    ):
+        project = _create_project(
+            db_session,
+            subscriber,
+            status=ProjectStatus.completed.value,
+        )
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Locked task"),
+        )
+
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=True
+        )
+        detail_context = web_projects.build_task_detail_context(
+            db_session, task=task, can_read_work_orders=True
+        )
+
+        assert context["project_actions_locked"] is True
+        assert context["project_actions_locked_reason"] == (
+            "Project is completed; only status changes remain available."
+        )
+        create_action = context["task_work_order_create_projections"][
+            str(task.id)
+        ].action
+        assert create_action.allowed is False
+        assert create_action.reason == "Completed projects cannot create field work"
+        assert detail_context["create_work_order_action"].allowed is False
+        assert detail_context["work_order_create_url"] is None
 
     def test_project_detail_field_work_is_hidden_without_dispatch_read(
         self, db_session, subscriber

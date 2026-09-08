@@ -45,11 +45,15 @@ def _page() -> web_integrations_meta_social.MetaSocialConfigPage:
         instagram_token_bound=True,
         signing_secret_bound=True,
         verify_token_bound=True,
+        conversion_dataset_id="dataset-1",
+        conversion_event_name="CustomerConverted",
+        conversion_token_bound=True,
         meta_oauth_token_ref_masked="",
         facebook_token_ref_masked="bao://secr…oken",
         instagram_token_ref_masked="bao://secr…oken",
         signing_secret_ref_masked="bao://secr…cret",
         verify_token_ref_masked="bao://secr…oken",
+        conversion_token_ref_masked="bao://secr…oken",
     )
 
 
@@ -93,6 +97,7 @@ def test_meta_connection_template_never_prefills_secret_references() -> None:
         "instagram_login_access_token_ref",
         "webhook_signing_secret_ref",
         "webhook_verify_token_ref",
+        "conversions_api_access_token_ref",
     ):
         assert f'name="{field}" value=""' in template
     assert 'include "components/forms/csrf_input.html"' in template

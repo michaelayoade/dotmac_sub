@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -20,6 +21,7 @@ from app.services.network.effective_ont_config import (
     resolve_effective_ont_config,
 )
 from app.services.network.ont_lan_block_choices import operator_lan_block_prefix_choices
+from app.services.network.ont_olt_context import resolve_ont_olt_read_context
 from app.services.network.ont_service_configuration import (
     OntServiceConfigurationEligibility,
     get_ont_service_configuration_eligibility,
@@ -631,14 +633,22 @@ def _service_recovery_context(
     olt_fallback_bind_available = False
     if desired_wan_mode == "pppoe":
         try:
-            from app.services.web_network_service_ports import _resolve_ont_olt_context
-
-            _fallback_ont, fallback_olt, fallback_fsp, fallback_olt_ont_id = (
-                _resolve_ont_olt_context(db, str(getattr(ont, "id", "")))
+            read_ctx, _message = resolve_ont_olt_read_context(
+                db, str(getattr(ont, "id", ""))
             )
             olt_fallback_bind_available = bool(
-                fallback_olt and fallback_fsp and fallback_olt_ont_id is not None
+                read_ctx is not None
+                and read_ctx.olt is not None
+                and read_ctx.fsp is not None
+                and read_ctx.ont_id_on_olt is not None
             )
+        except SQLAlchemyError:
+            db.rollback()
+            logger.debug(
+                "Failed to resolve read-only OLT context for ONT recovery",
+                exc_info=True,
+            )
+            olt_fallback_bind_available = False
         except Exception:
             olt_fallback_bind_available = False
     rows: list[dict[str, str | None]] = []

@@ -748,8 +748,50 @@ def action_permitted(request, action) -> bool:
     return not permission or can(request, permission)
 
 
+def _request_id(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    state_request_id = getattr(getattr(request, "state", None), "request_id", None)
+    if state_request_id:
+        return str(state_request_id)
+    return str(request.headers.get("x-request-id") or "") or None
+
+
+def _enforce_staff_leave_write_guard(
+    *,
+    db: Session,
+    auth: dict,
+    request: Request | None,
+    permission_key: str,
+) -> None:
+    if request is None:
+        return
+    from app.services import erp_staff_access
+
+    restriction = erp_staff_access.staff_write_restricted(
+        db,
+        auth,
+        method=request.method,
+    )
+    if restriction is None:
+        return
+    erp_staff_access.audit_denied_write(
+        db,
+        auth=auth,
+        restriction=restriction,
+        request_id=_request_id(request),
+        permission_key=permission_key,
+    )
+    db.commit()
+    raise HTTPException(
+        status_code=403,
+        detail="Staff leave restriction permits read-only access.",
+    )
+
+
 def require_permission(permission_key: str):
     def _require_permission(
+        request: Request = None,  # type: ignore[assignment]
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
@@ -759,12 +801,24 @@ def require_permission(permission_key: str):
         load_permission_keys(auth, db)
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key=permission_key,
+            )
             finish_read_transaction(db)
             return auth
 
         possible_keys = _expand_permission_keys(permission_key)
         scopes = set(auth.get("scopes") or [])
         if scopes & set(possible_keys):
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key=permission_key,
+            )
             finish_read_transaction(db)
             return auth
 
@@ -797,6 +851,12 @@ def require_permission(permission_key: str):
                 auth.get("scopes"),
             )
             raise HTTPException(status_code=403, detail="Forbidden")
+        _enforce_staff_leave_write_guard(
+            db=db,
+            auth=auth,
+            request=request,
+            permission_key=permission_key,
+        )
         finish_read_transaction(db)
         return auth
 
@@ -812,6 +872,7 @@ def require_any_permission(*permission_keys: str):
     """Require user to have at least one of the specified permissions."""
 
     def _require_any_permission(
+        request: Request = None,  # type: ignore[assignment]
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
@@ -820,6 +881,12 @@ def require_any_permission(*permission_keys: str):
         principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key="|".join(permission_keys),
+            )
             finish_read_transaction(db)
             return auth
 
@@ -829,6 +896,12 @@ def require_any_permission(*permission_keys: str):
             all_possible_keys.update(_expand_permission_keys(key))
         scopes = set(auth.get("scopes") or [])
         if scopes & all_possible_keys:
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key="|".join(permission_keys),
+            )
             finish_read_transaction(db)
             return auth
 
@@ -887,6 +960,12 @@ def require_any_permission(*permission_keys: str):
 
         if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")
+        _enforce_staff_leave_write_guard(
+            db=db,
+            auth=auth,
+            request=request,
+            permission_key="|".join(permission_keys),
+        )
         finish_read_transaction(db)
         return auth
 
@@ -914,8 +993,8 @@ def require_method_permission(
         db: Session = Depends(_get_db),
     ):
         if request.method.upper() in normalized_read_methods:
-            return require_read(auth=auth, db=db)
-        return require_write(auth=auth, db=db)
+            return require_read(request=None, auth=auth, db=db)
+        return require_write(request=request, auth=auth, db=db)
 
     return _declare_permissions(
         _require_method_permission,
@@ -1015,9 +1094,21 @@ def require_scoped_permission(permission_key: str, scope_extractor):
         if decision is None:
             raise HTTPException(status_code=403, detail="Forbidden")
         if decision == "global":
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key=permission_key,
+            )
             return auth
         resource_scope = scope_extractor(request, db)
         if resource_scope is not None and tuple(resource_scope) in decision:
+            _enforce_staff_leave_write_guard(
+                db=db,
+                auth=auth,
+                request=request,
+                permission_key=permission_key,
+            )
             return auth
         raise HTTPException(
             status_code=403, detail="Forbidden for this region/reseller"

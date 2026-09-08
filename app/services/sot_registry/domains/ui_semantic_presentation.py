@@ -857,7 +857,8 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Builds the read-only comprehensive operations map from typed "
-                "inventory, geometry, device-state, customer-address, and exact "
+                "inventory, geometry, device-state, customer-address/account-"
+                "lifecycle, and exact "
                 "RADIUS-session inputs. network.radius_sessions owns connected, "
                 "stale, offline, and inactive observations; "
                 "ui.status_presentation owns their label, tone, and icon. The "
@@ -1874,6 +1875,61 @@ DOMAIN = DomainSOT(
                     "tests/architecture/test_binary_device_operational_lifecycle.py",
                     "tests/architecture/test_core_device_archive_boundary.py",
                     "tests/playwright/e2e/test_core_device_archive.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="ui.admin_workflow_guidance",
+            module="app.services.admin_workflow_guidance",
+            owns=("Admin workflow guidance projection",),
+            notes=(
+                "One read-only, versioned-in-code projection supplies staff workflow "
+                "explanations. It never decides action eligibility or writes state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="Admin workflow guidance projection",
+                        role=OwnerRole.POLICY,
+                        input_names=("Admin workflow guidance registry",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="Admin workflow guidance registry",
+                        owner="ui.admin_workflow_guidance",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed WORKFLOW_GUIDANCE entries in app.services.admin_workflow_guidance.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="Immutable in-process guidance projection performs no persistence or external delivery.",
+                    locking="Immutable module content requires no lock.",
+                    idempotency="The same path and query produce the same guidance projection.",
+                    retries="No side effect is performed; callers may safely retry reads.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Help Center route adapter and Jinja presentation boundary",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner="Inline HelpArticle content in app.web.admin.help_center",
+                    new_owner="ui.admin_workflow_guidance",
+                    verification="Guidance service, Help Center render, and workflow guidance gate tests.",
+                    cutover_gate="The Help Center and contextual admin guidance read only the registered workflow-guidance projection.",
+                    fallback_retirement="Inline HelpArticle content is removed after this guidance projection is adopted.",
+                ),
+                steward="platform UI",
+                design_refs=(
+                    "docs/designs/ADMIN_WORKFLOW_GUIDANCE.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_admin_workflow_guidance.py",
+                    "tests/architecture/test_sot_registry_integrity.py",
                 ),
             ),
         ),

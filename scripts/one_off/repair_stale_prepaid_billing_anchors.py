@@ -1,10 +1,12 @@
-"""Repair prepaid billing anchors that diverge from exact funded coverage.
+"""Repair prepaid billing anchors that diverge from authoritative coverage.
 
 The cohort: an ACTIVE ``ServiceEntitlement`` ends after the subscription's
 ``next_billing_at``. The customer has already paid for that period — the
 entitlement is the exact funded-coverage evidence — but the billing anchor
 still says the period is due, so the runner re-invoices it and enforcement
-suspends the account for service it was already paid for.
+suspends the account for service it was already paid for. For each
+entitlement-backed candidate, the target includes any later applied
+service-extension grant end in the authoritative coverage union.
 
 The drift exists because the payment-allocation path committed entitlement
 evidence without ever emitting a durable ``payment.received`` event, so
@@ -72,8 +74,8 @@ def main() -> None:
     parser.add_argument(
         "--reason",
         default=(
-            "Align billing anchor to exact funded entitlement coverage after "
-            "operator review of projection drift"
+            "Align an entitlement-backed billing anchor to the complete active "
+            "entitlement and applied service-extension coverage union"
         ),
         help="Why the repair is being run; recorded as durable audit evidence.",
     )
@@ -122,6 +124,9 @@ def main() -> None:
                 f"  {candidate.subscription_id}  "
                 f"{previous} -> "
                 f"{candidate.coverage_end.isoformat()}  "
+                f"[entitlement={candidate.entitlement_coverage_end.isoformat()}, "
+                "extension="
+                f"{candidate.extension_coverage_end.isoformat() if candidate.extension_coverage_end else 'NONE'}]  "
                 + (
                     f"({candidate.drift.days:+d}d)"
                     if candidate.drift is not None

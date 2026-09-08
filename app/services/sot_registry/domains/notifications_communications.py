@@ -1,4 +1,4 @@
-﻿"""Canonical SOT declarations for the notifications_communications domain."""
+"""Canonical SOT declarations for the notifications_communications domain."""
 
 from __future__ import annotations
 
@@ -3208,6 +3208,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "communications.team_inbox_contact_resolution",
                 "communications.team_inbox_routing",
+                "ai.intake",
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "party.registry",
@@ -3221,7 +3222,9 @@ DOMAIN = DomainSOT(
                 "arbitrate between. Anonymous fiber-site sessions are "
                 "exact-origin and rate controlled by the adapter, use "
                 "Party-first prospect capture only for unmatched identity, and "
-                "retain ambiguous identity for human review."
+                "retain ambiguous identity for human review. The first persisted "
+                "widget visitor message requests optional, exact-scope AI intake; "
+                "missing or inactive policy leaves the human Inbox path unchanged."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_widget",
@@ -3270,6 +3273,16 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Native chat-widget conversation and message chronology.",
+                    ),
+                    AuthorityInput(
+                        name="enabled matching AI intake configuration",
+                        owner="ai.intake",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Exact registered chat-widget surface policy and channel "
+                            "AI-routing permission evaluated after the first visitor "
+                            "message is persisted."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
@@ -3898,6 +3911,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_projection",
                 "communications.team_inbox_routing",
                 "integration.inbox",
+                "integration.runtime",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_maintenance",
@@ -3934,7 +3948,11 @@ DOMAIN = DomainSOT(
                         name="AI intake recovery state",
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Bounded classifying or awaiting-follow-up state and configured fallback deadline.",
+                        source=(
+                            "Long-term AI awaiting-customer session expiry and "
+                            "customer-reply or human-takeover race evidence. Inactivity "
+                            "expires the AI session without human routing or assignment."
+                        ),
                     ),
                     AuthorityInput(
                         name="verified WhatsApp webhook repair evidence",
@@ -3946,15 +3964,28 @@ DOMAIN = DomainSOT(
                             "historical repair."
                         ),
                     ),
+                    AuthorityInput(
+                        name="Meta contact profile observation",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "Account-scoped Facebook or Instagram sender profile "
+                            "retrieved for the exact conversation contact address."
+                        ),
+                    ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_maintenance.invalid_location_repair_scope",
+                    "communications.team_inbox_maintenance.conversation_not_found",
+                    "communications.team_inbox_maintenance.profile_target_changed",
+                    "communications.team_inbox_maintenance.profile_name_missing",
                 ),
                 event_types=("team_inbox.projection_repaired.v1",),
                 projections=(
                     "repairable Inbox worklists and media projection",
                     "verified historical WhatsApp location attachment repair",
+                    "Meta contact profile repair and failed reply retry",
                 ),
             ),
         ),
@@ -4156,23 +4187,49 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.inbox_sla",
             module="app.services.inbox_sla",
-            owns=("Inbox SLA policy selection and clock state", "Inbox SLA transition evidence"),
-            depends_on=("communications.team_inbox_threads", "operations.sla_escalation"),
+            owns=(
+                "Inbox SLA policy selection and clock state",
+                "Inbox SLA transition evidence",
+            ),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "operations.sla_escalation",
+            ),
             notes="Native Inbox SLA state is distinct from retired CRM history; policy configuration is explicit and mapping-safe.",
             contract=_team_inbox_contract(
                 service_name="communications.inbox_sla",
                 concerns=(
-                    ("Inbox SLA policy selection and clock state", OwnerRole.AUTHORITATIVE_RECORD),
+                    (
+                        "Inbox SLA policy selection and clock state",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
                     ("Inbox SLA transition evidence", OwnerRole.AUTHORITATIVE_RECORD),
                 ),
                 inputs=(
-                    AuthorityInput(name="Inbox conversation facts", owner="communications.team_inbox_threads", kind=AuthorityKind.AUTHORITATIVE_RECORD, source="Inbox conversation and message rows"),
-                    AuthorityInput(name="Inbox SLA commands", owner="communications.inbox_sla", kind=AuthorityKind.CONTROL_INPUT, source="validated policy and lifecycle commands"),
+                    AuthorityInput(
+                        name="Inbox conversation facts",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Inbox conversation and message rows",
+                    ),
+                    AuthorityInput(
+                        name="Inbox SLA commands",
+                        owner="communications.inbox_sla",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="validated policy and lifecycle commands",
+                    ),
                 ),
                 transaction_mode=TransactionMode.PARTICIPANT,
                 event_types=("inbox.sla.changed.v1",),
-                domain_error_codes=("communications.inbox_sla.incomplete_policy", "communications.inbox_sla.overlapping_rules", "communications.inbox_sla.invalid_timezone"),
-                design_refs=("docs/SOT_RELATIONSHIP_MAP.md", "docs/UI_INFORMATION_AND_ACTION_STANDARD.md"),
+                domain_error_codes=(
+                    "communications.inbox_sla.incomplete_policy",
+                    "communications.inbox_sla.overlapping_rules",
+                    "communications.inbox_sla.invalid_timezone",
+                ),
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
                 test_refs=("tests/test_inbox_sla.py",),
             ),
         ),
@@ -4197,7 +4254,3 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
 )
-
-
-
-

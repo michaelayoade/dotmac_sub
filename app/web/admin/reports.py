@@ -2,6 +2,7 @@
 
 import csv
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from io import StringIO
@@ -31,6 +32,7 @@ from app.services import ncc_complaints_report as ncc_complaints_service
 from app.services import ncc_regulatory_pack as ncc_pack_service
 from app.services import ncc_report_email as ncc_weekly_delivery_service
 from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import support_csat as support_csat_service
 from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_document_discount_report as discount_report_service
@@ -130,6 +132,39 @@ class SalesReportContext(TypedDict):
     note: str
 
 
+@dataclass(frozen=True, slots=True)
+class SalesReportPage:
+    rows: tuple[SalesReportRow, ...]
+    page: int
+    per_page: int
+    total_count: int
+    total_pages: int
+
+    @property
+    def has_previous(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page < self.total_pages
+
+
+def _paginate_sales_report_rows(
+    rows: list[SalesReportRow], *, page: int, per_page: int = 20
+) -> SalesReportPage:
+    total_count = len(rows)
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    effective_page = min(max(page, 1), total_pages)
+    offset = (effective_page - 1) * per_page
+    return SalesReportPage(
+        rows=tuple(rows[offset : offset + per_page]),
+        page=effective_page,
+        per_page=per_page,
+        total_count=total_count,
+        total_pages=total_pages,
+    )
+
+
 REPORT_HUB_SECTIONS: list[ReportHubSection] = [
     {
         "id": "core",
@@ -201,6 +236,12 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "name": "Inbox Escalations",
                 "url": "/admin/reports/inbox-escalations",
                 "description": "Conversations that need supervisor attention",
+                "permission": "reports:support:read",
+            },
+            {
+                "name": "Support CSAT",
+                "url": "/admin/reports/support-csat",
+                "description": "Customer satisfaction ratings by ticket, inbox, agent, and team",
                 "permission": "reports:support:read",
             },
         ],
@@ -676,10 +717,21 @@ def sales_lead_performance_report(
     request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
+    page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
 ):
     context = _sales_lead_report_context(db, date_from=date_from, date_to=date_to)
-    template_context: dict[str, object] = {**context}
+    report_page = _paginate_sales_report_rows(context["rows"], page=page)
+    template_context: dict[str, object] = {
+        **context,
+        "rows": report_page.rows,
+        "page": report_page.page,
+        "per_page": report_page.per_page,
+        "total_count": report_page.total_count,
+        "total_pages": report_page.total_pages,
+        "has_previous": report_page.has_previous,
+        "has_next": report_page.has_next,
+    }
     template_context.update(
         _base_context(
             request,
@@ -718,10 +770,21 @@ def sales_order_performance_report(
     request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
+    page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
 ):
     context = _sales_order_report_context(db, date_from=date_from, date_to=date_to)
-    template_context: dict[str, object] = {**context}
+    report_page = _paginate_sales_report_rows(context["rows"], page=page)
+    template_context: dict[str, object] = {
+        **context,
+        "rows": report_page.rows,
+        "page": report_page.page,
+        "per_page": report_page.per_page,
+        "total_count": report_page.total_count,
+        "total_pages": report_page.total_pages,
+        "has_previous": report_page.has_previous,
+        "has_next": report_page.has_next,
+    }
     template_context.update(
         _base_context(
             request,
@@ -1050,12 +1113,23 @@ def reports_ticket_sla(
     date_from: str | None = None,
     date_to: str | None = None,
     open_only: bool = False,
+    page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     start_at = _parse_date_start(date_from)
     end_at = _parse_date_end(date_to)
+    violation_page = ticket_sla_reports_service.violation_page(
+        db,
+        query=ticket_sla_reports_service.TicketSlaViolationPageQuery(
+            start_at=start_at,
+            end_at=end_at,
+            open_only=open_only,
+            page=page,
+            per_page=15,
+        ),
+    )
     context = {
         "request": request,
         "active_page": "reports-ticket-sla",
@@ -1067,16 +1141,221 @@ def reports_ticket_sla(
         "open_only": open_only,
         "summary": ticket_sla_reports_service.summary(db, start_at, end_at),
         "trend": ticket_sla_reports_service.trend_daily(db, start_at, end_at),
-        "violations": ticket_sla_reports_service.violation_records(
-            db,
-            start_at=start_at,
-            end_at=end_at,
-            open_only=open_only,
-            limit=100,
-        ),
+        "violations": violation_page.rows,
+        "violation_page": violation_page,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
+
+
+@router.get(
+    "/ticket-sla/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_ticket_sla_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    open_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    content = ticket_sla_reports_service.build_violation_export_csv(
+        db=db,
+        query=ticket_sla_reports_service.TicketSlaExportQuery(
+            start_at=_parse_date_start(date_from),
+            end_at=_parse_date_end(date_to),
+            open_only=open_only,
+        ),
+    )
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ticket-sla.csv"'},
+    )
+
+
+def _parse_optional_uuid(value: str | None, *, field: str) -> UUID | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    try:
+        return UUID(clean)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid {field}") from None
+
+
+def _csat_query(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    rating: int | None,
+    source_type: str | None,
+    status: str,
+    agent_person_id: str | None,
+    service_team_id: str | None,
+    page: int,
+    per_page: int | None,
+) -> support_csat_service.CsatReportQuery:
+    try:
+        parsed_source = (
+            support_csat_service.CsatSourceType(source_type) if source_type else None
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid source type") from None
+    try:
+        parsed_status = support_csat_service.CsatRequestStatus(status)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid CSAT status") from None
+    return support_csat_service.CsatReportQuery(
+        date_from=_parse_date_start(date_from),
+        date_to=_parse_date_end(date_to),
+        rating=rating,
+        source_type=parsed_source,
+        agent_person_id=_parse_optional_uuid(agent_person_id, field="agent"),
+        service_team_id=_parse_optional_uuid(service_team_id, field="service team"),
+        status=parsed_status,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def _csat_report_rows(rows) -> list[dict[str, object]]:
+    rendered: list[dict[str, object]] = []
+    for row in rows:
+        is_ticket = (
+            row.source_type == support_csat_service.CsatSourceType.support_ticket.value
+        )
+        rendered.append(
+            {
+                "source_type": "Ticket" if is_ticket else "Inbox",
+                "source_reference": row.source_reference or str(row.source_id),
+                "source_url": (
+                    f"/admin/support/tickets/{row.source_id}"
+                    if is_ticket
+                    else f"/admin/inbox?c={row.source_id}"
+                ),
+                "agent": row.agent_display_name or "Unassigned",
+                "team": row.service_team_name or "Unassigned",
+                "rating": row.rating or "",
+                "comment": row.comment or "",
+                "customer": row.customer_display_name
+                or row.customer_email
+                or "Unknown",
+                "resolution_at": row.resolution_at,
+                "submitted_at": row.submitted_at,
+                "status": row.status,
+            }
+        )
+    return rendered
+
+
+@router.get(
+    "/support-csat",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_support_csat(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    rating: int | None = Query(default=None, ge=1, le=5),
+    source_type: str | None = None,
+    status: str = support_csat_service.CsatRequestStatus.submitted.value,
+    agent_person_id: str | None = None,
+    service_team_id: str | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    query = _csat_query(
+        date_from=date_from,
+        date_to=date_to,
+        rating=rating,
+        source_type=source_type,
+        status=status,
+        agent_person_id=agent_person_id,
+        service_team_id=service_team_id,
+        page=page,
+        per_page=per_page,
+    )
+    total = support_csat_service.report_total(db, query)
+    rows = support_csat_service.report_rows(db, query)
+    summary = support_csat_service.report_summary(db, query)
+    context = {
+        "request": request,
+        "active_page": "reports-support-csat",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "rating": rating,
+        "source_type": source_type or "",
+        "status": status,
+        "agent_person_id": agent_person_id or "",
+        "service_team_id": service_team_id or "",
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "has_previous": page > 1,
+        "has_next": (page * per_page) < total,
+        "rows": _csat_report_rows(rows),
+        "summary": summary,
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/support_csat.html", context)
+
+
+@router.get(
+    "/support-csat/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_support_csat_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    rating: int | None = Query(default=None, ge=1, le=5),
+    source_type: str | None = None,
+    status: str = support_csat_service.CsatRequestStatus.submitted.value,
+    agent_person_id: str | None = None,
+    service_team_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = _csat_query(
+        date_from=date_from,
+        date_to=date_to,
+        rating=rating,
+        source_type=source_type,
+        status=status,
+        agent_person_id=agent_person_id,
+        service_team_id=service_team_id,
+        page=1,
+        per_page=None,
+    )
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "source_type",
+            "source_reference",
+            "source_url",
+            "agent",
+            "team",
+            "rating",
+            "comment",
+            "customer",
+            "resolution_at",
+            "submitted_at",
+            "status",
+        ],
+    )
+    writer.writeheader()
+    writer.writerows(_csat_report_rows(support_csat_service.report_rows(db, query)))
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="support-csat.csv"'},
+    )
 
 
 def _seconds_label(value: float | None) -> str:
@@ -1646,6 +1925,65 @@ def reports_inbox_escalations_export(
 # ===================================================================
 
 
+_EXTENDED_EXPORT_PERMISSIONS = {
+    web_reports_ext_service.ExtendedReportExportKind.subscriber_growth: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.usage_by_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.upcoming_charges: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_per_plan: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.invoices: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.statements: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.tax: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.mrr: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.new_services: "customer:read",
+    web_reports_ext_service.ExtendedReportExportKind.custom_pricing: "reports:billing:export",
+    web_reports_ext_service.ExtendedReportExportKind.revenue_categories: "reports:billing:export",
+}
+
+
+@router.get(
+    "/extended-export/{report_kind}",
+    dependencies=[
+        Depends(require_any_permission("reports:billing:export", "customer:read"))
+    ],
+)
+def reports_extended_export(
+    request: Request,
+    report_kind: web_reports_ext_service.ExtendedReportExportKind,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    year: int | None = None,
+    days: int = Query(default=30, ge=1, le=3660),
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
+    db: Session = Depends(get_db),
+):
+    if not can(request, _EXTENDED_EXPORT_PERMISSIONS[report_kind]):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    export = web_reports_ext_service.build_extended_report_export(
+        db=db,
+        query=web_reports_ext_service.ExtendedReportExportQuery(
+            kind=report_kind,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            year=year,
+            days=days,
+            mode=mode,
+            state=state,
+            band=band,
+            include_funded=include_funded,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
+
+
 @router.get(
     "/subscriber-growth",
     response_class=HTMLResponse,
@@ -1940,6 +2278,46 @@ def reports_discounts(
         )
     context["report"] = report
     return templates.TemplateResponse("admin/reports/discounts.html", dict(context))
+
+
+@router.get(
+    "/discounts/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def reports_discounts_export(
+    tab: discount_report_service.DiscountReportTab = Query(
+        default=discount_report_service.DiscountReportTab.invoices
+    ),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = None,
+    customer: str | None = None,
+    salesperson_id: UUID | None = None,
+    discount_type: discount_report_service.DocumentDiscountType | None = None,
+    invoice_status: InvoiceStatus | None = None,
+    quote_status: QuoteStatus | None = None,
+    source: InvoiceDiscountSource | None = None,
+    db: Session = Depends(get_db),
+):
+    export = discount_report_service.build_document_discount_export(
+        db=db,
+        query=discount_report_service.DocumentDiscountReportQuery(
+            tab=tab,
+            date_from=date_from,
+            date_to=date_to,
+            customer=search or customer,
+            salesperson_id=salesperson_id,
+            discount_type=discount_type,
+            invoice_status=invoice_status if tab.value == "invoices" else None,
+            quote_status=quote_status if tab.value == "quotes" else None,
+            source=source if tab.value == "invoices" else None,
+        ),
+    )
+    return Response(
+        export.content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
 
 
 @router.get(

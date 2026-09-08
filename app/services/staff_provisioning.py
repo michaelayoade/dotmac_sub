@@ -28,7 +28,7 @@ from app.models.dispatch import TechnicianProfile
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from app.services import auth_cache, credential_recovery
+from app.services import auth_cache, credential_party_binding, credential_recovery
 from app.services import auth_flow as auth_flow_service
 from app.services import party as party_registry
 from app.services import system_user_assignments as assignment_service
@@ -36,6 +36,7 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.operator_tenant import operator_tenant_id
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -675,7 +676,45 @@ def _create_placeholder_local_credential(
     )
     db.add(credential)
     db.flush()
+    _stage_staff_credential_projection(db, credential=credential, user_id=user_id)
     return credential
+
+
+def _stage_staff_credential_projection(
+    db: Session, *, credential: UserCredential, user_id: UUID
+) -> None:
+    """Stage the required Party authentication projection with staff bootstrap."""
+
+    user = db.get(SystemUser, user_id)
+    if user is None or user.person_party_id is None:
+        raise _error(
+            "credential_party_projection_missing",
+            "Staff credentials require a bound Person Party.",
+            user_id=str(user_id),
+        )
+    binding = credential_party_binding.resolve_binding_for_mechanism(
+        db, AuthProvider.local.value
+    )
+    credential_party_binding.stage_credential_party_binding(
+        db,
+        credential_party_binding.CredentialPartyBinding(
+            context=CommandContext.system(
+                actor="auth.staff_provisioning",
+                scope="party:credential_authentication_projection",
+                reason="Staff local credential identity projection",
+            ),
+            credential_id=credential.id,
+            expected_principal_kind=(
+                credential_party_binding.CredentialPrincipalKind.system_user
+            ),
+            expected_principal_id=user_id,
+            party_id=user.person_party_id,
+            authentication_binding_id=binding.id,
+            tenant_id=operator_tenant_id(),
+            binding_source="auth.staff_provisioning",
+            binding_reason="Staff local credential identity projection",
+        ),
+    )
 
 
 def _ensure_login_identity_available(
@@ -736,6 +775,49 @@ def close_principal_access(db: Session, user_id: UUID) -> tuple[int, int]:
         or 0
     )
     return credentials, _revoke_active_sessions(db, user_id)
+
+
+def reconcile_active_local_login_credential(
+    db: Session,
+    *,
+    user_id: UUID,
+    email: str,
+) -> tuple[int, bool, bool]:
+    """Flush-only active-account credential convergence for coordinators.
+
+    Activation restores only the canonical local login credential, matching
+    ``set_staff_account_active``. It deliberately does not reactivate every
+    credential mechanism that deactivation closed.
+    """
+
+    normalized_email = _normalize_email(email)
+    _ensure_login_identity_available(db, user_id=user_id, email=normalized_email)
+    credentials = _locked_local_credentials(db, user_id)
+    if len(credentials) > 1:
+        raise _error(
+            "credential_ambiguous",
+            "Staff account has multiple local login credentials.",
+            user_id=str(user_id),
+            credential_count=len(credentials),
+        )
+    credential_created = not credentials
+    credential = (
+        _create_placeholder_local_credential(
+            db,
+            user_id=user_id,
+            email=normalized_email,
+            is_active=True,
+        )
+        if credential_created
+        else credentials[0]
+    )
+    credential_reconciled = credential.username != normalized_email
+    if credential_reconciled:
+        credential.username = normalized_email
+    credential_changes = int(credential_created or not credential.is_active)
+    credential.is_active = True
+    db.flush()
+    return credential_changes, credential_created, credential_reconciled
 
 
 def _revoke_active_sessions(db: Session, user_id: UUID) -> int:
@@ -952,16 +1034,17 @@ def _create_principal(
         reason=context.reason,
     )
     placeholder = secrets.token_urlsafe(32)
-    db.add(
-        UserCredential(
-            system_user_id=user.id,
-            provider=AuthProvider.local,
-            username=email,
-            password_hash=auth_flow_service.hash_password(placeholder),
-            must_change_password=True,
-            is_active=True,
-        )
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username=email,
+        password_hash=auth_flow_service.hash_password(placeholder),
+        must_change_password=True,
+        is_active=True,
     )
+    db.add(credential)
+    db.flush()
+    _stage_staff_credential_projection(db, credential=credential, user_id=user.id)
     return user
 
 

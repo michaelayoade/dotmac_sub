@@ -99,21 +99,30 @@ def add_policy(request: SlaPolicyRequest) -> dict[str, object]:
     with db_session_adapter.session() as db:
         return _serialize(create_policy(db, command))
 
-@router.get("/policies/{policy_id}", dependencies=[Depends(require_permission("support:ticket:read"))])
+
+@router.get(
+    "/policies/{policy_id}",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
 def get_policy(policy_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
     policy = db.get(InboxSlaPolicy, policy_id)
     if policy is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Inbox SLA policy not found")
     return _serialize(policy)
 
 
-@router.post("/policies/{policy_id}/active", dependencies=[Depends(require_permission("support:ticket:update"))])
+@router.post(
+    "/policies/{policy_id}/active",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
 def set_policy_active(policy_id: UUID, active: bool) -> dict[str, object]:
     with db_session_adapter.session() as db:
         policy = db.get(InboxSlaPolicy, policy_id)
         if policy is None:
             from fastapi import HTTPException
+
             raise HTTPException(status_code=404, detail="Inbox SLA policy not found")
         policy.is_active = active
         if not active:

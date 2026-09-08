@@ -545,6 +545,69 @@ def test_offer_plan_family_edit_preserves_null_price_unit_with_live_subscription
     assert price.unit is None
 
 
+def test_offer_edit_form_data_serializes_enum_select_values(db_session, catalog_offer):
+    catalog_offer.billing_cycle = BillingCycle.annual
+    db_session.commit()
+
+    offer_data, _ = web_catalog_offers_service.offer_edit_form_data(
+        db_session, str(catalog_offer.id), catalog_offer
+    )
+
+    assert offer_data["service_type"] == catalog_offer.service_type.value
+    assert offer_data["access_type"] == catalog_offer.access_type.value
+    assert offer_data["price_basis"] == catalog_offer.price_basis.value
+    assert offer_data["billing_cycle"] == BillingCycle.annual.value
+    assert offer_data["contract_term"] == catalog_offer.contract_term.value
+    assert offer_data["status"] == catalog_offer.status.value
+
+
+def test_live_offer_price_amount_edit_preserves_offer_billing_cycle_from_form_data(
+    db_session, subscriber, catalog_offer
+) -> None:
+    catalog_offer.billing_cycle = BillingCycle.annual
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        billing_cycle=BillingCycle.annual,
+        is_active=True,
+    )
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        unit_price=Decimal("100.00"),
+        start_at=datetime.now(UTC) - timedelta(days=5),
+        next_billing_at=datetime.now(UTC) + timedelta(days=25),
+    )
+    db_session.add_all([price, subscription])
+    db_session.commit()
+
+    offer_data, _ = web_catalog_offers_service.offer_edit_form_data(
+        db_session, str(catalog_offer.id), catalog_offer
+    )
+    offer_data["price_amount"] = "125.00"
+
+    updated = web_catalog_offers_service.update_offer_with_audit(
+        db_session,
+        str(catalog_offer.id),
+        catalog_offer,
+        offer_data,
+        FormData([]),
+        request=None,
+        actor_id="admin@example.test",
+    )
+    db_session.commit()
+
+    db_session.refresh(price)
+    db_session.refresh(subscription)
+    assert updated.billing_cycle == BillingCycle.annual
+    assert price.amount == Decimal("125.00")
+    assert subscription.unit_price == Decimal("125.00")
+
+
 def test_offer_form_context_exposes_full_billing_cycle_set(db_session):
     context = web_catalog_offers_service.offer_form_context(
         db_session,

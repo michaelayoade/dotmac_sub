@@ -293,8 +293,11 @@ def test_deployment_contract_is_profile_gated_and_loopback_only():
         "  vmagent:", maxsplit=1
     )[0]
     assert "- smtp-inbound" in smtp_service
+    # The bind is a knob now (deploy/published_ports.toml, ADR-0014), but its
+    # DEFAULT is still loopback -- which is the property this test is named for.
     assert (
-        "127.0.0.1:${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525" in smtp_service
+        "${TEAM_INBOX_SMTP_BIND:-127.0.0.1:}"
+        "${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525" in smtp_service
     )
     assert "- app.team_inbox_smtp\n    - serve" in smtp_service
     assert "- readiness" in smtp_service

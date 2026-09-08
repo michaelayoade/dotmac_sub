@@ -51,7 +51,14 @@ DOMAIN = DomainSOT(
                 "write the access-state projection. Subscription creation enters "
                 "active state through this owner, and every service-period, grant, "
                 "settlement, and reviewed-repair decision submits a typed, locked "
-                "compare-and-set billing-anchor projection to its one writer."
+                "compare-and-set billing-anchor projection to its one writer. "
+                "That non-key projection uses a PostgreSQL NO KEY UPDATE lock: "
+                "competing anchor writers serialize without blocking KEY SHARE "
+                "foreign-key checks from concurrent observations. The typed "
+                "operationally-current customer-health cohort policy lives in "
+                "subscription_lifecycle_policy: a disabled or stopped service is "
+                "historical only after its explicit end instant has passed. This "
+                "read classification never transitions lifecycle state."
             ),
         ),
         SOTService(
@@ -969,7 +976,10 @@ DOMAIN = DomainSOT(
                 "Single writer of the FreeRADIUS auth tables across every "
                 "configured runtime target. Event-time and per-user callers "
                 "request a full or scoped projection; they do not write auth "
-                "tables directly. The permanent account-access reconciler is the "
+                "tables directly. Scoped projection loads only the requested "
+                "duplicate-login cohort and bounded service counts for affected "
+                "subscribers; it does not hydrate unrelated fleet state. The "
+                "permanent account-access reconciler is the "
                 "only periodic drift detector and requests the full writer only "
                 "when drift exists; the writer is never independently scheduled. "
                 "Hard reject does not depend on a recoverable "

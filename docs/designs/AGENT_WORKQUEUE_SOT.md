@@ -73,11 +73,18 @@ row's overflow control. Templates consume owner-produced labels and hints; they
 do not infer status, urgency, or action eligibility.
 
 The row title is static identity text rather than a duplicate link. A compact,
-sticky section navigator above the work surface moves between `Right now`,
-Inbox, Tickets, Projects, and Work orders. Its selected state follows direct
-navigation and manual scrolling without changing projection state. Smooth
-scroll destinations reserve the navigator's measured height so section titles
-remain visible on desktop and narrow viewports.
+sticky tab navigator above the work surface switches between `Right now`,
+Inbox, Tickets, Projects, and Work orders without a document reload. Exactly one
+section is visible at a time. The selected tab and URL fragment remain aligned
+for direct navigation and browser history without changing projection state.
+Tabs expose record counts. The active section supports local search across its
+already-authorized projection and displays at most 21 matching records per
+page. A single bottom-right pager advances within that active section and each
+section retains its own current page while the operator switches tabs. The
+pager stays hidden when the active result has only one page.
+Operators can switch between Compact cards and
+a semantic tabular List; each page load starts in Compact. Long sections expose
+a Back to top control.
 
 Claim and complete use the shared server-owned `ActionForm` contract. Each
 rendered form carries an owner-generated fingerprint of the current native
@@ -123,6 +130,14 @@ Audience rules are:
 - `team`: work assigned across the operator's active member/managed teams; and
 - `org`: unrestricted only for administrators or an explicit org-audience
   scope.
+
+RBAC seeds `workqueue:audience:team` and `workqueue:audience:org` as active,
+UI-assignable permissions without granting them to any non-admin role. The role
+builder may grant team audience to an operational lead or accountable manager;
+the permission cannot invent that service-team responsibility. Organization
+audience is a high-trust cross-team, cross-region grant and should be assigned
+only to roles whose operating mandate requires unassigned work across the whole
+organization.
 
 A requested audience is clamped to the principal's natural authority. An
 explicit service-team filter outside that scope fails closed.

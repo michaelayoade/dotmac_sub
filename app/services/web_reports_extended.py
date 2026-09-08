@@ -5,9 +5,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,6 +19,61 @@ from app.services.status_presentation import invoice_status_presentation
 from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
 
 logger = logging.getLogger(__name__)
+
+
+class ExtendedReportExportKind(StrEnum):
+    subscriber_growth = "subscriber-growth"
+    usage_by_plan = "usage-by-plan"
+    upcoming_charges = "upcoming-charges"
+    revenue_per_plan = "revenue-per-plan"
+    invoices = "invoices"
+    statements = "statements"
+    tax = "tax"
+    mrr = "mrr"
+    new_services = "new-services"
+    custom_pricing = "custom-pricing"
+    revenue_categories = "revenue-categories"
+
+
+@dataclass(frozen=True, slots=True)
+class ExtendedReportExportQuery:
+    kind: ExtendedReportExportKind
+    date_from: str | None = None
+    date_to: str | None = None
+    status: str | None = None
+    year: int | None = None
+    days: int = 30
+    mode: str = "postpaid"
+    state: str = "all"
+    band: str | None = None
+    include_funded: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CsvReportExport:
+    filename: str
+    content: str
+
+
+def _csv_content(headers: Sequence[str], rows: Iterable[Sequence[object]]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    writer.writerows(tuple(_csv_value(value) for value in row) for row in rows)
+    return output.getvalue()
+
+
+def _csv_value(value: object) -> object:
+    primitive = getattr(value, "value", value)
+    if isinstance(primitive, (datetime,)):
+        return primitive.isoformat()
+    return primitive
+
+
+def _value(row: object, key: str, default: object = "") -> object:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
 
 
 def _default_report_window(days: int | None = 30) -> tuple[datetime, datetime]:
@@ -697,3 +754,205 @@ def get_custom_pricing_data(db: Session) -> dict:
         addon_count = 0
 
     return {"overrides": overrides, "total": len(overrides), "addon_count": addon_count}
+
+
+def build_extended_report_export(
+    db: Session, query: ExtendedReportExportQuery
+) -> CsvReportExport:
+    """Build a CSV from the same owned projection used by the report page."""
+
+    kind = query.kind
+    headers: Sequence[str]
+    rows: Iterable[Sequence[object]]
+    if kind is ExtendedReportExportKind.subscriber_growth:
+        data = get_subscriber_growth_data(db, days=query.days)
+        headers = ("date", "total_subscribers")
+        rows = zip(data["chart_labels"], data["chart_data"], strict=True)
+    elif kind is ExtendedReportExportKind.usage_by_plan:
+        data = get_usage_by_plan_data(db)
+        headers = ("plan", "price", "subscribers")
+        rows = (
+            (_value(r, "name"), _value(r, "price"), _value(r, "count"))
+            for r in data["plans"]
+        )
+    elif kind is ExtendedReportExportKind.upcoming_charges:
+        charge_rows: list[Sequence[object]] = []
+        page = 1
+        while True:
+            data = get_upcoming_charges_data(
+                db,
+                mode=query.mode,
+                state=query.state,
+                band=query.band,
+                include_funded=query.include_funded,
+                page=page,
+                per_page=50,
+            )
+            charge_rows.extend(
+                (
+                    _value(row, "customer_name"),
+                    _value(row, "plan_name"),
+                    _value(row, "reference"),
+                    _value(row, "mode"),
+                    _value(row, "due_at"),
+                    _value(row, "days_remaining"),
+                    _value(row, "amount_display"),
+                    _value(row, "funding_display"),
+                    _value(row, "needed_display"),
+                    _value(row, "status_label"),
+                )
+                for row in data["charges"]
+            )
+            if not data["has_next"]:
+                break
+            page += 1
+        headers = (
+            "customer",
+            "plan",
+            "reference",
+            "billing_mode",
+            "due_at",
+            "days_remaining",
+            "amount",
+            "available_funding",
+            "amount_needed",
+            "status",
+        )
+        rows = charge_rows
+    elif kind is ExtendedReportExportKind.revenue_per_plan:
+        data = get_revenue_per_plan_data(db, query.date_from, query.date_to)
+        headers = ("plan", "price", "invoices", "revenue")
+        rows = (
+            (
+                _value(r, "name"),
+                _value(r, "price"),
+                _value(r, "invoice_count"),
+                _value(r, "revenue"),
+            )
+            for r in data["plans"]
+        )
+    elif kind is ExtendedReportExportKind.invoices:
+        data = get_invoice_report_data(db, query.date_from, query.date_to, query.status)
+        headers = (
+            "invoice_number",
+            "status",
+            "tax_amount",
+            "total_amount",
+            "issued_at",
+        )
+        rows = (
+            (
+                _value(r, "invoice_number") or str(_value(r, "id"))[:8],
+                getattr(_value(r, "status"), "value", _value(r, "status")),
+                _value(r, "tax_amount", 0),
+                _value(r, "total_amount", 0),
+                _value(r, "issued_at"),
+            )
+            for r in data["invoices"]
+        )
+    elif kind is ExtendedReportExportKind.statements:
+        data = get_statements_data(db)
+        headers = ("customer", "documents", "total")
+        rows = (
+            (_value(r, "name"), _value(r, "doc_count"), _value(r, "total"))
+            for r in data["statements"]
+        )
+    elif kind is ExtendedReportExportKind.tax:
+        from app.services import tax_accounting
+
+        report = tax_accounting.build_tax_report(
+            db, date_from=query.date_from, date_to=query.date_to
+        )
+        headers = (
+            "record_type",
+            "reference",
+            "recognized_at",
+            "currency",
+            "tax_amount",
+            "gross_amount",
+            "status",
+        )
+        rows = (
+            *(
+                (
+                    "invoice",
+                    r.invoice_number or str(r.invoice_id),
+                    r.tax_point_at,
+                    r.currency,
+                    r.tax_amount,
+                    r.gross_amount,
+                    r.status,
+                )
+                for r in report.invoice_rows
+            ),
+            *(
+                (
+                    "credit_note",
+                    r.credit_number or str(r.credit_note_id),
+                    r.recognized_at,
+                    r.currency,
+                    r.tax_adjustment_amount,
+                    r.gross_credit_amount,
+                    r.status,
+                )
+                for r in report.credit_note_rows
+            ),
+            *(
+                (
+                    "withholding_tax",
+                    str(r.record_id),
+                    r.recognized_at,
+                    r.currency,
+                    r.wht_amount,
+                    r.gross_amount,
+                    r.status.value,
+                )
+                for r in report.wht_rows
+            ),
+        )
+    elif kind is ExtendedReportExportKind.mrr:
+        data = get_mrr_data(
+            db, query.year, date_from=query.date_from, date_to=query.date_to
+        )
+        headers = ("month", "start", "new", "cancellations", "end", "net_change")
+        rows = (
+            tuple(
+                _value(r, key)
+                for key in (
+                    "month",
+                    "start_count",
+                    "new",
+                    "cancellations",
+                    "end_count",
+                    "net_change",
+                )
+            )
+            for r in data["months"]
+        )
+    elif kind is ExtendedReportExportKind.new_services:
+        data = get_new_services_data(db, query.date_from, query.date_to)
+        headers = ("subscriber", "plan", "price", "start_date", "status")
+        rows = (
+            tuple(
+                _value(r, key)
+                for key in ("subscriber", "plan", "price", "start_date", "status")
+            )
+            for r in data["services"]
+        )
+    elif kind is ExtendedReportExportKind.custom_pricing:
+        data = get_custom_pricing_data(db)
+        headers = ("subscriber", "plan", "unit_price", "status")
+        rows = (
+            tuple(_value(r, key) for key in ("subscriber", "plan", "price", "status"))
+            for r in data["overrides"]
+        )
+    else:
+        data = get_revenue_categories_data(db)
+        headers = ("category", "invoices", "revenue")
+        rows = (
+            tuple(_value(r, key) for key in ("name", "invoice_count", "revenue"))
+            for r in data.categories
+        )
+    return CsvReportExport(
+        filename=f"{kind.value}.csv", content=_csv_content(headers, rows)
+    )

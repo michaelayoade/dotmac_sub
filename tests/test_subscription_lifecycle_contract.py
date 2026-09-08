@@ -424,6 +424,37 @@ def test_review_head_changes_when_pending_plan_change_is_created(
     assert after.head != before.head
 
 
+def test_cancel_requires_pending_plan_change_to_be_canceled_first(
+    db_session, subscriber, catalog_offer
+):
+    target = _target_offer(db_session, catalog_offer)
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    db_session.add(
+        SubscriptionChangeRequest(
+            subscription_id=subscription.id,
+            current_offer_id=catalog_offer.id,
+            requested_offer_id=target.id,
+            status=SubscriptionChangeStatus.pending,
+            effective_date=date(2026, 8, 1),
+        )
+    )
+    db_session.flush()
+    current = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    preview = preview_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            expected_head=current.head,
+        ),
+    )
+
+    assert preview.eligible is False
+    assert "cancel_pending_plan_change_first" in preview.eligibility_reasons
+
+
 def test_plan_change_preview_uses_canonical_proration_and_access_impact(
     db_session, subscriber, catalog_offer
 ):

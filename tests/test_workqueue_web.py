@@ -73,12 +73,12 @@ def test_workqueue_cards_use_open_as_the_only_source_link():
     row = Path("templates/admin/workqueue/_row.html").read_text(encoding="utf-8")
 
     assert '<a href="{{ row.url }}" class="mt-2' not in row
-    assert '<div class="mt-2 truncate text-sm font-semibold' in row
+    assert '<div class="mt-1.5 truncate text-[15px] font-semibold' in row
     assert row.count('href="{{ row.url }}"') == 1
     assert ">Open</a>" in row
 
 
-def test_workqueue_section_navigation_has_stable_smooth_scroll_behavior():
+def test_workqueue_section_navigation_switches_accessible_panels_without_reload():
     index = Path("templates/admin/workqueue/index.html").read_text(encoding="utf-8")
 
     for target in (
@@ -90,12 +90,46 @@ def test_workqueue_section_navigation_has_stable_smooth_scroll_behavior():
     ):
         assert f'href="{target}"' in index
     assert 'aria-label="Workqueue sections"' in index
-    assert 'target.scrollIntoView({ behavior: "smooth", block: "start" })' in index
-    assert "programmaticScroll = true" in index
-    assert "if (programmaticScroll) return" in index
-    assert "--workqueue-nav-offset" in index
-    assert "nav.offsetHeight + 16" in index
-    assert "scroll-margin-top: var(--workqueue-nav-offset" in index
+    assert 'role="tablist"' in index
+    assert index.count('role="tab"') == 5
+    assert index.count('role="tabpanel"') == 2
+    assert "showSection(link);" in index
+    assert "panel.hidden = !isActive" in index
+    assert 'link.setAttribute("aria-selected", String(isActive))' in index
+    assert "history.replaceState" in index
+    assert 'window.addEventListener("hashchange"' in index
+    assert "scrollIntoView" not in index
+    assert 'panel.classList.add("workqueue-panel-enter")' in index
+    assert "@keyframes workqueue-card-enter" in index
+    assert "prefers-reduced-motion: reduce" in index
+
+
+def test_workqueue_navigation_tools_are_client_side_and_default_to_compact():
+    root = Path("templates/admin/workqueue")
+    index = (root / "index.html").read_text(encoding="utf-8")
+    section = (root / "_section.html").read_text(encoding="utf-8")
+    table_row = (root / "_row_table.html").read_text(encoding="utf-8")
+
+    assert 'id="workqueue-search"' in index
+    assert 'data-density="compact"' in index
+    assert 'data-density="list"' in index
+    assert "const PAGE_SIZE = 21" in index
+    assert index.count('id="workqueue-page-previous"') == 1
+    assert index.count('id="workqueue-page-next"') == 1
+    assert index.count('id="workqueue-page-summary"') == 1
+    assert 'let density = "compact"' in index
+    assert "localStorage" not in index
+    assert "workqueue-inspect" not in index
+    assert "workqueue-inspect" not in (root / "_row.html").read_text(encoding="utf-8")
+    assert "workqueue-inspect" not in table_row
+    assert 'id="workqueue-back-top"' in index
+    assert 'data-workqueue-layout="compact"' in section
+    assert 'data-workqueue-layout="list"' in section
+    assert "<table" in section
+    assert all(
+        label in section for label in ("Item", "Why now", "State / timing", "Actions")
+    )
+    assert "<tr" in table_row
 
 
 def test_web_projection_exposes_identity_state_urgency_owner_hint_and_next_action(

@@ -22,12 +22,15 @@ from app.services.integrations.runtime import (
 
 META_SOCIAL_SEND_CAPABILITY = "messaging.send.v1"
 META_SOCIAL_RECEIVE_CAPABILITY = "messaging.receive.v1"
+META_LEAD_CAPTURE_CAPABILITY = "sales.lead_capture.v1"
+META_LEAD_CONVERSION_CAPABILITY = "sales.lead_conversion.send.v1"
 # These public strings identify secret bindings; they are not credential values.
 FACEBOOK_TOKEN_BINDING = "facebook_page_access_token"  # nosec B105
 INSTAGRAM_TOKEN_BINDING = "instagram_login_access_token"  # nosec B105
 META_OAUTH_TOKEN_BINDING = "meta_oauth_access_token"  # nosec B105
 WEBHOOK_SIGNING_SECRET_BINDING = "webhook_signing_secret"  # nosec B105
 WEBHOOK_VERIFY_TOKEN_BINDING = "webhook_verify_token"  # nosec B105
+CONVERSIONS_API_TOKEN_BINDING = "conversions_api_access_token"  # nosec B105
 META_SOCIAL_AUTH_MODE_OAUTH = "oauth"
 META_SOCIAL_AUTH_MODE_INDIVIDUAL = "individual"
 
@@ -104,13 +107,15 @@ def _payload(
     return payload
 
 
-def _profile_endpoint(config: Mapping[str, Any], channel: MetaSocialChannel) -> str:
+def _profile_endpoint(
+    config: Mapping[str, Any], channel: MetaSocialChannel, contact_id: str
+) -> str:
     version = _graph_version(config)
     if channel is MetaSocialChannel.instagram_dm and _auth_mode(config) == (
         META_SOCIAL_AUTH_MODE_INDIVIDUAL
     ):
-        return f"https://graph.instagram.com/{version}/me"
-    return f"https://graph.facebook.com/{version}"
+        return f"https://graph.instagram.com/{version}/{contact_id}"
+    return f"https://graph.facebook.com/{version}/{contact_id}"
 
 
 def _profile_fields(channel: MetaSocialChannel) -> str:
@@ -180,6 +185,12 @@ class MetaSocialRuntimeRunner:
         ):
             if not str(secret_material.get(binding) or "").strip():
                 errors.append(f"{binding}_required")
+        conversion_dataset_id = str(config.get("conversion_dataset_id") or "").strip()
+        conversion_token = str(
+            secret_material.get(CONVERSIONS_API_TOKEN_BINDING) or ""
+        ).strip()
+        if conversion_dataset_id and not conversion_token:
+            errors.append("conversion_configuration_incomplete")
         if errors:
             return ValidationResult(valid=False, error_codes=tuple(errors))
 
@@ -242,13 +253,31 @@ class MetaSocialRuntimeRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> OperationResult:
-        if envelope.capability_id != META_SOCIAL_SEND_CAPABILITY:
-            return self._rejected(envelope, "capability_unsupported")
-        if str(envelope.payload.get("action") or "") == "fetch_profile":
+        action = str(envelope.payload.get("action") or "")
+        if (
+            envelope.capability_id == META_SOCIAL_SEND_CAPABILITY
+            and action == "fetch_profile"
+        ):
             return self._fetch_profile(
                 envelope, config=config, secret_material=secret_material
             )
-        if str(envelope.payload.get("action") or "") != "send_direct_message":
+        if (
+            envelope.capability_id == META_LEAD_CAPTURE_CAPABILITY
+            and action == "fetch_lead"
+        ):
+            return self._fetch_lead(
+                envelope, config=config, secret_material=secret_material
+            )
+        if (
+            envelope.capability_id == META_LEAD_CONVERSION_CAPABILITY
+            and action == "send_lead_conversion"
+        ):
+            return self._send_lead_conversion(
+                envelope, config=config, secret_material=secret_material
+            )
+        if envelope.capability_id != META_SOCIAL_SEND_CAPABILITY:
+            return self._rejected(envelope, "capability_unsupported")
+        if action != "send_direct_message":
             return self._rejected(envelope, "action_unsupported")
         params = envelope.payload.get("params")
         if not isinstance(params, dict):
@@ -379,14 +408,14 @@ class MetaSocialRuntimeRunner:
                 and _auth_mode(config) == META_SOCIAL_AUTH_MODE_INDIVIDUAL
             ):
                 response = httpx.get(
-                    _profile_endpoint(config, channel),
+                    _profile_endpoint(config, channel, contact_id),
                     params={"fields": "id,username,name,profile_pic"},
                     headers={"Authorization": f"Bearer {credential}"},
                     timeout=timeout,
                 )
             else:
                 response = httpx.get(
-                    f"{_profile_endpoint(config, channel)}/{contact_id}",
+                    _profile_endpoint(config, channel, contact_id),
                     params={"fields": _profile_fields(channel)},
                     headers={"Authorization": f"Bearer {credential}"},
                     timeout=timeout,
@@ -411,6 +440,227 @@ class MetaSocialRuntimeRunner:
             operation_id=envelope.operation_id,
             status=OperationStatus.succeeded,
             output={"profile": profile},
+        )
+
+    def _fetch_lead(
+        self,
+        envelope: OperationEnvelope,
+        *,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> OperationResult:
+        params = envelope.payload.get("params")
+        if not isinstance(params, dict):
+            return self._rejected(envelope, "params_invalid")
+        leadgen_id = str(params.get("leadgen_id") or "").strip()
+        page_id = str(params.get("page_id") or "").strip()
+        if not leadgen_id:
+            return self._rejected(envelope, "leadgen_id_required")
+        if page_id != _configured_account_id(
+            config, MetaSocialChannel.facebook_messenger
+        ):
+            return self._rejected(envelope, "lead_page_not_bound")
+        credential = str(
+            secret_material.get(
+                _credential_binding(config, MetaSocialChannel.facebook_messenger)
+            )
+            or ""
+        ).strip()
+        if not credential:
+            return self._rejected(envelope, "lead_retrieval_credential_missing")
+        url = f"https://graph.facebook.com/{_graph_version(config)}/{leadgen_id}"
+        timeout = min(
+            float(config.get("timeout_seconds") or 10),
+            max(1.0, (envelope.deadline_at - datetime.now(UTC)).total_seconds()),
+        )
+        try:
+            response = httpx.get(
+                url,
+                params={"fields": "id,created_time,ad_id,form_id,field_data"},
+                headers={"Authorization": f"Bearer {credential}"},
+                timeout=timeout,
+            )
+        except httpx.TimeoutException:
+            return self._failed(
+                envelope, OperationStatus.retryable, "lead_fetch_timeout"
+            )
+        except httpx.RequestError:
+            return self._failed(
+                envelope, OperationStatus.retryable, "lead_fetch_unavailable"
+            )
+        if response.status_code == 429 or response.status_code >= 500:
+            return self._failed(
+                envelope, OperationStatus.retryable, "lead_fetch_retryable_response"
+            )
+        if response.status_code >= 400:
+            return self._failed(
+                envelope, OperationStatus.rejected, "lead_fetch_rejected"
+            )
+        try:
+            lead = response.json()
+        except (ValueError, json.JSONDecodeError):
+            return self._failed(
+                envelope, OperationStatus.rejected, "lead_fetch_invalid_response"
+            )
+        if not isinstance(lead, dict) or str(lead.get("id") or "") != leadgen_id:
+            return self._failed(
+                envelope, OperationStatus.rejected, "lead_fetch_identity_mismatch"
+            )
+        ad_id = str(lead.get("ad_id") or "").strip()
+        if ad_id:
+            ad_url = f"https://graph.facebook.com/{_graph_version(config)}/{ad_id}"
+            try:
+                ad_response = httpx.get(
+                    ad_url,
+                    params={"fields": "campaign_id,adset_id"},
+                    headers={"Authorization": f"Bearer {credential}"},
+                    timeout=timeout,
+                )
+            except httpx.TimeoutException:
+                return self._failed(
+                    envelope, OperationStatus.retryable, "lead_attribution_timeout"
+                )
+            except httpx.RequestError:
+                return self._failed(
+                    envelope,
+                    OperationStatus.retryable,
+                    "lead_attribution_unavailable",
+                )
+            if ad_response.status_code == 429 or ad_response.status_code >= 500:
+                return self._failed(
+                    envelope,
+                    OperationStatus.retryable,
+                    "lead_attribution_retryable_response",
+                )
+            if ad_response.status_code >= 400:
+                return self._failed(
+                    envelope, OperationStatus.rejected, "lead_attribution_rejected"
+                )
+            try:
+                attribution = ad_response.json()
+            except (ValueError, json.JSONDecodeError):
+                attribution = {}
+            if isinstance(attribution, dict):
+                lead["campaign_id"] = attribution.get("campaign_id")
+                lead["adset_id"] = attribution.get("adset_id")
+        if not str(lead.get("campaign_id") or "").strip():
+            return self._failed(
+                envelope, OperationStatus.rejected, "lead_campaign_missing"
+            )
+        return OperationResult(
+            operation_id=envelope.operation_id,
+            status=OperationStatus.succeeded,
+            output={"lead": lead},
+        )
+
+    def _send_lead_conversion(
+        self,
+        envelope: OperationEnvelope,
+        *,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> OperationResult:
+        params = envelope.payload.get("params")
+        if not isinstance(params, dict):
+            return self._rejected(envelope, "params_invalid")
+        dataset_id = str(config.get("conversion_dataset_id") or "").strip()
+        leadgen_id = str(params.get("leadgen_id") or "").strip()
+        event_name = str(
+            config.get("conversion_event_name") or "CustomerConverted"
+        ).strip()
+        event_time = params.get("event_time")
+        event_id = str(params.get("event_id") or "").strip()
+        if not dataset_id:
+            return self._rejected(envelope, "conversion_dataset_id_required")
+        if not leadgen_id:
+            return self._rejected(envelope, "leadgen_id_required")
+        if not isinstance(event_time, int) or event_time <= 0:
+            return self._rejected(envelope, "event_time_required")
+        if not event_id:
+            return self._rejected(envelope, "event_id_required")
+        credential = str(
+            secret_material.get(CONVERSIONS_API_TOKEN_BINDING) or ""
+        ).strip()
+        if not credential:
+            return self._rejected(envelope, "conversion_credential_missing")
+        url = f"https://graph.facebook.com/{_graph_version(config)}/{dataset_id}/events"
+        payload = {
+            "data": [
+                {
+                    "event_name": event_name,
+                    "event_time": event_time,
+                    "event_id": event_id,
+                    "action_source": "system_generated",
+                    "user_data": {"lead_id": leadgen_id},
+                }
+            ]
+        }
+        if bool(params.get("preview")):
+            return OperationResult(
+                operation_id=envelope.operation_id,
+                status=OperationStatus.succeeded,
+                output={"sent": False, "payload": payload},
+            )
+        timeout = min(
+            float(config.get("timeout_seconds") or 10),
+            max(1.0, (envelope.deadline_at - datetime.now(UTC)).total_seconds()),
+        )
+        try:
+            response = httpx.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {credential}"},
+                timeout=timeout,
+            )
+        except httpx.TimeoutException:
+            return self._failed(
+                envelope,
+                OperationStatus.reconciliation_required,
+                "conversion_outcome_ambiguous",
+            )
+        except httpx.RequestError:
+            return self._failed(
+                envelope, OperationStatus.retryable, "conversion_provider_unavailable"
+            )
+        receipt = _safe_receipt(response)
+        if response.status_code == 429 or response.status_code >= 500:
+            return OperationResult(
+                operation_id=envelope.operation_id,
+                status=OperationStatus.retryable,
+                external_receipt=receipt,
+                error_code="conversion_retryable_response",
+            )
+        if response.status_code >= 400:
+            return OperationResult(
+                operation_id=envelope.operation_id,
+                status=OperationStatus.rejected,
+                external_receipt=receipt,
+                error_code="conversion_rejected",
+            )
+        try:
+            response_data = response.json()
+        except (ValueError, json.JSONDecodeError):
+            response_data = {}
+        try:
+            accepted_count = (
+                int(response_data.get("events_received") or 0)
+                if isinstance(response_data, dict)
+                else 0
+            )
+        except (TypeError, ValueError):
+            accepted_count = 0
+        if accepted_count < 1:
+            return OperationResult(
+                operation_id=envelope.operation_id,
+                status=OperationStatus.reconciliation_required,
+                external_receipt=receipt,
+                error_code="conversion_acceptance_missing",
+            )
+        return OperationResult(
+            operation_id=envelope.operation_id,
+            status=OperationStatus.succeeded,
+            output={"sent": True, "events_received": accepted_count},
+            external_receipt=receipt,
         )
 
     def health(

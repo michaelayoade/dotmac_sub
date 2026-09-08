@@ -75,6 +75,20 @@ def fiber_project(db_session, subscriber):
     )
 
 
+def test_render_project_infrastructure_editor(db_session, base_context):
+    context = web_projects.build_project_form_context(db_session)
+    html = _render(
+        "admin/projects/project_form.html",
+        base_context,
+        {**context, "page_title": "New Project", "form_mode": "create"},
+    )
+    assert 'name="infrastructure_type"' in html
+    assert 'name="infrastructure_id"' in html
+    assert 'role="combobox"' in html
+    assert "/static/js/project-infrastructure-picker.js" in html
+    assert "Customer-only work can leave this blank." in html
+
+
 def _render(name: str, base: dict, extra: dict) -> str:
     context = dict(base)
     context.update(extra)
@@ -121,6 +135,7 @@ def test_render_project_detail_with_stages(db_session, base_context, fiber_proje
     html = _render("admin/projects/project_detail.html", base_context, context)
     assert "Fiber Installation Stages" in html
     assert "Project Plan" in html
+    assert "Create Work Order" in html
     assert work_order.public_id in html
     attachment_input = html.split(
         'data-testid="project-comment-attachments"', maxsplit=1
@@ -202,7 +217,10 @@ def test_render_project_detail_vendor_delivery_respects_finance_scope(
 def test_render_project_forms(db_session, base_context, fiber_project):
     create_ctx = web_projects.build_project_form_context(db_session)
     create_ctx.update({"page_title": "New Project", "form_mode": "create"})
-    _render("admin/projects/project_form.html", base_context, create_ctx)
+    create_html = _render("admin/projects/project_form.html", base_context, create_ctx)
+    assert 'name="owner_person_id"' in create_html
+    assert 'name="project_manager_person_id"' in create_html
+    assert 'name="manager_person_id"' not in create_html
 
     edit_ctx = web_projects.build_project_form_context(
         db_session, project=fiber_project
@@ -210,6 +228,12 @@ def test_render_project_forms(db_session, base_context, fiber_project):
     edit_ctx.update({"page_title": "Edit Project", "form_mode": "edit"})
     html = _render("admin/projects/project_form.html", base_context, edit_ctx)
     assert "Fiber install render" in html
+    assert 'name="manager_person_id"' not in html
+    assert 'data-typeahead-url="/admin/projects/customers/search"' in html
+    assert 'name="subscriber_id"' in html
+    assert str(fiber_project.subscriber_id) in html
+    assert '<select name="subscriber_id"' not in html
+    assert "Search name, account ID, or email" in html
 
 
 def test_render_tasks_pages(db_session, base_context, fiber_project):
@@ -232,7 +256,8 @@ def test_render_tasks_pages(db_session, base_context, fiber_project):
     list_ctx["assigned"] = ""
     html = _render("admin/projects/tasks.html", base_context, list_ctx)
     assert "Render task" in html
-    assert "Create Work Order" in html
+    assert "Field Work" not in html
+    assert "Create Work Order" not in html
 
     work_order = web_dispatch_work_orders.create_from_form(
         db_session,
@@ -334,8 +359,42 @@ def test_task_list_renders_open_and_many_labels(
 
     html = _render("admin/projects/tasks.html", base_context, context)
 
-    assert "Open Work Order" in html
-    assert "View 2 Work Orders" in html
+    assert "Field Work" not in html
+    assert "Open Work Order" not in html
+    assert "View 2 Work Orders" not in html
+
+
+def test_render_project_detail_task_actions_and_terminal_lock(
+    db_session, base_context, fiber_project
+):
+    task = project_tasks.create(
+        db_session,
+        ProjectTaskCreate(project_id=fiber_project.id, title="Project card task"),
+    )
+    context = web_projects.build_project_detail_context(
+        db_session, project=fiber_project, can_read_work_orders=True
+    )
+    html = _render("admin/projects/project_detail.html", base_context, context)
+
+    assert "Project card task" in html
+    assert f"project_task_id={task.id}" in html
+    assert "Create Work Order" in html
+
+    fiber_project.status = "completed"
+    db_session.commit()
+    locked_context = web_projects.build_project_detail_context(
+        db_session, project=fiber_project, can_read_work_orders=True
+    )
+    locked_html = _render(
+        "admin/projects/project_detail.html",
+        base_context,
+        locked_context,
+    )
+
+    assert "Project is completed; only status changes remain available." in locked_html
+    assert "Completed projects cannot create field work" in locked_html
+    assert 'action="/admin/projects/' in locked_html
+    assert "/status" in locked_html
 
 
 def test_render_template_admin_pages(db_session, base_context):

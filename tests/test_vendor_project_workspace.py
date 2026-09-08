@@ -15,6 +15,7 @@ from app.models.vendor_routes import (
     InstallationProject,
     InstallationProjectStatus,
     ProjectQuote,
+    ProjectQuoteLineItem,
     ProjectQuoteStatus,
     ProposedRouteRevision,
     ProposedRouteRevisionStatus,
@@ -37,6 +38,7 @@ from app.services.vendor_portal_operations import (
     CreateVendorRouteRevisionCommand,
     DeleteVendorQuoteLineCommand,
     ReviewVendorQuoteCommand,
+    SetVendorQuoteTaxCommand,
     SubmitVendorRouteRevisionCommand,
     UpdateVendorQuoteLineCommand,
     VendorProjectWorkspaceError,
@@ -557,6 +559,90 @@ def test_quote_line_edits_recalculate_vat_totals(db_session):
     assert quote["subtotal"] == Decimal("0.00")
     assert quote["tax_total"] == Decimal("0.00")
     assert quote["total"] == Decimal("0.00")
+
+
+def test_staff_can_set_quote_tax_and_recalculate_submitted_quote(db_session):
+    installation, vendor, user = _chain(db_session)
+    quote = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.submitted.value,
+        vat_rate_percent=Decimal("0.00"),
+    )
+    quote.line_items.append(
+        ProjectQuoteLineItem(
+            description="Taxable installation",
+            quantity=Decimal("1"),
+            unit_price=Decimal("10000.00"),
+            amount=Decimal("10000.00"),
+            is_active=True,
+        )
+    )
+    db_session.add(quote)
+    db_session.commit()
+    quote_id = str(quote.id)
+    user_id = str(user.id)
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_portal_operations.set_quote_tax(
+        db_session,
+        SetVendorQuoteTaxCommand(
+            context=_context(
+                actor=user_id,
+                scope=quote_id,
+                reason="test quote tax update",
+            ),
+            quote_id=quote_id,
+            vat_rate_percent=Decimal("7.5"),
+        ),
+    )
+
+    assert db_session.in_transaction() is False
+    assert result["subtotal"] == Decimal("10000.00")
+    assert result["tax_total"] == Decimal("750.00")
+    assert result["total"] == Decimal("10750.00")
+    event = db_session.query(EventStore).one()
+    assert event.event_type == "vendor_quote.changed"
+    assert event.payload["action"] == "tax_updated"
+
+
+def test_staff_cannot_change_quote_tax_after_approval(db_session):
+    installation, vendor, user = _chain(db_session)
+    quote = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.approved.value,
+        vat_rate_percent=Decimal("0.00"),
+        subtotal=Decimal("10000.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("10000.00"),
+    )
+    db_session.add(quote)
+    db_session.commit()
+    quote_id = str(quote.id)
+    user_id = str(user.id)
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(VendorProjectWorkspaceError) as exc:
+        vendor_portal_operations.set_quote_tax(
+            db_session,
+            SetVendorQuoteTaxCommand(
+                context=_context(
+                    actor=user_id,
+                    scope=quote_id,
+                    reason="test rejected quote tax update",
+                ),
+                quote_id=quote_id,
+                vat_rate_percent=Decimal("7.5"),
+            ),
+        )
+
+    assert exc.value.code.endswith(".quote_not_editable")
+    assert db_session.in_transaction() is False
+    db_session.refresh(quote)
+    assert quote.vat_rate_percent == Decimal("0.00")
+    assert quote.total == Decimal("10000.00")
+    assert db_session.query(EventStore).count() == 0
 
 
 def test_rejected_quote_edit_rolls_back_the_owner_transaction(db_session):

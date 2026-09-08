@@ -21,10 +21,14 @@ from app.services.customer_reporting_policy import active_customer_subscription_
 from app.services.radius_projection_planner import plan_radius_projection
 from app.services.subscription_lifecycle_policy import (
     BILLING_COLLECTIBLE_SERVICE_STATUSES,
+    HISTORICAL_WHEN_ENDED_SERVICE_STATUSES,
     MRR_COUNTABLE_SERVICE_STATUSES,
     PORTAL_VISIBLE_SERVICE_STATUSES,
     RADIUS_PROJECTABLE_SERVICE_STATUSES,
     TERMINAL_SERVICE_STATUSES,
+    OperationalSubscriptionCohortInput,
+    OperationalSubscriptionCohortReason,
+    classify_operational_subscription,
     is_customer_impact_service_status,
     is_mrr_countable_service_status,
 )
@@ -122,6 +126,47 @@ def test_subscription_lifecycle_status_sets_are_named_by_workflow():
     assert is_mrr_countable_service_status(SubscriptionStatus.active) is True
     assert is_mrr_countable_service_status(SubscriptionStatus.suspended) is False
     assert SubscriptionStatus.canceled in TERMINAL_SERVICE_STATUSES
+
+
+def test_operational_subscription_policy_only_historicizes_ended_paused_rows():
+    as_of = datetime(2026, 9, 2, 12, tzinfo=UTC)
+    ended_at = as_of - timedelta(seconds=1)
+
+    historical_decisions = tuple(
+        classify_operational_subscription(
+            OperationalSubscriptionCohortInput(
+                status=status,
+                end_at=ended_at,
+                as_of=as_of,
+            )
+        )
+        for status in (SubscriptionStatus.disabled, SubscriptionStatus.stopped)
+    )
+    active_drift = classify_operational_subscription(
+        OperationalSubscriptionCohortInput(
+            status=SubscriptionStatus.active,
+            end_at=ended_at,
+            as_of=as_of,
+        )
+    )
+    current_disabled = classify_operational_subscription(
+        OperationalSubscriptionCohortInput(
+            status=SubscriptionStatus.disabled,
+            end_at=None,
+            as_of=as_of,
+        )
+    )
+
+    assert SubscriptionStatus.disabled in HISTORICAL_WHEN_ENDED_SERVICE_STATUSES
+    assert SubscriptionStatus.stopped in HISTORICAL_WHEN_ENDED_SERVICE_STATUSES
+    assert all(
+        decision.is_operationally_current is False
+        and decision.reason
+        == OperationalSubscriptionCohortReason.historical_explicit_end
+        for decision in historical_decisions
+    )
+    assert active_drift.is_operationally_current is True
+    assert current_disabled.is_operationally_current is True
 
 
 def test_billing_communication_policy_batches_outage_and_ticket_suppression(

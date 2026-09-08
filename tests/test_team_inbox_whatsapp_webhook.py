@@ -21,6 +21,7 @@ from app.models.team_inbox import (
     InboxProviderObservation,
 )
 from app.services import team_inbox_maintenance, team_inbox_read
+from app.services.integrations import inbox as integration_inbox
 from app.services.integrations import installations
 from app.services.integrations.runtime import ValidationResult
 from app.services.integrations.whatsapp_capability import (
@@ -295,6 +296,49 @@ def test_meta_whatsapp_webhook_creates_native_inbox_message(db_session, monkeypa
     assert replay == receipt.consequence_json
     assert db_session.query(InboxMessage).count() == 1
     assert db_session.query(IntegrationInbox).count() == 1
+
+
+def test_meta_whatsapp_webhook_acknowledges_dead_letter_provider_retry(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
+    body = b'{"entry":[]}'
+
+    def _fail_consequence(*_args, **_kwargs):
+        raise RuntimeError("downstream failure")
+
+    monkeypatch.setattr(
+        inbox_webhooks.team_inbox_channel_receive,
+        "receive_whatsapp_webhook_batch_committed",
+        _fail_consequence,
+    )
+    with pytest.raises(RuntimeError, match="downstream failure"):
+        _run_async(
+            inbox_webhooks.receive_meta_whatsapp_webhook(
+                _request(body, {"X-Hub-Signature-256": _sign(body)}),
+                db_session,
+            )
+        )
+
+    receipt = db_session.query(IntegrationInbox).one()
+    integration_inbox.mark_failed(
+        receipt,
+        error_code="whatsapp_consequence_failed",
+        max_attempts=1,
+    )
+    db_session.commit()
+
+    response = _run_async(
+        inbox_webhooks.receive_meta_whatsapp_webhook(
+            _request(body, {"X-Hub-Signature-256": _sign(body)}),
+            db_session,
+        )
+    )
+
+    db_session.refresh(receipt)
+    assert response == {}
+    assert receipt.state == "dead_letter"
+    assert receipt.attempt_count == 1
 
 
 def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeypatch):

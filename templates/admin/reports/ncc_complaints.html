@@ -155,7 +155,7 @@
       </label>
       <label class="text-sm sm:col-span-2">Email body
         <textarea name="body_template" rows="6" {{ 'disabled' if not can_manage_ncc_email }} class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">{{ weekly_configuration.body_template }}</textarea>
-        <span class="mt-1 block text-xs text-slate-500">Placeholders: {lookback_days}, {row_count}, {not_filable_count}, {report_date}, {download_url}.</span>
+        <span class="mt-1 block text-xs text-slate-500">Placeholders: {lookback_days}, {row_count}, {report_date}, {download_url}.</span>
       </label>
     </div>
     {% if can_manage_ncc_email %}<button type="submit" class="mt-4 rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-white">Save delivery settings</button>{% endif %}

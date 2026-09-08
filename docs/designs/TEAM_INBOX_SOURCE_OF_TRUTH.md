@@ -13,6 +13,27 @@ by its list and detail screens. Providers are transports. They do not decide
 conversation, contact, ticket, assignment, escalation, read, or official
 timeline state.
 
+## Meta contact profile observations and repair
+
+Facebook Messenger and Instagram DM webhooks provide scoped sender identifiers,
+not reliable display names. The Meta transport retrieves the sender profile and
+`communications.team_inbox_processing` records the returned name as provider
+observation metadata. Canonical Party or Subscriber identity still takes
+precedence in Inbox display.
+
+`communications.team_inbox_maintenance` owns historical repair. Its operator
+tool is preview-only by default, produces a digest of exact conversation targets,
+and applies only when the same digest is supplied. Each write locks the
+conversation and refuses to continue if its channel or sender identity changed.
+Unavailable profiles remain unchanged instead of replacing an identifier with a
+guessed name.
+
+Failed Facebook and Instagram replies use a separate preview digest and retry
+only the exact failed message IDs shown in that preview. The outbound owner
+preserves the original failed attempt, creates the retry with provenance, and
+enforces the retry ceiling; repair never rewrites a failed attempt into a false
+success.
+
 Inbox and Support remain separate workspaces and lifecycle owners. A
 conversation may carry a reviewed ticket reference for context, but it does not
 create, transition, assign, or append to the official Support ticket timeline.
@@ -59,7 +80,11 @@ outbound-intent owners.
 The Inbox default queue is the operational active cohort and excludes resolved
 conversations. The explicit **All** view (`view=all`) includes every lifecycle
 status, including resolved conversations, for history review. Explicit status
-filters still narrow the queue to one status.
+filters still narrow the queue to one status. A non-empty search without an
+explicit lifecycle filter searches active and resolved history; `open_only`
+and explicit status filters remain authoritative when present. Historical
+search, All, and Resolved cohorts fetch one bounded page plus a next-page probe;
+they do not scan the full cohort merely to render an exact total.
 
 The stale-conversation policy may resolve an unassigned conversation only when
 its latest non-internal message is a human agent reply older than the configured
@@ -68,6 +93,15 @@ always excludes the conversation. The maintenance owner locks each candidate
 conversation and rechecks assignment and message evidence in the owner
 transaction before applying the audited status transition.
 
+AI customer waiting is not an escalation signal. The AI session owns
+`awaiting_customer`, the wait start, and a separate long-term `expires_at` based
+on `customer_wait_expiry_hours`. Team Inbox maintenance locks only sessions past
+that long-term expiry, rejects races with a newer customer reply or human
+takeover, and closes the inactive session/conversation without creating a note,
+assignment, or FIFO queue entry. Legacy five-minute wait rows are extended onto
+the long-term lifecycle before any consequence. Human routing still occurs only
+for a recorded explicit handoff reason such as a human request, unsupported
+issue, policy boundary, required tool failure, or exhausted troubleshooting.
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the
@@ -197,7 +231,8 @@ Queue communication is also owned by Team Inbox routing. `inbox_queue_notificati
 records initial position notices, movement updates, fifteen-minute unchanged
 heartbeats, handoff notices, dedupe keys, delivery outcome and outbound message
 links. Customer-visible queue messages are sent only through Team Inbox
-outbound intents and only for WhatsApp, Facebook Messenger and Instagram DM.
+outbound intents and only for WhatsApp, Facebook Messenger, Instagram DM, and
+the native chat widget.
 Queue messages never invent estimated wait times. Promotion, transfer,
 resolution, cancellation or assignment stops further queue updates.
 
@@ -441,9 +476,13 @@ stale. Realtime has no replay authority.
   Unreplied, Needs Attention, AI handling, ticket handoff, activity window,
   contact resolution, priority, mute, snooze, open, unassigned, and unread. The
   AI handling count and its drill-down use the same unresolved queue cohort.
-- Pagination uses the projection owner's exact filtered total and compact page
-  sequence. Conversation drill-down URLs preserve the active filters, sort,
-  page size, and page number. A confirmed HTMX reply uses its exact message UUID
+  Lifecycle, assignment/team, and channel are independent filter dimensions:
+  changing one preserves the others, so combinations such as All + My Team +
+  Email resolve as one intersected owner query.
+- Pagination uses an exact filtered total for active queues and bounded
+  next-page evidence for demand-loaded historical cohorts. Conversation
+  drill-down URLs preserve the active filters, sort, page size, and page number.
+  A confirmed HTMX reply uses its exact message UUID
   to fetch one typed message fragment and one filter-aware queue-row fragment;
   it does not rebuild the complete timeline or queue. Non-HTMX mutation
   fallbacks return to the same queue location rather than resetting to page one.

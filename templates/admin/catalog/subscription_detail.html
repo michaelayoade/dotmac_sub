@@ -11,7 +11,7 @@
 {% set can_restore = status_val in ('suspended', 'blocked', 'stopped', 'disabled') %}
 {% set can_suspend = status_val == 'active' %}
 {% set can_disable = status_val not in ('disabled', 'canceled', 'expired', 'hidden', 'archived') %}
-{% set can_cancel = status_val not in ('canceled', 'expired', 'hidden', 'archived') %}
+{% set can_cancel = cancel_subscription_preview and cancel_subscription_preview.eligible %}
 {% set can_change_plan = status_val in ('active', 'pending', 'suspended') %}
 {% set provisioning_router = subscription.provisioning_nas_device %}
 {% set conn = connection_status or {} %}
@@ -26,7 +26,15 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">{{ offer_label }}</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ offer_label }}</h1>
+            <div class="flex flex-wrap items-center gap-2">
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ offer_label }}</h1>
+                {% if pending_plan_change %}
+                <span class="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-amber-900 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-100"
+                      data-testid="pending-plan-change-badge">
+                    Pending plan change
+                </span>
+                {% endif %}
+            </div>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription details and activity.</p>
         </div>
         <div class="flex items-center gap-3" x-data="subscriptionDetailActions()">
@@ -128,6 +136,12 @@
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         Cancel Subscription
                     </button>
+                    {% elif pending_plan_change %}
+                    <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
+                    <div class="px-4 py-2 text-sm text-amber-700 dark:text-amber-300"
+                         data-testid="cancel-subscription-plan-change-blocked">
+                        Cancel the pending plan-change request first. The current subscription must remain in place while that request is open.
+                    </div>
                     {% endif %}
                 </div>
             </div>

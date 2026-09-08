@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -93,6 +95,12 @@ class DocumentDiscountReport:
     discount_type_options: tuple[DiscountReportOption, ...]
     status_options: tuple[DiscountReportOption, ...]
     source_options: tuple[DiscountReportOption, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentDiscountCsvExport:
+    filename: str
+    content: str
 
 
 DOCUMENT_DISCOUNT_LIST = ListDefinition(
@@ -359,3 +367,73 @@ def build_document_discount_report(
     if query.tab is DiscountReportTab.invoices:
         return _invoice_report(db, query, list_query)
     return _quote_report(db, query, list_query)
+
+
+def build_document_discount_export(
+    db: Session, query: DocumentDiscountReportQuery
+) -> DocumentDiscountCsvExport:
+    """Export every row matching the selected report tab and filters."""
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        (
+            "document",
+            "customer",
+            "original_subtotal",
+            "discount_value",
+            "discount_amount",
+            "discounted_subtotal",
+            "total_after_discount",
+            "source",
+            "reason",
+            "actor",
+            "applied_at",
+            "action",
+            "status",
+            "revision",
+        )
+    )
+    page = 1
+    while True:
+        report = build_document_discount_report(
+            db,
+            DocumentDiscountReportQuery(
+                tab=query.tab,
+                date_from=query.date_from,
+                date_to=query.date_to,
+                customer=query.customer,
+                salesperson_id=query.salesperson_id,
+                discount_type=query.discount_type,
+                invoice_status=query.invoice_status,
+                quote_status=query.quote_status,
+                source=query.source,
+                page=page,
+                page_size=100,
+            ),
+        )
+        for row in report.rows:
+            writer.writerow(
+                (
+                    row.document_label,
+                    row.customer_name,
+                    row.original_subtotal_display,
+                    row.discount_value_display,
+                    row.discount_amount_display,
+                    row.discounted_subtotal_display,
+                    row.total_after_discount_display,
+                    row.source_label,
+                    row.reason_display,
+                    row.actor_name,
+                    row.applied_at_display,
+                    row.action.label,
+                    row.document_status.label,
+                    row.revision,
+                )
+            )
+        if page * 100 >= report.total_count:
+            break
+        page += 1
+    return DocumentDiscountCsvExport(
+        filename=f"discounts-{query.tab.value}.csv", content=output.getvalue()
+    )

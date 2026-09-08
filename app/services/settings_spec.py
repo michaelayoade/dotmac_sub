@@ -1060,6 +1060,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
             "support_ticket_status_changed": True,
             "support_ticket_updated": False,
             "support_ticket_resolution_confirmation": True,
+            "support_csat_request": True,
             "work_order_en_route": True,
             "work_order_arrived": True,
             "work_order_complete": True,
@@ -2133,10 +2134,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="invoice_pdf_payment_presentment",
         env_var="BILLING_INVOICE_PDF_PAYMENT_PRESENTMENT",
         value_type=SettingValueType.string,
-        default="bank_account",
+        default="paystack",
         allowed={"bank_account", "paystack", "both"},
         string_normalization=SettingStringNormalization.LOWERCASE,
-        label="Invoice PDF Payment Presentment",
+        label="Invoice PDF Payment Fallback",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -5241,7 +5242,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=(
             "Please find attached the NCC complaints report for the last "
             "{lookback_days} day(s).\nRows included: {row_count}.\n"
-            "Rows not yet filable: {not_filable_count}.\n"
             "Download: {download_url}"
         ),
     ),
@@ -5639,13 +5639,6 @@ SETTINGS_SPECS.extend(
             env_var="CELERY_WORKER_PREFETCH_MULTIPLIER",
             value_type=SettingValueType.integer,
             default=1,
-        ),
-        SettingSpec(
-            domain=SettingDomain.subscriber,
-            key="quote_reconcile_interval_seconds",
-            env_var=None,
-            value_type=SettingValueType.integer,
-            default=3600,
         ),
         SettingSpec(
             domain=SettingDomain.usage,

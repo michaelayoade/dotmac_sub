@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -20,6 +20,7 @@ from app.models.team_inbox import (
 from app.schemas.fiber_inquiry import FiberInquiryRequest
 from app.services import (
     conversation_lead_relationships,
+    inbox_sla,
     team_inbox_assignment,
     team_inbox_automation,
     team_inbox_channel_receive,
@@ -28,7 +29,6 @@ from app.services import (
     team_inbox_participants,
     team_inbox_realtime,
     team_inbox_routing,
-    inbox_sla,
 )
 from app.services.customer_identity_normalization import normalize_email_identifier
 from app.services.owner_commands import CommandContext
@@ -248,7 +248,9 @@ def receive_fiber_inquiry(
     )
     db.add(message)
     db.flush()
-    inbox_sla.record_inbound(db, conversation, occurred_at=message.received_at or message.created_at)
+    inbox_sla.record_inbound(
+        db, conversation, occurred_at=message.received_at or message.created_at
+    )
     team_inbox_participants.record_message_participants(
         db,
         conversation=conversation,
@@ -649,7 +651,9 @@ def receive_inbound_email(
     )
     db.add(message)
     db.flush()
-    inbox_sla.record_inbound(db, conversation, occurred_at=message.received_at or message.created_at)
+    inbox_sla.record_inbound(
+        db, conversation, occurred_at=message.received_at or message.created_at
+    )
 
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
@@ -700,7 +704,3 @@ def receive_inbound_email(
             else None
         ),
     )
-
-
-
-

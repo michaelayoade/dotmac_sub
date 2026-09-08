@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.integration_platform import IntegrationCapabilityBinding
 from app.services.integrations import installations
 from app.services.integrations.connectors.meta_social_runtime import (
+    META_LEAD_CAPTURE_CAPABILITY,
+    META_LEAD_CONVERSION_CAPABILITY,
     META_SOCIAL_RECEIVE_CAPABILITY,
     META_SOCIAL_SEND_CAPABILITY,
     WEBHOOK_SIGNING_SECRET_BINDING,
@@ -19,6 +22,10 @@ from app.services.integrations.meta_social_contracts import (
     MetaContactProfile,
     MetaDirectMessageCommand,
     MetaDirectMessageOutcome,
+    MetaLeadConversionCommand,
+    MetaLeadConversionOutcome,
+    MetaLeadField,
+    MetaLeadObservation,
     MetaSocialChannel,
     MetaWebhookSecretMaterial,
 )
@@ -153,4 +160,104 @@ def fetch_contact_profile(
         display_name=profile.get("display_name"),
         username=profile.get("username"),
         profile_pic=profile.get("profile_pic"),
+    )
+
+
+def fetch_lead(
+    db: Session,
+    *,
+    leadgen_id: str,
+    page_id: str,
+    secret_resolver: Callable[[str | None], str | None] = resolve_secret,
+) -> MetaLeadObservation | None:
+    context = execution_context(
+        db,
+        capability_id=META_LEAD_CAPTURE_CAPABILITY,
+        secret_resolver=secret_resolver,
+    )
+    executor = make_operation_executor(
+        context,
+        correlation_id=f"meta-lead:{leadgen_id}",
+        trigger=OperationTrigger.inbound,
+        actor="integration.meta_social",
+        timeout_seconds=15,
+    )
+    result = executor("fetch_lead", {"leadgen_id": leadgen_id, "page_id": page_id})
+    if result.status is not OperationStatus.succeeded:
+        return None
+    output = result.output if isinstance(result.output, dict) else {}
+    raw = output.get("lead")
+    if not isinstance(raw, dict):
+        return None
+    raw_fields = raw.get("field_data")
+    fields: list[MetaLeadField] = []
+    if isinstance(raw_fields, list):
+        for item in raw_fields:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            values = item.get("values")
+            if not name or not isinstance(values, list):
+                continue
+            fields.append(
+                MetaLeadField(
+                    name=name,
+                    values=tuple(
+                        str(value).strip()
+                        for value in values[:20]
+                        if str(value).strip()
+                    ),
+                )
+            )
+    from datetime import datetime
+
+    try:
+        created = datetime.fromisoformat(str(raw.get("created_time") or ""))
+        return MetaLeadObservation(
+            leadgen_id=leadgen_id,
+            created_at=created,
+            page_id=page_id,
+            form_id=str(raw.get("form_id") or ""),
+            campaign_id=str(raw.get("campaign_id") or ""),
+            ad_set_id=str(raw.get("adset_id") or "").strip() or None,
+            ad_id=str(raw.get("ad_id") or "").strip() or None,
+            fields=tuple(fields),
+        )
+    except (ValueError, ValidationError):
+        return None
+
+
+def send_lead_conversion(
+    db: Session,
+    command: MetaLeadConversionCommand,
+    *,
+    secret_resolver: Callable[[str | None], str | None] = resolve_secret,
+) -> MetaLeadConversionOutcome:
+    context = execution_context(
+        db,
+        capability_id=META_LEAD_CONVERSION_CAPABILITY,
+        secret_resolver=secret_resolver,
+    )
+    executor = make_operation_executor(
+        context,
+        correlation_id=command.correlation_id,
+        trigger=OperationTrigger.interactive
+        if command.preview
+        else OperationTrigger.event,
+        actor="integration.meta_social",
+        timeout_seconds=int(context.config.get("timeout_seconds") or 10) + 5,
+    )
+    result = executor(
+        "send_lead_conversion",
+        {
+            "leadgen_id": command.leadgen_id,
+            "event_time": int(command.converted_at.timestamp()),
+            "event_id": command.event_id,
+            "preview": command.preview,
+        },
+    )
+    return MetaLeadConversionOutcome(
+        accepted=result.status is OperationStatus.succeeded,
+        operation_status=result.status.value,
+        error_code=result.error_code,
     )

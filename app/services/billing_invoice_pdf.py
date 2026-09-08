@@ -52,6 +52,10 @@ NAIRA_SIGN = "₦"
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
 INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
 INVOICE_PDF_PAYMENT_PRESENTMENT_KEY = "invoice_pdf_payment_presentment"
+CUSTOMER_PAYMENT_METHOD_PAYSTACK_VALUES = frozenset(
+    {"paystack", "card", "cards", "online", "online_payment"}
+)
+CUSTOMER_PAYMENT_METHOD_TRANSFER_VALUES = frozenset({"transfer", "bank_transfer"})
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
@@ -67,6 +71,14 @@ class InvoicePaymentPresentment:
     mode: InvoicePdfPaymentPresentment
     bank_details: dict[str, str] | None
     payment_url: str | None
+
+
+@dataclass(frozen=True)
+class InvoicePdfDownload:
+    """Canonical invoice document returned to an authorized adapter."""
+
+    filename: str
+    stream: StreamResult
 
 
 def _normalize_requested_by_id(db: Session, requested_by_id: str | None) -> str | None:
@@ -177,20 +189,42 @@ def _resolve_invoice_pdf_payment_presentment(
         db, SettingDomain.billing, INVOICE_PDF_PAYMENT_PRESENTMENT_KEY
     )
     value = (
-        str(raw_value or InvoicePdfPaymentPresentment.bank_account.value)
-        .strip()
-        .lower()
+        str(raw_value or InvoicePdfPaymentPresentment.paystack.value).strip().lower()
     )
     try:
         return InvoicePdfPaymentPresentment(value)
     except ValueError:
+        return InvoicePdfPaymentPresentment.paystack
+
+
+def _normalize_customer_payment_method(value: str | None) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _customer_invoice_payment_presentment(
+    invoice: Invoice,
+) -> InvoicePdfPaymentPresentment | None:
+    account = getattr(invoice, "account", None)
+    if account is None:
+        return None
+    payment_method = _normalize_customer_payment_method(
+        cast(str | None, getattr(account, "payment_method", None))
+    )
+    if not payment_method:
+        return None
+    if payment_method in CUSTOMER_PAYMENT_METHOD_TRANSFER_VALUES:
         return InvoicePdfPaymentPresentment.bank_account
+    if payment_method in CUSTOMER_PAYMENT_METHOD_PAYSTACK_VALUES:
+        return InvoicePdfPaymentPresentment.paystack
+    return InvoicePdfPaymentPresentment.paystack
 
 
 def _invoice_payment_presentment(
     db: Session, brand: ResolvedBrand, invoice: Invoice
 ) -> InvoicePaymentPresentment:
-    mode = _resolve_invoice_pdf_payment_presentment(db)
+    mode = _customer_invoice_payment_presentment(
+        invoice
+    ) or _resolve_invoice_pdf_payment_presentment(db)
     bank_details = None
     if mode in {
         InvoicePdfPaymentPresentment.bank_account,
@@ -1068,6 +1102,12 @@ def _is_export_fresh(
         )
         if presentment_updated_at and completed_at < presentment_updated_at:
             return False
+        account = getattr(invoice, "account", None)
+        if account is None and getattr(invoice, "account_id", None):
+            account = db.get(Subscriber, invoice.account_id)
+        account_updated = _as_utc(getattr(account, "updated_at", None))
+        if account_updated and completed_at < account_updated:
+            return False
     invoice_updated = _as_utc(invoice.updated_at or invoice.created_at)
     if invoice_updated and completed_at < invoice_updated:
         return False
@@ -1399,6 +1439,51 @@ def maybe_finalize_stalled_export(
 
 def download_filename(invoice: Invoice) -> str:
     return f"invoice-{_safe_invoice_number(invoice)}.pdf"
+
+
+def resolve_download(
+    db: Session,
+    *,
+    invoice: Invoice,
+    requested_by_id: str | None = None,
+) -> InvoicePdfDownload:
+    """Return a fresh canonical PDF stream, generating the export when needed."""
+
+    latest = maybe_finalize_stalled_export(db, get_latest_export(db, str(invoice.id)))
+    if is_export_cache_valid(db, invoice, latest):
+        if latest is None:  # Defensive narrowing for the type checker.
+            raise ObjectNotFoundError("Missing invoice PDF export")
+        try:
+            return InvoicePdfDownload(
+                filename=download_filename(invoice),
+                stream=stream_export(db, latest),
+            )
+        except Exception:
+            logger.debug(
+                "Failed streaming cached invoice PDF for invoice %s",
+                invoice.id,
+                exc_info=True,
+            )
+
+    try:
+        generated = generate_export_now(
+            db,
+            invoice_id=str(invoice.id),
+            requested_by_id=requested_by_id,
+        )
+        if is_export_cache_valid(db, invoice, generated):
+            return InvoicePdfDownload(
+                filename=download_filename(invoice),
+                stream=stream_export(db, generated),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed resolving invoice PDF download for invoice %s",
+            invoice.id,
+            exc_info=True,
+        )
+        raise ObjectNotFoundError(f"Invoice PDF unavailable for {invoice.id}") from exc
+    raise ObjectNotFoundError(f"Invoice PDF unavailable for {invoice.id}")
 
 
 def _invoice_owner_subscriber_id(invoice: Invoice):

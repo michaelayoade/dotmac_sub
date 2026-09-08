@@ -1381,8 +1381,10 @@ SERVICES: tuple[SOTService, ...] = (
             "work-item, audit, customer-intent, and event participants in one "
             "owner-managed transaction. Customer-entered WHT is admitted only "
             "through a server-issued invoice intent snapshot; consolidated "
-            "arbitrary credit fails closed for automatic WHT. HTTP adapters only "
-            "map typed results and domain errors."
+            "arbitrary credit fails closed for automatic WHT. Subscriber proof "
+            "verification also rejects a reference already represented by an "
+            "account Payment after taking the shared account lock. HTTP adapters "
+            "only map typed results and domain errors."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1480,8 +1482,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
                         "typed submitted, verified, and rejected transitions, "
-                        "duplicate-reference policy, amount/WHT validation, and "
-                        "versioned event vocabulary"
+                        "proof/payment duplicate-reference policy, amount/WHT "
+                        "validation, and versioned event vocabulary"
                     ),
                 ),
                 AuthorityInput(
@@ -1734,6 +1736,200 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_payment_proof_admin_routes.py",
                 "tests/test_payment_proof_duplicate_correction.py",
                 "tests/architecture/test_payment_proof_reviewer_notification_ownership.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.manual_payment_recording",
+        module="app.services.manual_payment_recording",
+        owns=(
+            "administrative manual-payment duplicate-risk preview",
+            "locked administrative manual-payment confirmation",
+        ),
+        depends_on=(
+            "customer.accounts",
+            "events.dispatcher",
+            "financial.payment_proofs",
+            "financial.payments",
+            "observability.audit_log",
+        ),
+        notes=(
+            "This coordinator requires a unique account-scoped reference for a "
+            "confirmed staff-entered payment, blocks an existing payment or "
+            "submitted proof with that reference, and presents bounded same-amount "
+            "payment/proof evidence for explicit acknowledgement. Confirmation "
+            "locks the account, rebuilds both financial and duplicate-control "
+            "previews, and delegates all money effects to financial.payments."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="administrative manual-payment duplicate-risk preview",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "administrative manual-payment command evidence",
+                        "canonical subscriber account",
+                        "canonical payment documents",
+                        "canonical payment-proof records",
+                    ),
+                ),
+                ConcernContract(
+                    name="locked administrative manual-payment confirmation",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "administrative manual-payment command evidence",
+                        "canonical subscriber account",
+                        "canonical payment documents",
+                        "canonical payment-proof records",
+                        "canonical payment creation participant protocol",
+                        "canonical audit protocol",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="administrative manual-payment command evidence",
+                    owner="financial.manual_payment_recording",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed account, amount, currency, status, payment reference, "
+                        "financial preview fingerprint, duplicate-control fingerprint, "
+                        "risk acknowledgement, actor, scope, reason, and idempotency"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical subscriber account",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="locked Subscriber account identity",
+                ),
+                AuthorityInput(
+                    name="canonical payment documents",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "account-scoped Payment identity, amount, currency, status, "
+                        "reference, settlement timestamp, and active lifecycle"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment-proof records",
+                    owner="financial.payment_proofs",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "account-scoped submitted PaymentProof identity, claimed "
+                        "amount, currency, reference, and transfer timestamp"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment creation participant protocol",
+                    owner="financial.payments",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "flush-only locked payment preview, idempotency reservation, "
+                        "settlement, ledger, audit, and payment.received event contract"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical audit protocol",
+                    owner="observability.audit_log",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="transactional staff decision and duplicate-risk evidence",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "Confirmation enters one owner command on a transaction-free "
+                    "adapter session and commits the payment, settlement, ledger, "
+                    "duplicate-control audit, and outbox events atomically."
+                ),
+                locking=(
+                    "The Subscriber account is locked before duplicate payment and "
+                    "proof evidence is rebuilt; the payment participant follows the "
+                    "same account-first order before reserving idempotency."
+                ),
+                idempotency=(
+                    "The payment-creation key binds one exact request and result. "
+                    "An exact replay returns that payment without re-evaluating it as "
+                    "a duplicate or staging another audit/event."
+                ),
+                retries=(
+                    "Exact replay is safe. Stale financial or duplicate evidence "
+                    "requires a new preview; reference conflicts and missing "
+                    "acknowledgement fail closed."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.manual_payment_recording.reference_required",
+                    "financial.manual_payment_recording.reference_already_recorded",
+                    "financial.manual_payment_recording.reference_has_submitted_proof",
+                    "financial.manual_payment_recording.invalid_scope",
+                    "financial.manual_payment_recording.idempotency_conflict",
+                    "financial.manual_payment_recording.stale_payment_preview",
+                    "financial.manual_payment_recording.stale_duplicate_evidence",
+                    "financial.manual_payment_recording.duplicate_risk_acknowledgement_required",
+                    *owner_command_boundary_error_codes(
+                        "financial.manual_payment_recording"
+                    ),
+                ),
+                mapping_owner="admin billing web and API adapters",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "missing confirmed-payment reference",
+                    "existing same-account reference",
+                    "submitted proof carrying the same reference",
+                    "stale financial or duplicate evidence",
+                    "unacknowledged same-amount payment or proof evidence",
+                    "active caller transaction or manifest mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=("manual_payment.recorded",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries payment/account identities, control "
+                    "fingerprint, acknowledgement state, and bounded evidence IDs "
+                    "without bank references or customer identity data."
+                ),
+                replay=(
+                    "Payment idempotency returns the existing result and emits no "
+                    "second manual-payment event."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner=(
+                    "generic admin payment form with a sixty-second amount-only "
+                    "double-click guard and no payment-proof awareness"
+                ),
+                new_owner="financial.manual_payment_recording",
+                verification=(
+                    "reference, payment collision, submitted-proof, same-amount "
+                    "warning, acknowledgement, stale-preview, replay, route, "
+                    "template, registry, and architecture tests"
+                ),
+                cutover_gate=(
+                    "Admin web and payment-creation API preview/confirm adapters use "
+                    "only this coordinator for confirmed manual settlement."
+                ),
+                fallback_retirement=(
+                    "The admin form no longer calls generic payment confirmation or "
+                    "relies on the sixty-second amount-only check as its control."
+                ),
+            ),
+            steward="finance operations",
+            design_refs=(
+                "docs/designs/MANUAL_PAYMENT_DUPLICATE_CONTROL.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+            ),
+            test_refs=(
+                "tests/test_manual_payment_recording.py",
+                "tests/test_billing_money_action_templates.py",
+                "tests/architecture/test_manual_payment_recording_boundary.py",
             ),
         ),
     ),

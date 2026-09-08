@@ -73,8 +73,6 @@ from app.services.prepaid_funding_reconstruction import (
 from app.services.prepaid_service_renewals import (
     FundingChangeRenewalDisposition,
     apply_due_prepaid_service_after_funding_change,
-    confirm_prepaid_service_renewal,
-    preview_prepaid_service_renewal,
 )
 from tests.prepaid_funding_helpers import (
     ensure_test_prepaid_contract,
@@ -134,6 +132,7 @@ def _payment(
         account_id=account.id,
         amount=amount,
         provider_fee=provider_fee,
+        refunded_amount=Decimal("0.00"),
         currency="NGN",
         status=PaymentStatus.succeeded,
         paid_at=paid_at,
@@ -151,6 +150,7 @@ def _payment(
         currency="NGN",
         memo="Reviewed test payment",
         is_active=True,
+        affects_customer_position=False,
         effective_date=paid_at,
         created_at=paid_at,
     )
@@ -439,6 +439,111 @@ def test_historical_paid_invoice_repair_accepts_stale_anchor_and_old_entitlement
     assert preview.payment_id == payment.id
     assert preview.billing_period_start == datetime(2026, 8, 2, 23, tzinfo=UTC)
     assert preview.billing_period_end == datetime(2026, 9, 2, 23, tzinfo=UTC)
+
+
+def test_historical_paid_invoice_repair_accepts_same_business_day_due_anchor(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, payment, allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    paid_at = datetime(2026, 8, 31, 8, 21, 57, tzinfo=UTC)
+    current_anchor = datetime(2026, 8, 31, tzinfo=UTC)
+    next_anchor = datetime(2026, 9, 30, tzinfo=UTC)
+    invoice.issued_at = paid_at
+    invoice.paid_at = paid_at
+    invoice.due_at = next_anchor
+    payment.paid_at = paid_at
+    payment.created_at = paid_at
+    payment.settlement.created_at = paid_at
+    subscriber.status = SubscriberStatus.suspended
+    subscription.status = SubscriptionStatus.suspended
+    subscription.access_state = "suspended"
+    subscription.next_billing_at = current_anchor
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            starts_at=datetime(2026, 7, 31, tzinfo=UTC),
+            ends_at=current_anchor,
+            amount_funded=Decimal("18812.50"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+            metadata_={"source": "previous_paid_period"},
+        )
+    )
+    db_session.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            notes="pytest same business-day due anchor lock",
+        )
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+    db_session.commit()
+
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+
+    assert preview.disposition is (
+        PaidPrepaidInvoiceRepairDisposition.exact_paid_unlinked_invoice
+    )
+    assert preview.actionable is True
+    assert preview.allocation_id == allocation.id
+    assert preview.billing_period_start == current_anchor
+    assert preview.billing_period_end == next_anchor
+    invoice_id = invoice.id
+    subscription_id = subscription.id
+    fingerprint = preview.fingerprint
+    db_session.commit()
+
+    result = repair_historical_paid_prepaid_invoice(
+        db_session,
+        RepairHistoricalPaidPrepaidInvoiceCommand(
+            context=CommandContext.system(
+                actor="pytest:billing-operator",
+                scope="prepaid_draft_reconciliation",
+                reason="Reviewed exact same-day paid invoice evidence",
+                idempotency_key=f"pytest-paid-anchor-boundary-{invoice_id}",
+            ),
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
+            preview_fingerprint=fingerprint,
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscription)
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    repaired_entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .one()
+    )
+    assert result.subscriptions_restored == 1
+    assert invoice.billing_period_start == current_anchor.replace(tzinfo=None)
+    assert invoice.billing_period_end == next_anchor.replace(tzinfo=None)
+    assert line.subscription_id == subscription.id
+    assert repaired_entitlement.starts_at == current_anchor.replace(tzinfo=None)
+    assert repaired_entitlement.ends_at == next_anchor.replace(tzinfo=None)
+    assert subscription.next_billing_at == next_anchor.replace(tzinfo=None)
+    assert subscription.status is SubscriptionStatus.active
+    assert subscriber.status is SubscriberStatus.active
 
 
 def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
@@ -1525,7 +1630,7 @@ def test_legacy_unbacked_credit_is_separated_from_native_shortfall(
     assert preview.shortfall == Decimal("18812.50")
 
 
-def test_funding_change_settles_exact_existing_draft_before_direct_renewal(
+def test_funding_change_settles_exact_existing_draft_before_new_invoice(
     db_session,
     subscriber,
     subscription,
@@ -1684,26 +1789,56 @@ def test_exact_direct_renewal_overlap_voids_duplicate_without_second_charge(
         Decimal("100.00"),
         position_at=datetime(2026, 7, 16, tzinfo=UTC),
     )
-    renewal_preview = preview_prepaid_service_renewal(
-        db_session,
-        subscription_id=subscription.id,
-        starts_at=START,
-        ends_at=END,
+    ledger_entry = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.adjustment,
+        category=LedgerCategory.internet_service,
         amount=Decimal("100.00"),
         currency="NGN",
+        memo="Historical direct prepaid renewal",
+        effective_date=START,
+        affects_customer_position=True,
     )
-    renewal = confirm_prepaid_service_renewal(
-        db_session,
-        renewal_preview,
-        evidence_ref="pytest:historical-direct-renewal",
+    db_session.add(ledger_entry)
+    db_session.flush()
+    adjustment = AccountAdjustment(
+        account_id=subscriber.id,
+        category=LedgerCategory.internet_service,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        memo="Historical direct prepaid renewal",
+        reason="Pre-invoice renewal evidence fixture",
+        origin="prepaid_service_renewal",
+        origin_ref=f"{subscription.id}:{START.isoformat()}:{END.isoformat()}",
+        prepaid_funding_before=Decimal("100.00"),
+        prepaid_funding_after=Decimal("0.00"),
+        postpaid_receivables=Decimal("0.00"),
+        collection_blocking_balance=Decimal("0.00"),
+        access_consequence="none_adjustment_only",
+        preview_fingerprint="a" * 64,
+        idempotency_key=f"legacy-renewal-{subscription.id}",
+        ledger_entry_id=ledger_entry.id,
     )
+    entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        source_ledger_entry_id=ledger_entry.id,
+        starts_at=START,
+        ends_at=END,
+        amount_funded=Decimal("100.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_={"source": "scheduled_prepaid_service_renewal"},
+    )
+    db_session.add_all([adjustment, entitlement])
     db_session.commit()
 
     invoice_id = invoice.id
     preview = preview_prepaid_draft_reconciliation(db_session, invoice_id)
     assert preview.disposition is PrepaidDraftDisposition.already_renewed
     assert preview.recommended_action is PrepaidDraftAction.void_duplicate
-    assert preview.entitlement_ids == (renewal.entitlement.id,)
+    assert preview.entitlement_ids == (entitlement.id,)
     db_session.commit()
 
     result = reconcile_prepaid_draft_invoice(
@@ -1922,5 +2057,11 @@ def test_funding_change_voids_duplicate_then_funds_current_renewal(
     assert result.funded == 1
     assert invoice.status is InvoiceStatus.void
     assert db_session.query(ServiceEntitlement).count() == 2
-    assert db_session.query(AccountAdjustment).count() == 1
+    assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(PaymentAllocation).count() == 0
+    renewal_invoice = db_session.query(Invoice).filter(Invoice.id != invoice.id).one()
+    consumption = db_session.query(PrepaidOpeningFundingConsumption).one()
+    assert consumption.invoice_id == renewal_invoice.id
+    assert consumption.amount == Decimal("100.00")
+    assert renewal_invoice.status is InvoiceStatus.paid
+    assert renewal_invoice.balance_due == Decimal("0.00")

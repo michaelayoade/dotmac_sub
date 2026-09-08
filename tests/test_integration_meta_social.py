@@ -124,6 +124,7 @@ def _secrets() -> dict[str, str]:
         "meta_oauth_access_token": "test-meta-oauth-token",
         "webhook_signing_secret": "test-signing-secret",
         "webhook_verify_token": "test-verify-token",
+        "conversions_api_access_token": "test-conversions-token",
     }
 
 
@@ -158,6 +159,7 @@ def test_configuration_owner_persists_refs_and_distinct_auth_modes(db_session):
     assert {binding.capability_id for binding in installation.capability_bindings} == {
         "messaging.send.v1",
         "messaging.receive.v1",
+        "sales.lead_capture.v1",
     }
     assert result.installation_state == "disabled"
 
@@ -192,6 +194,37 @@ def test_configuration_owner_persists_shared_oauth_mode(db_session):
     )
     assert "facebook_page_access_token" not in revision.secret_refs
     assert "instagram_login_access_token" not in revision.secret_refs
+
+
+def test_configuration_owner_binds_lead_conversion_only_when_configured(db_session):
+    result = configure_meta_social_installation(
+        db_session,
+        _command(
+            conversion_dataset_id="dataset-1",
+            conversion_event_name="CustomerConverted",
+            conversions_api_access_token_ref=(
+                "bao://secret/integrations/meta_social#conversions_api_access_token"
+            ),
+        ),
+        context=_context(),
+    )
+
+    installation = db_session.get(IntegrationInstallation, result.installation_id)
+    assert installation is not None
+    assert {binding.capability_id for binding in installation.capability_bindings} == {
+        "messaging.send.v1",
+        "messaging.receive.v1",
+        "sales.lead_capture.v1",
+        "sales.lead_conversion.send.v1",
+    }
+    assert installation.current_config_revision is not None
+    assert (
+        installation.current_config_revision.config_json["conversion_dataset_id"]
+        == "dataset-1"
+    )
+    assert installation.current_config_revision.secret_refs[
+        "conversions_api_access_token"
+    ].endswith("#conversions_api_access_token")
 
 
 def test_configuration_projection_never_returns_secret_references(db_session):
@@ -404,6 +437,129 @@ def test_runtime_connection_validation_probes_each_bound_account(monkeypatch):
     assert result == ValidationResult(valid=True)
     assert any("graph.facebook.com" in url for url in observed)
     assert any("graph.instagram.com" in url for url in observed)
+
+
+def test_instagram_profile_fetch_addresses_the_webhook_sender(monkeypatch):
+    observed: list[str] = []
+
+    def provider_get(url, *, params, headers, timeout):
+        observed.append(url)
+        return httpx.Response(
+            200,
+            json={"id": "igsid-42", "name": "Shallom", "username": "shallom"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(meta_social_runtime.httpx, "get", provider_get)
+    envelope = _envelope(channel=MetaSocialChannel.instagram_dm)
+    envelope = envelope.model_copy(
+        update={
+            "payload": {
+                "action": "fetch_profile",
+                "params": {
+                    "channel": "instagram_dm",
+                    "contact_id": "igsid-42",
+                },
+            }
+        }
+    )
+
+    result = meta_social_runtime.MetaSocialRuntimeRunner().execute(
+        envelope,
+        config=_config(),
+        secret_material=_secrets(),
+    )
+
+    assert result.status is OperationStatus.succeeded
+    assert observed == ["https://graph.instagram.com/v21.0/igsid-42"]
+    assert result.output["profile"]["display_name"] == "Shallom"
+
+
+def test_runtime_fetches_lead_details_after_verified_webhook(monkeypatch):
+    def provider_get(url, *, params, headers, timeout):
+        if url.endswith("/ad-1"):
+            assert params["fields"] == "campaign_id,adset_id"
+            return httpx.Response(
+                200,
+                json={"campaign_id": "campaign-1", "adset_id": "adset-1"},
+                request=httpx.Request("GET", url),
+            )
+        assert url == "https://graph.facebook.com/v21.0/leadgen-42"
+        assert "field_data" in params["fields"]
+        return httpx.Response(
+            200,
+            json={
+                "id": "leadgen-42",
+                "created_time": "2026-09-01T10:00:00+00:00",
+                "ad_id": "ad-1",
+                "form_id": "form-1",
+                "field_data": [{"name": "email", "values": ["lead@example.test"]}],
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(meta_social_runtime.httpx, "get", provider_get)
+    envelope = _envelope(channel=MetaSocialChannel.facebook_messenger).model_copy(
+        update={
+            "capability_id": meta_social_runtime.META_LEAD_CAPTURE_CAPABILITY,
+            "payload": {
+                "action": "fetch_lead",
+                "params": {"leadgen_id": "leadgen-42", "page_id": "page-1"},
+            },
+        }
+    )
+
+    result = meta_social_runtime.MetaSocialRuntimeRunner().execute(
+        envelope, config=_config(), secret_material=_secrets()
+    )
+
+    assert result.status is OperationStatus.succeeded
+    assert result.output["lead"]["id"] == "leadgen-42"
+    assert result.output["lead"]["campaign_id"] == "campaign-1"
+
+
+def test_runtime_conversion_retry_reuses_stable_event_id(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def provider_post(url, *, json, headers, timeout):
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={"events_received": 1},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(meta_social_runtime.httpx, "post", provider_post)
+    envelope = _envelope(channel=MetaSocialChannel.facebook_messenger).model_copy(
+        update={
+            "capability_id": meta_social_runtime.META_LEAD_CONVERSION_CAPABILITY,
+            "payload": {
+                "action": "send_lead_conversion",
+                "params": {
+                    "leadgen_id": "leadgen-42",
+                    "event_time": 1788256800,
+                    "event_id": "event-42",
+                },
+            },
+        }
+    )
+    config = {
+        **_config(),
+        "conversion_dataset_id": "dataset-1",
+        "conversion_event_name": "CustomerConverted",
+    }
+
+    first = meta_social_runtime.MetaSocialRuntimeRunner().execute(
+        envelope, config=config, secret_material=_secrets()
+    )
+    second = meta_social_runtime.MetaSocialRuntimeRunner().execute(
+        envelope, config=config, secret_material=_secrets()
+    )
+
+    assert first.status is OperationStatus.succeeded
+    assert second.status is OperationStatus.succeeded
+    assert calls[0]["data"][0]["event_id"] == "event-42"
+    assert calls[1]["data"][0]["event_id"] == "event-42"
 
 
 def test_typed_facade_returns_sanitized_outcome(db_session, monkeypatch):

@@ -5365,6 +5365,24 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/invoices/accounting-sync/v2": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:account_id",
+    "query:invoice_id",
+    "query:is_active",
+    "query:limit",
+    "query:offset",
+    "query:status",
+    "query:updated_since"
+   ],
+   "request": null,
+   "responses": {
+    "200": "5b040a46c8db",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/invoices/sync": {
    "params": [
     "header:authorization",
@@ -5714,6 +5732,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/me/invoices/{invoice_id}/pdf": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:invoice_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/me/ledger": {
    "params": [
     "header:authorization",
@@ -5728,6 +5758,18 @@
    "request": null,
    "responses": {
     "200": "cf908605dbeb",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/me/ledger/{entry_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:entry_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "97e0baea011b",
     "422": "a11c9d9b2af8"
    }
   },
@@ -5779,6 +5821,30 @@
    "request": null,
    "responses": {
     "200": "3edab48bd4d3",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/me/payments/{payment_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:payment_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "43c096131c5b",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/me/payments/{payment_id}/receipt/pdf": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:payment_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -14677,6 +14743,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/manager/assignments/{assignment_queue_id}/unassign": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:assignment_queue_id!"
+   ],
+   "request": "f5008b845753",
+   "responses": {
+    "200": "08afcc245f37",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/manager/equipment-custody": {
    "params": [
     "header:authorization",
@@ -14702,13 +14781,14 @@
   },
   "POST /api/v1/field/manager/expenses/{expense_request_id}/approve": {
    "params": [
+    "header:X-Request-ID",
     "header:authorization",
     "header:x-api-key",
     "path:expense_request_id!"
    ],
    "request": null,
    "responses": {
-    "200": "6cc1ebd3f658",
+    "200": "39a569c0cfe0",
     "422": "a11c9d9b2af8"
    }
   },
@@ -16817,7 +16897,7 @@
     "header:authorization",
     "header:x-api-key"
    ],
-   "request": "38270a0532b3",
+   "request": "4ae7a69b7033",
    "responses": {
     "201": "43c096131c5b",
     "422": "a11c9d9b2af8"
@@ -16828,9 +16908,9 @@
     "header:authorization",
     "header:x-api-key"
    ],
-   "request": "fafead161866",
+   "request": "bc6675cbbcec",
    "responses": {
-    "200": "baa74896df88",
+    "200": "7f6326e7807c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18519,6 +18599,16 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/webhooks/erp-staff-access/{capability_binding_id}": {
+   "params": [
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "6cfc0f329950",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/webhooks/fiber-inquiry/{capability_binding_id}": {
    "params": [
     "path:capability_binding_id!"
@@ -19018,8 +19108,8 @@
   "AddressType": "5e189902233b",
   "AddressUpdate": "f9f6114113e3",
   "AiIntakeConfigMetadata": "cfac9698536d",
-  "AiIntakeConfigRead": "240e16e3046b",
-  "AiIntakeConfigUpsert": "bb13c8c65243",
+  "AiIntakeConfigRead": "3e871d475e00",
+  "AiIntakeConfigUpsert": "526098afff43",
   "AiIntakeDepartmentMapping": "16e83ce18e10",
   "AiIntakeIntent": "3c85050864ae",
   "AlertAcknowledgeRequest": "558f6dec1ec8",
@@ -19136,7 +19226,7 @@
   "Body_my_add_ticket_comment_api_v1_me_support_tickets__ticket_id__comments_post": "d1a3a0cea554",
   "Body_my_create_ticket_api_v1_me_support_tickets_post": "2ae0ec94443b",
   "Body_submit_account_payment_proof_api_v1_payment_proofs_reseller_accounts__account_id__post": "ccea971d58ff",
-  "Body_submit_my_payment_proof_api_v1_payment_proofs_me_post": "d9b77dbb728d",
+  "Body_submit_my_payment_proof_api_v1_payment_proofs_me_post": "9b733ca2d165",
   "Body_submit_reseller_consolidated_proof_api_v1_payment_proofs_reseller_consolidated_post": "7e14a6cc3202",
   "Body_upload_avatar_api_v1_auth_me_avatar_post": "46d7e6a42f9a",
   "Body_upload_field_attachment_api_v1_field_attachments_post": "e39e31ee5e0c",
@@ -19288,6 +19378,7 @@
   "ElevationRead": "3ca3d8f2a410",
   "ErpDepartmentReference": "5ce6be19bec1",
   "ErpMaterialStatusReceipt": "dea085458884",
+  "ErpStaffAccessReceipt": "b87b89d22096",
   "ErrorDetail": "baaa77850daa",
   "ErrorResponse": "9a1634f1cfc4",
   "EtaUpdateCreate": "3b90f58a7082",
@@ -19351,11 +19442,12 @@
   "FieldEquipmentRead": "c401fc79d178",
   "FieldEquipmentRecord": "7c7bcf16d5ae",
   "FieldEquipmentReturnRequest": "80e3640552d3",
+  "FieldExpenseApprovalRead": "64ecf6941a17",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
   "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "4e1e5219e3d4",
+  "FieldExpenseRequestRead": "838acdc17f32",
   "FieldExpenseRequestSubmit": "e8a7e3d6ec5a",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
@@ -19386,8 +19478,9 @@
   "FieldLinkBudgetRead": "0fe4def40cc4",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
-  "FieldManagerJob": "2ad78b39db67",
+  "FieldManagerJob": "ec32bb6e783f",
   "FieldManagerJobAssignRequest": "b448cdab2bda",
+  "FieldManagerJobUnassignRequest": "2a9593a4d2f2",
   "FieldManagerMaterialRejectRequest": "c88a1edfa686",
   "FieldManagerMeResponse": "2f2d847e8029",
   "FieldManagerSummary": "5b25b71d2a7f",
@@ -19404,7 +19497,7 @@
   "FieldMaterialRequestCreate": "beb591240e6a",
   "FieldMaterialRequestItemCreate": "04759e76cb22",
   "FieldMaterialRequestItemRead": "1e218709f934",
-  "FieldMaterialRequestRead": "c01095e4d9b6",
+  "FieldMaterialRequestRead": "e962f5239169",
   "FieldMaterialRequestSubmit": "0bac3c573aa7",
   "FieldMeResponse": "92ccd05b3f23",
   "FieldMovementRead": "e6afbc3e60fc",
@@ -19494,6 +19587,8 @@
   "InboxTimelineMessageRead": "b29644b7b503",
   "InboxTimelineTeamRead": "0e7f8064a2de",
   "InformPayload": "338a13a14dd0",
+  "InfrastructureReference": "45072c99b2ce",
+  "InfrastructureType": "dfbf0db36551",
   "InstallAppointmentCreate": "92b473c163ab",
   "InstallAppointmentRead": "01daf8d2c86e",
   "InstallAppointmentUpdate": "28f4d5850436",
@@ -19545,6 +19640,12 @@
   "IntegratorSettlementMirrorReport": "6c4cf5ced22b",
   "IntegratorSettlementReceipt": "5aefc8c7f135",
   "InterfaceStatus": "20c251764046",
+  "InvoiceAccountingSyncDisposition": "24602856e05b",
+  "InvoiceAccountingSyncIssueCode": "794ea8914f37",
+  "InvoiceAccountingSyncIssueRead": "605f4d7a3162",
+  "InvoiceAccountingSyncLineRead": "c8e15125f57a",
+  "InvoiceAccountingSyncRead": "7dfa7a66e30c",
+  "InvoiceAccountingSyncSourceKind": "8be30288740f",
   "InvoiceBulkActionResponse": "4f4b4d0b09e5",
   "InvoiceBulkVoidRequest": "20ea34f498f7",
   "InvoiceBulkWriteOffRequest": "5a2aadec6ec8",
@@ -19572,8 +19673,9 @@
   "InvoiceRunRequest": "5817755e1053",
   "InvoiceRunResponse": "efd971b279b4",
   "InvoiceStatus": "dcf52835e2bf",
+  "InvoiceSyncAccountRead": "beffdf748598",
   "InvoiceSyncLineRead": "5d4a23b29375",
-  "InvoiceSyncRead": "46253f3c5f32",
+  "InvoiceSyncRead": "29e4cabfc620",
   "InvoiceUpdate": "ae0c65766866",
   "InvoiceWriteOffRequest": "fa4480c6ae89",
   "IpBlockCreate": "1064f90d2450",
@@ -19693,6 +19795,7 @@
   "ListResponse_IntegrationJobRead_": "4084eb06197f",
   "ListResponse_IntegrationRunRead_": "2d2a86b0a611",
   "ListResponse_IntegrationTargetRead_": "13dc8fbea6bf",
+  "ListResponse_InvoiceAccountingSyncRead_": "735a4e44c7b5",
   "ListResponse_InvoiceLineRead_": "c0bb00916c4f",
   "ListResponse_InvoiceRead_": "3c1c5f729682",
   "ListResponse_InvoiceSyncRead_": "661a97de2eee",
@@ -19809,6 +19912,10 @@
   "MFAMethodRead": "006b381ab9f1",
   "MFAMethodType": "7eb08d5473d8",
   "MFAMethodUpdate": "1ce054d49864",
+  "ManualPaymentDuplicateRiskRead": "0c3ee512bd05",
+  "ManualPaymentRecordingConfirm": "b980a2131614",
+  "ManualPaymentRecordingPreviewRead": "ee2a17666794",
+  "ManualPaymentRecordingPreviewRequest": "511b43d8e7ca",
   "MeResponse": "ed7d1f888118",
   "MeUpdateRequest": "6d440087ae48",
   "MetricType": "69c93461a4aa",
@@ -19822,7 +19929,7 @@
   "MyLocationRequestRead": "7a095cc41e3d",
   "MyPaymentMethodRead": "9490ed29f797",
   "MyProjectsResponse": "d1e5df424960",
-  "MyQuotesResponse": "ec1f4dbc31bd",
+  "MyQuotesResponse": "c3a030bfc4b0",
   "MyReferralsResponse": "8f11934342e6",
   "MyWorkOrdersResponse": "8ea011ae6981",
   "NasConfigBackupCreate": "72d66e37aa86",
@@ -19969,9 +20076,7 @@
   "PaymentChannelUpdate": "2887cb19ac6a",
   "PaymentCreate": "03250f7f35a3",
   "PaymentCreationAllocationEffectRead": "0a67d93a8b24",
-  "PaymentCreationConfirm": "6ba01616637b",
   "PaymentCreationPreviewRead": "b79bae168af8",
-  "PaymentCreationPreviewRequest": "2ae5952e3242",
   "PaymentInitiateRequest": "e559675b8226",
   "PaymentInitiateResponse": "a174d4f35569",
   "PaymentMethodCreate": "2bfc785da28d",
@@ -20059,12 +20164,12 @@
   "ProductPortDescriptorV1": "7fa027fa20f0",
   "ProductPortDescriptorV3": "cdcc534fd811",
   "ProjectCostSummary": "f953c7ceefa5",
-  "ProjectCreate": "306ae5d9f212",
+  "ProjectCreate": "53a0c89795cd",
   "ProjectGanttUpdate": "38b022ae411d",
   "ProjectItem": "df3035be834b",
   "ProjectKanbanMove": "7578fb10fb86",
   "ProjectPriority": "81159a031246",
-  "ProjectRead": "c3e170fcab3e",
+  "ProjectRead": "8b9f6a8ed70b",
   "ProjectStage": "0f50e77c4ccb",
   "ProjectStageState": "acffacb745a6",
   "ProjectStatus": "39abcda05ebd",
@@ -20078,7 +20183,7 @@
   "ProjectTaskStatusTransition": "62828b3ad076",
   "ProjectTaskUpdate": "be5ae31b8297",
   "ProjectType": "a29853f91876",
-  "ProjectUpdate": "c8ada8baddbd",
+  "ProjectUpdate": "53c319e44d41",
   "ProofReview": "419d3ee08c88",
   "ProrationPolicy": "d107683093f4",
   "ProviderEventOrderBy": "92e8a0fc9bbe",
@@ -20359,7 +20464,7 @@
   "TopUserEntry": "a8f50c81e200",
   "TopupEligibleInvoice": "f867f52b262b",
   "TopupInitiateRequest": "7a3f8d729837",
-  "TopupInitiateResponse": "56a7817aa9ef",
+  "TopupInitiateResponse": "7c8ce7063dd5",
   "TopupPageResponse": "70b5f0de03bc",
   "TopupPreviewInvoiceApplication": "62758d89ad99",
   "TopupPreviewRequest": "0cb61a5ccab3",

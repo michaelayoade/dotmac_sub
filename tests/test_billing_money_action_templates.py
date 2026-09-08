@@ -20,10 +20,15 @@ def test_manual_payment_and_credit_forms_confirm_and_bound_amounts():
     assert 'action="{{ action_url }}"' in payment_form
     assert "button[type=submit]').disabled" not in payment_form
     assert 'name="idempotency_token"' in payment_form
+    assert 'name="reference"' in payment_form
+    assert "must not already exist" in payment_form
     assert "Confirm and Record" in payment_confirmation
     assert "Prepaid funding position" in payment_confirmation
     assert "Unallocated account credit" in payment_confirmation
     assert 'name="preview_fingerprint"' in payment_confirmation
+    assert 'name="control_fingerprint"' in payment_confirmation
+    assert 'name="duplicate_risk_acknowledged"' in payment_confirmation
+    assert "Review submitted proof" in payment_confirmation
     assert 'min="0.01"' in payment_amount
     assert 'action="{{ action_url }}"' in credit_form
     assert "Confirm and issue" in credit_confirmation

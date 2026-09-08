@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.team_inbox import InboxChannelType, InboxConversationStatus
 from app.services import control_registry
 from app.services import team_inbox_analysis_projection as analysis_projection
 from app.services.ai.client import AIClientError
@@ -31,6 +32,12 @@ class ManagerChatConversationOption:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagerChatFilterOption:
+    value: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
 class ManagerChatPageState:
     conversations: tuple[ManagerChatConversationOption, ...]
     selected_conversation_id: UUID | None
@@ -45,6 +52,8 @@ class ManagerChatPageState:
     custom_end: str
     channel_type: str
     status_filter: str
+    channel_options: tuple[ManagerChatFilterOption, ...]
+    status_options: tuple[ManagerChatFilterOption, ...]
     period_facts: analysis_projection.ManagerPeriodFacts | None
 
 
@@ -55,6 +64,50 @@ def _coerce_uuid(value: object) -> UUID | None:
         return UUID(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _filter_label(value: str) -> str:
+    labels = {
+        "whatsapp": "WhatsApp",
+        "instagram_dm": "Instagram DM",
+    }
+    if value in labels:
+        return labels[value]
+    return value.replace("_", " ").title()
+
+
+def _channel_options() -> tuple[ManagerChatFilterOption, ...]:
+    return tuple(
+        ManagerChatFilterOption(value=item.value, label=_filter_label(item.value))
+        for item in InboxChannelType
+        if item is not InboxChannelType.note
+    )
+
+
+def _status_options() -> tuple[ManagerChatFilterOption, ...]:
+    return tuple(
+        ManagerChatFilterOption(value=item.value, label=_filter_label(item.value))
+        for item in InboxConversationStatus
+    )
+
+
+def _clean_channel_type(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    allowed = {
+        item.value for item in InboxChannelType if item is not InboxChannelType.note
+    }
+    return text if text in allowed else None
+
+
+def _clean_status(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    allowed = {item.value for item in InboxConversationStatus}
+    return text if text in allowed else None
+
+
+def _custom_date(value: str | None) -> date | None:
+    text = str(value or "").strip()
+    return datetime.fromisoformat(text).date() if text else None
 
 
 def _conversation_label(
@@ -190,9 +243,15 @@ def answer_manager_question(
         requested_mode = analysis_projection.ManagerAnalysisMode(mode)
         requested_period = analysis_projection.ManagerAnalysisPeriod(period)
         start_date = (
-            datetime.fromisoformat(custom_start).date() if custom_start else None
+            _custom_date(custom_start)
+            if requested_period is analysis_projection.ManagerAnalysisPeriod.custom
+            else None
         )
-        end_date = datetime.fromisoformat(custom_end).date() if custom_end else None
+        end_date = (
+            _custom_date(custom_end)
+            if requested_period is analysis_projection.ManagerAnalysisPeriod.custom
+            else None
+        )
     except ValueError as exc:
         raise ValueError("Invalid Manager AI analysis filters.") from exc
     projection = analysis_projection.build_projection(
@@ -204,8 +263,8 @@ def answer_manager_question(
             period=requested_period,
             custom_start=start_date,
             custom_end=end_date,
-            channel_type=channel_type or None,
-            status=status or None,
+            channel_type=_clean_channel_type(channel_type),
+            status=_clean_status(status),
         ),
     )
     payload = {
@@ -268,26 +327,31 @@ def build_page_state(
 ) -> ManagerChatPageState:
     selected_id = _coerce_uuid(conversation_id)
     period_facts = None
+    clean_channel_type = _clean_channel_type(channel_type)
+    clean_status = _clean_status(status)
     if mode == analysis_projection.ManagerAnalysisMode.period.value:
         try:
+            requested_period = analysis_projection.ManagerAnalysisPeriod(period)
             period_projection = analysis_projection.build_projection(
                 db,
                 analysis_projection.ManagerAnalysisRequest(
                     scope=scope,
                     mode=analysis_projection.ManagerAnalysisMode.period,
-                    period=analysis_projection.ManagerAnalysisPeriod(period),
+                    period=requested_period,
                     custom_start=(
-                        datetime.fromisoformat(custom_start).date()
-                        if custom_start
+                        _custom_date(custom_start)
+                        if requested_period
+                        is analysis_projection.ManagerAnalysisPeriod.custom
                         else None
                     ),
                     custom_end=(
-                        datetime.fromisoformat(custom_end).date()
-                        if custom_end
+                        _custom_date(custom_end)
+                        if requested_period
+                        is analysis_projection.ManagerAnalysisPeriod.custom
                         else None
                     ),
-                    channel_type=channel_type or None,
-                    status=status or None,
+                    channel_type=clean_channel_type,
+                    status=clean_status,
                 ),
             )
             period_facts = period_projection.facts
@@ -309,7 +373,9 @@ def build_page_state(
         period=period,
         custom_start=custom_start or "",
         custom_end=custom_end or "",
-        channel_type=channel_type or "",
-        status_filter=status or "",
+        channel_type=clean_channel_type or "",
+        status_filter=clean_status or "",
+        channel_options=_channel_options(),
+        status_options=_status_options(),
         period_facts=period_facts,
     )

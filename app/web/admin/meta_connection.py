@@ -61,6 +61,9 @@ def save_meta_connection(
     instagram_login_access_token_ref: str = Form(""),
     webhook_signing_secret_ref: str = Form(""),
     webhook_verify_token_ref: str = Form(""),
+    conversion_dataset_id: str = Form(""),
+    conversion_event_name: str = Form("CustomerConverted"),
+    conversions_api_access_token_ref: str = Form(""),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -79,6 +82,9 @@ def save_meta_connection(
         instagram_login_access_token_ref=instagram_login_access_token_ref,
         webhook_signing_secret_ref=webhook_signing_secret_ref,
         webhook_verify_token_ref=webhook_verify_token_ref,
+        conversion_dataset_id=conversion_dataset_id,
+        conversion_event_name=conversion_event_name,
+        conversions_api_access_token_ref=conversions_api_access_token_ref,
     )
     finish_read_transaction(db)
     try:
@@ -113,6 +119,8 @@ def save_meta_connection(
             "instagram_account_id": instagram_account_id,
             "graph_version": graph_version,
             "webhook_url": webhook_url,
+            "conversion_dataset_id": conversion_dataset_id,
+            "conversion_event_name": conversion_event_name,
         }
         return templates.TemplateResponse(
             "admin/inbox/meta_connection.html", context, status_code=400

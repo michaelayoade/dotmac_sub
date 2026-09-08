@@ -47,7 +47,8 @@ entry count.
   `financial.invoice_discounts` and `sales.quote_discount_reporting`.
 - First viewport: report identity, Invoice/Quote tabs, the double-count
   explanation, filters, and the beginning of the selected work surface.
-- Actions: no state-changing actions. Each row links to its canonical Invoice
+- Actions: no state-changing actions. Operators can export every row matching
+  the selected tab and filters as CSV. Each row links to its canonical Invoice
   or Quote; inherited Invoice rows also link to the source Quote.
 - Columns: document/customer, original subtotal, entered and actual discount,
   discounted subtotal/final total, source/reason, actor/time, action, document

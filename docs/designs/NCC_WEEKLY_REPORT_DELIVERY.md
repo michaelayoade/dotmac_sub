@@ -47,9 +47,11 @@ bounded report snapshot.
 
 The XLSX artifact follows the NCC validated Excel workbook template: hidden
 `Lookups` sheet, visible `Data Entry` sheet, official required-field headers,
-named lookup ranges, and row-4-to-end validation ranges. The screen keeps the
-internal readable column labels, then projects rows to the template headers for
-on-demand export and weekly email attachment generation.
+named lookup ranges, formula-backed template auto columns, Excel serial
+date-time cells, and row-2-to-16001 validation ranges from the latest NCC
+template received in September 2026. The screen keeps the internal readable
+column labels, then projects rows to the template headers for on-demand export
+and weekly email attachment generation.
 
 The complaints resolver excludes tickets carrying a source approved by the
 support owner as internal operational work. It does not use missing customer or
@@ -69,8 +71,7 @@ dependency.
 A failed artifact or intent is recorded on the occurrence with a bounded
 failure code. The savepoint removes any partial artifact/notification work,
 while the owner transaction preserves durable failure evidence. The next
-five-minute poll retries the same Tuesday occurrence. Once queued, subsequent
-polls return `already_queued` and cannot replace the preserved artifact.
+five-minute poll retries the same Tuesday occurrence. If the resolved workbook has any non-filing-ready rows, the occurrence records a failed decision and no artifact or notification is queued. Once a fully filable workbook is queued, subsequent polls return `already_queued` and cannot replace the preserved artifact.
 
 The exact queued workbook can be downloaded from the run history. Both email
 attachment resolution and operator download verify the stored SHA-256 digest;

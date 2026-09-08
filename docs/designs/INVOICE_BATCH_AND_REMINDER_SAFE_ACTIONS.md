@@ -60,6 +60,15 @@ step fails; retry relies on canonical invoice-line keys and re-resolution.
 rebuildable audit projection and is intentionally written after the run status
 so audit-schema failure cannot falsely mark already-created invoices as failed.
 
+Scheduled execution uses a separate bounded transport retry for transient
+database conflicts. It retries only PostgreSQL serialization failure
+(`40001`), deadlock (`40P01`), lock-unavailable (`55P03`), or an invalidated
+connection, rolling back before each backoff. Ordinary integrity, validation,
+and business failures are not retried. Billing-anchor projection takes a
+`FOR NO KEY UPDATE` subscription lock because it changes no key: competing
+anchor writers still serialize while concurrent foreign-key observations may
+retain their compatible `KEY SHARE` lock.
+
 ## Invoice bulk and AR reminder review
 
 Invoice-list issue/send/mark-paid/PDF actions and AR-aging reminder sends now
@@ -90,6 +99,7 @@ operators do not receive reminder controls.
 - Exact batch membership and fingerprint drift tests.
 - Explicit-confirmation and actor tests.
 - Failed-only retry and durable retry-lineage tests.
+- PostgreSQL billing-anchor/bandwidth foreign-key lock compatibility.
 - Dry-run impact and side-effect guards.
 - Invoice bulk exact-scope review tests.
 - AR-aging permission/review template tests.

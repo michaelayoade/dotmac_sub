@@ -11,6 +11,7 @@ from app.api.webhook_observation import webhook_observation
 from app.db import finish_read_response, get_db
 from app.models.audit import AuditActorType
 from app.models.billing import (
+    InvoiceStatus,
     PaymentProviderEventStatus,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -78,6 +79,7 @@ from app.schemas.billing import (
     CreditNoteUpdate,
     CreditNoteVoidPreviewRead,
     CreditNoteVoidRequest,
+    InvoiceAccountingSyncRead,
     InvoiceBulkActionResponse,
     InvoiceBulkVoidRequest,
     InvoiceBulkWriteOffRequest,
@@ -98,6 +100,9 @@ from app.schemas.billing import (
     InvoiceWriteOffRequest,
     LedgerEntryCreate,
     LedgerEntryRead,
+    ManualPaymentRecordingConfirm,
+    ManualPaymentRecordingPreviewRead,
+    ManualPaymentRecordingPreviewRequest,
     PaymentAllocationConfirm,
     PaymentAllocationCreate,
     PaymentAllocationPreviewRead,
@@ -110,9 +115,7 @@ from app.schemas.billing import (
     PaymentChannelRead,
     PaymentChannelUpdate,
     PaymentCreate,
-    PaymentCreationConfirm,
     PaymentCreationPreviewRead,
-    PaymentCreationPreviewRequest,
     PaymentInitiateRequest,
     PaymentInitiateResponse,
     PaymentMethodCreate,
@@ -147,11 +150,13 @@ from app.services import api_billing_webhooks as api_billing_webhooks_service
 from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services import customer_portal_flow_payments as customer_payments
+from app.services import manual_payment_recording as manual_payment_recording_service
 from app.services.auth_dependencies import require_permission, require_user_auth
 from app.services.billing import adjustments as account_adjustment_service
 from app.services.customer_context import require_customer_account_id
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.dotmac_erp import invoice_sync_projection
 from app.services.owner_commands import CommandContext
 from app.services.payment_provider_events import (
     ADMINISTRATIVE_INGEST_SCOPE,
@@ -242,6 +247,44 @@ def sync_invoices(
             updated_since=updated_since,
             limit=limit,
             offset=offset,
+        ),
+    )
+
+
+@router.get(
+    "/invoices/accounting-sync/v2",
+    response_model=ListResponse[InvoiceAccountingSyncRead],
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:read"))],
+)
+def sync_invoices_for_accounting_v2(
+    invoice_id: UUID | None = None,
+    account_id: UUID | None = None,
+    status: InvoiceStatus | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive invoice updated_at watermark for ERP accounting sync.",
+    ),
+    limit: int = Query(default=500, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Return versioned invoice accounting facts and blocking issue codes."""
+
+    return finish_read_response(
+        db,
+        invoice_sync_projection.list_invoice_accounting_sync(
+            db,
+            invoice_sync_projection.InvoiceAccountingSyncQuery(
+                invoice_id=invoice_id,
+                account_id=account_id,
+                status=status,
+                is_active=is_active,
+                updated_since=updated_since,
+                limit=limit,
+                offset=offset,
+            ),
         ),
     )
 
@@ -1501,6 +1544,30 @@ def delete_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
 # --- Payments ---
 
 
+def _manual_payment_recording_error(exc: DomainError) -> Never:
+    suffix = exc.code.removeprefix("financial.manual_payment_recording.")
+    status_code = {
+        "reference_required": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "reference_already_recorded": status.HTTP_409_CONFLICT,
+        "reference_has_submitted_proof": status.HTTP_409_CONFLICT,
+        "duplicate_risk_acknowledgement_required": status.HTTP_409_CONFLICT,
+        "idempotency_conflict": status.HTTP_409_CONFLICT,
+        "stale_payment_preview": status.HTTP_409_CONFLICT,
+        "stale_duplicate_evidence": status.HTTP_409_CONFLICT,
+        "active_caller_transaction": status.HTTP_409_CONFLICT,
+        "nested_owner_command": status.HTTP_409_CONFLICT,
+        "nested_transaction_completion": status.HTTP_409_CONFLICT,
+        "command_contract_violation": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "invalid_command_context": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    }.get(suffix, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    detail = (
+        exc.message
+        if exc.code.startswith("financial.manual_payment_recording.")
+        else "Manual-payment recording failed."
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.post(
     "/payments",
     response_model=PaymentRead,
@@ -1522,17 +1589,21 @@ def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
 
 @router.post(
     "/payments/creation/preview",
-    response_model=PaymentCreationPreviewRead,
+    response_model=ManualPaymentRecordingPreviewRead,
     tags=["payments"],
-    dependencies=[Depends(require_permission("billing:payment:create"))],
 )
 def preview_payment_creation(
-    payload: PaymentCreationPreviewRequest,
+    payload: ManualPaymentRecordingPreviewRequest,
     db: Session = Depends(get_db),
+    _principal: dict = Depends(require_permission("billing:payment:create")),
 ):
-    return finish_read_response(
-        db, billing_service.payments.preview_creation(db, payload)
-    )
+    try:
+        result = manual_payment_recording_service.preview_manual_payment_recording(
+            db, payload
+        )
+    except DomainError as exc:
+        _manual_payment_recording_error(exc)
+    return finish_read_response(db, result)
 
 
 @router.post(
@@ -1540,13 +1611,34 @@ def preview_payment_creation(
     response_model=PaymentRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payments"],
-    dependencies=[Depends(require_permission("billing:payment:create"))],
 )
 def confirm_payment_creation(
-    payload: PaymentCreationConfirm,
+    payload: ManualPaymentRecordingConfirm,
     db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:payment:create")),
 ):
-    return billing_service.payments.confirm_creation(db, payload).payment
+    actor_type, actor_id = _financial_actor(principal)
+    if actor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Financial principal identity is incomplete.",
+        )
+    context = CommandContext.system(
+        actor=f"{actor_type.value}:{actor_id}",
+        scope=manual_payment_recording_service.MANUAL_PAYMENT_RECORDING_SCOPE,
+        reason="Confirm an administrative manual payment after duplicate review.",
+        idempotency_key=payload.idempotency_key,
+    )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        result = manual_payment_recording_service.confirm_manual_payment_recording(
+            db,
+            context=context,
+            request=payload,
+        )
+    except DomainError as exc:
+        _manual_payment_recording_error(exc)
+    return result.payment_result.payment
 
 
 @router.get(

@@ -9,6 +9,10 @@ from app.services.integrations.delivery import (
     create_platform_deliveries_for_event,
     queue_platform_deliveries,
 )
+from app.services.integrations.meta_lead_conversion import (
+    queue_conversion,
+    stage_conversion_for_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,8 @@ class WebhookHandler:
     """Request typed delivery for enabled event subscriptions."""
 
     def handle(self, db: Session, event: Event) -> None:
+        meta_conversion = stage_conversion_for_event(db, event=event)
+        queue_conversion(meta_conversion)
         deliveries = create_platform_deliveries_for_event(
             db,
             event=event,

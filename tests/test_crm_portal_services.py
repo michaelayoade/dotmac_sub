@@ -7,7 +7,9 @@ from uuid import uuid4
 from fastapi import Request
 
 from app.models.support import ticket_status_display_value
+from app.schemas.support import TicketCreate
 from app.services import crm_portal
+from app.services.support import TicketCreationRoutingMode
 from app.services.support_ticket_settings import (
     PortalTicketTeamRoutingSource,
     SupportTeamRoutingResolution,
@@ -393,16 +395,16 @@ def test_handle_ticket_create_normalizes_unknown_priority(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def _create(
-        db,
-        payload,
-        actor_id=None,
-        dispatch_event_after_commit=True,
-        routing_mode=None,
-    ):
+        db: object,
+        payload: TicketCreate,
+        actor_id: object | None = None,
+        dispatch_event_after_commit: bool = True,
+        routing_mode: TicketCreationRoutingMode | None = None,
+    ) -> Mock:
         captured["priority"] = payload.priority
         captured["region"] = payload.region
         captured["description_is_internal"] = payload.description_is_internal
-        captured["routing_mode"] = routing_mode.value
+        captured["routing_mode"] = routing_mode.value if routing_mode else None
         return _ticket(id="ticket-1", subscriber_id=sid)
 
     monkeypatch.setattr("app.services.support.Tickets.create", _create)

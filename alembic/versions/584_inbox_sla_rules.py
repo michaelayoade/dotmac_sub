@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "570_inbox_sla_rules"
-down_revision: str | None = "569_retire_crm_chat_authority"
+revision: str = "584_inbox_sla_rules"
+down_revision: str | None = "583_staff_expense_requesters"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

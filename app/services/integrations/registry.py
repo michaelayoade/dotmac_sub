@@ -39,6 +39,7 @@ def _dotmac_erp_manifest(
     version: str,
     include_workforce_attendance: bool,
     include_material_webhook: bool = False,
+    include_staff_access: bool = False,
 ) -> ConnectorManifest:
     capabilities = [
         CapabilityManifest(
@@ -82,6 +83,19 @@ def _dotmac_erp_manifest(
                 modes=(CapabilityMode.inbound,),
             )
         )
+    if include_staff_access:
+        capabilities.extend(
+            (
+                CapabilityManifest(
+                    id="erp.staff_access.webhook.v1",
+                    modes=(CapabilityMode.inbound,),
+                ),
+                CapabilityManifest(
+                    id="erp.staff_access.reconcile.v1",
+                    modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
+                ),
+            )
+        )
     properties: dict[str, object] = {
         "base_url": {"type": "string"},
         "timeout_seconds": {"type": "integer"},
@@ -114,6 +128,9 @@ def _dotmac_erp_manifest(
     if include_workforce_attendance:
         reads.extend(("workforce.attendance_state", "workforce.browser_location"))
         classifications.extend(("workforce", "location"))
+    if include_staff_access:
+        reads.extend(("staff.leave_restriction_state", "staff.account_status_state"))
+        classifications.append("staff_identity")
     return ConnectorManifest(
         key="dotmac.erp",
         name="DotMac ERP",
@@ -136,7 +153,7 @@ def _dotmac_erp_manifest(
             SecretBindingManifest(name="service_credentials"),
             *(
                 (SecretBindingManifest(name="webhook_signing_secret"),)
-                if include_material_webhook
+                if include_material_webhook or include_staff_access
                 else ()
             ),
         ),
@@ -231,6 +248,7 @@ def _dotmac_crm_manifest(
     *,
     version: str,
     include_chat_session: bool,
+    include_quote_command: bool = True,
 ) -> ConnectorManifest:
     """Build the current CRM manifest and its bounded pre-chat predecessor."""
 
@@ -283,6 +301,12 @@ def _dotmac_crm_manifest(
             ),
         )
     )
+    if not include_quote_command:
+        capabilities = [
+            capability
+            for capability in capabilities
+            if capability.id != "crm.quote_command.v1"
+        ]
     properties: dict[str, dict[str, object]] = {
         "base_url": {"type": "string"},
         "timeout_seconds": {"type": "number"},
@@ -340,6 +364,7 @@ def _meta_social_manifest(
     version: str,
     include_shared_oauth: bool,
     include_auth_mode: bool,
+    include_lead_ads: bool = False,
 ) -> ConnectorManifest:
     """Build immutable Meta Social manifests for exact version/digest pins."""
     properties: dict[str, dict[str, object]] = {
@@ -392,9 +417,39 @@ def _meta_social_manifest(
             "enum": ["oauth", "individual"],
         }
         required.insert(2, "auth_mode")
+    if include_lead_ads:
+        properties["conversion_dataset_id"] = {"type": "string"}
+        properties["conversion_event_name"] = {"type": "string"}
     if include_shared_oauth:
         secrets.insert(
             0, SecretBindingManifest(name="meta_oauth_access_token", required=False)
+        )
+    if include_lead_ads:
+        secrets.append(
+            SecretBindingManifest(name="conversions_api_access_token", required=False)
+        )
+    capabilities = [
+        CapabilityManifest(
+            id="messaging.send.v1",
+            modes=(CapabilityMode.interactive, CapabilityMode.event),
+        ),
+        CapabilityManifest(
+            id="messaging.receive.v1",
+            modes=(CapabilityMode.inbound,),
+        ),
+    ]
+    if include_lead_ads:
+        capabilities.extend(
+            (
+                CapabilityManifest(
+                    id="sales.lead_capture.v1",
+                    modes=(CapabilityMode.inbound, CapabilityMode.reconcile),
+                ),
+                CapabilityManifest(
+                    id="sales.lead_conversion.send.v1",
+                    modes=(CapabilityMode.event, CapabilityMode.reconcile),
+                ),
+            )
         )
     return ConnectorManifest(
         key="meta.social",
@@ -408,16 +463,7 @@ def _meta_social_manifest(
             type=ConnectorRuntimeType.builtin_worker,
             module="app.services.integrations.connectors.meta_social_runtime",
         ),
-        capabilities=(
-            CapabilityManifest(
-                id="messaging.send.v1",
-                modes=(CapabilityMode.interactive, CapabilityMode.event),
-            ),
-            CapabilityManifest(
-                id="messaging.receive.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-        ),
+        capabilities=tuple(capabilities),
         config_schema={
             "type": "object",
             "properties": properties,
@@ -426,9 +472,19 @@ def _meta_social_manifest(
         },
         secrets=tuple(secrets),
         data_access=DataAccessManifest(
-            reads=("communications.outbound_message",),
-            emits=("communications.inbound_message_observation",),
-            classifications=("customer_contact", "message_content"),
+            reads=(
+                "communications.outbound_message",
+                *(("sales.customer_conversion",) if include_lead_ads else ()),
+            ),
+            emits=(
+                "communications.inbound_message_observation",
+                *(("sales.lead_ad_observation",) if include_lead_ads else ()),
+            ),
+            classifications=(
+                "customer_contact",
+                "message_content",
+                *(("sales_acquisition",) if include_lead_ads else ()),
+            ),
         ),
         egress=EgressManifest(hosts=("graph.facebook.com", "graph.instagram.com")),
         health=HealthManifest(operation="connection.validate.v1"),
@@ -676,8 +732,9 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         health=HealthManifest(operation="connection.validate.v1"),
     ),
     _dotmac_crm_manifest(
-        version="1.2.0",
+        version="1.3.0",
         include_chat_session=False,
+        include_quote_command=False,
     ),
     _whatsapp_manifest(
         version="1.1.0",
@@ -719,14 +776,16 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         health=HealthManifest(operation="connection.validate.v1"),
     ),
     _meta_social_manifest(
-        version="1.1.0",
+        version="1.2.0",
         include_shared_oauth=True,
         include_auth_mode=True,
+        include_lead_ads=True,
     ),
     _dotmac_erp_manifest(
-        version="1.2.0",
+        version="1.3.0",
         include_workforce_attendance=True,
         include_material_webhook=True,
+        include_staff_access=True,
     ),
     _paystack_manifest(
         version="1.0.1",
@@ -808,12 +867,18 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
 _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     _dotmac_integrator_manifest(version="1.0.0", include_settlement=False),
     _whatsapp_manifest(version="1.0.0", include_phone_number_id=False),
+    _dotmac_erp_manifest(
+        version="1.2.0",
+        include_workforce_attendance=True,
+        include_material_webhook=True,
+    ),
     _dotmac_erp_manifest(version="1.1.0", include_workforce_attendance=True),
     # ERP 1.0.0 remains executable while installations explicitly adopt the
     # workforce attendance capability introduced in 1.1.0.
     _dotmac_erp_manifest(version="1.0.0", include_workforce_attendance=False),
     # CRM 1.0.0 predates the temporary chat-session capability. It remains
     # executable because a deployed pin is an immutable compatibility fact.
+    _dotmac_crm_manifest(version="1.2.0", include_chat_session=False),
     _dotmac_crm_manifest(version="1.0.0", include_chat_session=False),
     # CRM 1.1.0 is the ONLY manifest that ever declared `crm.chat_session.v1`
     # (ADR 0006, retired 2026-08-30 with the CRM itself). 1.2.0 drops the
@@ -826,6 +891,11 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     # the runner no longer maps it to an action, so a 1.1.0-pinned binding for
     # it now fails closed with `capability_not_supported`.
     _dotmac_crm_manifest(version="1.1.0", include_chat_session=True),
+    _meta_social_manifest(
+        version="1.1.0",
+        include_shared_oauth=True,
+        include_auth_mode=True,
+    ),
     # The original Meta Social 1.0.0 pin did not declare the aggregate
     # auth_mode field. Production installations may retain this exact pin
     # until explicit adoption, so later manifest changes cannot rewrite it.

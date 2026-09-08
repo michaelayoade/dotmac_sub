@@ -108,7 +108,7 @@
         <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex flex-wrap gap-2">
                 {% for item in quick_links %}
-                <a href="{{ item.href }}" data-network-quick data-search="{{ item.label|lower }}" class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-sky-500 dark:hover:bg-slate-700">
+                <a href="{{ item.href }}" data-network-quick data-search="{{ item.label|lower }}" class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-500 dark:border-slate-700 dark:text-slate-200 dark:hover:border-sky-500 dark:hover:bg-slate-700 dark:hover:text-sky-300">
                     {{ item.label }}
                 </a>
                 {% endfor %}
@@ -139,7 +139,7 @@
                         </div>
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center justify-between gap-2">
-                                <h2 class="truncate text-sm font-semibold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-white dark:group-hover:text-slate-100">{{ item.label }}</h2>
+                                <h2 class="truncate text-sm font-semibold text-slate-900 transition-colors group-hover:text-{{ item.color }}-500 dark:text-white dark:group-hover:text-{{ item.color }}-300">{{ item.label }}</h2>
                                 <svg class="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 dark:group-hover:text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
                             <p class="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{{ item.desc }}</p>

@@ -45,7 +45,10 @@ from app.services import (
     ticket_validation,
     ticket_work_order_handoff,
 )
-from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.auth_dependencies import (
+    require_permission,
+    require_user_auth,
+)
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
@@ -56,6 +59,13 @@ router = APIRouter(prefix="/support", tags=["support"])
 def _actor_id(auth: dict) -> str | None:
     principal = auth.get("principal_id")
     return str(principal) if principal else None
+
+
+def _ticket_http_error(exc: support_service.SupportTicketError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": exc.code, "message": exc.message, **exc.details},
+    )
 
 
 def require_agent_or_admin(auth=Depends(require_user_auth)):
@@ -77,9 +87,15 @@ def create_ticket(
     db: Session = Depends(get_db),
 ):
     db_session_adapter.release_read_transaction(db)
-    return support_service.tickets.create(
-        db, payload, actor_id=_actor_id(auth), request=None
-    )
+    try:
+        return support_service.tickets.create(
+            db,
+            payload,
+            actor_id=_actor_id(auth),
+            request=None,
+        )
+    except support_service.SupportTicketError as exc:
+        raise _ticket_http_error(exc) from exc
 
 
 @router.get(
@@ -261,9 +277,16 @@ def update_ticket(
     db: Session = Depends(get_db),
 ):
     db_session_adapter.release_read_transaction(db)
-    return support_service.tickets.update(
-        db, str(ticket_id), payload, actor_id=_actor_id(auth), request=None
-    )
+    try:
+        return support_service.tickets.update(
+            db,
+            str(ticket_id),
+            payload,
+            actor_id=_actor_id(auth),
+            request=None,
+        )
+    except support_service.SupportTicketError as exc:
+        raise _ticket_http_error(exc) from exc
 
 
 @router.delete(
@@ -291,23 +314,37 @@ def bulk_update_tickets(
     db: Session = Depends(get_db),
 ):
     db_session_adapter.release_read_transaction(db)
-    items = support_service.tickets.bulk_update(
-        db, payload, actor_id=_actor_id(auth), request=None
-    )
+    try:
+        items = support_service.tickets.bulk_update(
+            db,
+            payload,
+            actor_id=_actor_id(auth),
+            request=None,
+        )
+    except support_service.SupportTicketError as exc:
+        raise _ticket_http_error(exc) from exc
     return {"items": items, "count": len(items), "limit": len(items), "offset": 0}
 
 
 @router.post(
     "/tickets/{ticket_id}/auto-assign",
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+    ],
 )
 def manual_auto_assign(
     ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
 ):
     db_session_adapter.release_read_transaction(db)
-    return support_service.tickets.manual_auto_assign(
-        db, str(ticket_id), actor_id=_actor_id(auth), request=None
-    )
+    try:
+        return support_service.tickets.manual_auto_assign(
+            db,
+            str(ticket_id),
+            actor_id=_actor_id(auth),
+            request=None,
+        )
+    except support_service.SupportTicketError as exc:
+        raise _ticket_http_error(exc) from exc
 
 
 @router.post(

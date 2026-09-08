@@ -2,33 +2,38 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
 from app.models.integration_platform import IntegrationInbox
 from app.models.team_inbox import (
     InboxConversation,
-    InboxConversationAssignment,
     InboxConversationStatus,
     InboxMediaAsset,
     InboxMessage,
+    InboxMessageDirection,
 )
 from app.services import (
+    ai_conversation_intake,
     team_inbox_media,
     team_inbox_observations,
     team_inbox_operations,
-    team_inbox_realtime,
-    team_inbox_routing,
+    team_inbox_outbound,
+    team_inbox_status,
 )
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,8 +72,205 @@ class MaintenanceOutcome:
     skipped: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class MetaProfileRepairCandidate:
+    conversation_id: UUID
+    channel_type: str
+    contact_address: str
+
+
+@dataclass(frozen=True, slots=True)
+class MetaProfileRepairPreview:
+    candidates: tuple[MetaProfileRepairCandidate, ...]
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyMetaProfileObservationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    expected_channel_type: str
+    expected_contact_address: str
+    display_name: str
+    username: str | None
+    profile_pic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FailedMetaDeliveryCandidate:
+    message_id: UUID
+    channel_type: str
+    retry_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class FailedMetaDeliveryPreview:
+    candidates: tuple[FailedMetaDeliveryCandidate, ...]
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetryFailedMetaDeliveriesCommand:
+    context: CommandContext
+    message_ids: tuple[UUID, ...]
+    max_retry_count: int = 5
+
+
 class TeamInboxMaintenanceError(DomainError):
     """A bounded Inbox repair command cannot be executed safely."""
+
+
+def preview_meta_profile_repairs(
+    db: Session, *, limit: int = 500
+) -> MetaProfileRepairPreview:
+    rows = (
+        db.query(InboxConversation)
+        .filter(
+            InboxConversation.channel_type.in_(("facebook_messenger", "instagram_dm")),
+            InboxConversation.contact_address.isnot(None),
+            InboxConversation.is_active.is_(True),
+        )
+        .order_by(InboxConversation.id)
+        .limit(5000)
+        .all()
+    )
+    candidates = tuple(
+        MetaProfileRepairCandidate(
+            conversation_id=row.id,
+            channel_type=row.channel_type,
+            contact_address=str(row.contact_address),
+        )
+        for row in rows
+        if not str((row.metadata_ or {}).get("contact_name") or "").strip()
+    )[: max(1, min(int(limit), 5000))]
+    digest = hashlib.sha256(
+        "\n".join(
+            f"{row.conversation_id}:{row.channel_type}:{row.contact_address}"
+            for row in candidates
+        ).encode()
+    ).hexdigest()
+    return MetaProfileRepairPreview(candidates=candidates, digest=digest)
+
+
+def apply_meta_profile_observation(
+    db: Session, command: ApplyMetaProfileObservationCommand
+) -> MaintenanceOutcome:
+    def operation() -> MaintenanceOutcome:
+        conversation = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id == command.conversation_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if conversation is None:
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.conversation_not_found",
+                message="Conversation was not found.",
+            )
+        if (
+            conversation.channel_type != command.expected_channel_type
+            or conversation.contact_address != command.expected_contact_address
+        ):
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.profile_target_changed",
+                message="Conversation identity changed after preview.",
+            )
+        display_name = command.display_name.strip()
+        if not display_name:
+            raise TeamInboxMaintenanceError(
+                code="communications.team_inbox_maintenance.profile_name_missing",
+                message="Meta did not return a usable contact name.",
+            )
+        metadata = dict(conversation.metadata_ or {})
+        metadata["contact_name"] = display_name[:200]
+        metadata["contact_name_source"] = "provider_observation"
+        metadata["contact_profile"] = {
+            "display_name": display_name[:255],
+            "username": (command.username or "")[:255] or None,
+            "profile_pic": (command.profile_pic or "")[:1000] or None,
+        }
+        conversation.metadata_ = metadata
+        db.flush()
+        return MaintenanceOutcome(changed=1)
+
+    return execute_owner_command(
+        db,
+        definition=_MAINTENANCE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def preview_failed_meta_deliveries(
+    db: Session, *, limit: int = 100
+) -> FailedMetaDeliveryPreview:
+    rows = (
+        db.query(InboxMessage)
+        .filter(
+            InboxMessage.direction == "outbound",
+            InboxMessage.channel_type.in_(("facebook_messenger", "instagram_dm")),
+            InboxMessage.metadata_["delivery_status"].as_string() == "failed",
+        )
+        .order_by(InboxMessage.id)
+        .limit(max(1, min(int(limit), 1000)))
+        .all()
+    )
+    candidates = tuple(
+        FailedMetaDeliveryCandidate(
+            message_id=row.id,
+            channel_type=row.channel_type,
+            retry_count=int((row.metadata_ or {}).get("retry_count") or 0),
+        )
+        for row in rows
+    )
+    digest = hashlib.sha256(
+        "\n".join(
+            f"{row.message_id}:{row.channel_type}:{row.retry_count}"
+            for row in candidates
+        ).encode()
+    ).hexdigest()
+    return FailedMetaDeliveryPreview(candidates=candidates, digest=digest)
+
+
+def retry_failed_meta_deliveries(
+    db: Session, command: RetryFailedMetaDeliveriesCommand
+) -> MaintenanceOutcome:
+    def operation() -> MaintenanceOutcome:
+        changed = 0
+        skipped = 0
+        for message_id in command.message_ids:
+            message = (
+                db.query(InboxMessage)
+                .filter(InboxMessage.id == message_id)
+                .with_for_update()
+                .one_or_none()
+            )
+            if message is None or message.channel_type not in {
+                "facebook_messenger",
+                "instagram_dm",
+            }:
+                skipped += 1
+                continue
+            metadata = dict(message.metadata_ or {})
+            if (
+                metadata.get("delivery_status") != "failed"
+                or int(metadata.get("retry_count") or 0) >= command.max_retry_count
+            ):
+                skipped += 1
+                continue
+            result = team_inbox_outbound.retry_outbound_message(db, message=message)
+            if result.kind in {"sent", "queued"}:
+                changed += 1
+            else:
+                skipped += 1
+        return MaintenanceOutcome(changed=changed, skipped=skipped)
+
+    return execute_owner_command(
+        db,
+        definition=_MAINTENANCE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,118 +539,199 @@ def _parse_instant(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _wait_inbound_reply_exists(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    wait_started_at: datetime,
+) -> bool:
+    return (
+        db.query(InboxMessage.id)
+        .filter(InboxMessage.conversation_id == conversation_id)
+        .filter(InboxMessage.direction == InboxMessageDirection.inbound.value)
+        .filter(InboxMessage.created_at > wait_started_at)
+        .order_by(InboxMessage.created_at.asc(), InboxMessage.id.asc())
+        .first()
+        is not None
+    )
+
+
+def _recover_one_stale_ai_intake_session(
+    db: Session,
+    *,
+    session: AiIntakeSession,
+    now: datetime,
+) -> MaintenanceOutcome:
+    if session.state != "awaiting_customer":
+        return MaintenanceOutcome(changed=0, skipped=1)
+    conversation = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.id == session.conversation_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if conversation is None:
+        ai_conversation_intake.complete_session(session, state="expired")
+        return MaintenanceOutcome(changed=0, skipped=1)
+    if ai_conversation_intake.has_human_takeover(db, conversation):
+        ai_conversation_intake.complete_session(session, state="stopped_human_takeover")
+        ai_conversation_intake.mark_conversation_ai_metadata(
+            conversation, session=session, active=False
+        )
+        return MaintenanceOutcome(changed=0, skipped=1)
+    session_metadata = dict(session.metadata_ or {})
+    wait_started = (
+        _as_utc(session.customer_wait_started_at)
+        or _parse_instant(session_metadata.get("customer_wait_started_at"))
+        or _as_utc(session.updated_at)
+        or now
+    )
+    if _wait_inbound_reply_exists(
+        db,
+        conversation_id=conversation.id,
+        wait_started_at=wait_started,
+    ):
+        ai_conversation_intake.clear_customer_wait(
+            session, reason="customer_response_before_expiry"
+        )
+        session.state = "collecting_intent"
+        ai_conversation_intake.mark_conversation_ai_metadata(
+            conversation, session=session, active=True
+        )
+        return MaintenanceOutcome(changed=0, skipped=1)
+    if "customer_wait_expiry_hours" not in session_metadata:
+        version = (
+            db.get(AiIntakePolicyVersion, session.policy_version_id)
+            if session.policy_version_id
+            else None
+        )
+        ai_conversation_intake.record_customer_wait(
+            session,
+            version=version,
+            reason="legacy_short_wait_migrated",
+            now=now,
+        )
+        return MaintenanceOutcome(changed=1, skipped=0)
+    deadline = _as_utc(session.expires_at)
+    if deadline is None:
+        version = (
+            db.get(AiIntakePolicyVersion, session.policy_version_id)
+            if session.policy_version_id
+            else None
+        )
+        ai_conversation_intake.record_customer_wait(
+            session,
+            version=version,
+            reason="legacy_wait_expiry_backfill",
+            now=now,
+        )
+        return MaintenanceOutcome(changed=1, skipped=0)
+    if deadline > now:
+        return MaintenanceOutcome(changed=0, skipped=0)
+    conversation_metadata = dict(conversation.metadata_ or {})
+    intake_metadata = dict(conversation_metadata.get("ai_intake") or {})
+    intake_metadata.update(
+        {
+            "status": "expired",
+            "reason": "customer_inactive_expired",
+            "session_expires_at": deadline.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+    )
+    conversation_metadata["ai_intake"] = intake_metadata
+    conversation.metadata_ = conversation_metadata
+    ai_conversation_intake.transition_conversation_status(
+        db,
+        conversation=conversation,
+        status=InboxConversationStatus.resolved,
+        reason=team_inbox_status.InboxStatusReason.ai_intake_expired,
+        source_id=f"ai-intake-expired:{session.id}:{deadline.isoformat()}",
+        occurred_at=now,
+    )
+    session_metadata["expiry_reason"] = "customer_inactive_expired"
+    session_metadata["expired_at"] = now.isoformat()
+    session.metadata_ = session_metadata
+    ai_conversation_intake.complete_session(session, state="expired")
+    ai_conversation_intake.mark_conversation_ai_metadata(
+        conversation, session=session, active=False
+    )
+    logger.info(
+        "AI intake customer wait expired without handoff",
+        extra={
+            "event": "ai_intake_customer_wait_expired",
+            "conversation_id": str(conversation.id),
+            "session_id": str(session.id),
+            "session_expires_at": deadline.isoformat(),
+            "resolution_reason": "customer_inactive_expired",
+        },
+    )
+    return MaintenanceOutcome(changed=1, skipped=0)
+
+
 def recover_stale_ai_intake(
     db: Session, command: RecoverStaleAiIntakeCommand
 ) -> MaintenanceOutcome:
-    """Move expired intake waits to the normal fallback team path.
-
-    This reconciler never creates messages, queue entries, or assignments. It
-    only repairs destination-team state for unowned conversations.
-    """
+    """Expire long-idle AI waits without assigning or queueing a human."""
 
     def operation() -> MaintenanceOutcome:
         now = (command.now or datetime.now(UTC)).astimezone(UTC)
-        conversations = (
-            db.query(InboxConversation)
-            .filter(InboxConversation.is_active.is_(True))
-            .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        sessions = (
+            db.query(AiIntakeSession)
+            .filter(AiIntakeSession.completed_at.is_(None))
+            .filter(AiIntakeSession.state == "awaiting_customer")
             .filter(
-                InboxConversation.metadata_["ai_intake"]["status"]
-                .as_string()
-                .in_(("classifying", "awaiting_follow_up"))
+                or_(
+                    AiIntakeSession.expires_at.is_(None),
+                    AiIntakeSession.expires_at <= now,
+                )
             )
-            .order_by(InboxConversation.updated_at.asc())
+            .order_by(
+                AiIntakeSession.expires_at.asc(),
+                AiIntakeSession.updated_at.asc(),
+                AiIntakeSession.id.asc(),
+            )
             .limit(max(1, min(command.limit, 1000)))
             .with_for_update(skip_locked=True)
             .all()
         )
         changed = 0
         skipped = 0
-        for conversation in conversations:
-            metadata = dict(conversation.metadata_ or {})
-            state_value = metadata.get("ai_intake")
-            if not isinstance(state_value, dict):
-                continue
-            state = dict(state_value)
-            if state.get("status") not in {"classifying", "awaiting_follow_up"}:
-                continue
-            due_at = _parse_instant(state.get("ai_intake_fallback_due_at"))
-            if due_at is None:
-                updated_at = _parse_instant(state.get("updated_at"))
-                baseline = updated_at or conversation.updated_at or now
-                if baseline.tzinfo is None:
-                    baseline = baseline.replace(tzinfo=UTC)
-                due_at = baseline.astimezone(UTC) + timedelta(minutes=5)
-            if due_at > now:
-                continue
-            active_assignment = (
-                db.query(InboxConversationAssignment.id)
-                .filter(InboxConversationAssignment.conversation_id == conversation.id)
-                .filter(InboxConversationAssignment.is_active.is_(True))
-                .first()
-            )
-            if active_assignment is not None:
-                state.update(
-                    {
-                        "status": "skipped",
-                        "reason": "active_owner",
-                        "updated_at": now.isoformat(),
-                    }
+        for session in sessions:
+
+            def recover_candidate(
+                current_session: AiIntakeSession = session,
+            ) -> MaintenanceOutcome:
+                return _recover_one_stale_ai_intake_session(
+                    db,
+                    session=current_session,
+                    now=now,
                 )
-                metadata["ai_intake"] = state
-                conversation.metadata_ = metadata
+
+            try:
+                outcome = execute_owner_savepoint(db, recover_candidate)
+            except Exception as exc:
+                logger.warning(
+                    "AI intake long-term expiry candidate failed and remains retryable",
+                    extra={
+                        "event": "ai_intake_expiry_candidate_failed",
+                        "session_id": str(session.id),
+                        "conversation_id": str(session.conversation_id),
+                        "error_type": type(exc).__name__,
+                    },
+                    exc_info=True,
+                )
                 skipped += 1
                 continue
-            decision = team_inbox_routing.resolve_channel_routing_decision(
-                db,
-                channel_type=conversation.channel_type,
-                provider=str(state.get("provider") or "default"),
-                account_scope=str(state.get("account_scope") or "default"),
-                fallback_service_team_id=team_inbox_routing.default_service_team_id(db),
-                metadata={**state, "ai_intake_status": "escalated"},
-            )
-            participants = [
-                item
-                for item in (
-                    decision.primary_service_team_id,
-                    decision.channel_service_team_id,
-                )
-                if item
-            ]
-            team_inbox_routing.apply_email_routing_plan(
-                db,
-                conversation=conversation,
-                plan=team_inbox_routing.EmailTeamRoutingPlan(
-                    primary_service_team_id=decision.primary_service_team_id,
-                    participant_service_team_ids=list(dict.fromkeys(participants)),
-                    matches=[],
-                    unmatched_recipients=[],
-                ),
-            )
-            state.update(
-                {
-                    "status": "escalated",
-                    "reason": "fallback_timeout",
-                    "destination_team_id": decision.primary_service_team_id,
-                    "routing_reason": decision.reason,
-                    "updated_at": now.isoformat(),
-                }
-            )
-            metadata["ai_intake"] = state
-            conversation.metadata_ = metadata
-            logger.info(
-                "stale AI intake routed to fallback",
-                extra={
-                    "event": "ai_intake_fallback_selected",
-                    "conversation_id": str(conversation.id),
-                    "destination_team_id": decision.primary_service_team_id,
-                    "reason": "fallback_timeout",
-                },
-            )
-            team_inbox_realtime.publish_queue_event(
-                db, conversation_id=str(conversation.id), created=False
-            )
-            changed += 1
+            changed += outcome.changed
+            skipped += outcome.skipped
         return MaintenanceOutcome(changed=changed, skipped=skipped)
 
     return execute_owner_command(

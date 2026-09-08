@@ -58,8 +58,10 @@ already absorbed, leaving false partial debt and understating customer credit.
   projection and payment allocation.
 - `financial.prepaid_funding_reconstruction` owns the signed, reviewed opening
   baseline. It remains a funding source, never a Payment.
-- `financial.prepaid_service_renewals` owns direct renewal debit and entitlement
-  evidence when no authoritative draft exists.
+- `financial.prepaid_service_renewals` owns funded renewal coordination when no
+  authoritative draft exists. It creates a deterministic draft through the
+  invoice participant and requires this reconciler's existing settlement
+  participants to make it paid before entitlement is granted.
 - `financial.prepaid_draft_reconciliation` is the only classifier and repair
   coordinator when a prepaid draft already exists. It alone writes opening
   funding consumption and durable reconciliation exceptions.
@@ -120,9 +122,13 @@ The owner separately repairs an already-paid unlinked document only when the
 operator supplies the exact invoice/subscription pair and the current snapshot
 proves one positive line, one active full-value allocation, one successful
 unreturned settlement, canonical taxed contract-charge equality, no credit-note
-funding, no entitlement, and no billing anchor. The Payment may fund other
-invoices; the selected allocation alone must exactly equal this invoice total.
-The settlement instant determines the WAT service period.
+funding, and no overlapping entitlement or competing document. The Payment may
+fund other invoices; the selected allocation alone must exactly equal this
+invoice total. The settlement instant determines the WAT service period. If an
+older subscription anchor is one boundary later on that same WAT service-start
+business date, the repair may use that anchor only when the invoice due instant
+exactly matches the next cadence boundary; otherwise the anchor remains manual
+review.
 
 Confirmation posts no money and never changes invoice status, balance, total,
 or allocation. A flush-only invoice participant writes missing line and period
@@ -162,8 +168,8 @@ historical baseline is unrelated to that exact cash application. Mixed or
 underfunded repairs continue to require the reviewed opening-funding workflow.
 
 An existing prepaid draft has first claim on the service-period document
-boundary. A funding-change consequence checks it before an invoice-less direct
-renewal:
+boundary. A funding-change consequence checks it before creating a new funded
+renewal invoice:
 
 - exact native payment-backed funding equal to or above the full balance:
   issue and fully settle the draft atomically;
@@ -190,7 +196,7 @@ renewal:
 
 When a current funding-change transaction finds the exact duplicate case, the
 same owner stages the void first and reports it separately from a funded draft.
-The caller may then spend the current funding on the now-due invoice-less
+The caller may then spend the current funding on the now-due invoice-backed
 renewal. A settled draft still terminates the path because it funded that
 period; multiple or unproven overlaps remain blocking.
 
@@ -407,7 +413,7 @@ which approved path created it.
 
 ## Rollout
 
-1. Deploy the funding-change draft-first guard.
+1. Deploy the funding-change draft-first guard and funded-renewal invoice path.
 2. Run the full dry-run cohort and retain the reviewed JSON.
 3. Preview exact funded onboarding proformas one invoice/subscription pair at a
    time; adopt one canary and verify that only documentary identity changed.

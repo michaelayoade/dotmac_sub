@@ -541,7 +541,7 @@ def customers_list(
             **page_data,
             **subscription_action_permissions,
             "customer_bulk_action_contract": customer_bulk_action_contract,
-            **web_notifications_service.bulk_notification_setup_context(db),
+            **web_notifications_service.customer_notification_picker_context(db),
             "active_page": "customers",
             "active_menu": "operations",
             "current_user": current_user,
@@ -855,11 +855,18 @@ def person_detail(
     show_conversations = bool(request_auth) and has_permission(
         request_auth, db, "support:ticket:read"
     )
+    show_service_extensions = bool(request_auth) and has_permission(
+        request_auth, db, "billing:extension:read"
+    )
+    can_create_service_extension = bool(request_auth) and has_permission(
+        request_auth, db, "billing:extension:create"
+    )
     try:
         detail_data = web_customer_details_service.build_customer_detail_snapshot(
             db=db,
             customer_id=customer_id,
             include_conversations=show_conversations,
+            include_service_extensions=show_service_extensions,
             network_query=web_customer_details_service.CustomerDetailNetworkQuery(
                 include=panel == "network",
             ),
@@ -886,7 +893,9 @@ def person_detail(
     location_capture_enabled = can_confirm_location and location_capture.prompt_enabled(
         db
     )
-    notification_context = web_notifications_service.bulk_notification_setup_context(db)
+    notification_context = (
+        web_notifications_service.customer_notification_picker_context(db)
+    )
     pppoe_access = detail_data.get("pppoe_access") or {
         "has_credential": False,
         "credential_id": None,
@@ -941,6 +950,8 @@ def person_detail(
             "current_user": current_user,
             "location_capture_enabled": location_capture_enabled,
             "can_unsuspend_account": can_unsuspend_account,
+            "can_read_service_extensions": show_service_extensions,
+            "can_create_service_extension": can_create_service_extension,
             "party_binding_repair": party_binding_repair,
             "sidebar_stats": sidebar_stats,
         },

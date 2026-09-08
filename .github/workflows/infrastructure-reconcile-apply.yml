@@ -1,0 +1,272 @@
+name: Apply authorized infrastructure published-port reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected-main SHA that produced both plans
+        required: true
+        type: string
+      service:
+        description: Exact service named by both plans
+        required: true
+        type: choice
+        options:
+          - postgres-local
+          - freeradius
+      target_server_name:
+        description: Explicit production target
+        required: true
+        type: string
+      execution_plan_digest:
+        description: Reviewed sha256 digest of the byte-identical plans
+        required: true
+        type: string
+      first_plan_run_id:
+        description: First terminal-success first-attempt plan run
+        required: true
+        type: string
+      second_plan_run_id:
+        description: Second distinct terminal-success first-attempt plan run
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: dotmac-sub-production-published-port
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    name: Admit exact terminal plan evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Refuse disabled, rerun, mutable, duplicate, or wrong-target dispatch
+        env:
+          ENABLED: ${{ vars.PUBLISHED_PORT_RECONCILE_V2_ENABLED }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ inputs.target_server_name }}
+          PLAN_DIGEST: ${{ inputs.execution_plan_digest }}
+          FIRST_RUN: ${{ inputs.first_plan_run_id }}
+          SECOND_RUN: ${{ inputs.second_plan_run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$ENABLED" = "true"
+          test "$RUN_ATTEMPT" = "1"
+          test "$EVENT_REF" = "refs/heads/main"
+          test "$TARGET" = "dotmac-sub-prod"
+          test "$SOURCE_SHA" = "$EVENT_SHA"
+          test "$FIRST_RUN" != "$SECOND_RUN"
+          case "$SOURCE_SHA" in *[!0-9a-f]*|'') exit 1 ;; esac
+          test "${#SOURCE_SHA}" -eq 40
+          case "$PLAN_DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          case "$FIRST_RUN:$SECOND_RUN" in *[!0-9:]*|:*) exit 1 ;; esac
+
+      - name: Observe current protected main and both terminal runs
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          FIRST_RUN: ${{ inputs.first_plan_run_id }}
+          SECOND_RUN: ${{ inputs.second_plan_run_id }}
+        with:
+          script: |
+            const fs = require("fs");
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: "main",
+            });
+            if (!branch.data.protected || branch.data.commit.sha !== process.env.SOURCE_SHA) {
+              core.setFailed("source_sha is not the current protected main head");
+              return;
+            }
+            const expectedRepo = `${context.repo.owner}/${context.repo.repo}`;
+            const ids = [Number(process.env.FIRST_RUN), Number(process.env.SECOND_RUN)];
+            for (const [index, runId] of ids.entries()) {
+              if (!Number.isSafeInteger(runId) || runId <= 0) {
+                core.setFailed("plan run IDs must be positive integers");
+                return;
+              }
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              });
+              const run = response.data;
+              const workflow = await github.rest.actions.getWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: run.workflow_id,
+              });
+              if (workflow.data.path !== ".github/workflows/infrastructure-reconcile-plan.yml" ||
+                  run.name !== "Plan infrastructure published-port reconciliation" ||
+                  run.head_repository?.full_name !== expectedRepo ||
+                  run.head_branch !== "main" || run.head_sha !== process.env.SOURCE_SHA ||
+                  run.event !== "workflow_dispatch" || run.run_attempt !== 1 ||
+                  run.status !== "completed" || run.conclusion !== "success" ||
+                  !run.created_at || !run.updated_at) {
+                core.setFailed(`plan run ${runId} is not admissible terminal evidence`);
+                return;
+              }
+              const observation = {
+                completed_at: run.updated_at,
+                conclusion: "success",
+                created_at: run.created_at,
+                event: "workflow_dispatch",
+                protected_ref: "refs/heads/main",
+                repository: expectedRepo,
+                run_attempt: 1,
+                run_id: runId,
+                schema: "PublishedPortPlanRunObservationV2",
+                source_sha: run.head_sha,
+                status: "completed",
+                workflow: ".github/workflows/infrastructure-reconcile-plan.yml",
+              };
+              const canonical = Object.fromEntries(Object.entries(observation).sort(([a], [b]) => a.localeCompare(b)));
+              fs.writeFileSync(`${process.env.RUNNER_TEMP}/plan-run-${index + 1}.json`, `${JSON.stringify(canonical)}\n`, {mode: 0o600});
+            }
+
+      - name: Download first exact plan artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: published-port-plan-v1-${{ inputs.service }}-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/apply-inputs/plan-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.first_plan_run_id }}
+
+      - name: Download second exact plan artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: published-port-plan-v1-${{ inputs.service }}-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/apply-inputs/plan-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.second_plan_run_id }}
+
+      - name: Assemble observed evidence without interpreting it
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/apply-inputs/observations"
+          install -m 0600 "$RUNNER_TEMP/plan-run-1.json" \
+            "$RUNNER_TEMP/apply-inputs/observations/plan-run-1.json"
+          install -m 0600 "$RUNNER_TEMP/plan-run-2.json" \
+            "$RUNNER_TEMP/apply-inputs/observations/plan-run-2.json"
+
+      - name: Upload exact observed plan evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: published-port-apply-inputs-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/apply-inputs/
+          if-no-files-found: error
+          retention-days: 1
+
+  apply:
+    name: Apply target-only port change under persistent deadman
+    needs: admit
+    runs-on: [self-hosted, linux, x64, dotmac-sub-production]
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - name: Re-observe protected main after production authorization
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            if (process.env.RUN_ATTEMPT !== "1") {
+              core.setFailed("APPLY workflow reruns are not admissible");
+              return;
+            }
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: "main",
+            });
+            if (!branch.data.protected || branch.data.commit.sha !== process.env.SOURCE_SHA) {
+              core.setFailed("source_sha ceased to be current protected main");
+            }
+
+      - name: Checkout exact admitted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download this run's observed apply inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: published-port-apply-inputs-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/apply-inputs
+
+      - name: Verify pinned Python and Pydantic toolchain
+        env:
+          PYTHON_BIN: ${{ vars.PUBLISHED_PORT_RECONCILE_PYTHON_BIN }}
+        run: |
+          set -euo pipefail
+          bash scripts/reconcile_published_ports_v2.sh verify-toolchain
+
+      - name: Build typed admission under the authenticated production gate
+        env:
+          PYTHON_BIN: ${{ vars.PUBLISHED_PORT_RECONCILE_PYTHON_BIN }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          APPLY_RUN_ID: ${{ github.run_id }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.execution_plan_digest }}
+          FIREWALL_VERIFIER_IDENTITY: ${{ vars.PUBLISHED_PORT_FIREWALL_VERIFIER_IDENTITY }}
+          CLIENT_COLLECTOR_IDENTITY: ${{ vars.PUBLISHED_PORT_CLIENT_COLLECTOR_IDENTITY }}
+        run: |
+          set -euo pipefail
+          test -n "$PYTHON_BIN"
+          "$PYTHON_BIN" -m scripts.published_port_reconcile_v2 admit-apply \
+            --first-dir "$RUNNER_TEMP/apply-inputs/plan-1" \
+            --second-dir "$RUNNER_TEMP/apply-inputs/plan-2" \
+            --first-observation "$RUNNER_TEMP/apply-inputs/observations/plan-run-1.json" \
+            --second-observation "$RUNNER_TEMP/apply-inputs/observations/plan-run-2.json" \
+            --source-sha "$SOURCE_SHA" \
+            --apply-run-id "$APPLY_RUN_ID" \
+            --admitted-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
+            --firewall-verifier-identity "$FIREWALL_VERIFIER_IDENTITY" \
+            --client-collector-identity "$CLIENT_COLLECTOR_IDENTITY" \
+            --output "$RUNNER_TEMP/admission.json"
+          install -m 0600 "$RUNNER_TEMP/apply-inputs/plan-1/plan.json" \
+            "$RUNNER_TEMP/admitted-plan.json"
+
+      - name: Apply admitted target-only reconcile
+        env:
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+          PYTHON_BIN: ${{ vars.PUBLISHED_PORT_RECONCILE_PYTHON_BIN }}
+          FIREWALL_PROOF_DIR: ${{ vars.PUBLISHED_PORT_FIREWALL_PROOF_DIR }}
+          CLIENT_PROOF_DIR: ${{ vars.PUBLISHED_PORT_CLIENT_PROOF_DIR }}
+          OUTPUT_DIR: ${{ runner.temp }}/published-port-outcome
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          APPLY_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$OUTPUT_DIR"
+          REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \
+            bash scripts/reconcile_published_ports_v2.sh apply \
+              --plan "$RUNNER_TEMP/admitted-plan.json" \
+              --admission "$RUNNER_TEMP/admission.json" \
+              --source-sha "$SOURCE_SHA" \
+              --apply-run-id "$APPLY_RUN_ID" \
+              --output-dir "$OUTPUT_DIR" \
+              --firewall-proof-dir "$FIREWALL_PROOF_DIR" \
+              --reach-proof-dir "$CLIENT_PROOF_DIR"
+
+      - name: Upload sanitized terminal outcome
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: published-port-apply-outcome-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/published-port-outcome/outcome.json
+          if-no-files-found: error
+          retention-days: 30

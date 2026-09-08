@@ -16,14 +16,17 @@ from app.models.team_inbox import InboxChannelType
 from app.services import team_inbox_channel_receive
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.connectors.meta_social_runtime import (
+    META_LEAD_CAPTURE_CAPABILITY,
     META_SOCIAL_RECEIVE_CAPABILITY,
 )
 from app.services.integrations.meta_social_capability import (
     fetch_contact_profile,
+    fetch_lead,
     inbound_secret_material,
     require_binding,
 )
 from app.services.integrations.meta_social_contracts import MetaSocialChannel
+from app.services.sales.meta_lead_ads import capture_meta_lead
 
 router = APIRouter(prefix="/webhooks/meta", tags=["meta-inbox-webhook"])
 SIGNATURE_HEADER = "X-Hub-Signature-256"
@@ -350,6 +353,29 @@ def _iter_meta_social_messages(payload: dict[str, Any]):
             }
 
 
+def _iter_meta_leadgen(payload: dict[str, Any]):
+    if str(payload.get("object") or "").strip().lower() != "page":
+        return
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        page_id = _text(entry.get("id"))
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict) or change.get("field") != "leadgen":
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            leadgen_id = _text(value.get("leadgen_id"))
+            observed_page_id = _text(value.get("page_id")) or page_id
+            if leadgen_id and observed_page_id:
+                yield {
+                    "leadgen_id": leadgen_id,
+                    "page_id": observed_page_id,
+                    "payload": value,
+                }
+
+
 @router.get("")
 def verify_meta_inbox_webhook(
     mode: str | None = Query(default=None, alias="hub.mode"),
@@ -388,6 +414,54 @@ async def receive_meta_inbox_webhook(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON payload.",
             )
+
+        lead_results: list[dict[str, object]] = []
+        for lead_item in _iter_meta_leadgen(payload):
+            finish_read_transaction(db)
+            lead_binding = require_binding(
+                db,
+                capability_id=META_LEAD_CAPTURE_CAPABILITY,
+            )
+            lead_receipt, should_capture = integration_inbox.receive_and_claim_verified(
+                db,
+                capability_binding_id=lead_binding.id,
+                provider_event_id=str(lead_item["leadgen_id"]),
+                event_type="meta.leadgen.webhook.v1",
+                payload=dict(lead_item["payload"]),
+                headers={"source": "verified_meta_webhook"},
+            )
+            if not should_capture:
+                lead_results.append(dict(lead_receipt.consequence_json))
+                continue
+            try:
+                observation = fetch_lead(
+                    db,
+                    leadgen_id=str(lead_item["leadgen_id"]),
+                    page_id=str(lead_item["page_id"]),
+                )
+                if observation is None:
+                    raise RuntimeError("Meta Lead details are temporarily unavailable")
+                outcome = capture_meta_lead(
+                    db,
+                    receipt_id=lead_receipt.id,
+                    observation=observation,
+                )
+                lead_results.append(
+                    {
+                        "lead_id": str(outcome.lead_id),
+                        "party_id": str(outcome.party_id),
+                        "replayed": outcome.replayed,
+                        "customer_match": outcome.customer_match.status.value,
+                    }
+                )
+            except Exception as exc:
+                integration_inbox.fail_consequence(
+                    db,
+                    receipt=lead_receipt,
+                    error_code="meta_lead_capture_failed",
+                    error_detail=type(exc).__name__,
+                )
+                raise
 
         inbound_payloads: list[team_inbox_channel_receive.InboundChannelPayload] = []
         for item in (
@@ -469,6 +543,7 @@ async def receive_meta_inbox_webhook(
                 "status": "ok",
                 "processed": len(results),
                 "items": results,
+                "leads": lead_results,
             }
             integration_inbox.complete_consequence(
                 db,

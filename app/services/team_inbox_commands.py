@@ -1,4 +1,4 @@
-﻿"""Committed command boundary for team-inbox UI adapters.
+"""Committed command boundary for team-inbox UI adapters.
 
 The underlying team-inbox services own their focused policies. This module owns
 admin command orchestration, model lookup, and the transaction boundary so web
@@ -54,9 +54,6 @@ from app.schemas.sales import (
     LeadOriginCaptureCreate,
 )
 from app.services import (
-    party as party_service,
-)
-from app.services import (
     inbox_sla,
     team_inbox_assignment,
     team_inbox_contact_links,
@@ -68,6 +65,9 @@ from app.services import (
     team_inbox_participants,
     team_inbox_routing,
     team_inbox_status,
+)
+from app.services import (
+    party as party_service,
 )
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
@@ -3081,6 +3081,3 @@ def consume_snooze_wake(
         )[0]
 
     return _commit(db, _operation, context=context)
-
-
-

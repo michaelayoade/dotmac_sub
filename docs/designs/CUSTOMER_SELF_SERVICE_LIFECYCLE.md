@@ -114,6 +114,15 @@ connection/outage evidence, freshness, next action, and any pending plan or
 network change. Customer Portal, Reseller Portal, Customer 360, and mobile
 consume the same DTO.
 
+Operationally current is a typed lifecycle-policy decision evaluated at one
+explicit instant. The normal cohort is `pending`, `active`, `blocked`,
+`suspended`, `stopped`, and `disabled`; only a `stopped` or `disabled` row whose
+explicit `end_at` has passed is historical for customer health. That row remains
+available in admin history. Current paused services and other non-terminal
+past-end drift remain visible and fail closed rather than being broadly hidden.
+The Account Health composer passes the exact resolved cohort to Service Status,
+so no route, template, or client owns a second interpretation.
+
 ## Migration and retirement
 
 Completed in this slice:

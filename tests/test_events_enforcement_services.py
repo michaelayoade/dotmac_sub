@@ -31,6 +31,7 @@ from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     Notification,
     NotificationChannel,
+    NotificationStatus,
     NotificationTemplate,
 )
 from app.models.provisioning import ProvisioningVendor
@@ -1219,6 +1220,90 @@ class TestNotificationHandler:
         assert (
             f"https://selfcare.dotmac.io/portal/billing/payments/{payment.id}/receipt"
         ) in (notification.body or "")
+
+    def test_payment_event_restores_and_delivers_email_and_sms(
+        self, db_session, subscriber, monkeypatch
+    ):
+        from app.tasks.notifications import _deliver_notification_queue
+
+        monkeypatch.setattr(
+            "app.services.notification.quiet_hours_send_at",
+            lambda _db: None,
+        )
+        subscriber.phone = "+2348000000199"
+        payment = Payment(
+            account_id=subscriber.id,
+            amount=18712.50,
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime.now(UTC),
+            is_active=True,
+        )
+        db_session.add_all(
+            [
+                payment,
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received",
+                    channel=NotificationChannel.email,
+                    subject="Payment receipt {receipt_number}",
+                    body="Receipt {receipt_number}: {receipt_url}",
+                    is_active=False,
+                ),
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received SMS",
+                    channel=NotificationChannel.sms,
+                    subject=None,
+                    body="Receipt {receipt_number}: {receipt_url}",
+                    is_active=False,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        NotificationHandler().handle(
+            db_session,
+            Event(
+                event_type=EventType.payment_received,
+                payload={"payment_id": str(payment.id), "amount": "18712.50"},
+                account_id=subscriber.id,
+            ),
+        )
+        db_session.commit()
+
+        delivered: dict[str, str] = {}
+        monkeypatch.setattr(
+            "app.tasks.notifications.communication_eligibility.may_send",
+            lambda *_args, **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            "app.tasks.notifications.email_service.send_email",
+            lambda **kwargs: delivered.update(email=kwargs["body_text"]) or True,
+        )
+        monkeypatch.setattr(
+            "app.tasks.notifications.sms_service.send_sms",
+            lambda **kwargs: delivered.update(sms=kwargs["body"]) or True,
+        )
+
+        assert _deliver_notification_queue(db_session, batch_size=10) == 2
+
+        notifications = (
+            db_session.query(Notification)
+            .filter(Notification.event_type == "payment_received")
+            .all()
+        )
+        receipt_reference = f"#RCP-{payment.id.hex[:8].upper()}"
+        receipt_url = (
+            f"https://selfcare.dotmac.io/portal/billing/payments/{payment.id}/receipt"
+        )
+        assert {row.channel for row in notifications} == {
+            NotificationChannel.email,
+            NotificationChannel.sms,
+        }
+        assert all(row.status == NotificationStatus.delivered for row in notifications)
+        assert all(receipt_reference in body for body in delivered.values())
+        assert all(receipt_url in body for body in delivered.values())
 
     def test_prepaid_renewal_event_uses_owner_renewed_through_date(
         self, db_session, subscriber, subscription

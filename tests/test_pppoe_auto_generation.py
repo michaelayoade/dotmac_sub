@@ -396,6 +396,33 @@ class TestAutoGeneratePppoeCredential:
         assert credential.username.startswith("SEQ")
         assert created.login == credential.username
 
+    def test_activation_replaces_staged_login_with_exact_credential_identity(
+        self,
+        db_session,
+        subscriber,
+        catalog_offer,
+    ):
+        _seed_pppoe_settings(db_session, start=1)
+        _set_subscriber_number(db_session, subscriber, "SUB-000127")
+
+        created = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                account_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+                login="stale-create-form-login",
+            ),
+        )
+
+        credential = (
+            db_session.query(AccessCredential)
+            .filter(AccessCredential.subscription_id == created.id)
+            .one()
+        )
+        assert credential.username == "10000127"
+        assert created.login == credential.username
+
 
 class TestGenerateRandomPassword:
     """Tests for _generate_random_password."""

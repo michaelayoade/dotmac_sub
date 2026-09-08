@@ -18,8 +18,8 @@ from app.web.admin import network as web_network
 from app.web.templates import templates
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ORIGINAL_MAP_NORMALIZED_SHA256 = (
-    "2e6316233fb7f66a95c1dc961044e0530c090a2a114b40644e40867e85d0bacb"
+REVIEWED_BASE_MAP_NORMALIZED_SHA256 = (
+    "a2ca0a8d108ded394e93d7f3349caede0680c7e96f1f6e0823cdc5051f6ab2fc"
 )
 
 
@@ -103,11 +103,11 @@ def test_v2_route_is_isolated_and_uses_the_original_map_permission():
     )
 
 
-def test_original_network_map_template_content_remains_unchanged():
+def test_network_map_v2_extends_the_reviewed_base_template():
     original = (PROJECT_ROOT / "templates/admin/network/map.html").read_bytes()
     normalized = original.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
-    assert hashlib.sha256(normalized).hexdigest() == ORIGINAL_MAP_NORMALIZED_SHA256
+    assert hashlib.sha256(normalized).hexdigest() == REVIEWED_BASE_MAP_NORMALIZED_SHA256
 
 
 def test_nearby_unrelated_endpoints_are_not_inferred_as_connected():

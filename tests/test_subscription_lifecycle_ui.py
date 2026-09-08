@@ -211,6 +211,9 @@ def test_subscription_detail_uses_canonical_preview_and_execute_endpoints():
     assert "Correct Subscription" in source
     assert "action_form(correction_action)" in source
     assert "subscriptionCorrectionActions" not in source
+    assert "pending-plan-change-badge" in source
+    assert "cancel_subscription_preview.eligible" in source
+    assert "Cancel the pending plan-change request first" in source
 
 
 def test_subscription_detail_does_not_use_legacy_single_action_paths():

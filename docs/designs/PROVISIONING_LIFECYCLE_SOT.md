@@ -99,6 +99,13 @@ after the staging watermark. Ambiguous profiles, credentials, users, stale
 syncs, and mismatched profiles fail closed and remain repairable from the same
 canonical evidence.
 
+Creating a pending subscription stages service intent only. Credential lookup
+is scoped to that exact subscription: creation must not rename, re-secret, or
+re-profile a credential bound to another live service merely because both
+services belong to the same subscriber. If no exact credential is staged,
+activation mints and binds one for the new subscription, and the subscription
+login follows that exact credential identity.
+
 ## Migration and repair
 
 Migration 390 adds the native links and append-only evidence tables. It

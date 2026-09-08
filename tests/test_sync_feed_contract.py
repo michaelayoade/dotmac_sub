@@ -7,9 +7,12 @@ from sqlalchemy import event
 
 from app.api.billing import router as billing_router
 from app.api.subscribers import router as subscriber_router
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import BillingCycle, SubscriptionStatus
 from app.models.subscriber import UserType
+from app.schemas.billing import InvoiceSyncRead
 from app.schemas.subscriber import SubscriberSyncRead
+from app.services import billing as billing_service
 from app.services import subscriber as subscriber_service
 
 
@@ -105,3 +108,47 @@ def test_subscriber_sync_feed_projects_commercial_metrics_and_watermark(
     assert projection.billing_cycle == BillingCycle.quarterly.value
     assert projection.recurring_amount_monthly == Decimal("200.00")
     assert projection.annualized_recurring_revenue == Decimal("2400.00")
+
+
+def test_invoice_sync_feed_embeds_account_without_per_invoice_queries(
+    db_session, subscriber_account
+):
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-SYNC-1",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        issued_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    statements: list[str] = []
+    bind = db_session.get_bind()
+
+    def count_statement(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(bind, "before_cursor_execute", count_statement)
+    try:
+        response = billing_service.invoices.sync_list_response(
+            db_session,
+            account_id=None,
+            status=None,
+            is_active=None,
+            updated_since=None,
+            limit=500,
+            offset=0,
+        )
+        projection = InvoiceSyncRead.model_validate(response["items"][0])
+    finally:
+        event.remove(bind, "before_cursor_execute", count_statement)
+
+    assert len(statements) == 3
+    assert projection.id == invoice.id
+    assert projection.account.id == subscriber_account.id
+    assert projection.account.email == subscriber_account.email

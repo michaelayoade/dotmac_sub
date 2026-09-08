@@ -133,6 +133,39 @@ def test_ticket_claim_delegates_to_ticket_owner_and_replays(db_session):
     )
 
 
+def test_ticket_claim_uses_ticket_update_authority(db_session):
+    actor_id = uuid4()
+    team = _team_member(db_session, actor_id)
+    ticket = Ticket(
+        title="Assignment update authority",
+        status=TicketStatus.open.value,
+        priority="normal",
+        service_team_id=team.id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    principal = _principal(actor_id)
+    command = WorkqueueActionCommand(
+        context=_context(actor_id),
+        principal=principal,
+        item_kind=ItemKind.ticket,
+        item_id=ticket.id,
+        action=ActionKind.claim,
+        state_fingerprint=_fingerprint(
+            db_session,
+            principal,
+            item_kind=ItemKind.ticket,
+            item_id=ticket.id,
+            action=ActionKind.claim,
+        ),
+    )
+
+    outcome = execute_action(db_session, command)
+
+    assert outcome.result == "claimed"
+    assert db_session.get(Ticket, ticket.id).assigned_to_person_id == actor_id
+
+
 def test_ticket_complete_is_atomic_and_replays_after_item_leaves_queue(db_session):
     actor_id = uuid4()
     team = _team_member(db_session, actor_id)

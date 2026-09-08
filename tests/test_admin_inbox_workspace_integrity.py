@@ -249,7 +249,8 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' not in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260830a" in INDEX
+    assert "admin-inbox.js?v=20260904a" in INDEX
+    assert "admin-inbox.js?v=20260830a" not in INDEX
     assert "admin-inbox.js?v=20260827a" not in INDEX
     assert "admin-inbox.js?v=20260820a" not in INDEX
     assert "admin-inbox.js?v=20260817b" not in INDEX
@@ -454,12 +455,13 @@ def test_sidebar_shell_header_and_icon_use_the_page_scoped_contract():
     ):
         assert class_name in INDEX
     for class_name in (
-        "flex items-center justify-between gap-2 border-b border-slate-200/60 px-5 py-4",
-        "h-11 w-11",
-        "rounded-xl",
+        "space-y-2 border-b border-slate-200/60 px-5 py-3",
+        "flex items-center justify-between gap-2",
+        "h-10 w-10",
+        "rounded-lg",
         "from-amber-500 to-orange-600",
         "shadow-lg shadow-amber-500/25",
-        "h-[22px] w-[22px]",
+        "h-[20px] w-[20px]",
         "text-lg font-bold text-slate-900",
         "font-semibold tabular-nums text-amber-600 dark:text-amber-400",
     ):
@@ -467,7 +469,7 @@ def test_sidebar_shell_header_and_icon_use_the_page_scoped_contract():
 
 
 def test_header_actions_have_live_states_and_tooltips():
-    assert SIDEBAR.count('role="tooltip"') == 5
+    assert SIDEBAR.count('role="tooltip"') == 6
     assert "h-9 w-9" in SIDEBAR
     assert "hover:bg-amber-50 hover:text-amber-600" in SIDEBAR
     assert "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700" in SIDEBAR
@@ -1112,6 +1114,22 @@ def test_channel_and_team_remain_separate_and_inbox_selector_stays_hidden():
     assert ">Team</span>" in SIDEBAR
     assert 'name="receiving_account_id"' not in SIDEBAR
     assert 'name="mailbox_id"' not in SIDEBAR
+
+
+def test_lifecycle_assignment_and_channel_filters_are_composable():
+    marker = JAVASCRIPT.index("navigateFilter(changes")
+    body = JAVASCRIPT[marker : marker + 2600]
+    lifecycle = body.split("const lifecycleKeys = [", 1)[1].split("];", 1)[0]
+    assignment = body.split("const assignmentKeys = [", 1)[1].split("];", 1)[0]
+
+    assert '"view"' in lifecycle
+    assert '"status"' in lifecycle
+    assert '"view"' not in assignment
+    assert '"status"' not in assignment
+    assert 'clearScope === "lifecycle"' in body
+    assert 'clearScope === "assignment"' in body
+    assert '@change="navigateFilter({ channel_type: $el.value })"' in SIDEBAR
+    assert '@change="navigateFilter({ service_team_id: $el.value })"' in SIDEBAR
 
 
 def test_by_agent_panel_uses_live_agent_and_activity_filters():

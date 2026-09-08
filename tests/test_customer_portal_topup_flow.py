@@ -161,6 +161,40 @@ def _patch_topup_settings(
     )
 
 
+def _patch_direct_transfer_creation_policy(monkeypatch) -> None:
+    from app.services import direct_transfer_intents, topup_intents
+
+    monkeypatch.setattr(
+        topup_intents,
+        "direct_transfer_configuration",
+        lambda _db: topup_intents.DirectTransferConfiguration(
+            accounts=(
+                topup_intents.DirectTransferConfiguredAccount(
+                    id="bank-primary",
+                    enabled=True,
+                    bank_name="Dotmac Test Bank",
+                    account_name="Dotmac Payments",
+                    account_number="0123456789",
+                ),
+            ),
+            bank_name="Dotmac Test Bank",
+            account_name="Dotmac Payments",
+            account_number="0123456789",
+            sort_code="",
+            instructions="Use the supplied reference.",
+        ),
+    )
+    monkeypatch.setattr(
+        direct_transfer_intents,
+        "resolve_value",
+        lambda _db, _domain, key: {
+            "topup_min_amount": 1000,
+            "topup_max_amount": 500000,
+            "direct_bank_transfer_intent_ttl_days": 7,
+        }[key],
+    )
+
+
 def _create_intent(
     monkeypatch, db_session, subscriber, *, amount: str, reference: str
 ) -> dict:
@@ -1207,24 +1241,35 @@ def test_create_invoice_payment_intent_saved_card_failure_is_atomic(
     assert reservation is None
 
 
-def test_create_invoice_payment_intent_rejects_customer_bank_transfer(
+def test_create_invoice_payment_intent_bank_transfer_hands_off(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
+    _patch_direct_transfer_creation_policy(monkeypatch)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
     )
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="direct_bank_transfer",
+    )
 
-    with pytest.raises(ValueError, match="resellers only"):
-        create_invoice_payment_intent(
-            db_session,
-            _invoice_customer(subscriber),
-            str(invoice.id),
-            provider="direct_bank_transfer",
-        )
+    assert payload["provider_type"] == "direct_bank_transfer"
+    assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+    assert payload["requested_amount"] == Decimal("2500.00")
+    intent = db_session.scalars(
+        select(TopupIntent).where(TopupIntent.reference == payload["reference"])
+    ).first()
+    assert intent is not None
+    assert intent.metadata_["invoice_id"] == str(invoice.id)
+    assert intent.metadata_["payment_flow"] == "invoice_payment"
 
 
-def test_direct_transfer_topup_page_rejects_customer_access(db_session, subscriber):
+def test_direct_transfer_topup_page_surfaces_server_calculated_wht(
+    monkeypatch, db_session, subscriber
+):
     from app.services.customer_portal_flow_payments import (
         get_direct_transfer_topup_page,
     )
@@ -1257,33 +1302,52 @@ def test_direct_transfer_topup_page_rejects_customer_access(db_session, subscrib
     )
     db_session.add(intent)
     db_session.commit()
-    with pytest.raises(ValueError, match="resellers only"):
-        get_direct_transfer_topup_page(
-            db_session,
-            _invoice_customer(subscriber),
-        )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.enabled_direct_bank_transfer_accounts",
+        lambda _db: [],
+    )
+
+    page = get_direct_transfer_topup_page(
+        db_session,
+        _invoice_customer(subscriber),
+    )
+
+    assert page["intent"].reference == "TRF-WHT-PAGE"
+    assert page["withholding_tax"]["gross_amount"] == "107500.00"
+    assert page["withholding_tax"]["vat_exclusive_amount"] == "100000.00"
+    assert page["withholding_tax"]["vat_amount"] == "7500.00"
+    assert page["withholding_tax"]["withholding_tax_rate_percent"] == "5.00"
+    assert page["withholding_tax"]["withholding_tax_amount"] == "5000.00"
+    assert page["withholding_tax"]["net_amount"] == "102500.00"
 
 
-def test_create_invoice_payment_intent_rejects_customer_bank_transfer_below_topup_min(
+def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch, min_amount=1000)
+    _patch_direct_transfer_creation_policy(monkeypatch)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="500.00", invoice_number="INV-PAY-SMALL"
     )
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="direct_bank_transfer",
+    )
 
-    with pytest.raises(ValueError, match="resellers only"):
-        create_invoice_payment_intent(
-            db_session,
-            _invoice_customer(subscriber),
-            str(invoice.id),
-            provider="direct_bank_transfer",
-        )
+    assert payload["requested_amount"] == Decimal("500.00")
+    assert payload["redirect_url"] == "/portal/billing/topup/transfer"
 
 
-def test_direct_transfer_portal_rejects_customer_proof_submission(
-    db_session, subscriber
+def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
+    monkeypatch, db_session, subscriber
 ):
+    from app.services import payment_proofs
     from app.services.topup_intents import (
         DIRECT_TRANSFER_PROVIDER,
         TopupIntentStatus,
@@ -1301,15 +1365,45 @@ def test_direct_transfer_portal_rejects_customer_proof_submission(
     db_session.add(intent)
     db_session.commit()
     db_session.refresh(intent)
-    with pytest.raises(ValueError, match="resellers only"):
-        _run_async(
-            submit_direct_transfer_topup(
-                db_session,
-                _invoice_customer(subscriber),
-                made_payment=True,
-                file=SimpleNamespace(filename="portal-atomic.png"),
-            )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.enabled_direct_bank_transfer_accounts",
+        lambda _db: [
+            {
+                "id": "bank-primary",
+                "enabled": "true",
+                "bank_name": "Dotmac Test Bank",
+                "account_name": "Dotmac Payments",
+                "account_number": "0123456789",
+                "sort_code": "",
+            }
+        ],
+    )
+
+    async def fake_save_proof_file(_file) -> str:
+        return "uploads/payment_proofs/portal-atomic.png"
+
+    monkeypatch.setattr(payment_proofs, "save_proof_file", fake_save_proof_file)
+
+    result = _run_async(
+        submit_direct_transfer_topup(
+            db_session,
+            _invoice_customer(subscriber),
+            made_payment=True,
+            file=SimpleNamespace(filename="portal-atomic.png"),
         )
+    )
+
+    proof = db_session.get(PaymentProof, result["id"])
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert proof is not None
+    assert proof.status is PaymentProofStatus.submitted
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
+    assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 
 
 def test_create_invoice_payment_intent_rejects_gateway_when_customer_email_blank(

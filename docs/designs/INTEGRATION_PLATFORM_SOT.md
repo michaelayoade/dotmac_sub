@@ -5,6 +5,36 @@ CRM, ERP, direct Meta WhatsApp, Meta social inbox, Paystack, Flutterwave, and HT
 have completed cutover. Their former direct transports and duplicate delivery
 stores are retired by migration `380_integration_platform_cutover`.
 
+## Meta Social 1.2 capabilities
+
+The version-pinned `meta.social` 1.2 connector adds
+`sales.lead_capture.v1` for verified Lead Ads intake and
+`sales.lead_conversion.send.v1` for conversion feedback. Existing installations
+must explicitly adopt the 1.2 manifest before those capabilities can be bound;
+changing configuration does not silently upgrade a deployed connector.
+
+Lead notifications arrive through the signed Meta webhook but receive their own
+provider-event identity based on the Meta Lead ID. Lead details are retrieved
+with the enabled installation credential before `sales.capture` decides the
+local consequence. Customer conversion delivery uses a separately referenced
+Conversions API credential and configured Dataset ID. Secret values are
+resolved only at execution time and never stored in delivery evidence.
+An exact match to one active customer through a verified Party email address or
+phone number can report the customer lifecycle stage immediately, while the
+local Lead-to-customer identity link remains review-only. Ambiguous or
+unverified matches never send that update.
+
+Facebook and Instagram contact profile reads address the sender ID supplied by
+the message webhook. In particular, Instagram Login reads
+`/{instagram-scoped-sender-id}`; `/me` identifies the connected business and is
+not valid customer-name evidence.
+
+Provider contracts:
+
+- [Instagram User Profile API](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/user-profile)
+- [Lead Ads webhook and retrieval](https://developers.facebook.com/docs/marketing-api/guides/lead-ads/retrieving)
+- [Conversions API for CRM](https://developers.facebook.com/docs/marketing-api/conversions-api/conversion-leads-integration)
+
 ## 2026-08-23 amendment — independently deployed Integrator settlement port
 
 The 2026-07-20 cutover consolidated Sub's then-current connector paths inside

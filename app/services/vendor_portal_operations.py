@@ -63,6 +63,12 @@ _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
     ProjectQuoteStatus.revision_requested.value,
 }
+_QUOTE_TAX_EDITABLE_STATUSES = {
+    ProjectQuoteStatus.draft.value,
+    ProjectQuoteStatus.revision_requested.value,
+    ProjectQuoteStatus.submitted.value,
+    ProjectQuoteStatus.under_review.value,
+}
 # Awarding a project (``approved``) and everything after it closes quoting:
 # post-award change is a variation, not another bid. ``assigned`` is the
 # directed-work intake state: the vendor was named without a bidding round and
@@ -157,6 +163,13 @@ class ReviewVendorQuoteCommand:
     reviewer_id: str
     approve: bool
     notes: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SetVendorQuoteTaxCommand:
+    context: CommandContext
+    quote_id: str
+    vat_rate_percent: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -808,6 +821,18 @@ def _serialize_quote(row: ProjectQuote) -> dict:
         ),
         "approve_url": f"/admin/vendors/operations/quotes/{row.id}/approve",
         "revision_url": (f"/admin/vendors/operations/quotes/{row.id}/request-revision"),
+        "tax_action": Action(
+            key="set_quote_tax",
+            label="Apply tax",
+            allowed=row.status in _QUOTE_TAX_EDITABLE_STATUSES,
+            reason=(
+                None
+                if row.status in _QUOTE_TAX_EDITABLE_STATUSES
+                else f"A {row.status.replace('_', ' ')} quote tax cannot be changed"
+            ),
+            affected=1,
+        ),
+        "tax_url": f"/admin/vendors/operations/quotes/{row.id}/tax",
     }
 
 
@@ -1658,6 +1683,23 @@ class VendorPortalOperations:
             db,
             context=command.context,
             name="review_vendor_quote",
+            operation=operation,
+        )
+
+    @staticmethod
+    def set_quote_tax(
+        db: Session,
+        command: SetVendorQuoteTaxCommand,
+    ) -> dict:
+        def operation() -> dict:
+            from app.services import vendor_project_records
+
+            return vendor_project_records.stage_set_quote_tax(db, command)
+
+        return _execute(
+            db,
+            context=command.context,
+            name="set_vendor_quote_tax",
             operation=operation,
         )
 

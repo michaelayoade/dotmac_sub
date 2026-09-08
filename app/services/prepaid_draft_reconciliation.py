@@ -27,13 +27,14 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import (
     AccountAdjustment,
@@ -55,7 +56,20 @@ from app.models.billing import (
     ServiceEntitlement,
     ServiceEntitlementStatus,
 )
-from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.billing_contract import (
+    CadenceAlignment,
+    CollectionTiming,
+    EndOfMonthRule,
+    IntervalUnit,
+    ProrationPolicy,
+    RateBasis,
+)
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.collections import (
     FinancialAccessAction,
     FinancialAccessConsequence,
@@ -92,6 +106,7 @@ from app.services.billing.account_credit import (
     ReviewedOpeningSettlementAllocationRelease,
 )
 from app.services.billing.adjustments import AccountAdjustmentOrigin
+from app.services.billing.cadence import BillingCadence, service_period
 from app.services.billing.customer_subledger import (
     StageReversalCommand,
     resolve_position,
@@ -129,6 +144,9 @@ from app.services.prepaid_funding_reconstruction import (
     verified_prepaid_funding_balance,
 )
 from app.timezone import APP_TIMEZONE_NAME
+
+if TYPE_CHECKING:
+    from app.services.prepaid_service_renewals import PrepaidSettlementPeriod
 
 _OWNER = "financial.prepaid_draft_reconciliation"
 _CONCERN = "stranded prepaid draft invoice reconciliation"
@@ -243,6 +261,7 @@ class PrepaidDraftReconciliationPreview:
     reason: str
     fingerprint: str
     renewal_ledger_entry_ids: tuple[UUID, ...] = ()
+    opening_funding_opening_position_id: UUID | None = None
 
     @property
     def actionable(self) -> bool:
@@ -325,6 +344,7 @@ class FundingChangeDraftCommand:
 @dataclass(frozen=True, slots=True)
 class ReviewedOpeningFundingPreview:
     baseline_id: UUID | None
+    opening_position_id: UUID | None
     approved_amount: Decimal
     previously_consumed: Decimal
     available_amount: Decimal
@@ -679,6 +699,19 @@ def _reviewed_opening_funding_preview(
     payment_funding: AccountCreditInvoiceFundingPreview,
 ) -> ReviewedOpeningFundingPreview:
     currency = (invoice.currency or "NGN").upper()
+    subledger_authority_active = (
+        db.scalar(select(CustomerSubledgerAuthorityCutover.id).limit(1)) is not None
+    )
+    opening = (
+        db.scalar(
+            select(CustomerSubledgerOpeningPosition).where(
+                CustomerSubledgerOpeningPosition.account_id == invoice.account_id,
+                CustomerSubledgerOpeningPosition.currency == currency,
+            )
+        )
+        if subledger_authority_active
+        else None
+    )
     baseline = db.scalar(
         select(PrepaidFundingBaseline).where(
             PrepaidFundingBaseline.account_id == invoice.account_id,
@@ -702,9 +735,31 @@ def _reviewed_opening_funding_preview(
             account_id=str(invoice.account_id),
             currency=currency,
         )
-    if baseline is None or baseline.amount <= Decimal("0.00"):
+
+    source_baseline_id: UUID | None = None
+    source_opening_id: UUID | None = None
+    source_amount = Decimal("0.00")
+    consumed_filter: ColumnElement[bool] = PrepaidOpeningFundingConsumption.id.is_(None)
+    approval_evidence_ref: str | None = None
+    approval_actor: str | None = None
+    if opening is not None and opening.legacy_position > Decimal("0.00"):
+        source_opening_id = opening.id
+        source_amount = round_money(to_decimal(opening.legacy_position))
+        consumed_filter = (
+            PrepaidOpeningFundingConsumption.opening_position_id == opening.id
+        )
+        approval_evidence_ref = opening.review_reference
+        approval_actor = opening.captured_by
+    elif baseline is not None and baseline.amount > Decimal("0.00"):
+        source_baseline_id = baseline.id
+        source_amount = round_money(to_decimal(baseline.amount))
+        consumed_filter = PrepaidOpeningFundingConsumption.baseline_id == baseline.id
+        approval_evidence_ref = baseline.batch.evidence_ref
+        approval_actor = baseline.batch.approved_by
+    else:
         return ReviewedOpeningFundingPreview(
             baseline_id=None,
+            opening_position_id=None,
             approved_amount=Decimal("0.00"),
             previously_consumed=Decimal("0.00"),
             available_amount=Decimal("0.00"),
@@ -712,6 +767,7 @@ def _reviewed_opening_funding_preview(
             approval_evidence_ref=None,
             approval_actor=None,
         )
+
     consumed = round_money(
         to_decimal(
             db.query(
@@ -720,33 +776,34 @@ def _reviewed_opening_funding_preview(
                     0,
                 )
             )
-            .filter(PrepaidOpeningFundingConsumption.baseline_id == baseline.id)
+            .filter(consumed_filter)
             .scalar()
         )
     )
     source_remaining = max(
         Decimal("0.00"),
-        round_money(to_decimal(baseline.amount) - consumed),
+        round_money(source_amount - consumed),
     )
     authoritative_nonpayment = max(
         Decimal("0.00"),
         round_money(authoritative - payment_funding.total_payment_backed_credit),
     )
     # Untyped ledger credit is not opening-funding provenance. Keep it
-    # quarantined rather than allowing it to revive an already spent baseline.
+    # quarantined rather than allowing it to revive already spent reviewed source.
     available = (
         Decimal("0.00")
         if payment_funding.unbacked_credit > Decimal("0.00")
         else min(source_remaining, authoritative_nonpayment)
     )
     return ReviewedOpeningFundingPreview(
-        baseline_id=baseline.id,
-        approved_amount=round_money(to_decimal(baseline.amount)),
+        baseline_id=source_baseline_id,
+        opening_position_id=source_opening_id,
+        approved_amount=source_amount,
         previously_consumed=consumed,
         available_amount=round_money(available),
         authoritative_funding=authoritative,
-        approval_evidence_ref=baseline.batch.evidence_ref,
-        approval_actor=baseline.batch.approved_by,
+        approval_evidence_ref=approval_evidence_ref,
+        approval_actor=approval_actor,
     )
 
 
@@ -1482,10 +1539,20 @@ def preview_historical_paid_prepaid_invoice_repair(
             billing_cycle=cycle,
         )
     )
-    stale_anchor = (
-        subscription.next_billing_at is None
-        or _utc(subscription.next_billing_at) <= period.starts_at
+    current_anchor = (
+        _utc(subscription.next_billing_at)
+        if subscription.next_billing_at is not None
+        else None
     )
+    anchor_period = _paid_invoice_repair_period_from_current_anchor(
+        invoice=invoice,
+        settlement_period=period,
+        current_anchor=current_anchor,
+        billing_cycle=cycle,
+    )
+    if anchor_period is not None:
+        period = anchor_period
+    stale_anchor = current_anchor is None or current_anchor <= period.starts_at
     if not stale_anchor:
         return _build_paid_invoice_repair_preview(
             invoice=invoice,
@@ -1572,6 +1639,63 @@ def _business_midnight(value: date) -> datetime:
         time.min,
         tzinfo=ZoneInfo(APP_TIMEZONE_NAME),
     ).astimezone(UTC)
+
+
+_PAID_INVOICE_REPAIR_CYCLE_INTERVALS: dict[BillingCycle, tuple[IntervalUnit, int]] = {
+    BillingCycle.daily: (IntervalUnit.day, 1),
+    BillingCycle.weekly: (IntervalUnit.week, 1),
+    BillingCycle.monthly: (IntervalUnit.month, 1),
+    BillingCycle.quarterly: (IntervalUnit.month, 3),
+    BillingCycle.annual: (IntervalUnit.year, 1),
+}
+
+
+def _paid_invoice_repair_period_from_current_anchor(
+    *,
+    invoice: Invoice,
+    settlement_period: PrepaidSettlementPeriod,
+    current_anchor: datetime | None,
+    billing_cycle: BillingCycle,
+) -> PrepaidSettlementPeriod | None:
+    if (
+        current_anchor is None
+        or current_anchor <= settlement_period.starts_at
+        or invoice.due_at is None
+    ):
+        return None
+    zone = ZoneInfo(settlement_period.timezone_name)
+    if current_anchor.astimezone(zone).date() != settlement_period.starts_on:
+        return None
+    interval_spec = _PAID_INVOICE_REPAIR_CYCLE_INTERVALS.get(billing_cycle)
+    if interval_spec is None:
+        return None
+    interval_unit, interval_count = interval_spec
+    cadence = BillingCadence(
+        rate_basis=RateBasis.fixed_per_service_period,
+        rate_unit=interval_unit,
+        rate_quantity=Decimal("1"),
+        service_interval_unit=interval_unit,
+        service_interval_count=interval_count,
+        invoice_interval_unit=interval_unit,
+        invoice_interval_count=interval_count,
+        collection_timing=CollectionTiming.advance,
+        alignment=CadenceAlignment.contract_anniversary,
+        timezone_name=settlement_period.timezone_name,
+        end_of_month_rule=EndOfMonthRule.clamp_to_month_end,
+        proration_policy=ProrationPolicy.none,
+    )
+    interval = service_period(cadence=cadence, contract_start=current_anchor)
+    starts_at = interval.starts_at.astimezone(UTC)
+    ends_at = interval.ends_at.astimezone(UTC)
+    if starts_at != current_anchor or ends_at != _utc(invoice.due_at):
+        return None
+    return replace(
+        settlement_period,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        starts_on=starts_at.astimezone(zone).date(),
+        ends_on=ends_at.astimezone(zone).date(),
+    )
 
 
 def _build_missing_paid_invoice_preview(
@@ -2259,6 +2383,9 @@ def _build_preview(
         "opening_funding_baseline_id": (
             opening.baseline_id if opening is not None else None
         ),
+        "opening_funding_opening_position_id": (
+            opening.opening_position_id if opening is not None else None
+        ),
         "opening_funding_available": opening_available,
         "opening_funding_required": opening_required,
         "subscription_ids": subscription_ids,
@@ -2282,6 +2409,9 @@ def _build_preview(
         opening_funding_required=opening_required,
         opening_funding_baseline_id=(
             opening.baseline_id if opening is not None else None
+        ),
+        opening_funding_opening_position_id=(
+            opening.opening_position_id if opening is not None else None
         ),
         unbacked_credit=funding.unbacked_credit,
         shortfall=funding.shortfall,
@@ -2527,7 +2657,7 @@ def preview_prepaid_draft_reconciliation(
         )
     if (
         funding.shortfall > Decimal("0.00")
-        and opening.baseline_id is not None
+        and (opening.baseline_id is not None or opening.opening_position_id is not None)
         and opening.available_amount >= funding.shortfall
         and opening.authoritative_funding >= funding.invoice_remaining
         and funding.unbacked_credit == Decimal("0.00")
@@ -2637,26 +2767,67 @@ def _stage_opening_funding_consumption(
     context: CommandContext | None,
 ) -> PrepaidOpeningFundingConsumption:
     baseline_id = preview.opening_funding_baseline_id
-    if baseline_id is None or amount <= Decimal("0.00"):
+    opening_position_id = preview.opening_funding_opening_position_id
+    if (baseline_id is None) == (opening_position_id is None) or amount <= Decimal(
+        "0.00"
+    ):
         _error(
             "opening_funding_unavailable",
             "Reviewed opening funding is not available for this invoice.",
         )
-    baseline = db.scalar(
-        select(PrepaidFundingBaseline)
-        .where(PrepaidFundingBaseline.id == baseline_id)
-        .with_for_update()
-    )
-    if (
-        baseline is None
-        or not baseline.is_active
-        or baseline.account_id != invoice.account_id
-        or baseline.currency != preview.currency
-    ):
-        _error(
-            "opening_funding_changed",
-            "Reviewed opening funding changed after preview; preview again.",
+    baseline: PrepaidFundingBaseline | None = None
+    opening: CustomerSubledgerOpeningPosition | None = None
+    source_amount = Decimal("0.00")
+    consumed_filter: ColumnElement[bool] = PrepaidOpeningFundingConsumption.id.is_(None)
+    approval_evidence_ref: str
+    approval_actor: str
+    if opening_position_id is not None:
+        if db.scalar(select(CustomerSubledgerAuthorityCutover.id).limit(1)) is None:
+            _error(
+                "opening_funding_changed",
+                "Customer-subledger opening authority changed after preview; preview again.",
+            )
+        opening = db.scalar(
+            select(CustomerSubledgerOpeningPosition)
+            .where(CustomerSubledgerOpeningPosition.id == opening_position_id)
+            .with_for_update()
         )
+        if (
+            opening is None
+            or opening.account_id != invoice.account_id
+            or opening.currency != preview.currency
+        ):
+            _error(
+                "opening_funding_changed",
+                "Reviewed opening funding changed after preview; preview again.",
+            )
+        source_amount = round_money(to_decimal(opening.legacy_position))
+        consumed_filter = (
+            PrepaidOpeningFundingConsumption.opening_position_id == opening.id
+        )
+        approval_evidence_ref = opening.review_reference
+        approval_actor = opening.captured_by
+    else:
+        assert baseline_id is not None
+        baseline = db.scalar(
+            select(PrepaidFundingBaseline)
+            .where(PrepaidFundingBaseline.id == baseline_id)
+            .with_for_update()
+        )
+        if (
+            baseline is None
+            or not baseline.is_active
+            or baseline.account_id != invoice.account_id
+            or baseline.currency != preview.currency
+        ):
+            _error(
+                "opening_funding_changed",
+                "Reviewed opening funding changed after preview; preview again.",
+            )
+        source_amount = round_money(to_decimal(baseline.amount))
+        consumed_filter = PrepaidOpeningFundingConsumption.baseline_id == baseline.id
+        approval_evidence_ref = baseline.batch.evidence_ref
+        approval_actor = baseline.batch.approved_by
     consumed = round_money(
         to_decimal(
             db.query(
@@ -2665,11 +2836,11 @@ def _stage_opening_funding_consumption(
                     0,
                 )
             )
-            .filter(PrepaidOpeningFundingConsumption.baseline_id == baseline.id)
+            .filter(consumed_filter)
             .scalar()
         )
     )
-    source_remaining = round_money(to_decimal(baseline.amount) - consumed)
+    source_remaining = round_money(source_amount - consumed)
     if source_remaining < amount:
         _error(
             "opening_funding_changed",
@@ -2724,14 +2895,15 @@ def _stage_opening_funding_consumption(
         commit=False,
     )
     consumption = PrepaidOpeningFundingConsumption(
-        baseline_id=baseline.id,
+        baseline_id=baseline.id if baseline is not None else None,
+        opening_position_id=opening.id if opening is not None else None,
         account_id=invoice.account_id,
         invoice_id=invoice.id,
         ledger_entry_id=ledger_entry.id,
         amount=amount,
         currency=preview.currency,
-        approval_evidence_ref=baseline.batch.evidence_ref,
-        approval_actor=baseline.batch.approved_by,
+        approval_evidence_ref=approval_evidence_ref,
+        approval_actor=approval_actor,
         reconciliation_fingerprint=preview.fingerprint,
         idempotency_key=opening_key,
         consumed_at=_utc(effective_at),
@@ -3094,6 +3266,11 @@ def _stage_action(
                 ),
                 "opening_funding_baseline_id": (
                     str(opening_consumption.baseline_id)
+                    if opening_consumption is not None
+                    else None
+                ),
+                "opening_funding_opening_position_id": (
+                    str(opening_consumption.opening_position_id)
                     if opening_consumption is not None
                     else None
                 ),
@@ -5166,12 +5343,12 @@ def stage_prepaid_draft_after_funding_change(
     db: Session,
     command: FundingChangeDraftCommand,
 ) -> FundingChangeDraftResult:
-    """Resolve one exact existing draft before any invoice-less renewal.
+    """Resolve one exact prepaid draft from verified account funding.
 
-    This is a flush-only participant for the existing funding-change
-    transaction. A strictly proven duplicate is voided so the current funding
-    can continue to direct renewal. Every unresolved or underfunded draft still
-    blocks that path, and multiple drafts remain for reviewed reconciliation.
+    This is a flush-only participant for a funding-change or funded-renewal
+    transaction. It settles one exactly funded draft or voids one strictly
+    proven historical duplicate. Every unresolved or underfunded draft stays
+    open, and multiple drafts remain for reviewed reconciliation.
     """
 
     account_id = command.account_id

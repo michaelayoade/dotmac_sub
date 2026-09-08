@@ -898,6 +898,11 @@ def _eligibility_reasons(
             now=now,
         )
         reasons.extend(decision.reasons)
+    if (
+        command.kind == SubscriptionCommandKind.cancel
+        and _active_change_request(db, subscription.id) is not None
+    ):
+        reasons.append("cancel_pending_plan_change_first")
     if command.kind != SubscriptionCommandKind.change_plan:
         return reasons
     if target_offer is None:

@@ -43,7 +43,7 @@
       {% else %}<p class="p-8 text-center text-sm text-slate-500">No active line items.</p>{% endif %}
       <dl class="ml-auto grid max-w-sm grid-cols-2 gap-2 border-t border-slate-200 p-5 text-sm dark:border-slate-800">
         <dt class="text-slate-500">Subtotal</dt><dd class="text-right">{{ quote.currency }} {{ "{:,.2f}".format(quote.subtotal) }}</dd>
-        <dt class="text-slate-500">Tax</dt><dd class="text-right">{{ quote.currency }} {{ "{:,.2f}".format(quote.tax_total) }}</dd>
+        <dt class="text-slate-500">Tax{% if quote.vat_rate_percent %} ({{ quote.vat_rate_percent }}%){% endif %}</dt><dd class="text-right">{{ quote.currency }} {{ "{:,.2f}".format(quote.tax_total) }}</dd>
         <dt class="font-bold">Total</dt><dd class="text-right font-bold">{{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</dd>
       </dl>
     </section>
@@ -58,6 +58,28 @@
           {% if quote.review_notes %}<div><dt class="text-slate-500">Review note</dt><dd>{{ quote.review_notes }}</dd></div>{% endif %}
         </dl>
       </section>
+
+      {% if can_review_operations and action_permitted(request, quote.tax_action) %}
+      <section class="rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <h2 class="font-bold">Quote tax</h2>
+        <form class="mt-4 space-y-3" method="post" action="{{ quote.tax_url }}">
+          {% include "components/forms/csrf_input.html" %}
+          <label for="quote-tax-rate" class="block text-sm font-medium">Tax rate</label>
+          {% set current_vat = quote.vat_rate_percent|default(0, true)|float %}
+          {% if tax_rates %}
+          <select id="quote-tax-rate" name="vat_rate_percent" class="mt-1 block w-full rounded-md border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white">
+            {% for rate in tax_rates %}
+            <option value="{{ rate.rate }}" {% if current_vat == rate.rate|float %}selected{% endif %}>{{ rate.name }} ({{ rate.rate }}%)</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <input id="quote-tax-rate" name="vat_rate_percent" type="number" min="0" max="100" step="0.01" value="{{ quote.vat_rate_percent or 0 }}" class="mt-1 block w-full rounded-md border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white">
+          {% endif %}
+          <p class="text-xs text-slate-500 dark:text-slate-400">Applied on top of the active line-item subtotal.</p>
+          <button class="w-full rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">{{ quote.tax_action.label }}</button>
+        </form>
+      </section>
+      {% endif %}
 
       {% if quote.route_revisions %}
       <section class="rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">

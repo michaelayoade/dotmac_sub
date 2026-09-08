@@ -414,7 +414,9 @@ class FieldMaterialRequestItemRead(BaseModel):
 
 class FieldMaterialRequestRead(BaseModel):
     id: UUID
-    work_order_id: str
+    # Material needs can originate from a ticket, project, project task, or
+    # work order. Only the last of those has a work-order public identifier.
+    work_order_id: str | None = None
     crm_material_request_id: str | None = None
     requested_by_person_id: UUID
     requested_by_system_user_id: UUID | None = None
@@ -524,6 +526,8 @@ class FieldExpenseRequestRead(BaseModel):
     expense_claim_reference: str | None = None
     expense_claim_number: str | None = None
     expense_claim_status: str | None = None
+    erp_sync_status: str | None = None
+    erp_sync_error: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None
@@ -533,6 +537,15 @@ class FieldExpenseRequestRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[FieldExpenseRequestItemRead] = Field(default_factory=list)
+
+
+class FieldExpenseApprovalRead(BaseModel):
+    id: UUID
+    status: Literal["approved"]
+    approved_at: datetime
+    erp_sync_status: str
+    erp_sync_event_id: UUID | None = None
+    erp_sync_error: str | None = None
 
 
 class FieldJobHistoryItem(BaseModel):
@@ -1271,6 +1284,7 @@ class TechnicianSatisfactionResponse(BaseModel):
 class FieldManagerJob(BaseModel):
     id: str
     work_order_mirror_id: UUID
+    assignment_queue_id: UUID | None = None
     title: str
     description: str | None = None
     status: str
@@ -1293,6 +1307,10 @@ class FieldManagerJobAssignRequest(BaseModel):
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     status: str | None = Field(default=None, max_length=20)
+
+
+class FieldManagerJobUnassignRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=500)
 
 
 class FieldManagerExpenseRejectRequest(BaseModel):

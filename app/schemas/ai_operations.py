@@ -88,6 +88,7 @@ class AiIntakeConfigUpsert(BaseModel):
     allow_followup_questions: bool = True
     max_clarification_turns: int = Field(default=2, ge=0, le=5)
     escalate_after_minutes: int = Field(default=5, ge=1, le=1440)
+    customer_response_timeout_minutes: int = Field(default=5, ge=1, le=1440)
     exclude_campaign_attribution: bool = True
     fallback_team_id: UUID | None = None
     instructions: str | None = Field(default=None, max_length=2000)
@@ -98,10 +99,17 @@ class AiIntakeConfigUpsert(BaseModel):
     @classmethod
     def supported_conversational_channel(cls, value: str) -> str:
         normalized = "_".join(value.lower().replace("-", "_").split())
-        allowed = {"whatsapp", "facebook_messenger", "instagram_dm", "any"}
+        allowed = {
+            "whatsapp",
+            "facebook_messenger",
+            "instagram_dm",
+            "chat_widget",
+            "any",
+        }
         if normalized not in allowed:
             raise ValueError(
-                "AI intake supports WhatsApp, Facebook Messenger, and Instagram only"
+                "AI intake supports WhatsApp, Facebook Messenger, Instagram, "
+                "and chat widget only"
             )
         return normalized
 

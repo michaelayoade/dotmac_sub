@@ -535,6 +535,12 @@ class BandwidthSamples(ListResponseMixin):
 
             metrics_store = get_metrics_store()
 
+            # Release any open read transaction before the VictoriaMetrics HTTP
+            # calls. This async function receives a sync Session; awaiting with
+            # an open transaction leaves the database connection idle in
+            # transaction until Postgres terminates it.
+            db.rollback()
+
             # Get current bandwidth
             current = await metrics_store.get_current_bandwidth(str(subscription_id))
 

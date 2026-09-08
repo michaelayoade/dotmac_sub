@@ -5,6 +5,7 @@
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-8">
     {% call page_header(title="MRR Net Change", subtitle="Monthly recurring revenue movement and subscriber base changes", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
+    {% set export_permission = "reports:billing:export" %}{% set export_url = "/admin/reports/extended-export/mrr" %}{% include "admin/reports/_csv_export_button.html" %}
 
     {# KPI Summary #}
     {% if months %}

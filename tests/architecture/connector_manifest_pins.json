@@ -26,8 +26,8 @@
     {
         "current": true,
         "key": "dotmac.crm",
-        "manifest_digest": "16c79c1f244a33ac3977a650ca6cc6217d53a32634f4ea2713eb297560a0f623",
-        "version": "1.2.0"
+        "manifest_digest": "b70114070615f3ca5f41cd348c8747c405542509a3b1d43f8df372d7e6598dce",
+        "version": "1.3.0"
     },
     {
         "current": true,
@@ -44,14 +44,14 @@
     {
         "current": true,
         "key": "meta.social",
-        "manifest_digest": "dfa7b8229d870b1524ba8fcab76448c9ba3de2f4922ac6031105398811c993d6",
-        "version": "1.1.0"
+        "manifest_digest": "ebbab59c10536ba381078733e3f23abd10d2234e012ac5e84d0a281214ce9f23",
+        "version": "1.2.0"
     },
     {
         "current": true,
         "key": "dotmac.erp",
-        "manifest_digest": "a4aa608ccd25a1c5b9c7463ccb327ec51724f8b9e464596d3936b86bc0b3f1a0",
-        "version": "1.2.0"
+        "manifest_digest": "b7859536aa6da9a2aa97975f0f5595c3f5ea7b8611c6d46d62c5ab48cfac0d66",
+        "version": "1.3.0"
     },
     {
         "current": true,
@@ -92,6 +92,12 @@
     {
         "current": false,
         "key": "dotmac.erp",
+        "manifest_digest": "a4aa608ccd25a1c5b9c7463ccb327ec51724f8b9e464596d3936b86bc0b3f1a0",
+        "version": "1.2.0"
+    },
+    {
+        "current": false,
+        "key": "dotmac.erp",
         "manifest_digest": "185ad7c1152c126445216cc75ae348a1612a746f6926fa8f4755b494a2c16cf3",
         "version": "1.1.0"
     },
@@ -104,6 +110,12 @@
     {
         "current": false,
         "key": "dotmac.crm",
+        "manifest_digest": "16c79c1f244a33ac3977a650ca6cc6217d53a32634f4ea2713eb297560a0f623",
+        "version": "1.2.0"
+    },
+    {
+        "current": false,
+        "key": "dotmac.crm",
         "manifest_digest": "9230e15377ffb8b595d27256fa303b77463ba7a73bdb643819fcd5f93cf88adf",
         "version": "1.0.0"
     },
@@ -111,6 +123,12 @@
         "current": false,
         "key": "dotmac.crm",
         "manifest_digest": "e1de51fcf0e93869ce8776c6291f8b1ac4b0a35b373adcaa322c46e5c3f48908",
+        "version": "1.1.0"
+    },
+    {
+        "current": false,
+        "key": "meta.social",
+        "manifest_digest": "dfa7b8229d870b1524ba8fcab76448c9ba3de2f4922ac6031105398811c993d6",
         "version": "1.1.0"
     },
     {

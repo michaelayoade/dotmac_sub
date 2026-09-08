@@ -19,7 +19,7 @@ The lifecycle owner controls, in one root owner command:
 - links, duplicate evidence, merges, and merged-source immutability;
 - resolution requests, active confirmation capabilities, confirmation, disputes,
   and automatic confirmation after the configured grace period;
-- CSAT/satisfaction evidence; and
+- best-effort CSAT request creation for closed resolution cycles; and
 - transactionally staged audit records, domain events, notifications, and SLA
   consequences.
 
@@ -102,6 +102,25 @@ Assignment is split deliberately:
   its locked round-robin cursor; it returns an immutable `AssignmentResult`;
 - the Ticket owner rechecks and applies the proposed team/person consequence.
 
+Assignment is part of the ordinary ticket lifecycle update authority.
+`support:ticket:update` admits human changes to status, priority, description,
+`assigned_to_person_id`, `technician_person_id`,
+`ticket_manager_person_id`, the legacy `site_coordinator_person_id`,
+`service_team_id`, and `assignee_person_ids`. Ticket creation may also carry an
+initial assignment under the existing `support:ticket:create` gate. Adapters do
+not resolve a separate assignment permission, and the lifecycle owner does not
+consume assignment-specific authorization evidence.
+
+Automatic assignment recommendations are observations or proposals, not
+writes from the rule engine. The ticket lifecycle owner may apply an accepted
+proposal inside its root command, and manual auto-assignment is an ordinary
+human ticket update action guarded by `support:ticket:update`.
+
+The retired `support:ticket:assign` permission is removed from current RBAC
+seed data and cleaned from deployed grant tables by migration. Historical
+migrations may still mention it because they preserve the already-applied
+schema history, but current code no longer creates, grants, checks, or depends
+on that permission.
 Automation has the same separation:
 
 - `support.ticket_automation_rule_configuration` owns typed automation rules;
@@ -220,6 +239,13 @@ idempotent rebuild path; the comment-edit delta tests and database target/unique
 constraints are the drift signal.
 
 ## Related owners
+
+`support.csat` owns durable CSAT request and response records for support
+tickets and eligible Team Inbox conversations. The Ticket lifecycle owner
+creates one request per closed resolution cycle through an optional participant
+path, and customer submissions keep `Ticket.metadata.csat` only as a
+compatibility projection. Historical CSAT reporting reads `support_csat_requests`
+and its agent/team snapshots, not mutable current Ticket assignment.
 
 `support.ticket_sla_clock` remains the Ticket SLA clock and breach owner.
 `support.ticket_work_order_handoff` remains the only issuance/provenance

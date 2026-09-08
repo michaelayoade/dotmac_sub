@@ -25,6 +25,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -34,6 +35,7 @@ from app.schemas.billing import (
     AccountBalanceResponse,
     AutopayEnableRequest,
     AutopayStatusResponse,
+    BankTransferAccount,
     DirectBankTransferConfig,
     InvoiceRead,
     LedgerEntryRead,
@@ -130,6 +132,8 @@ from app.schemas.usage import (
 from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
+from app.services import billing_invoice_pdf as billing_invoice_pdf_service
+from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import catalog as catalog_service
 from app.services import chat_session as chat_session_service
 from app.services import (
@@ -166,6 +170,8 @@ from app.services.customer_context import require_customer_account_id
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.events.handlers.owner_session import owner_session
+from app.services.file_storage import build_content_disposition
+from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
 
@@ -240,6 +246,42 @@ def my_invoice(
     return invoice
 
 
+@router.get("/invoices/{invoice_id}/pdf")
+def my_invoice_pdf(
+    invoice_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Download the caller's canonical invoice PDF."""
+
+    account_id = _subscriber_id(principal)
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if not invoice or str(getattr(invoice, "account_id", "")) != account_id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    try:
+        document = billing_invoice_pdf_service.resolve_download(
+            db,
+            invoice=invoice,
+            requested_by_id=account_id,
+        )
+    except ObjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Invoice PDF is not available yet. Please try again.",
+        ) from exc
+
+    headers = {
+        "Content-Disposition": build_content_disposition(document.filename),
+    }
+    if document.stream.content_length is not None:
+        headers["Content-Length"] = str(document.stream.content_length)
+    return StreamingResponse(
+        document.stream.chunks,
+        media_type=document.stream.content_type or "application/pdf",
+        headers=headers,
+    )
+
+
 @router.get("/payments", response_model=ListResponse[PaymentRead])
 def my_payments(
     status: str | None = None,
@@ -253,6 +295,54 @@ def my_payments(
     account_id = _subscriber_id(principal)
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
+    )
+
+
+@router.get("/payments/{payment_id}", response_model=PaymentRead)
+def my_payment(
+    payment_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> PaymentRead:
+    """Return one payment only when it belongs to the signed-in subscriber."""
+
+    account_id = _subscriber_id(principal)
+    payment = billing_service.payments.get(db=db, payment_id=payment_id)
+    if not payment or str(getattr(payment, "account_id", "")) != account_id:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return payment
+
+
+@router.get("/payments/{payment_id}/receipt/pdf")
+def my_payment_receipt_pdf(
+    payment_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Download the caller's canonical successful-payment receipt PDF."""
+
+    try:
+        document = payment_receipts_service.build_customer_receipt_pdf_download(
+            db,
+            subscriber_id=_subscriber_id(principal),
+            payment_id=payment_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Failed rendering self-care payment receipt %s",
+            payment_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Payment receipt is not available. Please try again.",
+        ) from exc
+    return Response(
+        content=document.content,
+        media_type=document.content_type,
+        headers={"Content-Disposition": build_content_disposition(document.filename)},
     )
 
 
@@ -361,6 +451,21 @@ def my_ledger(
     return billing_service.ledger_entries.list_response(
         db, account_id, entry_type, source, True, order_by, order_dir, limit, offset
     )
+
+
+@router.get("/ledger/{entry_id}", response_model=LedgerEntryRead)
+def my_ledger_entry(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> LedgerEntryRead:
+    """Return one immutable ledger entry within the caller's account scope."""
+
+    account_id = _subscriber_id(principal)
+    entry = billing_service.ledger_entries.get(db=db, entry_id=entry_id)
+    if not entry or str(getattr(entry, "account_id", "")) != account_id:
+        raise HTTPException(status_code=404, detail="Ledger entry not found")
+    return entry
 
 
 @router.get("/subscriptions", response_model=ListResponse[SubscriptionRead])
@@ -779,20 +884,30 @@ def my_topup_page(
 ):
     """Deposit Account Credit context, eligibility, limits, and payment options.
 
-    ``payment_options`` mirrors the customer web chooser. Direct bank transfer
-    stays disabled for customer selfcare; reseller transfer flows use their own
-    endpoints and configuration projection.
+    ``payment_options`` mirrors the customer web chooser, including configured
+    direct bank transfer when the collection-account owner enables it.
     """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
     options = [
         PaymentProviderOption(provider_type=opt["provider_type"], label=opt["label"])
         for opt in ctx.get("payment_options", [])
-        if opt.get("provider_type") != "direct_bank_transfer"
     ]
+    accounts = [
+        BankTransferAccount(
+            bank_name=str(account.get("bank_name") or ""),
+            account_name=str(account.get("account_name") or ""),
+            account_number=str(account.get("account_number") or ""),
+            sort_code=(
+                str(account.get("sort_code")) if account.get("sort_code") else None
+            ),
+        )
+        for account in customer_payments.enabled_direct_bank_transfer_accounts(db)
+    ]
+    transfer_settings = customer_payments.direct_bank_transfer_settings(db)
     direct_transfer = DirectBankTransferConfig(
         enabled=customer_payments.customer_direct_bank_transfer_enabled(db),
-        instructions=None,
-        accounts=[],
+        instructions=transfer_settings.get("direct_bank_transfer_instructions") or None,
+        accounts=accounts,
     )
     return TopupPageResponse(
         provider_type=ctx["provider_type"],
@@ -864,6 +979,7 @@ def my_topup_initiate(
         customer_email=customer["username"] or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
+        redirect_url=result.get("redirect_url"),
         preview_fingerprint=result["preview_fingerprint"],
     )
 
@@ -1178,10 +1294,10 @@ def my_quote_request(
 ):
     """Request a map-pinned installation quote. The dropped pin drives the
     feasibility check (proximity to fiber) + estimate + deposit. Behind the
-    ``quotes_native_write_enabled`` write-flip flag: OFF writes through
-    to the CRM and returns the mirrored item; ON creates the quote in sub's
-    native ``quotes`` table (no CRM link required, so native-only subscribers
-    can quote too) — same payload shape either way."""
+    ``quotes_native_write_enabled`` write-flip flag: OFF delegates to the
+    retired mirror owner and refuses without contacting CRM; ON creates the
+    quote in sub's native ``quotes`` table (no CRM link required, so
+    native-only subscribers can quote too)."""
     subscriber_id = _subscriber_id(principal)
     if selfserve_service.native_write_enabled(db):
         quote = selfserve_service.selfserve_quotes.request_quote(
@@ -1689,8 +1805,7 @@ def my_rate_ticket(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Rate the support experience on the caller's own closed ticket
-    (CSAT, 1-5 + optional comment). Re-rating overwrites the previous score."""
+    """Rate the caller's own closed ticket once for the current CSAT cycle."""
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.set_satisfaction(

@@ -21,6 +21,9 @@ PAYMENTS = PROJECT_ROOT / "app" / "services" / "billing" / "payments.py"
 CANONICAL_WRITER = PROJECT_ROOT / "app" / "services" / "account_lifecycle.py"
 ENTITLEMENTS = PROJECT_ROOT / "app" / "services" / "service_entitlements.py"
 OWNER = PROJECT_ROOT / "app" / "services" / "prepaid_service_renewals.py"
+CATALOG_SUBSCRIPTIONS = (
+    PROJECT_ROOT / "app" / "services" / "catalog" / "subscriptions.py"
+)
 HANDLER = (
     PROJECT_ROOT / "app" / "services" / "events" / "handlers" / "prepaid_renewal.py"
 )
@@ -40,6 +43,48 @@ def _module_function_names(path: Path) -> set[str]:
         for node in _tree(path).body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
+
+
+def _class_method(
+    path: Path, class_name: str, method_name: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    class_node = next(
+        node
+        for node in _tree(path).body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    return next(
+        node
+        for node in class_node.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == method_name
+    )
+
+
+def _assigned_literal_subscript_keys(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    """Return literal mapping keys assigned inside one function.
+
+    Direct ORM-attribute scans do not see a mapping write later persisted by a
+    generic ``setattr`` loop. Those indirect writes are still physical writer
+    paths and must be visible to the ownership guard.
+    """
+    keys: set[str] = set()
+    for inner in ast.walk(node):
+        targets: list[ast.expr] = []
+        if isinstance(inner, ast.Assign):
+            targets = list(inner.targets)
+        elif isinstance(inner, (ast.AnnAssign, ast.AugAssign)):
+            targets = [inner.target]
+        for target in targets:
+            if not isinstance(target, ast.Subscript):
+                continue
+            if isinstance(target.slice, ast.Constant) and isinstance(
+                target.slice.value, str
+            ):
+                keys.add(target.slice.value)
+    return keys
 
 
 def _assigns_next_billing_at(path: Path) -> set[str]:
@@ -129,6 +174,19 @@ def test_canonical_writer_is_the_only_service_assignment() -> None:
         if path != CANONICAL_WRITER and _assigns_next_billing_at(path)
     }
     assert offenders == {}
+
+
+def test_generic_catalog_update_cannot_manufacture_a_billing_anchor() -> None:
+    update = _class_method(CATALOG_SUBSCRIPTIONS, "Subscriptions", "update")
+    called_names = {
+        inner.func.id
+        for inner in ast.walk(update)
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+    }
+
+    assert "next_billing_at" not in _assigned_literal_subscript_keys(update)
+    assert "_compute_next_billing_at" not in called_names
+    assert "stage_subscription_billing_anchor" not in called_names
 
 
 def test_legacy_anchor_backfill_cannot_guess_or_write_billing_dates() -> None:

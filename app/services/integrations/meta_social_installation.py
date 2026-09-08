@@ -16,8 +16,11 @@ from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.integrations import installations
 from app.services.integrations.connectors.meta_social_runtime import (
+    CONVERSIONS_API_TOKEN_BINDING,
     FACEBOOK_TOKEN_BINDING,
     INSTAGRAM_TOKEN_BINDING,
+    META_LEAD_CAPTURE_CAPABILITY,
+    META_LEAD_CONVERSION_CAPABILITY,
     META_OAUTH_TOKEN_BINDING,
     META_SOCIAL_AUTH_MODE_INDIVIDUAL,
     META_SOCIAL_AUTH_MODE_OAUTH,
@@ -58,6 +61,9 @@ class ConfigureMetaSocialInstallationCommand:
     instagram_login_access_token_ref: str
     webhook_signing_secret_ref: str
     webhook_verify_token_ref: str
+    conversion_dataset_id: str = ""
+    conversion_event_name: str = "CustomerConverted"
+    conversions_api_access_token_ref: str = ""
     environment: str = "production"
 
 
@@ -86,6 +92,9 @@ class MetaSocialInstallationProjection:
     instagram_token_bound: bool
     signing_secret_bound: bool
     verify_token_bound: bool
+    conversion_dataset_id: str
+    conversion_event_name: str
+    conversion_token_bound: bool
 
 
 def _error(suffix: str, message: str, **details: object) -> MetaSocialInstallationError:
@@ -140,6 +149,11 @@ def get_meta_social_installation_projection(
         instagram_token_bound=bool(refs.get(INSTAGRAM_TOKEN_BINDING)),
         signing_secret_bound=bool(refs.get(WEBHOOK_SIGNING_SECRET_BINDING)),
         verify_token_bound=bool(refs.get(WEBHOOK_VERIFY_TOKEN_BINDING)),
+        conversion_dataset_id=str(config.get("conversion_dataset_id") or ""),
+        conversion_event_name=str(
+            config.get("conversion_event_name") or "CustomerConverted"
+        ),
+        conversion_token_bound=bool(refs.get(CONVERSIONS_API_TOKEN_BINDING)),
     )
 
 
@@ -247,6 +261,21 @@ def _configure_meta_social_installation(
             binding=INSTAGRAM_TOKEN_BINDING,
             field="instagram_login_access_token_ref",
         )
+    conversion_dataset_id = command.conversion_dataset_id.strip()
+    conversion_token_ref = command.conversions_api_access_token_ref.strip() or str(
+        previous_refs.get(CONVERSIONS_API_TOKEN_BINDING) or ""
+    )
+    if conversion_dataset_id or conversion_token_ref:
+        if not conversion_dataset_id:
+            raise _error(
+                "meta_configuration_invalid",
+                "Meta conversion Dataset ID is required when conversion sync is configured.",
+                field="conversion_dataset_id",
+            )
+        secret_refs[CONVERSIONS_API_TOKEN_BINDING] = _required(
+            conversion_token_ref,
+            field="conversions_api_access_token_ref",
+        )
 
     revision = installations.create_config_revision(
         db,
@@ -274,6 +303,10 @@ def _configure_meta_social_installation(
             "webhook_url": command.webhook_url.strip(),
             "graph_version": _required(command.graph_version, field="graph_version"),
             "timeout_seconds": 10,
+            "conversion_dataset_id": conversion_dataset_id,
+            "conversion_event_name": (
+                command.conversion_event_name.strip() or "CustomerConverted"
+            ),
         },
         secret_refs=secret_refs,
         actor=context.actor,
@@ -281,7 +314,14 @@ def _configure_meta_social_installation(
     for capability_id in (
         META_SOCIAL_SEND_CAPABILITY,
         META_SOCIAL_RECEIVE_CAPABILITY,
+        META_LEAD_CAPTURE_CAPABILITY,
+        META_LEAD_CONVERSION_CAPABILITY,
     ):
+        if (
+            capability_id == META_LEAD_CONVERSION_CAPABILITY
+            and not conversion_dataset_id
+        ):
+            continue
         installations.bind_capability(
             db,
             installation_id=installation.id,

@@ -789,6 +789,93 @@ class TestPortalServiceVisibility:
         assert len(page["services"]) == 1
         assert page["services"][0].status == SubscriptionStatus.blocked
 
+    def test_services_page_suspended_prepaid_uses_suspension_evidence(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import BillingMode, SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import (
+            PortalServiceDateKind,
+            get_services_page,
+        )
+
+        stale_anchor = datetime(2025, 9, 4, tzinfo=UTC)
+        suspended_at = datetime(2026, 9, 3, 0, 1, tzinfo=UTC)
+        subscriber.billing_mode = BillingMode.prepaid
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.status = SubscriptionStatus.suspended
+        subscription.next_billing_at = stale_anchor
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=subscriber.id,
+                reason=EnforcementReason.prepaid,
+                source="test:prepaid-balance-sweep",
+                created_at=suspended_at,
+            )
+        )
+        db_session.commit()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        service = page["services"][0]
+        assert service.next_billing_at is not None
+        assert service.next_billing_at.replace(tzinfo=UTC) == stale_anchor
+        assert service.date_projection.kind == PortalServiceDateKind.suspended_since
+        assert service.date_projection.label == "Suspended since"
+        assert service.date_projection.value.is_present is True
+        assert service.date_projection.value.value == suspended_at
+
+    def test_services_page_active_prepaid_uses_exact_coverage_end(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import timedelta
+        from decimal import Decimal
+
+        from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+        from app.models.catalog import BillingMode, SubscriptionStatus
+        from app.services.customer_portal_flow_services import (
+            PortalServiceDateKind,
+            get_services_page,
+        )
+
+        now = datetime.now(UTC)
+        coverage_end = now + timedelta(days=29)
+        subscriber.billing_mode = BillingMode.prepaid
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.status = SubscriptionStatus.active
+        subscription.next_billing_at = datetime(2025, 9, 4, tzinfo=UTC)
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber.id,
+                subscription_id=subscription.id,
+                starts_at=now - timedelta(days=1),
+                ends_at=coverage_end,
+                amount_funded=Decimal("430000.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+            )
+        )
+        db_session.commit()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        service = page["services"][0]
+        assert service.date_projection.kind == PortalServiceDateKind.paid_through
+        assert service.date_projection.label == "Paid through"
+        assert service.date_projection.value.is_present is True
+        assert service.date_projection.value.value == coverage_end
+
     def test_services_page_eager_loads_template_relationships(
         self, db_session, subscription, subscriber
     ) -> None:
@@ -807,7 +894,7 @@ class TestPortalServiceVisibility:
 
         assert page["services"]
         service = page["services"][0]
-        unloaded = sa_inspect(service).unloaded
+        unloaded = sa_inspect(service.subscription).unloaded
         assert "offer" not in unloaded
         assert "offer_version" not in unloaded
 
@@ -894,7 +981,7 @@ class TestAdminUsageTemplateDefaults:
 
         assert "{% set usage_records_default_view = 'chart' %}" in template
 
-    def test_admin_stats_configures_direct_mikrotik_live_read(self) -> None:
+    def test_admin_stats_consumes_central_live_stream(self) -> None:
         stats_panel = Path("templates/admin/customers/_stats_panel.html").read_text(
             encoding="utf-8"
         )
@@ -902,12 +989,24 @@ class TestAdminUsageTemplateDefaults:
             encoding="utf-8"
         )
 
-        assert "/api/v1/bandwidth/mikrotik-live/" in stats_panel
-        assert "bandwidth_chart_direct_live_endpoint" in stats_panel
-        assert "directLiveEndpoint" in usage_content
-        assert "Live from MikroTik" in Path("static/js/bandwidth-chart.js").read_text(
-            encoding="utf-8"
+        assert "/api/v1/bandwidth/mikrotik-live/" not in stats_panel
+        assert "bandwidth_chart_direct_live_endpoint" not in stats_panel
+        assert (
+            "bandwidth_chart_live_stream = usage_subscription_id is not none"
+            in stats_panel
         )
+        assert "liveStream: true" in usage_content
+
+    def test_legacy_direct_probe_polling_is_sequential_and_cancellable(self) -> None:
+        js = Path("static/js/bandwidth-chart.js").read_text(encoding="utf-8")
+
+        direct_section = js.split("async loadDirectLive()", 1)[1].split(
+            "// Load historical data", 1
+        )[0]
+        assert "directLiveRequestInFlight" in direct_section
+        assert "new AbortController()" in direct_section
+        assert "setTimeout(pollAfterCompletion" in direct_section
+        assert "setInterval" not in direct_section
 
     def test_customer_usage_template_supports_live_stream(self) -> None:
         usage_content = Path("templates/customer/usage/_content.html").read_text(

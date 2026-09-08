@@ -374,7 +374,28 @@ def _set_invoice_pdf_payment_presentment(db_session, value: str):
     db_session.commit()
 
 
-def test_render_invoice_outputs_bank_account_by_default(db_session, subscriber_account):
+def test_render_invoice_outputs_paystack_by_default(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_invoice_collection_account(db_session)
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+    text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
+
+    expected_url = f"https://selfcare.dotmac.io/pay/invoices/{invoice.id}"
+    assert "Pay with Paystack" in html
+    assert expected_url in html
+    assert "Bank transfer" not in html
+    assert "0123456789" not in html
+    assert "Pay with Paystack:" in text_lines
+    assert expected_url in text_lines
+    assert "Bank Details:" not in text_lines
+
+
+def test_render_invoice_outputs_bank_account_for_transfer_customer(
+    db_session, subscriber_account
+):
+    subscriber_account.payment_method = "transfer"
+    db_session.commit()
     invoice = _invoice(db_session, subscriber_account)
     _add_invoice_collection_account(db_session)
 
@@ -392,12 +413,14 @@ def test_render_invoice_outputs_bank_account_by_default(db_session, subscriber_a
     assert expected_url not in text_lines
 
 
-def test_render_invoice_outputs_paystack_only_when_configured(
+def test_render_invoice_outputs_paystack_for_customer_over_global_both(
     db_session, subscriber_account
 ):
+    subscriber_account.payment_method = "paystack"
+    db_session.commit()
     invoice = _invoice(db_session, subscriber_account)
     _add_invoice_collection_account(db_session)
-    _set_invoice_pdf_payment_presentment(db_session, "paystack")
+    _set_invoice_pdf_payment_presentment(db_session, "both")
 
     html = pdf_service._render_invoice_html(invoice, db_session)
     text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
@@ -412,10 +435,13 @@ def test_render_invoice_outputs_paystack_only_when_configured(
     assert "Bank Details:" not in text_lines
 
 
-def test_render_invoice_outputs_bank_account_and_paystack_when_configured(
-    db_session, subscriber_account
+def test_render_invoice_outputs_bank_account_and_paystack_for_global_fallback(
+    db_session, subscriber_account, monkeypatch
 ):
     invoice = _invoice(db_session, subscriber_account)
+    monkeypatch.setattr(
+        pdf_service, "_customer_invoice_payment_presentment", lambda _invoice: None
+    )
     _add_invoice_collection_account(db_session)
     _set_invoice_pdf_payment_presentment(db_session, "both")
 
@@ -502,6 +528,27 @@ def test_invoice_pdf_payment_presentment_change_makes_export_stale(
         created_at=completed_at,
         updated_at=completed_at,
     )
+    db_session.add(export)
+    db_session.commit()
+
+    assert pdf_service._is_export_fresh(invoice, export, db=db_session) is False
+
+
+def test_customer_payment_method_change_makes_export_stale(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    completed_at = datetime.now(UTC) + timedelta(minutes=1)
+    export = InvoicePdfExport(
+        invoice_id=invoice.id,
+        status=InvoicePdfExportStatus.completed,
+        requested_by_id=subscriber_account.id,
+        completed_at=completed_at,
+        created_at=completed_at,
+        updated_at=completed_at,
+    )
+    subscriber_account.payment_method = "transfer"
+    subscriber_account.updated_at = completed_at + timedelta(minutes=1)
     db_session.add(export)
     db_session.commit()
 

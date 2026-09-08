@@ -848,8 +848,12 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 retries=(
                     "Only failed or abandoned runs are eligible for reviewed "
-                    "retry. Transient database retries rerun owner checks; a "
-                    "changed staff preview requires new confirmation."
+                    "business retry. The scheduled adapter may rerun the same "
+                    "idempotent owner checks for SQLSTATE 40001 serialization, "
+                    "40P01 deadlock, 55P03 lock-unavailable, or an invalidated "
+                    "connection, with three bounded attempts and rollback before "
+                    "backoff. Other database failures are not retried; a changed "
+                    "staff preview requires new confirmation."
                 ),
             ),
             errors=ErrorContract(
@@ -1020,6 +1024,14 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.ledger",
             "financial.access_resolution",
             "financial.billing_health",
+            "financial.billing_automation",
+        ),
+        notes=(
+            "The scheduled adapter owns session lifecycle and serialization "
+            "only. Invoice-cycle decisions remain with "
+            "financial.billing_automation. It enters that owner's bounded "
+            "transient-database retry path; it never retries validation or "
+            "ordinary integrity failures."
         ),
     ),
     SOTService(

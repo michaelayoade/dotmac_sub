@@ -1,0 +1,7 @@
+{% if not export_permission or can(request, export_permission) %}<div class="flex justify-end">
+    <a href="{{ export_url }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
+       class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+        Export CSV
+    </a>
+</div>
+{% endif %}

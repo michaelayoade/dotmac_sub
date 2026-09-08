@@ -163,7 +163,7 @@
         <td class="px-4 py-3 text-right tabular-nums"><p class="font-semibold text-slate-800 dark:text-slate-100">{{ order.currency }} {{ "{:,.2f}".format(order.total or 0) }}</p><p class="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Collected {{ "{:,.2f}".format(order.amount_paid or 0) }}</p><p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">Due {{ "{:,.2f}".format(order.balance_due or 0) }}</p></td>
       </tr>
       {% else %}{{ empty_state('No sales orders found', 'Try clearing filters or create the first manual sales order.', colspan=5) }}{% endfor %}
-      {% if orders %}<tr class="hidden sm:table-row" data-order-no-results><td colspan="5" class="px-4 py-8 text-center text-slate-500">No orders on this page match your search.</td></tr>{% endif %}
+      {% if orders %}<tr class="!hidden sm:table-row" data-order-no-results><td colspan="5" class="px-4 py-8 text-center text-slate-500">No orders on this page match your search.</td></tr>{% endif %}
     </tbody></table></div>
     <div class="grid gap-3 p-3 sm:hidden" data-mobile-order-list>
       {% for order in orders %}{% set customer = subscriber_map.get(order.subscriber_id|string) %}{% set agent = agent_map.get(order.owner_agent_id|string) if order.owner_agent_id else none %}
@@ -194,7 +194,7 @@
         </dl>
       </article>
       {% else %}<p class="py-8 text-center text-sm text-slate-500">No sales orders found. Try clearing filters or create the first manual sales order.</p>{% endfor %}
-      {% if orders %}<p class="hidden py-8 text-center text-sm text-slate-500 sm:hidden" data-order-no-results>No orders on this page match your search.</p>{% endif %}
+      {% if orders %}<p class="!hidden py-8 text-center text-sm text-slate-500 sm:hidden" data-order-no-results>No orders on this page match your search.</p>{% endif %}
     </div>
     {% if orders|length > 10 %}<div x-show="!orderSearchActive" class="border-t border-slate-200 p-3 text-center dark:border-slate-700"><button type="button" @click="ordersExpanded = !ordersExpanded" :aria-expanded="ordersExpanded.toString()" class="rounded-lg border border-slate-300 bg-slate-50 px-4 py-2 text-xs font-semibold text-cyan-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-cyan-300 dark:hover:bg-slate-700" data-orders-toggle><span x-text="ordersExpanded ? 'Show fewer orders' : 'Show all orders ({{ orders|length }})'">Show all orders ({{ orders|length }})</span></button></div>{% endif %}
     {% if total_pages > 1 %}<div class="border-t border-slate-200 p-3 dark:border-slate-700">{{ list_pagination(list_query, page_meta, '/admin/sales/sales-order') }}</div>{% endif %}
@@ -272,7 +272,7 @@
       row.classList.toggle('hidden', !matchesQuery);
       if (matchesQuery) matches += 1;
     });
-    orderNoResults.forEach(empty => empty.classList.toggle('hidden', !query || matches > 0));
+    orderNoResults.forEach(empty => empty.classList.toggle('!hidden', !query || matches > 0));
   };
   orderSearch?.addEventListener('input', syncOrders);
   document.querySelector('[data-orders-toggle]')?.addEventListener('click', () => {

@@ -25,6 +25,24 @@ The projection answers, for one exact subscriber account:
 Availability is explicit through `StateValue`. Unknown, unavailable, stale,
 not-applicable, and authoritative zero are not interchangeable.
 
+### Operationally-current subscription definition
+
+`app.services.subscription_lifecycle_policy` owns the typed cohort decision
+consumed by `customer.service_status`. A subscription is operationally current
+when its lifecycle status is `pending`, `active`, `blocked`, `suspended`,
+`stopped`, or `disabled`, except that a `stopped` or `disabled` row is
+historical once its non-null explicit `end_at` is at or before the single,
+timezone-aware `as_of` instant. The narrow end-date exception prevents an old
+paused row from overriding a healthy replacement without treating end dates as
+a general lifecycle authority.
+
+Consequently, an `active`, `pending`, `blocked`, or `suspended` row with a past
+end remains in customer health and in the drift report for review. A current
+`disabled` or `stopped` row with no past end remains visible and keeps its
+support action. Terminal lifecycle rows remain outside customer health. All
+rows, including the historical paused rows omitted from customer health, remain
+available to the admin Service/history query.
+
 ## Inputs and boundaries
 
 The owner reads:
@@ -37,6 +55,10 @@ The owner reads:
 - pending service-change intent from `service_intent.subscription_lifecycle`;
 - customer-safe connection/outage diagnosis from `network.connection_health`;
 - semantic labels/tones/icons from `ui.status_presentation`.
+
+Account Health resolves one typed operational cohort at one `as_of` instant and
+passes that exact cohort to Service Status. Neither composer maintains its own
+status/end-date rule, and no UI surface reinterprets or mutates lifecycle state.
 
 An exact RADIUS subscription binding wins. An unbound live session is eligible
 only when the subscriber has exactly one operationally-current subscription.
@@ -91,6 +113,29 @@ update this document and the test together. Additional-service scaling requires
 a separate measured budget before a page is allowed to diagnose an unbounded
 cohort.
 
+## Drift, repair, and rollback
+
+`app.services.service_status.build_subscription_end_drift_report` is the read-only
+drift signal for non-terminal subscriptions whose explicit `end_at` has passed.
+For an explicit `as_of` and optional subscriber scope it returns deterministically
+ordered typed rows and a stable SHA-256 fingerprint. Historical paused rows are
+classified as having one newer active same-offer replacement, no such
+replacement, ambiguous replacements, or unavailable chronology. Other
+non-terminal statuses fail closed as requiring review.
+
+This slice introduces no automatic reconciliation writer and changes no
+subscription, billing, RADIUS, enforcement-lock, or audit state. If an operator
+later repairs a reviewed row, the only permitted write path is the public typed
+`access.subscription_lifecycle` expiration command with explicit actor, reason,
+effective time, reviewed head, and idempotency key; direct SQL and blind Alembic
+data updates are forbidden. A bulk apply adapter requires a separate owner
+contract and runbook before use.
+
+Cutover removes the private `service_status._CURRENT_STATUSES` cohort and the
+independently timed Account Health read. Rollback is code-only: restore the
+prior reader behavior. No data rollback is required because this projection
+change performs no writes. Drift evidence remains available throughout cutover.
+
 ## Verification
 
 - financial currency-lane and unavailable-versus-zero tests;
@@ -98,3 +143,4 @@ cohort.
 - shared Customer/Reseller/Customer 360 template boundary tests;
 - API route retirement and mobile Account Health model tests;
 - template compilation, SOT manifest, and focused backend/mobile tests.
+- deterministic past-end drift fingerprint and fail-closed ambiguity tests.

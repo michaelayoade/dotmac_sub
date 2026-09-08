@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.stored_file import StoredFile
+from app.services import support as support_service
 from app.services import web_support_ticket_bulk as support_ticket_bulk_service
 from app.services import (
     web_support_ticket_bulk_actions as support_ticket_bulk_actions_service,
@@ -260,6 +261,7 @@ def tickets_export_csv(
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def tickets_bulk_preview(
+    request: Request,
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
@@ -290,6 +292,8 @@ def tickets_bulk_update(
         )
     except HTTPException:
         raise
+    except support_service.SupportTicketError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -303,7 +307,9 @@ def ticket_new(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
     context.update(
         support_web_service.build_ticket_form_context(
-            db, query_params=request.query_params
+            db,
+            query_params=request.query_params,
+            can_assign_ticket=True,
         )
     )
     context.update({"page_title": "New Ticket", "form_mode": "create", "ticket": None})
@@ -324,6 +330,7 @@ def ticket_edit_page(
             db,
             query_params=request.query_params,
             ticket_lookup=ticket_lookup,
+            can_assign_ticket=True,
         )
     )
     return templates.TemplateResponse("admin/support/tickets/new.html", context)
@@ -422,6 +429,7 @@ def ticket_create(
                     "tags": tags or "",
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
+                can_assign_ticket=True,
             )
         )
         context.update(
@@ -471,6 +479,7 @@ def ticket_create(
                     "tags": tags or "",
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
+                can_assign_ticket=True,
             )
         )
         context.update(
@@ -512,6 +521,7 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             ticket_lookup=ticket_lookup,
             actor_id=_actor_id(request),
             can_read_material_requests=can(request, "operations:material_request:read"),
+            can_assign_ticket=True,
         )
     )
     context["handoff_notice"] = request.query_params.get("handoff_notice")
@@ -738,6 +748,7 @@ def ticket_add_comment(
                 can_read_material_requests=can(
                     request, "operations:material_request:read"
                 ),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = exc.message
@@ -783,7 +794,9 @@ def ticket_edit_comment(
 @router.post(
     "/{ticket_id}/auto-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+    ],
 )
 def ticket_auto_assign(
     request: Request, ticket_id: UUID, db: Session = Depends(get_db)
@@ -837,7 +850,9 @@ def ticket_link(
         context = _ctx(request, db)
         context.update(
             support_web_service.build_ticket_detail_context(
-                db, ticket_lookup=str(ticket_id)
+                db,
+                ticket_lookup=str(ticket_id),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = str(exc)
@@ -873,7 +888,9 @@ def ticket_merge(
         context = _ctx(request, db)
         context.update(
             support_web_service.build_ticket_detail_context(
-                db, ticket_lookup=str(ticket_id)
+                db,
+                ticket_lookup=str(ticket_id),
+                can_assign_ticket=True,
             )
         )
         context["action_error"] = str(exc)
@@ -913,7 +930,9 @@ def ticket_quick_status(
 @router.post(
     "/{ticket_id}/quick-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+    ],
 )
 def ticket_quick_assign(
     request: Request,

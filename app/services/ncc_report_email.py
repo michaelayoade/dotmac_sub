@@ -74,7 +74,6 @@ DEFAULT_SUBJECT = "Weekly NCC Report"
 DEFAULT_BODY_TEMPLATE = (
     "Please find attached the NCC complaints report for the last "
     "{lookback_days} day(s).\nRows included: {row_count}.\n"
-    "Rows not yet filable: {not_filable_count}.\n"
     "Download: {download_url}"
 )
 DEFAULT_LOCAL_TIME = "08:00"
@@ -87,7 +86,6 @@ _BODY_TEMPLATE_FIELDS = frozenset(
     {
         "download_url",
         "lookback_days",
-        "not_filable_count",
         "report_date",
         "row_count",
     }
@@ -242,9 +240,13 @@ _RUN_DEFINITION = OwnerCommandDefinition(
 
 
 def _error(
-    suffix: str, message: str, *, field: str | None = None
+    suffix: str,
+    message: str,
+    *,
+    field: str | None = None,
+    extra_details: dict[str, object] | None = None,
 ) -> NccWeeklyDeliveryError:
-    details: dict[str, object] = {}
+    details: dict[str, object] = dict(extra_details or {})
     if field is not None:
         details["field"] = field
     return NccWeeklyDeliveryError(
@@ -449,7 +451,7 @@ def get_configuration(db: Session) -> NccWeeklyDeliveryConfiguration:
         recipients=recipients,
         sender_key=sender_key,
         subject=_text_value(db, SUBJECT_KEY, DEFAULT_SUBJECT) or DEFAULT_SUBJECT,
-        body_template=(
+        body_template=_regulator_safe_body_template(
             _text_value(db, BODY_TEMPLATE_KEY, DEFAULT_BODY_TEMPLATE)
             or DEFAULT_BODY_TEMPLATE
         ),
@@ -602,6 +604,37 @@ def _download_url(run_id: UUID) -> str:
     return f"{base_url}/admin/reports/ncc-weekly-runs/{run_id}/download"
 
 
+def _regulator_safe_body_template(template: str) -> str:
+    lines = [
+        line
+        for line in template.splitlines()
+        if "{not_filable_count}" not in line and "not yet fil" not in line.lower()
+    ]
+    cleaned = "\n".join(lines).strip()
+    return cleaned or DEFAULT_BODY_TEMPLATE
+
+
+def _raise_if_report_not_filable(*, row_count: int, not_filable_count: int) -> None:
+    if not_filable_count <= 0:
+        return
+    raise _error(
+        "report_not_filable",
+        "The NCC report has rows that fail the regulator filing validation; "
+        "delivery was not queued.",
+        extra_details={
+            "row_count": row_count,
+            "not_filable_count": not_filable_count,
+        },
+    )
+
+
+def _domain_error_count(exc: Exception, key: str) -> int:
+    if not isinstance(exc, DomainError):
+        return 0
+    value = exc.details.get(key)
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
 def _render_body(
     config: NccWeeklyDeliveryConfiguration,
     *,
@@ -617,7 +650,7 @@ def _render_body(
         report_date=report_date,
         download_url=_download_url(run_id),
     )
-    body_text = config.body_template.format_map(values)
+    body_text = _regulator_safe_body_template(config.body_template).format_map(values)
     body_html = "<p>" + escape(body_text).replace("\n", "<br>") + "</p>"
     return body_text, body_html
 
@@ -727,6 +760,15 @@ def run_due_delivery(
             )
             records = snapshot.record_mappings()
             rows = ncc_workbook.export_rows(records)
+            not_filable_count = sum(
+                1
+                for row in rows
+                if not ncc_workbook.validation_status(row).startswith("[OK]")
+            )
+            _raise_if_report_not_filable(
+                row_count=snapshot.total_complaints,
+                not_filable_count=not_filable_count,
+            )
             workbook_rows = ncc_workbook.template_export_rows(records)
             workbook = ncc_workbook.build_workbook(
                 workbook_rows, list(ncc_workbook.TEMPLATE_COLUMNS)
@@ -741,11 +783,6 @@ def run_due_delivery(
                     "artifact_generation_failed",
                     "The generated NCC workbook exceeds the email attachment limit.",
                 )
-            not_filable_count = sum(
-                1
-                for row in rows
-                if not ncc_workbook.validation_status(row).startswith("[OK]")
-            )
             filename = ncc_workbook.export_filename(local_now)
             artifact_sha256 = hashlib.sha256(workbook).hexdigest()
             body_text, body_html = _render_body(
@@ -820,14 +857,18 @@ def run_due_delivery(
                 if isinstance(exc, DomainError)
                 else f"{OWNER}.artifact_or_delivery_failed"
             )
-            run.failure_detail = type(exc).__name__
+            run.failure_detail = (
+                exc.message if isinstance(exc, DomainError) else type(exc).__name__
+            )
             run.artifact_filename = None
             run.artifact_content_type = None
             run.artifact_content = None
             run.artifact_sha256 = None
             run.notification_id = None
-            run.row_count = 0
-            run.not_filable_count = 0
+            row_count = _domain_error_count(exc, "row_count")
+            not_filable_count = _domain_error_count(exc, "not_filable_count")
+            run.row_count = row_count
+            run.not_filable_count = not_filable_count
             stage_audit_event(
                 db,
                 action="ncc.weekly_report_failed",
@@ -835,13 +876,19 @@ def run_due_delivery(
                 entity_id=str(run.id),
                 actor=AuditActor.system(command.context.actor),
                 is_success=False,
-                metadata={"failure_code": run.failure_code},
+                metadata={
+                    "failure_code": run.failure_code,
+                    "row_count": run.row_count,
+                    "not_filable_count": run.not_filable_count,
+                },
             )
             db.flush()
             return NccWeeklyDeliveryOutcome(
                 NccWeeklyRunDecision.failed,
                 scheduled_local_date=local_date_text,
                 run_id=run.id,
+                row_count=run.row_count,
+                not_filable_count=run.not_filable_count,
                 failure_code=run.failure_code,
             )
 

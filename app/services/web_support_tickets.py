@@ -643,6 +643,7 @@ def build_ticket_form_context(
     *,
     query_params: Mapping[str, object] | None = None,
     ticket: Ticket | None = None,
+    can_assign_ticket: bool = True,
 ) -> dict:
     params = query_params or {}
     status_options = support_ticket_settings_service.list_status_options(db)
@@ -783,6 +784,7 @@ def build_ticket_form_context(
         ),
         "selected_person": selected_person,
         "prefill": prefill,
+        "can_assign_ticket": can_assign_ticket,
     }
 
 
@@ -791,9 +793,15 @@ def build_ticket_edit_page_context(
     *,
     query_params: Mapping[str, object] | None,
     ticket_lookup: str,
+    can_assign_ticket: bool = True,
 ) -> dict:
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
-    context = build_ticket_form_context(db, query_params=query_params, ticket=ticket)
+    context = build_ticket_form_context(
+        db,
+        query_params=query_params,
+        ticket=ticket,
+        can_assign_ticket=can_assign_ticket,
+    )
     context.update(
         {
             "page_title": "Edit Ticket",
@@ -845,37 +853,51 @@ def build_ticket_create_payload(**kwargs) -> TicketCreate:
     )
 
 
-def build_ticket_update_payload(**kwargs) -> TicketUpdate:
+def build_ticket_update_payload(
+    *,
+    assignment_fields_submitted: bool = True,
+    **kwargs,
+) -> TicketUpdate:
     tags = kwargs.pop("tags", None)
     assignee_person_ids = kwargs.pop("assignee_person_ids", [])
-    return TicketUpdate(
-        title=kwargs["title"],
-        description=kwargs["description"] or None,
-        description_is_internal=not bool(kwargs.get("publish_description")),
-        subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
-        customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
-        customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),
-        region=kwargs.get("region") or None,
-        status=kwargs["status"],
-        priority=kwargs["priority"],
-        channel=kwargs["channel"],
-        ticket_type=kwargs.get("ticket_type") or None,
-        due_at=parse_dt_or_none(kwargs.get("due_at")),
-        tags=[item.strip() for item in (tags or "").split(",") if item.strip()],
-        technician_person_id=parse_uuid_or_none(kwargs.get("technician_person_id")),
-        ticket_manager_person_id=parse_uuid_or_none(
-            kwargs.get("ticket_manager_person_id")
-        ),
-        site_coordinator_person_id=parse_uuid_or_none(
-            kwargs.get("site_coordinator_person_id")
-        ),
-        service_team_id=parse_uuid_or_none(kwargs.get("service_team_id")),
-        assignee_person_ids=[
-            uid
-            for uid in (parse_uuid_or_none(item) for item in assignee_person_ids)
-            if uid
-        ],
-    )
+    payload: dict[str, object] = {
+        "title": kwargs["title"],
+        "description": kwargs["description"] or None,
+        "description_is_internal": not bool(kwargs.get("publish_description")),
+        "subscriber_id": parse_uuid_or_none(kwargs.get("subscriber_id")),
+        "customer_account_id": parse_uuid_or_none(kwargs.get("customer_account_id")),
+        "customer_person_id": parse_uuid_or_none(kwargs.get("customer_person_id")),
+        "region": kwargs.get("region") or None,
+        "status": kwargs["status"],
+        "priority": kwargs["priority"],
+        "channel": kwargs["channel"],
+        "ticket_type": kwargs.get("ticket_type") or None,
+        "due_at": parse_dt_or_none(kwargs.get("due_at")),
+        "tags": [item.strip() for item in (tags or "").split(",") if item.strip()],
+    }
+    if assignment_fields_submitted:
+        payload.update(
+            {
+                "technician_person_id": parse_uuid_or_none(
+                    kwargs.get("technician_person_id")
+                ),
+                "ticket_manager_person_id": parse_uuid_or_none(
+                    kwargs.get("ticket_manager_person_id")
+                ),
+                "site_coordinator_person_id": parse_uuid_or_none(
+                    kwargs.get("site_coordinator_person_id")
+                ),
+                "service_team_id": parse_uuid_or_none(kwargs.get("service_team_id")),
+                "assignee_person_ids": [
+                    uid
+                    for uid in (
+                        parse_uuid_or_none(item) for item in assignee_person_ids
+                    )
+                    if uid
+                ],
+            }
+        )
+    return TicketUpdate.model_validate(payload)
 
 
 def build_ticket_comment_payload(
@@ -991,6 +1013,7 @@ def update_ticket_from_form(
     request,
     ticket_id: str,
     actor_id: str | None,
+    assignment_fields_submitted: bool = True,
     **form,
 ):
     ticket = support_service.tickets.get(db, ticket_id)
@@ -1000,7 +1023,10 @@ def update_ticket_from_form(
         surface=support_ticket_settings_service.OperatorTicketStatusSurface.edit,
         current_status=ticket.status,
     )
-    payload = build_ticket_update_payload(**form)
+    payload = build_ticket_update_payload(
+        assignment_fields_submitted=assignment_fields_submitted,
+        **form,
+    )
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.update(
         db,
@@ -1036,9 +1062,10 @@ def quick_update_ticket(
     ticket = support_service.tickets.get(db, ticket_id)
     payload_data: dict = {}
     for key, value in fields.items():
-        if value in (None, ""):
-            continue
         if key in uuid_fields:
+            if value in (None, ""):
+                payload_data[key] = None
+                continue
             try:
                 payload_data[key] = UUID(str(value))
             except ValueError as exc:
@@ -1046,6 +1073,8 @@ def quick_update_ticket(
                     code="support_ticket_form_invalid",
                     message=f"{key} must be a valid UUID",
                 ) from exc
+        elif value in (None, ""):
+            continue
         elif key == "status":
             payload_data[key] = _admin_status_value(
                 db,
@@ -1759,6 +1788,7 @@ def build_ticket_detail_context(
     ticket_lookup: str,
     actor_id: str | None = None,
     can_read_material_requests: bool = False,
+    can_assign_ticket: bool = True,
 ) -> dict:
     from uuid import uuid4
 
@@ -1908,4 +1938,5 @@ def build_ticket_detail_context(
             db, ticket, actor_id=actor_id
         ),
         "work_order_idempotency_key": uuid4().hex,
+        "can_assign_ticket": can_assign_ticket,
     }

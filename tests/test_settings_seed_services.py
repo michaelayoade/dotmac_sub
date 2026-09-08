@@ -394,6 +394,60 @@ class TestSeedNotificationTemplates:
         assert "{renewed_through}" in template.body
         assert template.is_active is True
 
+    def test_restores_inactive_payment_received_email_and_sms(self, db_session):
+        db_session.add_all(
+            [
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received",
+                    channel=NotificationChannel.email,
+                    subject="Payment receipt {receipt_number}",
+                    body="Receipt {receipt_number}: {receipt_url}",
+                    is_active=False,
+                ),
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received SMS",
+                    channel=NotificationChannel.sms,
+                    subject=None,
+                    body="Receipt {receipt_number}: {receipt_url}",
+                    is_active=False,
+                ),
+            ]
+        )
+        db_session.flush()
+
+        settings_seed._seed_missing_notification_templates(db_session)
+
+        templates = (
+            db_session.query(NotificationTemplate)
+            .filter(NotificationTemplate.code == "payment_received")
+            .all()
+        )
+        assert {template.channel for template in templates} == {
+            NotificationChannel.email,
+            NotificationChannel.sms,
+        }
+        assert all(template.is_active for template in templates)
+
+    def test_repairs_incomplete_active_payment_received_copy(self, db_session):
+        template = NotificationTemplate(
+            code="payment_received",
+            name="Payment Received",
+            channel=NotificationChannel.email,
+            subject="Payment received",
+            body="Thank you for paying {amount}.",
+            is_active=True,
+        )
+        db_session.add(template)
+        db_session.flush()
+
+        settings_seed._seed_missing_notification_templates(db_session)
+
+        assert template.is_active is True
+        assert "{receipt_number}" in template.body
+        assert "{receipt_url}" in template.body
+
 
 # =============================================================================
 # Collections Settings Tests

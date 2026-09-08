@@ -4,7 +4,6 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import NoReturn
 
 from fastapi import UploadFile
 from sqlalchemy import or_, select
@@ -368,13 +367,9 @@ def direct_bank_transfer_enabled(db: Session) -> bool:
 
 
 def customer_direct_bank_transfer_enabled(db: Session) -> bool:
-    """Customer selfcare transfer is disabled; reseller flows remain configured."""
+    """Return whether customer selfcare can create direct-transfer payments."""
 
-    return False
-
-
-def _raise_customer_direct_transfer_unavailable() -> NoReturn:
-    raise ValueError("Direct bank transfer is available to resellers only")
+    return direct_bank_transfer_enabled(db)
 
 
 def _resolve_topup_limits(db: Session) -> tuple[int, int]:
@@ -1157,7 +1152,13 @@ def create_invoice_payment_intent(
         raise ValueError("Invoice no longer has an outstanding balance")
 
     if provider == DIRECT_TRANSFER_PROVIDER:
-        _raise_customer_direct_transfer_unavailable()
+        return create_direct_transfer_topup_intent(
+            db,
+            customer,
+            amount,
+            invoice_id=str(invoice.id),
+            idempotency_key=idempotency_key,
+        )
 
     selected_payment_method_id = str(payment_method_id or "").strip() or None
     route = select_checkout_provider(
@@ -1531,10 +1532,9 @@ def get_payment_methods_page(
 ) -> dict:
     """Build context for the customer payment-methods management page.
 
-    Surfaces saved cards (with their default flag) and the prepaid balance.
-    Direct bank transfer is reseller-only, so customer selfcare receives a
-    disabled transfer projection for compatibility. Autopay status is layered
-    on by the route (mirrors the top-up page)."""
+    Surfaces saved cards (with their default flag), the prepaid balance, and
+    configured direct bank transfer. Autopay status is layered on by the route
+    (mirrors the top-up page)."""
     account_id = optional_customer_account_id(db, customer)
 
     cards = []
@@ -1633,7 +1633,13 @@ def create_topup_intent(
     account_id = _customer_account_uuid(db, customer)
     requested_amount = round_money(to_decimal(amount))
     if provider == DIRECT_TRANSFER_PROVIDER:
-        _raise_customer_direct_transfer_unavailable()
+        return create_direct_transfer_topup_intent(
+            db,
+            customer,
+            requested_amount,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
 
     selected_payment_method_id = str(payment_method_id or "").strip() or None
     route = select_checkout_provider(
@@ -1801,13 +1807,43 @@ def create_direct_transfer_topup_intent(
 ) -> dict:
     """Adapt a customer request to the typed direct-transfer command owner."""
 
-    _raise_customer_direct_transfer_unavailable()
+    account_id = _customer_account_uuid(db, customer)
+    created_by = str(optional_customer_subscriber_id(db, customer) or account_id)
+    from app.services import direct_transfer_intents
+
+    command = direct_transfer_intents.CreateDirectTransferIntentCommand(
+        account_id=account_id,
+        created_by=created_by,
+        requested_amount=amount if invoice_id is None else None,
+        invoice_id=uuid.UUID(invoice_id) if invoice_id else None,
+        expected_preview_fingerprint=preview_fingerprint,
+    )
+    context = CommandContext.system(
+        actor=f"customer:{created_by}",
+        scope=direct_transfer_intents.CREATE_SCOPE,
+        reason=(
+            "Customer portal invoice direct-transfer intent"
+            if invoice_id
+            else "Customer portal account-credit direct-transfer intent"
+        ),
+        idempotency_key=(str(idempotency_key or "").strip() or None),
+    )
+    db_session_adapter.release_read_transaction(db)
+    result = direct_transfer_intents.create_direct_transfer_intent(
+        db,
+        command,
+        context=context,
+    )
+    return {
+        **result.to_dict(),
+        "redirect_url": "/portal/billing/topup/transfer",
+    }
 
 
 def get_direct_transfer_topup_page(db: Session, customer: dict) -> dict:
     """Build context for the customer direct-transfer instruction page."""
     if not customer_direct_bank_transfer_enabled(db):
-        _raise_customer_direct_transfer_unavailable()
+        raise ValueError("Direct bank transfer is not configured")
     account_id = _customer_account_uuid(db, customer)
     intent = _latest_pending_direct_transfer_intent(db, account_id)
     if not intent:
@@ -1832,7 +1868,7 @@ async def submit_direct_transfer_topup(
     if not made_payment:
         raise ValueError("Confirm that you have made the payment")
     if not customer_direct_bank_transfer_enabled(db):
-        _raise_customer_direct_transfer_unavailable()
+        raise ValueError("Direct bank transfer is not configured")
 
     account_id = _customer_account_uuid(db, customer)
     intent = _latest_pending_direct_transfer_intent(db, account_id)

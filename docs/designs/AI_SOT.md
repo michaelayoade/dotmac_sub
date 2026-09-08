@@ -120,28 +120,41 @@ deadline and team, department overrides, custom instructions, and campaign
 attribution exclusion. The admin contract refuses email and limits
 clarification to one turn.
 
-`app.services.ai_intake` owns classification only. Normalized inbound
-processing calls it after provider/message deduplication and before final team
-routing. It may see the latest inbound message, at most three bounded recent
-messages, bounded tags, and custom instructions; customer content and obvious
-credentials are redacted before `ai.gateway` is called. Raw prompts and
-unredacted content are not stored in intake metadata.
+`app.services.ai_intake` owns typed message understanding and customer-response
+composition. Eligibility remains provider-free. The session processor sends the
+persisted selected inbound to the existing gateway once for classification and
+fact extraction, then may send a separate safe bounded projection to the same
+gateway to phrase the backend-selected next action. That projection contains the
+latest customer statement, at most six role-aware customer-visible messages,
+known and missing fact keys, question state, approved identity/monitoring
+projections, playbook step, business tone, and approved ISP information.
+Internal notes are excluded. Customer content and obvious credentials are
+redacted before gateway calls; raw prompts and unredacted content are not stored
+in intake metadata.
 
 At or above the configured threshold, validated intent/category/department
-metadata is handed to `communications.team_inbox_routing`. Below threshold,
-an approved clarification may be recorded when enabled. The generic question
-and customer-type question are editable draft-policy fields, stored with the
-immutable version and projected to runtime only after activation. Older
-policies use the approved default wording. The classifier does **not** send that text; the Team Inbox coordinator submits it
-to `communications.team_inbox_outbound_intents`, which uses the normal durable
-WhatsApp, Facebook Messenger, or Instagram Direct notification path. The
+metadata is available to the conversational engine. Below threshold, the same
+engine first honors an explicit human request and otherwise chooses one useful
+policy-constrained missing fact; low confidence is not a handoff action. The
+response model may phrase only that approved action. A backend validator rejects
+action/purpose mismatch, repeated or unapproved questions, repeated apology,
+internal terms, unsupported promises, invented monitoring/outage/payment facts,
+and unsupported diagnosis. Safe deterministic playbook/template wording is the
+fallback. The Team Inbox coordinator submits accepted text to
+`communications.team_inbox_outbound_intents`, which uses the normal durable
+WhatsApp, Facebook Messenger, Instagram Direct, or native chat-widget delivery
+path. The
 provider call remains asynchronous to webhook acknowledgement. A dedupe key
 derived from the inbound message prevents a repeated delivery from creating a
-second clarification. A second uncertain result, disabled clarification,
-provider failure, invalid output, or a five-minute timeout takes the configured
-fallback team or normal channel default. The scheduled Team Inbox maintenance
-owner locks each conversation row and repairs stale `classifying` or
-`awaiting_follow_up` state idempotently.
+second response. Customer silence records `waiting_reason=awaiting_customer` and
+does not route, assign, queue, or increment AI inability. `expires_at` is a
+separate `customer_wait_expiry_hours` policy (72 hours by default, bounded to
+24?720 hours). The scheduled Team Inbox maintenance owner locks only sessions
+past that long-term expiry, rechecks newer inbound and human takeover, then
+transitions the AI session to `expired` and the Inbox conversation to resolved.
+It creates no handoff note or assignment. A newer customer reply resumes the
+same graph in `collecting_intent`; legacy short-wait rows are extended onto the new
+long-term lifecycle before any expiry consequence.
 
 Inbound processing serializes one channel/thread with a PostgreSQL transaction
 advisory lock, then locks an existing conversation row before reading or
@@ -149,9 +162,17 @@ replacing intake metadata. This prevents concurrent webhooks, or a webhook and
 the recovery task, from losing the follow-up count, fallback deadline, or
 delivery evidence.
 
+The first persisted eligible inbound customer message is turn 1. Starting or
+resuming AI intake is not a separate customer turn: welcome delivery is
+idempotent and may occur immediately before processing the same persisted
+inbound, but it never consumes, replaces, or skips that message. Duplicate
+provider webhooks are suppressed by the inbound message path before the session
+processor sees work; processor retries use the welcome and per-inbound AI
+message dedupe keys and mark `processed_inbound:<message_id>` only after the
+classification/engine path reaches a durable outcome.
+
 The conversational intake extension stores durable lifecycle in
-`ai_intake_sessions`. `ai_intake_configs` remains the compatibility row used by
-existing routes, but customer-visible AI messages attach to immutable
+`ai_intake_sessions`. `ai_intake_configs` remains the compatibility row used by existing routes, but customer-visible AI messages attach to immutable
 `ai_intake_policy_versions` so the display name, welcome message, editable
 business instructions, approved ISP information, queue templates and data
 cleanup policy are auditable after activation. Protected system, security,
@@ -162,9 +183,22 @@ An activated policy version can enable the composable conversational engine
 with metadata owned by `ai.intake`. The engine persists structured operational
 state in the active session metadata: current and previous intent, category,
 confidence, subscriber/contact identity, permitted identifiers supplied by the
-customer, collected facts, missing facts, requested fields, bounded customer
-statements, troubleshooting steps, tool results, tool errors, escalation reason,
-handoff status and counters. It does not store uncontrolled chain-of-thought.
+customer, corrected collected facts, missing facts, typed question/answer state,
+issue acknowledgement, bounded customer statements, troubleshooting steps,
+typed monitoring observations, tool results/latency, tool errors, escalation,
+waiting/resolution reasons and counters. It does not store chain-of-thought.
+
+`continue_classifier` is not an engine routing action. The graph must select a
+policy-constrained question, guidance, approved read-only tool, wait, resolution,
+or an explicit-reason handoff. `mark_resolved` produces the terminal AI
+`resolved` state and delegates the authoritative Inbox status transition to
+`communications.team_inbox_status`.
+
+A media-only first inbound is persisted and its attachments are promoted before
+the configured customer-visible media handoff notice and factual private note
+are created. Team Inbox performs normal routing/assignment and AI ownership ends
+without attempting customer lookup, monitoring, or attachment interpretation.
+Captioned media with usable text follows normal intake.
 
 The approved tool catalogue is backend-owned. Current tools are:
 
@@ -175,7 +209,11 @@ The approved tool catalogue is backend-owned. Current tools are:
 - `subscriber_monitoring`: read-only wrapper over the existing customer network
   context and ONT/RADIUS status projections. It reports bounded factual service
   state, live-session and equipment status where available. An unavailable
-  result must not become a diagnosis.
+  result must not become a diagnosis or a handoff unless the activated policy's
+  bounded `tool_failure_handoff_statuses` explicitly requires that status to
+  hand off. Playbook conditions use `monitoring_status`, `radius_status`, and
+  `ont_status` separately; customer-reported LOS and connectivity facts remain
+  collected facts rather than monitoring observations.
 
 Policy versions may select which identifiers can be requested, and in which
 order. Customer identity prompts are asked one at a time, and the policy's
@@ -218,13 +256,12 @@ validation refuses LangGraph activation when the package is unavailable, and
 `custom_v1` remains the deployable default until the server dependency is
 installed deliberately.
 
-The authoritative AI session state machine is:
-
-`eligible -> welcome_pending -> collecting_intent -> awaiting_customer ->
-classified -> handoff_requested -> completed`
-
-Terminal states are `completed`, `stopped_human_takeover`,
-`fallback_escalated`, `expired`, `failed` and `ineligible`. `queued` and
+The authoritative AI session lifecycle starts as
+`eligible -> welcome_pending -> collecting_intent`. A customer-facing question
+transitions to `awaiting_customer`; a reply resumes `collecting_intent`. The
+terminal branches are `resolved`, `expired`, `completed`,
+`stopped_human_takeover`, `fallback_escalated`, `failed`, and `ineligible`.
+Explicit escalation uses `handoff_requested -> completed`. `queued` and
 `assigned` are not AI states; they are Team Inbox routing outcomes and may
 appear only as derived audit metadata.
 
@@ -270,8 +307,12 @@ default-off controls and never send automatically.
   authorized cohort; qualitative AI review is limited to the explicitly
   reported evidence sample. It cannot assign,
   reply, close, refund, profile-update, or otherwise mutate a domain row.
-- **Conversational AI intake.** WhatsApp, Facebook Messenger and Instagram DM
-  may enter `pending` UI state with an active `ai_intake_sessions` row. The AI
+- **Conversational AI intake.** WhatsApp, Facebook Messenger, Instagram DM,
+  and explicitly scoped native Fiber, customer-portal, and reseller-portal
+  chat widgets may enter `pending` UI state with an active
+  `ai_intake_sessions` row. For a widget, policy
+  matching occurs on the first persisted visitor message; without an active
+  matching policy it remains on the normal human Team Inbox path. The AI
   sends through Team Inbox outbound only, uses `sender_type=ai` identity
   metadata, classifies intent, and requests handoff. Team Inbox remains the
   owner of routing, queueing, assignment and provider delivery. The admin

@@ -20,11 +20,11 @@
     {% if error %}<div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">{{ error }}</div>{% endif %}
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {{ stats_card(kpis.total.label, kpis.total.value.value, icon=work_icon, color="slate", color2="cyan", href=kpis.total.cohort_url, tone=kpis.total.tone) }}
-        {{ stats_card(kpis.active.label, kpis.active.value.value, icon=work_icon, color="cyan", color2="blue", href=kpis.active.cohort_url, tone=kpis.active.tone) }}
-        {{ stats_card(kpis.scheduled.label, kpis.scheduled.value.value, icon=work_icon, color="amber", color2="orange", href=kpis.scheduled.cohort_url, tone=kpis.scheduled.tone) }}
-        {{ stats_card(kpis.in_progress.label, kpis.in_progress.value.value, icon=work_icon, color="blue", color2="cyan", href=kpis.in_progress.cohort_url, tone=kpis.in_progress.tone) }}
-        {{ stats_card(kpis.completed.label, kpis.completed.value.value, icon=work_icon, color="emerald", color2="green", href=kpis.completed.cohort_url, tone=kpis.completed.tone) }}
+        {{ stats_card(kpis.total.label, kpis.total.value.value, icon=work_icon, color="slate", color2="cyan", href=kpis.total.cohort_url, tone=kpis.total.tone, active=not status_filter and not active_filter and not q and not project_task_filter) }}
+        {{ stats_card(kpis.active.label, kpis.active.value.value, icon=work_icon, color="cyan", color2="blue", href=kpis.active.cohort_url, tone=kpis.active.tone, active=active_filter) }}
+        {{ stats_card(kpis.scheduled.label, kpis.scheduled.value.value, icon=work_icon, color="amber", color2="orange", href=kpis.scheduled.cohort_url, tone=kpis.scheduled.tone, active=status_filter == "scheduled") }}
+        {{ stats_card(kpis.in_progress.label, kpis.in_progress.value.value, icon=work_icon, color="blue", color2="cyan", href=kpis.in_progress.cohort_url, tone=kpis.in_progress.tone, active=status_filter == "in_progress") }}
+        {{ stats_card(kpis.completed.label, kpis.completed.value.value, icon=work_icon, color="emerald", color2="green", href=kpis.completed.cohort_url, tone=kpis.completed.tone, active=status_filter == "completed") }}
     </div>
 
     {% if can(request, create_work_order_action.permission) and not create_work_order_action.allowed %}
