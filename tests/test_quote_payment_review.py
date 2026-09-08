@@ -100,6 +100,7 @@ def test_approval_records_reviewer_time_revision_and_exact_snapshot(
     reviewer = _reviewer(db_session)
     quote = _pending_quote(db_session, subscriber)
     command = _command(quote, reviewer)
+    db_session.rollback()
 
     outcome = quote_payment_review.review_quote_payment(db_session, command)
 
@@ -129,6 +130,7 @@ def test_review_command_replays_and_rejects_changed_command_reuse(
     quote = _pending_quote(db_session, subscriber)
     command_id = uuid4()
     command = _command(quote, reviewer, command_id=command_id)
+    db_session.rollback()
 
     first = quote_payment_review.review_quote_payment(db_session, command)
     replay = quote_payment_review.review_quote_payment(db_session, command)
@@ -143,6 +145,7 @@ def test_review_command_replays_and_rejects_changed_command_reuse(
         decision=QuotePaymentReviewDecision.reject,
         reason="Address cannot be served",
     )
+    db_session.rollback()
     with pytest.raises(quote_payment_review.QuotePaymentReviewError) as exc_info:
         quote_payment_review.review_quote_payment(db_session, changed)
     assert exc_info.value.code == "sales.quote_payment_review.command_conflict"
@@ -151,9 +154,11 @@ def test_review_command_replays_and_rejects_changed_command_reuse(
 def test_review_command_rejects_staff_without_review_permission(db_session, subscriber):
     reviewer = _reviewer(db_session, authorized=False)
     quote = _pending_quote(db_session, subscriber)
+    command = _command(quote, reviewer)
+    db_session.rollback()
 
     with pytest.raises(quote_payment_review.QuotePaymentReviewError) as exc_info:
-        quote_payment_review.review_quote_payment(db_session, _command(quote, reviewer))
+        quote_payment_review.review_quote_payment(db_session, command)
 
     assert exc_info.value.code == "sales.quote_payment_review.reviewer_not_authorized"
     db_session.refresh(quote)
