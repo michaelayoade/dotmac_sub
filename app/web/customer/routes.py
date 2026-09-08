@@ -54,6 +54,11 @@ from app.services import payment_proofs as payment_proofs_service
 from app.services import service_address as service_address_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services.application_exception_observability import (
+    PaymentVerificationChannel,
+    PaymentVerificationOutcome,
+    record_payment_verification_outcome,
+)
 from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
@@ -153,8 +158,17 @@ def _payment_verification_error_response(
     *,
     status_code: int = 400,
 ) -> Response:
-    logger.info(
-        "Customer payment verification failed",
+    record_payment_verification_outcome(
+        channel=PaymentVerificationChannel.CUSTOMER_PORTAL,
+        outcome=PaymentVerificationOutcome.UNEXPECTED_FAILURE,
+    )
+    logger.warning(
+        "customer_payment_verification_failed",
+        extra={
+            "payment_verification_outcome": PaymentVerificationOutcome.UNEXPECTED_FAILURE.value,
+            "exception_fingerprint": type(exc).__name__[:80],
+            "status": status_code,
+        },
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return templates.TemplateResponse(
@@ -2292,6 +2306,10 @@ def customer_verify_payment(
             and subscriber_id
             and not is_subscriber_restricted(db, subscriber_id)
         )
+        record_payment_verification_outcome(
+            channel=PaymentVerificationChannel.CUSTOMER_PORTAL,
+            outcome=PaymentVerificationOutcome.SETTLED,
+        )
         return templates.TemplateResponse(
             "customer/billing/pay_success.html",
             {
@@ -2315,6 +2333,10 @@ def customer_verify_payment(
             },
         )
     except GatewayPaymentIncomplete as exc:
+        record_payment_verification_outcome(
+            channel=PaymentVerificationChannel.CUSTOMER_PORTAL,
+            outcome=PaymentVerificationOutcome.PENDING_PROVIDER_CONFIRMATION,
+        )
         return _render_payment_return_status(
             request,
             reference=reference,

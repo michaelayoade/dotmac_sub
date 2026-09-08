@@ -23,6 +23,16 @@ REQUEST_ERRORS = Counter(
     "Total HTTP 5xx responses",
     ["method", "path", "status"],
 )
+APPLICATION_EXCEPTIONS = Counter(
+    "application_exceptions_total",
+    "Unhandled application exceptions by bounded route and exception fingerprint",
+    ["surface", "exception_type"],
+)
+PAYMENT_VERIFICATION_OUTCOMES = Counter(
+    "payment_verification_outcomes_total",
+    "Customer payment verification outcomes by channel and safe category",
+    ["channel", "outcome"],
+)
 API_SYNC_PRESSURE_LIMITED = Counter(
     "api_sync_pressure_limited_total",
     "API sync requests rejected before they could acquire DB resources",
