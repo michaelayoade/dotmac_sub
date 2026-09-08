@@ -47,6 +47,18 @@ def test_project_guidance_explains_customer_typeahead_selection() -> None:
     assert "selected customer account" in content
 
 
+def test_sales_quote_guidance_explains_direct_customer_subject() -> None:
+    guide = guidance_for_path("/admin/sales/quotes/new")
+
+    assert guide is not None
+    assert guide.id == "sales-quotes"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "exactly one lead or customer" in content
+    assert "does not create a lead" in content
+    assert "does not" in content and "party binding" in content
+    assert "reuses the existing active subscriber" in content
+
+
 def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:
     guide = guidance_for_path("/admin/inbox/manager-ai")
 

@@ -47,6 +47,7 @@ from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition
 from app.services.owner_commands import CommandContext
 from app.services.sales import quote_delivery, quote_documents
+from app.services.sales import service as sales_service
 
 router = APIRouter(prefix="/sales", tags=["web-admin-sales"])
 templates = Jinja2Templates(directory="templates")
@@ -1240,6 +1241,23 @@ def quote_new(
 
 
 @router.get(
+    "/quotes/leads/search",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_lead_search(q: str = Query(min_length=2), db: Session = Depends(get_db)):
+    """Server-backed eligible Lead picker projection for Quote authoring."""
+
+    return JSONResponse(
+        jsonable_encoder(
+            sales_service.leads.search_for_quote(
+                db,
+                sales_service.QuoteLeadSearchQuery(term=q, limit=20),
+            )
+        )
+    )
+
+
+@router.get(
     "/quotes/customers/search",
     dependencies=[Depends(require_permission("crm:quote:write"))],
 )
@@ -1247,7 +1265,9 @@ def quote_customer_search(q: str = Query(min_length=2), db: Session = Depends(ge
     """Server-backed customer picker projection for Quote authoring."""
     return JSONResponse(
         jsonable_encoder(
-            customer_search_service.search_response(db, q, limit=20, reviewed_only=True)
+            customer_search_service.search_response(
+                db, q, limit=20, reviewed_only=False
+            )
         )
     )
 

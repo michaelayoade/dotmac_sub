@@ -226,6 +226,23 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "sales-quotes",
+        "Sales",
+        "Create and manage sales Quotes",
+        "Sales and account managers",
+        "Prepare a pricing proposal for a genuine Lead or an existing Customer.",
+        ("/admin/sales/quotes",),
+        "Open New Quote and search at least two characters for exactly one Lead or Customer.",
+        "Choose Lead only when the proposal belongs to an open sales opportunity; choose Customer when the account already exists.",
+        "Confirm the selected result, Project Type, line items, discount, tax, expiry, and optional install location before creating the Quote.",
+        "Send the Quote for review, then use acceptance only after the customer agrees to the commercial terms.",
+        notes=(
+            "A Customer-backed Quote uses the selected Subscriber account directly and does not create a Lead or require a Party binding.",
+            "Accepting a Lead-backed Quote converts its reviewed identity and marks that Lead Won; accepting a Customer-backed Quote reuses the existing active Subscriber. Both continue through the same sales-order and implementation workflow.",
+            "Typing text alone does not select a recipient. Choose an exact typeahead result; changing the text clears the previous selection.",
+        ),
+    ),
+    _guide(
         "billing-overview",
         "Billing",
         "Understand customer billing",
