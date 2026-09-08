@@ -38,6 +38,7 @@ from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogu
 from app.schemas.settings import DomainSettingUpdate
 from app.services import (
     ai_conversation_intake,
+    ai_conversation_ownership,
     ai_intake_canary_library,
     ai_intake_canary_runner,
     ai_intake_rollout_readiness,
@@ -115,6 +116,17 @@ class InboxReadPresentation(BaseModel):
     status: Literal["success", "error"]
     changed: bool
     message: str
+
+
+def _request_permission_keys(request: Request, db: Session) -> frozenset[str]:
+    """Return projection permissions, denying when an adapter supplied no actor."""
+
+    auth = getattr(request.state, "auth", None)
+    if not isinstance(auth, dict):
+        return frozenset()
+    if "admin" not in set(auth.get("roles") or ()) and not auth.get("principal_id"):
+        return frozenset()
+    return load_permission_keys(auth, db)
 
 
 def _json_object_list(value: str | None) -> tuple[dict[str, object], ...]:
@@ -307,8 +319,7 @@ def team_inbox_queue(
         actor_person_id = UUID(actor_id) if actor_id else None
     except ValueError:
         actor_person_id = None
-    auth = getattr(request.state, "auth", None) or {}
-    actor_permission_keys = load_permission_keys(auth, db)
+    actor_permission_keys = _request_permission_keys(request, db)
     try:
         projection = team_inbox_projection.build_queue_projection(
             db,
@@ -1038,9 +1049,7 @@ def team_inbox_detail(
         db,
         conversation_id=conversation_id,
         actor_person_id=actor_person_id,
-        actor_permission_keys=load_permission_keys(
-            getattr(request.state, "auth", None) or {}, db
-        ),
+        actor_permission_keys=_request_permission_keys(request, db),
         include_contact_candidates=False,
         include_label_usage_counts=False,
     )
@@ -1635,7 +1644,7 @@ def team_inbox_reply(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         if _is_htmx_request(request):
             return _reply_presentation_response(
                 conversation_id,
@@ -2140,7 +2149,7 @@ def team_inbox_workflow_action(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     return _detail_redirect(
         conversation_id,
@@ -2306,7 +2315,7 @@ def team_inbox_bulk_action(
             auto_assign=auto_assign,
             actor_person_id=_actor_id_from_request(request),
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
@@ -2341,7 +2350,7 @@ def team_inbox_assign_to_me(
             service_team_id=_query_text(service_team_id),
             actor_person_id=actor_person_id,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
@@ -2591,7 +2600,7 @@ def team_inbox_internal_note(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
@@ -2696,7 +2705,7 @@ def team_inbox_status_action(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except team_inbox_commands.InboxCommandError as exc:
         return _detail_redirect(
@@ -2761,7 +2770,7 @@ def team_inbox_issue_ticket(
             status="error",
             message=exc.message,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except ValueError as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
@@ -2817,7 +2826,7 @@ def team_inbox_assign(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,
@@ -2866,7 +2875,7 @@ def team_inbox_run_macro(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         return _domain_conflict_response(exc)
     except (
         team_inbox_commands.InboxCommandError,

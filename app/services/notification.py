@@ -80,6 +80,17 @@ class CancelPendingNotificationsOutcome:
     canceled_notification_ids: tuple[UUID, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SuppressNotificationDeliveryCommand:
+    notification_id: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressNotificationDeliveryOutcome:
+    suppressed: bool
+
+
 def cancel_pending_notifications(
     db: Session,
     command: CancelPendingNotificationsCommand,
@@ -108,6 +119,34 @@ def cancel_pending_notifications(
         canceled.append(notification.id)
     db.flush()
     return CancelPendingNotificationsOutcome(canceled_notification_ids=tuple(canceled))
+
+
+def suppress_notification_delivery(
+    db: Session,
+    command: SuppressNotificationDeliveryCommand,
+) -> SuppressNotificationDeliveryOutcome:
+    """Flush-only delivery-state participant for an owning coordinator."""
+
+    reason = command.reason.strip()
+    if not reason:
+        raise ValueError("Notification suppression reason is required")
+    notification = (
+        db.query(Notification)
+        .filter(Notification.id == command.notification_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if notification is None or notification.status not in {
+        NotificationStatus.queued,
+        NotificationStatus.failed,
+        NotificationStatus.sending,
+    }:
+        return SuppressNotificationDeliveryOutcome(suppressed=False)
+    notification.status = NotificationStatus.canceled
+    notification.last_error = reason[:255]
+    notification.send_at = None
+    db.flush()
+    return SuppressNotificationDeliveryOutcome(suppressed=True)
 
 
 logger = logging.getLogger(__name__)

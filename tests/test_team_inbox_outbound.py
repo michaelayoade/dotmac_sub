@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from app.api import support as support_api
+from app.models.ai_intake import AiIntakeSession
 from app.models.notification import (
     CommunicationIntentRecord,
     Notification,
@@ -1392,6 +1393,16 @@ def test_meta_direct_intake_followups_use_normal_outbound_dispatcher(
         )
         db_session.add(inbound)
         db_session.flush()
+        session = AiIntakeSession(
+            conversation_id=conversation.id,
+            state="collecting_intent",
+            channel_type=channel_type,
+            provider="meta",
+            account_scope=account_id,
+            metadata_={},
+        )
+        db_session.add(session)
+        db_session.flush()
 
         queued = team_inbox_outbound.send_ai_intake_follow_up(
             db_session,
@@ -1400,6 +1411,7 @@ def test_meta_direct_intake_followups_use_normal_outbound_dispatcher(
                 question=GENERIC_FOLLOW_UP_QUESTION,
                 inbound_message_id=inbound.id,
                 config_id=uuid4(),
+                session_id=session.id,
                 follow_up_count=1,
             ),
         )

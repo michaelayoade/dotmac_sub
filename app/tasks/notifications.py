@@ -21,11 +21,11 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
-from app.models.team_inbox import InboxMessage
 from app.services import (
     ai_conversation_ownership,
     communication_attachments,
     communication_eligibility,
+    team_inbox_commands,
     team_inbox_media,
     team_inbox_receive,
     team_inbox_reply_window,
@@ -44,6 +44,7 @@ from app.services.ephemeral_communication_actions import (
 from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.nextcloud_talk_staff import deliver_due_staff_talk_notifications
 from app.services.observability import record_notification_queue_result
+from app.services.owner_commands import CommandContext
 from app.services.settings_spec import resolve_value
 from app.services.whatsapp_notification_templates import provider_template_from_template
 
@@ -70,41 +71,6 @@ _DELIVERABLE_CHANNELS = (
     NotificationChannel.instagram_comment,
     NotificationChannel.push,
 )
-
-
-def _suppress_ai_outbound_without_ownership(
-    db: Session,
-    notification: Notification,
-) -> bool:
-    metadata = dict(notification.metadata_ or {})
-    try:
-        conversation_id = UUID(str(metadata.get("conversation_id")))
-    except (TypeError, ValueError):
-        conversation_id = None
-    decision = ai_conversation_ownership.decide_ai_outbound_delivery(
-        db,
-        conversation_id=conversation_id,
-        metadata=metadata,
-    )
-    if not decision.applicable or decision.allowed:
-        return False
-    reason = decision.reason or "ai_ownership_ended"
-    notification.status = NotificationStatus.canceled
-    notification.last_error = reason
-    notification.send_at = None
-    message = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.notification_id == notification.id)
-        .one_or_none()
-    )
-    if message is not None:
-        message_metadata = dict(message.metadata_ or {})
-        message_metadata["delivery_status"] = "canceled"
-        message_metadata["suppression_reason"] = reason
-        message.metadata_ = message_metadata
-    record_delivery_outcome(db, notification)
-    db.commit()
-    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,9 +570,6 @@ def _deliver_notification_queue_stats(
         )
         if notification is None:
             continue
-        if _suppress_ai_outbound_without_ownership(db, notification):
-            suppressed += 1
-            continue
         channel_counts[notification.channel] = current_count + 1
         # Reclaim handling: a notification still in "sending" was stuck past the
         # timeout — the worker likely crashed mid-send, possibly AFTER the
@@ -674,9 +637,26 @@ def _deliver_notification_queue_stats(
         record_delivery_outcome(db, notification)
         db.commit()
 
+        delivery_metadata = dict(notification.metadata_ or {})
+        if ai_conversation_ownership.is_ai_outbound_intent(delivery_metadata):
+            suppression = team_inbox_commands.suppress_ai_outbound_without_ownership(
+                db,
+                team_inbox_commands.SuppressAiOutboundCommand(
+                    context=CommandContext.system(
+                        actor="service:notification-delivery-worker",
+                        scope="team-inbox:ai-outbound-revalidation",
+                        reason="revalidate AI ownership immediately before delivery",
+                        idempotency_key=f"ai-outbound-delivery:{candidate_id}",
+                    ),
+                    notification_id=candidate_id,
+                ),
+            )
+            if suppression.suppressed:
+                suppressed += 1
+                continue
+
         subject = notification.subject or "Notification"
         body = notification.body or ""
-        delivery_metadata = dict(notification.metadata_ or {})
         raw_inbox_attachment_ids = delivery_metadata.get("inbox_attachment_ids")
         inbox_attachment_ids = (
             [str(value) for value in raw_inbox_attachment_ids if isinstance(value, str)]

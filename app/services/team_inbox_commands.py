@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakeSession
 from app.models.audit import AuditActorType
+from app.models.notification import Notification
 from app.models.organization import Organization
 from app.models.party import (
     Party,
@@ -75,7 +76,7 @@ from app.services import (
 from app.services import (
     party as party_service,
 )
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.domain_errors import DomainError
@@ -99,6 +100,11 @@ _ADMIN_MUTATION = OwnerCommandDefinition(
     owner=OWNER,
     concern="operator conversation and collaboration commands",
     name="execute_team_inbox_admin_mutation",
+)
+_AI_OUTBOUND_REVALIDATION = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="queued AI outbound ownership revalidation and suppression",
+    name="suppress_ai_outbound_without_ownership",
 )
 
 
@@ -314,6 +320,19 @@ class TakeOverConversationOutcome:
     replayed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SuppressAiOutboundCommand:
+    context: CommandContext
+    notification_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressAiOutboundOutcome:
+    notification_id: UUID
+    suppressed: bool
+    reason: str | None
+
+
 _TAKEOVER_PERMISSIONS = frozenset(
     {"support:ticket:update", "support:inbox:self_assign"}
 )
@@ -324,6 +343,7 @@ def _commit(
     action: Callable[[], T],
     *,
     context: CommandContext | None = None,
+    definition: OwnerCommandDefinition = _ADMIN_MUTATION,
 ) -> T:
     if owner_command_active(db):
         return action()
@@ -337,7 +357,7 @@ def _commit(
     )
     return execute_owner_command(
         db,
-        definition=_ADMIN_MUTATION,
+        definition=definition,
         context=command_context,
         operation=action,
     )
@@ -1430,6 +1450,78 @@ def _cancel_pending_ai_outbound(
     return len(canceled_ids)
 
 
+def suppress_ai_outbound_without_ownership(
+    db: Session,
+    command: SuppressAiOutboundCommand,
+) -> SuppressAiOutboundOutcome:
+    """Revalidate and suppress one AI delivery immediately before provider use."""
+
+    def execute() -> SuppressAiOutboundOutcome:
+        notification = db.get(Notification, command.notification_id)
+        if notification is None:
+            return SuppressAiOutboundOutcome(
+                notification_id=command.notification_id,
+                suppressed=False,
+                reason=None,
+            )
+        metadata = dict(notification.metadata_ or {})
+        try:
+            conversation_id = UUID(str(metadata.get("conversation_id")))
+        except (TypeError, ValueError):
+            conversation_id = None
+        decision = ai_conversation_ownership.decide_ai_outbound_delivery(
+            db,
+            conversation_id=conversation_id,
+            metadata=metadata,
+        )
+        if not decision.applicable or decision.allowed:
+            return SuppressAiOutboundOutcome(
+                notification_id=notification.id,
+                suppressed=False,
+                reason=None,
+            )
+        reason = decision.reason or "ai_ownership_ended"
+        suppression = notification_service.suppress_notification_delivery(
+            db,
+            notification_service.SuppressNotificationDeliveryCommand(
+                notification_id=notification.id,
+                reason=reason,
+            ),
+        )
+        if not suppression.suppressed:
+            return SuppressAiOutboundOutcome(
+                notification_id=notification.id,
+                suppressed=False,
+                reason=None,
+            )
+        message = (
+            db.query(InboxMessage)
+            .filter(InboxMessage.notification_id == notification.id)
+            .one_or_none()
+        )
+        if message is not None:
+            message_metadata = dict(message.metadata_ or {})
+            message_metadata["delivery_status"] = "canceled"
+            message_metadata["suppression_reason"] = reason
+            message.metadata_ = message_metadata
+        from app.services.communication_intents import record_delivery_outcome
+
+        record_delivery_outcome(db, notification)
+        db.flush()
+        return SuppressAiOutboundOutcome(
+            notification_id=notification.id,
+            suppressed=True,
+            reason=reason,
+        )
+
+    return _commit(
+        db,
+        execute,
+        context=command.context,
+        definition=_AI_OUTBOUND_REVALIDATION,
+    )
+
+
 def _takeover_replay(
     db: Session,
     *,
@@ -1607,8 +1699,10 @@ def take_over_conversation(
             action="ai_conversation_human_takeover",
             entity_type="inbox_conversation",
             entity_id=str(conversation.id),
-            actor_type=AuditActorType.user,
-            actor_id=str(command.actor_person_id),
+            actor=AuditActor.user(
+                str(command.actor_person_id),
+                party_id=command.actor_person_id,
+            ),
             metadata={
                 "owner": OWNER,
                 "ai_session_id": str(active_session.id),

@@ -254,6 +254,17 @@ def require_human_control(
     return ownership
 
 
+def is_ai_outbound_intent(metadata: Mapping[str, object]) -> bool:
+    """Identify an AI-authored delivery intent without deciding ownership."""
+
+    return bool(
+        metadata.get("ai_intake_session_id")
+        or str(metadata.get("sender_type") or "").strip().lower() == "ai"
+        or str(metadata.get("author_type") or "").strip().lower() == "ai"
+        or str(metadata.get("automation_kind") or "").strip().lower() == "ai_intake"
+    )
+
+
 def decide_ai_outbound_delivery(
     db: Session,
     *,
@@ -262,16 +273,8 @@ def decide_ai_outbound_delivery(
 ) -> AiOutboundDeliveryDecision:
     """Fail closed for queued AI Intake messages whose authority has ended."""
 
-    sender_type = str(metadata.get("sender_type") or "").strip().lower()
-    author_type = str(metadata.get("author_type") or "").strip().lower()
-    automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
     raw_session_id = metadata.get("ai_intake_session_id")
-    applicable = bool(
-        raw_session_id
-        or sender_type == "ai"
-        or author_type == "ai"
-        or automation_kind == "ai_intake"
-    )
+    applicable = is_ai_outbound_intent(metadata)
     if not applicable:
         return AiOutboundDeliveryDecision(
             applicable=False,

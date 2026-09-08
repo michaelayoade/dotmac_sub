@@ -53,7 +53,6 @@ from app.services.auth_dependencies import (
 )
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
-from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -373,7 +372,7 @@ def escalate_inbox_conversation(
             assigned_by_person_id=actor_id,
             reason=payload.reason,
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.code, "message": exc.message, "details": exc.details},
@@ -429,6 +428,11 @@ def list_inbox_conversations(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    normalized_view = (
+        view
+        if isinstance(view, str) and view in {"all", "ai_intake", "queue", "history"}
+        else "all"
+    )
     clean_contact_resolution_status = (
         contact_resolution_status.strip()
         if isinstance(contact_resolution_status, str)
@@ -467,7 +471,7 @@ def list_inbox_conversations(
             "ai_intake": ai_conversation_ownership.ConversationOwnershipCohort.ai_intake,
             "queue": ai_conversation_ownership.ConversationOwnershipCohort.queue,
             "history": ai_conversation_ownership.ConversationOwnershipCohort.history,
-        }[view],
+        }[normalized_view],
         limit=limit,
         offset=offset,
     )
@@ -521,7 +525,7 @@ def reply_to_inbox_conversation(
                 sent_by_person_id=_actor_id(auth),
             ),
         )
-    except DomainError as exc:
+    except ai_conversation_ownership.AiConversationOwnedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.code, "message": exc.message, "details": exc.details},

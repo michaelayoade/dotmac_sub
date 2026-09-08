@@ -3136,7 +3136,10 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_commands",
             module="app.services.team_inbox_commands",
-            owns=("operator conversation and collaboration commands",),
+            owns=(
+                "operator conversation and collaboration commands",
+                "queued AI outbound ownership revalidation and suppression",
+            ),
             depends_on=(
                 "auth.permission_gate",
                 "communications.nextcloud_talk_staff",
@@ -3147,6 +3150,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_status",
                 "communications.team_inbox_outbound_intents",
                 "communications.team_inbox_operator_state",
+                "communications.notification_service",
                 "ai.intake",
             ),
             contract=_team_inbox_contract(
@@ -3154,6 +3158,10 @@ DOMAIN = DomainSOT(
                 concerns=(
                     (
                         "operator conversation and collaboration commands",
+                        OwnerRole.APPLICATION_COORDINATOR,
+                    ),
+                    (
+                        "queued AI outbound ownership revalidation and suppression",
                         OwnerRole.APPLICATION_COORDINATOR,
                     ),
                 ),
@@ -3200,6 +3208,15 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_outbound_intents",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Stable queued or suppressed intent and message identifiers.",
+                    ),
+                    AuthorityInput(
+                        name="notification delivery state",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Locked queued, failed, or sending Notification state "
+                            "suppressed before provider contact when AI authority ended."
+                        ),
                     ),
                     AuthorityInput(
                         name="operator read state",

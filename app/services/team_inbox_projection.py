@@ -2227,6 +2227,8 @@ def _normalize_inbox_view(value: object) -> str | None:
 
 def _ownership_cohort_for_view(
     view: str | None,
+    *,
+    ai_handling: bool | None,
 ) -> ai_conversation_ownership.ConversationOwnershipCohort:
     if view == "ai_intake":
         return ai_conversation_ownership.ConversationOwnershipCohort.ai_intake
@@ -2234,6 +2236,10 @@ def _ownership_cohort_for_view(
         return ai_conversation_ownership.ConversationOwnershipCohort.queue
     if view == "history":
         return ai_conversation_ownership.ConversationOwnershipCohort.history
+    if ai_handling is True:
+        # Preserve old bookmarked/filter URLs while deriving membership from the
+        # authoritative active AI session instead of projected metadata.
+        return ai_conversation_ownership.ConversationOwnershipCohort.ai_intake
     return ai_conversation_ownership.ConversationOwnershipCohort.actionable
 
 
@@ -2351,7 +2357,10 @@ def get_queue_row_projection(
         unread_only=request.unread,
         reply_window_status=reply_window_status,
         ai_handling=request.ai_handling,
-        ownership_cohort=_ownership_cohort_for_view(view),
+        ownership_cohort=_ownership_cohort_for_view(
+            view,
+            ai_handling=request.ai_handling,
+        ),
         has_ticket=request.has_ticket,
         activity_from=request.activity_from,
         activity_to=request.activity_to,
@@ -2511,7 +2520,10 @@ def build_queue_projection(
             service_team_ids=team_id_scope,
             advanced_filters=advanced_filter_query,
             ai_handling=request.ai_handling,
-            ownership_cohort=_ownership_cohort_for_view(view),
+            ownership_cohort=_ownership_cohort_for_view(
+                view,
+                ai_handling=request.ai_handling,
+            ),
             has_ticket=request.has_ticket,
             activity_from=request.activity_from,
             activity_to=request.activity_to,
