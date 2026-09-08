@@ -66,6 +66,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "automation-center",
+        "Administration",
+        "Review the Automation Center",
+        "Administrators and automation operators",
+        "Review the governed module, rule, and execution surfaces for central automation.",
+        ("/admin/automation",),
+        "Confirm that your role has Automation Center access before opening the hub.",
+        "Review the module registry to see which modules and events are eligible for central automation.",
+        "Review central rules and recent execution evidence only when your role grants those additional permissions.",
+        "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
+        notes=(
+            "The initial hub is read-only and creates no rules or business side effects.",
+            "Custom fields and migration of existing rules are outside this delivery sequence.",
+        ),
+    ),
+    _guide(
         "find-customer",
         "Customers",
         "Find a customer",

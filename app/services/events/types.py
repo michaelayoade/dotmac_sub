@@ -23,6 +23,9 @@ class EventType(enum.Enum):
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
 
+    # Automation Center control-plane events
+    automation_rule_changed = "automation.rule_changed"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"
