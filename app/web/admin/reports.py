@@ -9,6 +9,7 @@ from io import StringIO
 from typing import Literal, TypedDict, cast
 from urllib.parse import quote, quote_plus, urlencode
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -355,7 +356,7 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
             {
                 "name": "NCC Complaints (Weekly)",
                 "url": "/admin/reports/ncc-complaints",
-                "description": "Complaint records, categories, SLA and the filing workbook",
+                "description": "Complaint records, categories, SLA and the filing CSV",
                 "permission": "reports:ncc:read",
             },
             {
@@ -2604,16 +2605,70 @@ def reports_ncc_subscribers_export(
 
 
 # ── NCC weekly Complaints return (①) ──────────────────────────────────────
+_NCC_REPORTING_TIMEZONE = "Africa/Lagos"
+
+
+def _completed_ncc_reporting_week(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    tzinfo = ZoneInfo(_NCC_REPORTING_TIMEZONE)
+    local_now = (now or datetime.now(UTC)).astimezone(tzinfo)
+    current_week_start = local_now.date() - timedelta(days=local_now.weekday())
+    reporting_start = current_week_start - timedelta(days=7)
+    reporting_end = current_week_start - timedelta(days=1)
+    return (
+        datetime.combine(reporting_start, time.min, tzinfo=tzinfo).astimezone(UTC),
+        datetime.combine(reporting_end, time.max, tzinfo=tzinfo).astimezone(UTC),
+    )
+
+
+def _ncc_window_form_dates(start: datetime, end: datetime) -> tuple[str, str]:
+    tzinfo = ZoneInfo(_NCC_REPORTING_TIMEZONE)
+    local_start = start.astimezone(tzinfo).date()
+    local_end = end.astimezone(tzinfo).date()
+    return local_start.isoformat(), local_end.isoformat()
+
+
+def _parse_ncc_date_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value).date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(
+        parsed_date,
+        time.min,
+        tzinfo=ZoneInfo(_NCC_REPORTING_TIMEZONE),
+    ).astimezone(UTC)
+
+
+def _parse_ncc_date_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value).date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(
+        parsed_date,
+        time.max,
+        tzinfo=ZoneInfo(_NCC_REPORTING_TIMEZONE),
+    ).astimezone(UTC)
+
+
 def _ncc_complaints_window(
     date_from: str | None, date_to: str | None
 ) -> tuple[datetime, datetime]:
     """Bound the complaints window.
 
-    Defaults to the trailing seven days, matching the weekly complaints report
-    cadence, anchored on ``created_at``.
+    Defaults to the completed Monday-Sunday NCC reporting week, anchored on
+    ``created_at``.
     """
-    end = _parse_date_end(date_to) or datetime.now(UTC)
-    start = _parse_date_start(date_from) or (end - timedelta(days=7))
+    if not date_from and not date_to:
+        return _completed_ncc_reporting_week()
+    end = _parse_ncc_date_end(date_to) or datetime.now(UTC)
+    start = _parse_ncc_date_start(date_from) or (end - timedelta(days=7))
     if end < start:
         start, end = end, start
     return start, end
@@ -2635,6 +2690,7 @@ def reports_ncc_complaints(
     from app.web.admin import get_current_user, get_sidebar_stats
 
     start, end = _ncc_complaints_window(date_from, date_to)
+    effective_date_from, effective_date_to = _ncc_window_form_dates(start, end)
     snapshot = ncc_complaints_service.query_report(
         db=db,
         query=ncc_complaints_service.NccComplaintsReportQuery(start=start, end=end),
@@ -2682,8 +2738,8 @@ def reports_ncc_complaints(
         "columns": report["columns"],
         "rows": rows,
         "not_filable": not_filable,
-        "date_from": date_from or "",
-        "date_to": date_to or "",
+        "date_from": date_from or effective_date_from,
+        "date_to": date_to or effective_date_to,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "weekly_configuration": weekly_configuration,
         "weekly_runs": weekly_runs,
@@ -2707,13 +2763,11 @@ def reports_ncc_complaints_export(
     start, end = _ncc_complaints_window(date_from, date_to)
     report = ncc_complaints_service.build_report(db, start=start, end=end)
     rows = ncc_workbook.template_export_rows(report["records"])
-    content = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
-    filename = ncc_workbook.export_filename(end)
+    content = ncc_workbook.build_csv(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
+    filename = ncc_workbook.export_filename_for_window(start=start, end=end)
     return Response(
         content,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        media_type=ncc_workbook.CSV_CONTENT_TYPE,
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 

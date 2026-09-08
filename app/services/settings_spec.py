@@ -5173,7 +5173,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Configured RADIUS sync jobs",
     ),
-    # Weekly NCC complaints workbook delivery — default OFF until an operator
+    # Weekly NCC complaints CSV delivery — default OFF until an operator
     # migrates and verifies the CRM recipient configuration. Tuesday is the
     # authoritative default; the owner evaluates local time and timezone.
     SettingSpec(

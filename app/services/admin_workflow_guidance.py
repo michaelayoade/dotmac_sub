@@ -375,6 +375,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "ncc-complaints-report",
+        "Reports",
+        "Export NCC complaints",
+        "Customer experience managers, compliance staff",
+        "Prepare the weekly NCC complaints CSV for Box submission.",
+        ("/admin/reports/ncc-complaints", "/admin/reports/ncc-weekly-runs"),
+        "Use the default completed Monday-Sunday reporting week unless NCC has explicitly named another date range.",
+        "Review Not yet filable before exporting; every row must be filing-ready before submission.",
+        "Download the CSV and confirm the filename follows the required week format, such as 36_2026_COMPLAINTS_DOTMAC.csv.",
+        "Upload exactly one CSV file to the provider folder in Box.",
+        notes=(
+            "Do not submit the validation workbook or any file with multiple sheets.",
+            "Scheduled NCC delivery preserves the same single CSV artifact for the completed reporting week.",
+        ),
+    ),
+    _guide(
         "support-csat-report",
         "Support",
         "Review support CSAT",
