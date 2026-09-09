@@ -554,21 +554,24 @@ def _source_reference_is_null(db: Session, row: FieldErpSyncEvent) -> bool | Non
 def delivered_unlinked_diagnostics(
     db: Session,
     *,
-    stale_after_hours: float = 24,
     limit_per_flow: int = 500,
 ) -> dict[str, dict[str, object]]:
-    """Per-flow count + max age of delivered outbox rows never linked to their source.
+    """Per-flow count + oldest age of delivered outbox rows never linked to their source.
 
     A row counts here when it is ``sent``/``accepted`` (delivered) AND its
     source entity's own ERP-reference field is still null — the exact
     condition ``unlinked_delivered_events`` selects for repair, surfaced here
     for observability instead of action.
 
-    ``stale_after_hours=24`` is ONE reasonable default applied uniformly
-    across every flow, not a tuned per-flow SLA. Purchase-order/invoice
-    write-backs affect accounts-payable and expense-claim write-backs are
-    payroll-adjacent; these plausibly warrant different thresholds. Confirm
-    or adjust per flow before wiring this into a paging alert.
+    INFORMATIONAL ONLY — not an alert or an SLA. This reports the raw count
+    and the age (in hours) of the oldest delivered-but-unlinked row for EVERY
+    flow, regardless of how old that row is. There is deliberately no
+    threshold, "stale"/"breach" boolean, or severity here: purchase-order and
+    purchase-invoice write-backs affect accounts-payable and expense-claim
+    write-backs are payroll-adjacent, so a shared numeric cutoff would be an
+    invented, unowned SLA. A human — or a later, separately reviewed change
+    that gives each flow its own explicitly owned threshold — decides what
+    age is concerning.
     """
     now = datetime.now(UTC)
     report: dict[str, dict[str, object]] = {}
@@ -582,11 +585,9 @@ def delivered_unlinked_diagnostics(
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=UTC)
             ages_hours.append((now - created_at).total_seconds() / 3600)
-        max_age = max(ages_hours) if ages_hours else 0.0
+        oldest_age = max(ages_hours) if ages_hours else 0.0
         report[flow.value] = {
             "count": len(ages_hours),
-            "max_age_hours": round(max_age, 2),
-            "stale_after_hours": stale_after_hours,
-            "stale": max_age >= stale_after_hours,
+            "oldest_age_hours": round(oldest_age, 2),
         }
     return report

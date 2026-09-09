@@ -38,7 +38,11 @@ import logging
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
+from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
+    FieldErpSyncFlow,
+    flow_owned_by_sub,
+)
 from app.models.field_material import FieldMaterialRequest, FieldMaterialRequestItem
 from app.services.dotmac_erp import outbox
 from app.services.dotmac_erp.client import DotMacERPClient
@@ -303,22 +307,38 @@ def _poll_unlinked_material_requests(
     *,
     client: DotMacERPClient | ErpCapabilityClient,
     limit: int,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, list[str]]:
     """Poll ``sent``/``accepted`` outbox rows whose request never got a reference.
 
     A ``sent`` row was never eligible for the reference-gated query below (it
     has no reference BY DEFINITION). An ``accepted`` row can also land here if
     the same-transaction write-back failed after delivery. Keyed on Sub's own
     request id — see ``client.get_material_request_status``'s docstring.
+
+    OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front, since
+    ownership is a per-flow switch, not per-row. A status poll is a real ERP
+    API call about a row that may belong to a flow ownership has since moved
+    back to CRM — skipped, not polled, when not owned. Skipped rows are
+    counted separately so the caller's own sweep numbers stay honest.
     """
     processed = 0
     updated = 0
+    skipped_not_owned = 0
     errors: list[str] = []
+    owned = flow_owned_by_sub(db, FieldErpSyncFlow.material_request)
     for row in outbox.unlinked_delivered_events(
         db, flow=FieldErpSyncFlow.material_request, limit=limit
     ):
         request = db.get(FieldMaterialRequest, row.entity_id)
         if request is None or request.support_reference:
+            continue
+        if not owned:
+            skipped_not_owned += 1
+            logger.info(
+                "material_sync: skipping unlinked status poll for %s — sub "
+                "does not own flow 'material_request' (sync_flow_ownership)",
+                row.id,
+            )
             continue
         processed += 1
         request_id = str(request.id)
@@ -337,7 +357,7 @@ def _poll_unlinked_material_requests(
         db.commit()
         if request.support_reference:
             updated += 1
-    return processed, updated, errors
+    return processed, updated, skipped_not_owned, errors
 
 
 def refresh_material_request_statuses(
@@ -390,12 +410,17 @@ def refresh_material_request_statuses(
 
     processed = 0
     updated = 0
+    skipped_not_owned = 0
     try:
-        unlinked_processed, unlinked_updated, unlinked_errors = (
-            _poll_unlinked_material_requests(db, client=owned_client, limit=limit)
-        )
+        (
+            unlinked_processed,
+            unlinked_updated,
+            unlinked_skipped_not_owned,
+            unlinked_errors,
+        ) = _poll_unlinked_material_requests(db, client=owned_client, limit=limit)
         processed += unlinked_processed
         updated += unlinked_updated
+        skipped_not_owned += unlinked_skipped_not_owned
         errors.extend(unlinked_errors)
 
         for request in pending:
@@ -421,6 +446,7 @@ def refresh_material_request_statuses(
 
     result["processed"] = processed
     result["updated"] = updated
+    result["skipped_not_owned"] = skipped_not_owned
     return result
 
 

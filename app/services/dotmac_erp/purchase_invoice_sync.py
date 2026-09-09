@@ -373,7 +373,18 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
        must not claim to have repaired something it did not.
     3. **A pending/rejected/dead outbox row exists** — left alone; normal
        delivery retry or dead-letter handling owns it, not this repair.
+
+    OWNERSHIP GUARD: this is a scheduled sweep left running across cutovers —
+    ``sync_flow_ownership`` can move a flow back to CRM after this repair was
+    first wired, and a stale schedule must not keep acting on a flow it no
+    longer owns. Checked ONCE per run (ownership is a per-flow switch, not
+    per-row), before either repair consequence below: re-applying a stored
+    response (a state mutation implying ERP involvement) and uploading an
+    attachment (a genuine ERP call). A row is skipped, not errored, when sub
+    does not currently own this flow, and counted under
+    ``skipped_not_owned`` so the sweep's own numbers stay honest.
     """
+    owned = flow_owned_by_sub(db, FieldErpSyncFlow.purchase_invoice)
     rows = (
         db.query(VendorPurchaseInvoice)
         .filter(VendorPurchaseInvoice.is_active.is_(True))
@@ -388,9 +399,18 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
     enqueued = 0
     attachments = 0
     unlinked = 0
+    skipped_not_owned = 0
     errors: list[str] = []
     for invoice in rows:
         processed += 1
+        if not owned:
+            skipped_not_owned += 1
+            logger.info(
+                "purchase_invoice_sync: skipping repair for invoice %s — sub "
+                "does not own flow 'purchase_invoice' (sync_flow_ownership)",
+                invoice.id,
+            )
+            continue
         try:
             if not invoice.payables_document_reference:
                 existing_event = (
@@ -426,6 +446,7 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
         "enqueued": enqueued,
         "attachments": attachments,
         "unlinked": unlinked,
+        "skipped_not_owned": skipped_not_owned,
         "errors": errors,
     }
 
@@ -459,7 +480,7 @@ def _poll_unlinked_purchase_invoices(
     *,
     client: _PurchaseInvoiceStatusClient,
     limit: int,
-) -> tuple[int, list[str]]:
+) -> tuple[int, int, list[str]]:
     """Poll ``sent``/``accepted`` outbox rows whose invoice never got a reference.
 
     Distinct from the strict, already-linked payment-observation loop below:
@@ -470,14 +491,30 @@ def _poll_unlinked_purchase_invoices(
     same-transaction write-back never landed (see ``outbox
     .unlinked_delivered_events``). Keyed by Sub's own invoice id, never the
     ERP id — see ``client.get_purchase_invoice_status``'s docstring.
+
+    OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front. A status
+    poll is a real ERP API call about a row that may belong to a flow
+    ownership has since moved back to CRM — never made when not owned. Rows
+    skipped this way are counted separately so the caller's own numbers stay
+    honest about how much was actually polled.
     """
     processed = 0
+    skipped_not_owned = 0
     errors: list[str] = []
+    owned = flow_owned_by_sub(db, FieldErpSyncFlow.purchase_invoice)
     for row in outbox.unlinked_delivered_events(
         db, flow=FieldErpSyncFlow.purchase_invoice, limit=limit
     ):
         invoice = db.get(VendorPurchaseInvoice, row.entity_id)
         if invoice is None or invoice.payables_document_reference:
+            continue
+        if not owned:
+            skipped_not_owned += 1
+            logger.info(
+                "purchase_invoice_sync: skipping unlinked status poll for %s — "
+                "sub does not own flow 'purchase_invoice' (sync_flow_ownership)",
+                row.id,
+            )
             continue
         processed += 1
         try:
@@ -496,7 +533,7 @@ def _poll_unlinked_purchase_invoices(
             continue
         outbox.record_polled_outcome(db, row, response)
         db.commit()
-    return processed, errors
+    return processed, skipped_not_owned, errors
 
 
 def refresh_purchase_invoice_statuses(
@@ -550,11 +587,12 @@ def refresh_purchase_invoice_statuses(
         .all()
     )
 
-    unlinked_processed, unlinked_errors = _poll_unlinked_purchase_invoices(
-        db, client=owned_client, limit=limit
+    unlinked_processed, unlinked_skipped_not_owned, unlinked_errors = (
+        _poll_unlinked_purchase_invoices(db, client=owned_client, limit=limit)
     )
     errors: list[str] = list(unlinked_errors)
     processed = unlinked_processed
+    skipped_not_owned = unlinked_skipped_not_owned
     observed = 0
     changed = 0
 
@@ -565,6 +603,7 @@ def refresh_purchase_invoice_statuses(
             "processed": processed,
             "observed": observed,
             "changed": changed,
+            "skipped_not_owned": skipped_not_owned,
             "errors": errors,
         }
 
@@ -673,6 +712,7 @@ def refresh_purchase_invoice_statuses(
         "processed": processed,
         "observed": observed,
         "changed": changed,
+        "skipped_not_owned": skipped_not_owned,
         "errors": errors,
     }
 
