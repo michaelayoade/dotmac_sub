@@ -259,7 +259,7 @@ def vendor_login_page(
     auth = validate_session_token(request, db)
     if auth:
         try:
-            vendor_context(db, auth)
+            vendor_context(db, dict(auth))
         except Exception as exc:
             if _auth_failure(exc).status_code != 403:
                 raise

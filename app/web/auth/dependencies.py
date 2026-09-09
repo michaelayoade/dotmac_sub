@@ -217,8 +217,8 @@ def require_web_auth(
 
 
 def require_admin_web_auth(
+    request: Request,
     auth: WebAuthInfo = Depends(require_web_auth),
-    request: Request | None = None,
     db: Session = Depends(_get_db),
 ) -> WebAuthInfo:
     """Require an authenticated *staff* principal for admin web routes.
@@ -238,15 +238,14 @@ def require_admin_web_auth(
         )
     from app.services import erp_staff_access
 
-    restriction = (
-        erp_staff_access.staff_write_restricted(db, auth, method=request.method)
-        if request is not None
-        else None
+    auth_values: dict[str, object] = dict(auth)
+    restriction = erp_staff_access.staff_write_restricted(
+        db, auth_values, method=request.method
     )
-    if restriction is not None and request is not None:
+    if restriction is not None:
         erp_staff_access.record_denied_write(
             db,
-            auth=auth,
+            auth=auth_values,
             restriction=restriction,
             request_id=str(request.headers.get("x-request-id") or "") or None,
             permission_key="admin:web",

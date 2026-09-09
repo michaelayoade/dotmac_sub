@@ -8,6 +8,7 @@ provider-neutral attendance contract into JSON for the native client.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -23,6 +24,7 @@ from app.services.audit_adapter import record_audit_event
 from app.services.rate_limiter_adapter import allow_operation
 from app.services.workforce_attendance import (
     AttendanceAction,
+    AttendancePunchResolution,
     AttendanceView,
     BrowserLocation,
     WorkforceAttendanceError,
@@ -58,8 +60,18 @@ def _request_id(request: Request, fallback: str) -> str:
     return str(getattr(request.state, "request_id", fallback))[:160]
 
 
+def _resolution_value(
+    resolution: AttendancePunchResolution,
+) -> Literal["direct", "reconciled"]:
+    if resolution is AttendancePunchResolution.DIRECT:
+        return "direct"
+    return "reconciled"
+
+
 def _response(
-    view: AttendanceView, *, resolution: str | None = None
+    view: AttendanceView,
+    *,
+    resolution: AttendancePunchResolution | None = None,
 ) -> FieldAttendanceRead:
     return FieldAttendanceRead(
         state=view.state.value,
@@ -71,7 +83,7 @@ def _response(
         status=view.status,
         allowed_actions=tuple(action.value for action in view.allowed_actions),
         reason=view.reason,
-        resolution=resolution,
+        resolution=_resolution_value(resolution) if resolution is not None else None,
     )
 
 
@@ -202,7 +214,7 @@ def _punch(
     )
     return _response(
         outcome.attendance,
-        resolution=outcome.resolution.value,
+        resolution=outcome.resolution,
     )
 
 
