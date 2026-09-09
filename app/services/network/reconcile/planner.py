@@ -832,7 +832,12 @@ def _plan_service_ports(
         indexed_observed_count += 1
         if idx == desired.mgmt_service_port_index:
             if desired.mgmt_vlan is not None and _service_port_matches(
-                sp, index=idx, vlan=desired.mgmt_vlan, gem_index=2, ont_id=ont_id, fsp=fsp
+                sp,
+                index=idx,
+                vlan=desired.mgmt_vlan,
+                gem_index=2,
+                ont_id=ont_id,
+                fsp=fsp,
             ):
                 continue
             mismatched_at_index["mgmt"] = sp
@@ -949,9 +954,7 @@ def _plan_service_ports(
     # create action; the both-slots-unallocated case already returned above,
     # and the per-slot case leaves ``slot_index_unallocated`` set so the
     # caller still learns nothing was recreated for the withheld slot.
-    observed_indices = {
-        _sp_int(sp, "index") for sp in observed.olt.olt_service_ports
-    }
+    observed_indices = {_sp_int(sp, "index") for sp in observed.olt.olt_service_ports}
     observed_indices.discard(None)
     if (
         desired.mgmt_service_port_index is not None

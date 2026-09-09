@@ -1284,9 +1284,7 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
                 },
             ),
         )
-        return ReadResult(
-            status="present", observed=observed, error=None
-        )
+        return ReadResult(status="present", observed=observed, error=None)
 
     monkeypatch.setattr(
         "app.services.network.reconcile.core.read_olt_state", _drifty_olt_read

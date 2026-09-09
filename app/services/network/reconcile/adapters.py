@@ -803,9 +803,7 @@ def upsert_ont_observation(
     return row
 
 
-def _apply_acs_observed_fields(
-    row: OntObservation, acs: AcsObservedFields
-) -> None:
+def _apply_acs_observed_fields(row: OntObservation, acs: AcsObservedFields) -> None:
     """Copy every ``acs_observed_*`` column. Split out of ``upsert_ont_observation``
     so that function's OLT/ACS branches read at a glance."""
     row.acs_last_inform_at = acs.acs_last_inform_at

@@ -184,18 +184,24 @@ def test_serial_found_on_a_different_port_is_not_an_observation(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
-        lambda olt, fsp, ont_id: calls.append(("status", fsp, ont_id)) or (
-            False,
-            "should not be called",
-            None,
+        lambda olt, fsp, ont_id: (
+            calls.append(("status", fsp, ont_id))
+            or (
+                False,
+                "should not be called",
+                None,
+            )
         ),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
-        lambda olt, fsp, ont_id: calls.append(("detail", fsp, ont_id)) or (
-            False,
-            "should not be called",
-            None,
+        lambda olt, fsp, ont_id: (
+            calls.append(("detail", fsp, ont_id))
+            or (
+                False,
+                "should not be called",
+                None,
+            )
         ),
     )
     # Desired target is fsp=0/1/3, olt_ont_id=11; registration found at a
