@@ -243,6 +243,68 @@ def test_configuration_admission_commits_intent_operation_and_dispatch_atomicall
     assert head.phase is OntServiceConfigurationPhase.queued
 
 
+def test_configuration_admission_does_not_gate_on_subscription_status(
+    db_session,
+    monkeypatch,
+    olt_device,
+    subscription,
+    subscriber,
+):
+    """Staff-initiated config is desired-state staging, not service delivery.
+
+    A suspended (or otherwise non-active) subscription must not block the
+    operator Configure path — delivery authorization is a separate concern
+    owned by radius_access_state.py / ppp_delivery_authorization.py.
+    """
+    ont_id, assignment_id = _admission_scope(
+        db_session,
+        monkeypatch,
+        olt_device=olt_device,
+        subscription=subscription,
+        subscriber=subscriber,
+    )
+    subscription.status = SubscriptionStatus.suspended
+    db_session.commit()
+    command = _configure_command(ont_id, idempotency_key="suspended-admission")
+
+    outcome = configure_ont_service(db_session, command)
+
+    head = db_session.get(OntServiceConfigurationHead, outcome.configuration_head_id)
+    operation = db_session.get(NetworkOperation, outcome.operation_id)
+
+    assert head is not None and head.assignment_id == assignment_id
+    assert operation is not None
+    assert head.phase is OntServiceConfigurationPhase.queued
+
+
+def test_configuration_admission_rejects_unresolvable_subscription(
+    db_session,
+    monkeypatch,
+    olt_device,
+    subscription,
+    subscriber,
+):
+    """A dangling/unresolvable subscription reference is a distinct failure
+    from an inactive-but-resolvable one, and keeps its own error code."""
+    ont_id, _assignment_id = _admission_scope(
+        db_session,
+        monkeypatch,
+        olt_device=olt_device,
+        subscription=subscription,
+        subscriber=subscriber,
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_service_configuration.assignment_subscription_snapshot",
+        lambda *_args, **_kwargs: None,
+    )
+    command = _configure_command(ont_id, idempotency_key="unresolvable-subscription")
+
+    with pytest.raises(DomainError) as excinfo:
+        configure_ont_service(db_session, command)
+
+    assert excinfo.value.code.endswith("subscription_missing")
+
+
 def test_customer_wifi_admission_saves_secret_and_queues_without_device_io(
     db_session,
     monkeypatch,

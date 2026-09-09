@@ -672,10 +672,18 @@ def _load_admission_scope(
     subscription = assignment_subscription_snapshot(
         db, assignment.subscription_id, for_update=True
     )
-    if subscription is None or subscription.status != "active":
+    if subscription is None:
         raise _error(
-            "subscription_not_active", "The assigned subscription is not active."
+            "subscription_missing",
+            "The assigned subscription record could not be resolved.",
         )
+    # Staff-initiated configuration is desired-state staging, not service
+    # delivery: it deliberately does not gate on subscription lifecycle
+    # status (active/suspended/blocked/...). Delivery authorization is a
+    # separate concern owned by radius_access_state.py (PPPoE RADIUS
+    # access) and ppp_delivery_authorization.py (PPP delivery
+    # authorization) — those refuse actual service delivery for a
+    # non-serviceable subscription independently of this admission check.
     if subscription.subscriber_id != assignment.subscriber_id:
         raise _error(
             "assignment_identity_conflict",
