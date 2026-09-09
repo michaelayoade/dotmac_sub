@@ -644,3 +644,25 @@ implementation.
 - Responsive behavior: line items are stacked cards at every width, controls
   retain labels and text errors, totals name their currency, and add/remove and
   submit actions remain accessible without relying on colour.
+
+## Field Work-Order Note Contract
+
+- Audience and task: an assigned technician records an internal staff note or
+  an external customer-history note and follows that exact note through mobile
+  delivery.
+- Authority: `operations.field_notes` owns note creation, assignment checks,
+  attachment links, retry identity, and the committed output.
+  `operations.work_orders` owns work-order and assignment facts. The mobile
+  outbox is a durable delivery projection only.
+- Mutation: the app creates one stable `client_ref` before enqueue and reuses it
+  for every retry. Identical retries return the original note; reuse with
+  changed content fails closed.
+- States: **Note saved** means the API accepted the note. **Queued for sync**
+  means the durable local request is pending. **Sync failed** means a permanent
+  rejection or exhausted retry is retained for review. These states are never
+  collapsed into a generic success message.
+- Refresh behavior: server notes and non-sent local note requests merge by
+  `client_ref`; refreshing or reopening a job cannot silently remove queued or
+  failed evidence.
+- Responsive behavior: visibility and delivery labels accompany the note text,
+  do not rely on colour alone, and remain readable on the mobile first viewport.
