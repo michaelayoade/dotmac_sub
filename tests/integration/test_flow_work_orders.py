@@ -160,20 +160,22 @@ def test_work_order_lifecycle_native(db_session):
     assert worklog.work_order_mirror_id == row.id
 
     note_request_id = uuid4()
+    requester_system_user_id = user.id
+    work_order_public_id = row.public_id
     db_session_adapter.release_read_transaction(db_session)
     create_field_work_order_note(
         db_session,
         CreateFieldWorkOrderNote(
             context=CommandContext.system(
-                actor=f"user:{user.id}",
+                actor=f"user:{requester_system_user_id}",
                 scope="field:work_order_notes:write",
                 reason="integration_field_note_creation",
                 command_id=note_request_id,
                 correlation_id=note_request_id,
                 idempotency_key=str(note_request_id),
             ),
-            requester_system_user_id=user.id,
-            work_order_public_id=row.public_id,
+            requester_system_user_id=requester_system_user_id,
+            work_order_public_id=work_order_public_id,
             request_id=note_request_id,
             body="Splice completed at FDH.",
             is_internal=True,

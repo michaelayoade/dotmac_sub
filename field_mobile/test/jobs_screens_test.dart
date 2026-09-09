@@ -598,7 +598,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Stored note returned as text'), findsOneWidget);
-    expect(find.textContaining('Adaeze Okafor'), findsOneWidget);
+    expect(
+      find.text('Adaeze Okafor · 1970-01-01T00:00:00.000Z'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('job detail keeps queued note state visible', (tester) async {
