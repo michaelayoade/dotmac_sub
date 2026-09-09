@@ -709,6 +709,7 @@ SERVICES: tuple[SOTService, ...] = (
             "field expense request submission",
             "expense receipt staging for submitted claims",
             "field expense approval and ERP delivery staging",
+            "field expense payment initiation and ERP delivery staging",
             "field expense vendor picker",
             "requester-owned field expense history",
             "field expense requester-identity repair",
@@ -725,9 +726,10 @@ SERVICES: tuple[SOTService, ...] = (
             "supplies exact RBAC-authorized work-order evidence and derives the actor "
             "from the authenticated session. Every submission requires current "
             "technician-assignment evidence. Receipt metadata is staged flush-only "
-            "inside the same command. A separate typed manager approval owns the "
-            "local financial decision and stages the idempotent ERP delivery intent; "
-            "submission never sends an unapproved expense. The client reference and "
+            "inside the same command. Submission stages ERP claim visibility; typed "
+            "manager approval and rejection commands stage ordered ERP decisions. A "
+            "separately authorized payment command stages reimbursement initiation, "
+            "while ERP remains the payment and settlement authority. The client reference and "
             "normalized fingerprint make retries safe. The vendor picker remains "
             "read-only and projects active vendor labels for expense entry."
         ),
@@ -759,6 +761,15 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical submitted expense request",
+                        "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense payment initiation and ERP delivery staging",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical approved expense request",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -835,6 +846,15 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="canonical approved expense request",
+                    owner="operations.expense_requests",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Locked active FieldExpenseRequest with manager approval "
+                        "evidence and no active or unresolved payment command"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical field expense request state",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -866,31 +886,33 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Create, submit, optional receipt metadata, and work-order activity "
-                    "marking complete in one owner transaction without ERP delivery. "
-                    "Receipt storage is a flush-only participant. Manager approval "
-                    "locks the request and, after cutover, stages its ERP outbox intent "
-                    "in the same owner transaction. The vendor picker performs a "
+                    "marking and submitted ERP outbox staging complete in one owner "
+                    "transaction. Receipt storage is a flush-only participant. Manager "
+                    "approval, rejection, and payment initiation each lock the request "
+                    "and stage an ordered ERP intent in the same owner transaction. "
+                    "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
                     "side-effect free; revision 584 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
-                    "Submission locks the scoped active work order; approval locks "
-                    "the active expense request before its status transition."
+                    "Submission locks the scoped active work order; approval, "
+                    "rejection, and payment initiation lock the active expense "
+                    "request before their transitions."
                 ),
                 idempotency=(
                     "A unique client reference replays only when the normalized "
                     "submission fingerprint is identical. An already-approved "
                     "request returns its current delivery outcome; the first "
-                    "transition records its command id, and "
-                    "exp-{request_id}-submit-v1 remains the stable compatibility "
-                    "delivery key."
+                    "transition records its command id. Submit and manager decisions "
+                    "have stable per-request delivery keys; each payment command id "
+                    "has one stable key and one ERP payment intent."
                 ),
                 retries=(
                     "Identical submission retries return the committed request. "
-                    "A staging failure rolls back approval for safe command retry; "
-                    "after staging, ERP transport retries from the durable outbox "
-                    "without reversing the local approval."
+                    "A staging failure rolls back the manager action for safe command "
+                    "retry. Ordered ERP transport retries from the durable outbox; an "
+                    "indeterminate provider outcome blocks another payment command."
                 ),
             ),
             errors=ErrorContract(
@@ -901,6 +923,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.erp_staging_failed",
                     "operations.expense_requests.incomplete_approval",
                     "operations.expense_requests.invalid_transition",
+                    "operations.expense_requests.manager_email_required",
+                    "operations.expense_requests.payment_already_active",
                     "operations.expense_requests.requester_not_found",
                     "operations.expense_requests.request_not_found",
                     "operations.expense_requests.work_order_not_found",
@@ -939,6 +963,31 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             projections=(
                 ProjectionContract(
+                    name="field expense ERP payment projection",
+                    input_names=(
+                        "canonical approved expense request",
+                        "expense ERP delivery cutover control",
+                    ),
+                    writer="operations.expense_requests",
+                    freshness=(
+                        "Updated after each accepted payment command response and by "
+                        "scheduled ERP claim-status reconciliation."
+                    ),
+                    stale_behavior=(
+                        "The last observed payment status remains visible with its "
+                        "timestamp; unknown outcomes remain blocking, never failed."
+                    ),
+                    drift_signal=(
+                        "ERP reports a payment intent or paid claim state that differs "
+                        "from the request's erp_payment metadata projection."
+                    ),
+                    rebuild_operation=(
+                        "Poll the ERP expense-claim status endpoint by the stable Sub "
+                        "request id and reapply the typed claim/payment response."
+                    ),
+                    repair_owner="operations.expense_requests",
+                ),
+                ProjectionContract(
                     name="field expense requester identity bridge",
                     input_names=(
                         "canonical field expense request state",
@@ -974,9 +1023,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "conflict, requester-history, and exact identity-repair tests pass."
                 ),
                 cutover_gate=(
-                    "Mobile clients use the typed approval endpoint, ERP delivery "
+                    "Mobile clients use the typed submit, decision, and payment "
+                    "endpoints, ERP delivery "
                     "capabilities are enabled, and expense_claim ownership moves to "
-                    "Sub before approving a new production expense. Historical test "
+                    "Sub before submitting a new production expense. Historical test "
                     "expenses are not backfilled into ERP delivery; exact requester-"
                     "identity repair remains a separate local migration."
                 ),

@@ -18,8 +18,9 @@ Three responsibilities live here:
 * **reconcile** — ``refresh_expense_claim_statuses`` polls ERP for in-flight
   claims and refreshes the mirror fields (ports CRM's status-poll refresh).
 
-INERT UNTIL CUTOVER: nothing here sends. Manager approval stages a durable event
-only when ``sync_flow_ownership.expense_claim`` belongs to Sub (seeded ``crm``).
+INERT UNTIL CUTOVER: nothing here sends. Submission and later manager actions
+stage durable events only when ``sync_flow_ownership.expense_claim`` belongs to
+Sub (seeded ``crm``).
 The worker resolves the ERP capability when it delivers that event. Ownership
 must move to Sub at cutover before a single claim reaches ERP.
 """
@@ -27,7 +28,10 @@ must move to Sub at cutover before a single claim reaches ERP.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+from uuid import UUID
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -45,7 +49,24 @@ logger = logging.getLogger(__name__)
 ENTITY_TYPE = "field_expense_request"
 PROVIDER = "dotmac_erp"
 
-# The sub-side statuses a claim can still change while ERP owns approval/payment;
+
+class ExpenseErpAction(StrEnum):
+    SUBMIT = "submit"
+    APPROVE = "approve"
+    REJECT = "reject"
+    INITIATE_PAYMENT = "initiate_payment"
+
+
+@dataclass(frozen=True, slots=True)
+class ExpensePaymentProjection:
+    status: str | None
+    intent_id: str | None
+    command_id: str | None
+    error: str | None
+    updated_at: str | None
+
+
+# The sub-side statuses a claim can still change while ERP owns settlement;
 # only these get polled for a status refresh.
 _IN_FLIGHT_STATUSES = ("submitted", "approved")
 
@@ -74,6 +95,18 @@ def expense_claim_idempotency_key(request: FieldExpenseRequest) -> str:
     outbox row instead of creating a second ERP claim.
     """
     return f"exp-{request.id}-submit-v1"
+
+
+def expense_decision_idempotency_key(
+    request: FieldExpenseRequest, action: ExpenseErpAction
+) -> str:
+    return f"exp-{request.id}-{action.value}-v1"
+
+
+def expense_payment_idempotency_key(
+    request: FieldExpenseRequest, command_id: UUID
+) -> str:
+    return f"exp-{request.id}-pay-{command_id}-v1"
 
 
 def _requester_email(request: FieldExpenseRequest) -> str | None:
@@ -120,6 +153,7 @@ def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
     reference_number = request.crm_expense_request_id or None
 
     return {
+        "_expense_action": ExpenseErpAction.SUBMIT.value,
         "source_claim_id": str(request.id),
         "purpose": request.purpose,
         "claim_date": claim_date,
@@ -136,11 +170,11 @@ def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
 def expense_claim_eligibility_error(request: FieldExpenseRequest) -> str | None:
     """Return a reason string if the request is NOT eligible for ERP sync, else None.
 
-    Only locally approved expenses may cross the ERP delivery boundary. A claim
+    Submitted expenses cross the ERP boundary before manager approval. A claim
     must also have at least one line and a requester email so ERP can match the
     employee.
     """
-    if request.status != "approved":
+    if request.status not in {"submitted", "approved", "rejected", "paid"}:
         return (
             f"Expense request {request.id} is in {request.status} status and "
             "cannot be synced"
@@ -153,14 +187,14 @@ def expense_claim_eligibility_error(request: FieldExpenseRequest) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Enqueue (manager-approval release point)
+# Enqueue (submission release point plus ordered manager actions)
 # ---------------------------------------------------------------------------
 
 
 def enqueue_expense_claim(
     db: Session, request: FieldExpenseRequest, *, isolate: bool = True
 ) -> FieldErpSyncEvent | None:
-    """Enqueue the expense-claim outbox intent for an approved request.
+    """Enqueue the expense-claim creation intent for a submitted request.
 
     Validates eligibility, builds the payload + stable key, and calls
     ``outbox.enqueue`` (idempotent on the key). Returns the outbox row, or ``None``
@@ -181,6 +215,71 @@ def enqueue_expense_claim(
         entity_type=ENTITY_TYPE,
         entity_id=request.id,
         idempotency_key=expense_claim_idempotency_key(request),
+        payload=payload,
+        isolate=isolate,
+    )
+
+
+def enqueue_expense_decision(
+    db: Session,
+    request: FieldExpenseRequest,
+    *,
+    action: ExpenseErpAction,
+    decision_id: UUID,
+    decided_by_email: str,
+    decided_at: datetime,
+    reason: str | None = None,
+    notes: str | None = None,
+    isolate: bool = False,
+) -> FieldErpSyncEvent:
+    if action not in {ExpenseErpAction.APPROVE, ExpenseErpAction.REJECT}:
+        raise ValueError(f"Unsupported expense decision action: {action}")
+    payload: dict[str, object] = {
+        "_expense_action": action.value,
+        "_depends_on_idempotency_key": expense_claim_idempotency_key(request),
+        "decision_id": str(decision_id),
+        "decided_by_email": decided_by_email,
+        "decided_at": decided_at.isoformat(),
+    }
+    if notes:
+        payload["notes"] = notes
+    if action is ExpenseErpAction.REJECT:
+        payload["reason"] = reason or "Rejected in Field"
+    return outbox.enqueue(
+        db,
+        flow=FieldErpSyncFlow.expense_claim,
+        entity_type="field_expense_decision",
+        entity_id=request.id,
+        idempotency_key=expense_decision_idempotency_key(request, action),
+        payload=payload,
+        isolate=isolate,
+    )
+
+
+def enqueue_expense_payment(
+    db: Session,
+    request: FieldExpenseRequest,
+    *,
+    command_id: UUID,
+    initiated_by_email: str,
+    initiated_at: datetime,
+    isolate: bool = False,
+) -> FieldErpSyncEvent:
+    payload: dict[str, object] = {
+        "_expense_action": ExpenseErpAction.INITIATE_PAYMENT.value,
+        "_depends_on_idempotency_key": expense_decision_idempotency_key(
+            request, ExpenseErpAction.APPROVE
+        ),
+        "command_id": str(command_id),
+        "initiated_by_email": initiated_by_email,
+        "initiated_at": initiated_at.isoformat(),
+    }
+    return outbox.enqueue(
+        db,
+        flow=FieldErpSyncFlow.expense_claim,
+        entity_type="field_expense_payment",
+        entity_id=request.id,
+        idempotency_key=expense_payment_idempotency_key(request, command_id),
         payload=payload,
         isolate=isolate,
     )
@@ -236,6 +335,7 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
         request.expense_claim_reference = str(erp_id)[:120]
     if claim_number:
         request.expense_claim_number = str(claim_number)[:60]
+    _apply_payment_projection(request, response)
     if not claim_status:
         return
 
@@ -257,6 +357,51 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
     elif mapped == "paid" and request.status == "approved":
         request.paid_at = request.paid_at or now
         request.status = mapped
+
+
+def _apply_payment_projection(
+    request: FieldExpenseRequest, response: dict[str, object]
+) -> None:
+    raw_status = response.get("payment_status")
+    raw_intent_id = response.get("payment_intent_id")
+    if not raw_status and not raw_intent_id:
+        return
+    metadata = dict(request.metadata_ or {})
+    current = dict(metadata.get("erp_payment") or {})
+    if raw_status:
+        current["status"] = str(raw_status).strip().lower()[:40]
+    if raw_intent_id:
+        current["intent_id"] = str(raw_intent_id)[:120]
+    current["updated_at"] = datetime.now(UTC).isoformat()
+    current.pop("error", None)
+    metadata["erp_payment"] = current
+    request.metadata_ = metadata
+
+
+def mark_payment_queued(
+    request: FieldExpenseRequest, *, command_id: UUID, event_id: UUID
+) -> None:
+    metadata = dict(request.metadata_ or {})
+    metadata["erp_payment"] = {
+        "status": "queued",
+        "command_id": str(command_id),
+        "event_id": str(event_id),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    request.metadata_ = metadata
+
+
+def expense_payment_projection(
+    request: FieldExpenseRequest,
+) -> ExpensePaymentProjection:
+    raw = dict((request.metadata_ or {}).get("erp_payment") or {})
+    return ExpensePaymentProjection(
+        status=str(raw["status"]) if raw.get("status") else None,
+        intent_id=str(raw["intent_id"]) if raw.get("intent_id") else None,
+        command_id=str(raw["command_id"]) if raw.get("command_id") else None,
+        error=str(raw["error"]) if raw.get("error") else None,
+        updated_at=str(raw["updated_at"]) if raw.get("updated_at") else None,
+    )
 
 
 def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:

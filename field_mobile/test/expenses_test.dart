@@ -375,6 +375,9 @@ void main() {
       'erp_claim_status': 'rejected',
       'erp_sync_status': 'failed',
       'erp_sync_error': 'timeout',
+      'payment_status': 'processing',
+      'payment_intent_id': 'payment-12',
+      'payment_error': 'Awaiting provider confirmation',
       'submitted_at': '2026-07-01T08:00:00Z',
       'rejected_at': '2026-07-02T09:00:00Z',
       'items': [
@@ -397,6 +400,9 @@ void main() {
     expect(request.rejectionReason, 'Missing receipt');
     expect(request.erpClaimNumber, 'EC-12');
     expect(request.erpSyncStatus, 'failed');
+    expect(request.paymentStatus, 'processing');
+    expect(request.paymentIntentId, 'payment-12');
+    expect(request.paymentError, 'Awaiting provider confirmation');
     expect(request.items, hasLength(1));
     expect(request.items.single.amount, 80.0);
     expect(request.items.single.vendorName, 'City Cabs');

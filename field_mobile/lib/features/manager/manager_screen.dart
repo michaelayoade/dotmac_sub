@@ -523,7 +523,13 @@ class _ManagerExpenseReviewScreenState
     ) {
       final items = next.valueOrNull;
       if (items == null || !mounted) return;
-      setState(() => _lastLoadedExpenses = items);
+      setState(() {
+        _lastLoadedExpenses = items;
+        _resolvedExpenseIds.removeWhere(
+          (id) =>
+              items.any((item) => item.id == id && item.status != 'submitted'),
+        );
+      });
     });
   }
 
@@ -545,9 +551,11 @@ class _ManagerExpenseReviewScreenState
     final visibleItems = latestItems
         ?.where((item) => !_resolvedExpenseIds.contains(item.id))
         .toList();
+    final canPayExpenses =
+        ref.watch(managerProfileProvider).valueOrNull?.canPayExpenses == true;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Approvals')),
+      appBar: AppBar(title: const Text('Expenses')),
       body: RefreshIndicator(
         onRefresh: () async => ref.invalidate(managerExpensesProvider),
         child: switch (visibleItems) {
@@ -561,24 +569,62 @@ class _ManagerExpenseReviewScreenState
                 ),
                 const SizedBox(height: 12),
               ],
-              Text(
-                'Pending expenses',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 8),
               if (items.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 48),
-                  child: Center(child: Text('No expense approvals pending')),
+                  child: Center(child: Text('No team expenses')),
                 )
-              else
-                for (final request in items)
+              else ...[
+                _ExpenseSectionTitle(
+                  title: 'Pending approval',
+                  count: items
+                      .where((item) => item.status == 'submitted')
+                      .length,
+                ),
+                for (final request in items.where(
+                  (item) => item.status == 'submitted',
+                ))
                   _ExpenseApprovalCard(
                     request: request,
+                    canPay: canPayExpenses,
                     onResolved: _markResolved,
                   ),
+                const SizedBox(height: 12),
+                _ExpenseSectionTitle(
+                  title: 'Approved for payment',
+                  count: items
+                      .where((item) => item.status == 'approved')
+                      .length,
+                ),
+                for (final request in items.where(
+                  (item) => item.status == 'approved',
+                ))
+                  _ExpenseApprovalCard(
+                    request: request,
+                    canPay: canPayExpenses,
+                    onResolved: _markResolved,
+                  ),
+                const SizedBox(height: 12),
+                _ExpenseSectionTitle(
+                  title: 'History',
+                  count: items
+                      .where(
+                        (item) =>
+                            item.status != 'submitted' &&
+                            item.status != 'approved',
+                      )
+                      .length,
+                ),
+                for (final request in items.where(
+                  (item) =>
+                      item.status != 'submitted' && item.status != 'approved',
+                ))
+                  _ExpenseApprovalCard(
+                    request: request,
+                    canPay: canPayExpenses,
+                    onResolved: _markResolved,
+                  ),
+              ],
             ],
           ),
           null when expenses.isLoading => const Center(
@@ -1285,9 +1331,14 @@ class _DispatchJobCard extends ConsumerWidget {
 }
 
 class _ExpenseApprovalCard extends ConsumerStatefulWidget {
-  const _ExpenseApprovalCard({required this.request, required this.onResolved});
+  const _ExpenseApprovalCard({
+    required this.request,
+    required this.canPay,
+    required this.onResolved,
+  });
 
   final ExpenseRequest request;
+  final bool canPay;
   final ValueChanged<String> onResolved;
 
   @override
@@ -1322,6 +1373,39 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
     }, failureMessage: 'Could not reject expense');
   }
 
+  Future<void> _pay() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pay expense?'),
+        content: Text(
+          'This will initiate a bank transfer of '
+          '${_money(widget.request.currency, widget.request.totalAmount)} '
+          'through ERP and Paystack.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Pay expense'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _run(() async {
+      final result = await ref
+          .read(managerRepositoryProvider)
+          .payExpense(widget.request.id);
+      return result.paymentStatus == 'queued'
+          ? 'Payment queued securely in ERP'
+          : 'Payment status: ${result.paymentStatus}';
+    }, failureMessage: 'Could not initiate payment. No retry was assumed.');
+  }
+
   Future<void> _run(
     Future<String> Function() action, {
     required String failureMessage,
@@ -1353,6 +1437,12 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
   @override
   Widget build(BuildContext context) {
     final request = widget.request;
+    final paymentActive = const {
+      'queued',
+      'pending',
+      'processing',
+      'indeterminate',
+    }.contains(request.paymentStatus);
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -1392,30 +1482,76 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _busy ? null : _reject,
-                    icon: const Icon(Icons.close),
-                    label: const Text('Reject'),
-                  ),
+            if (request.paymentStatus != null) ...[
+              Text(
+                'Payment: ${request.paymentStatus!.replaceAll('_', ' ')}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (request.paymentError != null)
+                Text(
+                  request.paymentError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _busy ? null : _approve,
-                    icon: const Icon(Icons.check),
-                    label: const Text('Approve'),
+              const SizedBox(height: 10),
+            ],
+            if (request.status == 'submitted')
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _busy ? null : _reject,
+                      icon: const Icon(Icons.close),
+                      label: const Text('Reject'),
+                    ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _approve,
+                      icon: const Icon(Icons.check),
+                      label: const Text('Approve'),
+                    ),
+                  ),
+                ],
+              )
+            else if (request.status == 'approved' && widget.canPay)
+              FilledButton.icon(
+                onPressed: _busy || paymentActive ? null : _pay,
+                icon: Icon(
+                  paymentActive ? Icons.hourglass_top : Icons.payments_outlined,
                 ),
-              ],
-            ),
+                label: Text(
+                  paymentActive ? 'Payment in progress' : 'Pay expense',
+                ),
+              )
+            else
+              Text(
+                request.status.replaceAll('_', ' '),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
           ],
         ),
       ),
     );
   }
+}
+
+class _ExpenseSectionTitle extends StatelessWidget {
+  const _ExpenseSectionTitle({required this.title, required this.count});
+
+  final String title;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      '$title ($count)',
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+    ),
+  );
 }
 
 String expenseApprovalMessage(ExpenseApprovalResult result) {

@@ -463,6 +463,18 @@ class _ExpenseErpSummary extends StatelessWidget {
             title: const Text('ERP sync'),
             subtitle: Text(_expenseErpSyncLabel(request.erpSyncStatus!)),
           ),
+        if (request.paymentStatus != null)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.payments_outlined),
+            title: const Text('Payment'),
+            subtitle: Text(_expensePaymentLabel(request.paymentStatus!)),
+          ),
+        if (request.paymentError != null)
+          Text(
+            request.paymentError!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
         if ({
               'dead',
               'rejected',
@@ -487,6 +499,17 @@ String _expenseErpSyncLabel(String status) => switch (status) {
   'dead' => 'Failed; needs attention',
   'not_configured' => 'ERP delivery is not configured',
   'not_queued' => 'Not queued; needs attention',
+  _ => status.replaceAll('_', ' '),
+};
+
+String _expensePaymentLabel(String status) => switch (status) {
+  'queued' => 'Queued securely for ERP processing',
+  'pending' => 'Prepared; awaiting transfer initiation',
+  'processing' => 'Transfer is processing',
+  'completed' => 'Transfer completed',
+  'failed' => 'Transfer failed; a manager may retry',
+  'indeterminate' => 'Transfer outcome is unknown; do not retry',
+  'delivery_failed' => 'Payment command could not reach ERP',
   _ => status.replaceAll('_', ' '),
 };
 
