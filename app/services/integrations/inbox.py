@@ -78,7 +78,16 @@ def execute_command(
 
 
 def get_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
-    receipt = db.get(IntegrationInbox, receipt_id)
+    # FOR UPDATE: callers use this to read-then-mutate lifecycle state
+    # (replay_receipt's lease check, fail_claimed_consequence's completion).
+    # A plain `db.get` would let a concurrent claimant's read-then-write race
+    # this one under READ COMMITTED — see the identical reasoning on
+    # `receive_verified`'s own-row lookup below.
+    receipt = db.scalars(
+        select(IntegrationInbox)
+        .where(IntegrationInbox.id == receipt_id)
+        .with_for_update()
+    ).one_or_none()
     if receipt is None:
         raise InboxError("integration inbox receipt not found")
     return receipt
@@ -150,12 +159,22 @@ def receive_verified(
     if not normalized_event_id:
         raise InboxError("provider event id is required")
     digest = payload_digest(payload)
+    # FOR UPDATE: the binding lock above only serializes callers that are
+    # BOTH still inside this function. A claimant that already committed its
+    # claim and moved on to processing the receipt (a separate, later
+    # transaction, holding a row lock on the IntegrationInbox row via
+    # `get_receipt`/`lock_for_update`, but no binding lock) is not blocked by
+    # the binding lock at all. Locking this row too makes a concurrent
+    # redelivery's reclaim attempt block on that claimant's own row lock
+    # instead of racing it with a non-locking read — the same protection the
+    # sweeper already gets from `with_for_update(skip_locked=True)`.
     existing = (
         db.query(IntegrationInbox)
         .filter(
             IntegrationInbox.capability_binding_id == binding.id,
             IntegrationInbox.provider_event_id == normalized_event_id,
         )
+        .with_for_update()
         .one_or_none()
     )
     if existing is not None:
@@ -232,13 +251,18 @@ def claim_for_processing(
 ) -> bool:
     """Claim `receipt` for processing, reclaiming an expired lease if needed.
 
-    Callers reach this only after acquiring the capability-binding lock in
-    `receive_verified`, which serializes concurrent claim attempts against the
-    same binding. That closes the claim-time race; it does NOT protect a claim
-    already in flight in a separate transaction (e.g. a stalled worker that
-    claimed earlier and is still running `process_claimed_payment_webhook`
-    when this reclaim happens) — that is what the `attempt_count` fence in
-    `mark_processed`/`mark_failed` guards.
+    Callers reach this only after acquiring the capability-binding lock AND
+    a `FOR UPDATE` lock on this exact row in `receive_verified`. The binding
+    lock alone is not enough: a claimant that already committed its claim and
+    moved on to processing the receipt holds no binding lock while it works,
+    only a row lock (taken separately via `get_receipt`/`lock_for_update` in
+    `process_claimed_payment_webhook`) — the row-level lock here is what
+    makes a concurrent reclaim block on that in-flight claimant instead of
+    reading a stale snapshot and clobbering its eventual commit. Even so, a
+    lease can still expire out from under a claimant that is genuinely still
+    working (a live worker between transactions, not merely slow inside one);
+    the `attempt_count` fence in `mark_processed`/`mark_failed` is the backstop
+    for that case.
     """
 
     now = now or datetime.now(UTC)

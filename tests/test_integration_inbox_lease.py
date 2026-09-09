@@ -6,8 +6,14 @@ died/crashed/timed out before calling `mark_processed`/`mark_failed` left the
 row stuck forever, and the provider's retry got an empty-consequence 200 (see
 `app/services/api_billing_webhooks.py`). These tests pin the reclaim
 mechanism (`lease_expires_at` + `attempt_count` fence) added to
-`app/services/integrations/inbox.py`, wired to auto-reclaim for
-`payments.webhook.v1` only.
+`app/services/integrations/inbox.py`. Reclaim itself has no per-capability
+gating — every one of the 8 inbox domains gets a reclaimable lease. Only the
+`claimed_attempt` completion fence is wired through payments
+(`payment_webhook_commands.py`'s `ProcessClaimedPaymentWebhookCommand`); the
+other 7 domains' completion paths (`mark_processed`/`mark_failed` called
+without `claimed_attempt`) are unaffected by the fence and were not audited
+for reclaim safety here — an open question for a follow-up, not solved by
+this file.
 
 The single most important test here is
 `test_a_zombie_worker_cannot_complete_a_reclaimed_receipt`: it proves that a

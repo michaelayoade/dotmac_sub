@@ -56,20 +56,39 @@ def upgrade() -> None:
         )
 
     bind = op.get_bind()
-    if not _has_index("integration_inbox", _INDEX):
-        if bind.dialect.name == "postgresql":
-            op.create_index(
-                _INDEX,
-                "integration_inbox",
-                ["lease_expires_at"],
-                postgresql_where=sa.text("state = 'processing'"),
+    if _has_index("integration_inbox", _INDEX):
+        return
+    if bind.dialect.name == "postgresql":
+        # `integration_inbox` serves all 8 webhook domains (payments, CRM,
+        # leads, ERP material, integrator settlement, ...). A plain CREATE
+        # INDEX takes a ShareLock that blocks writes to the whole table --
+        # including live payment webhook ingestion -- for the build's
+        # duration. CONCURRENTLY avoids that; matches
+        # `581_inbox_delivery_status_index` and
+        # `563_topup_reconcile_attempt_leases`.
+        with op.get_context().autocommit_block():
+            op.execute("SET lock_timeout = '5s'")
+            op.execute("SET statement_timeout = '15min'")
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {_INDEX} "
+                "ON integration_inbox (lease_expires_at) "
+                "WHERE state = 'processing'"
             )
-        else:
-            op.create_index(_INDEX, "integration_inbox", ["lease_expires_at"])
+            op.execute("RESET statement_timeout")
+            op.execute("RESET lock_timeout")
+    else:
+        op.create_index(_INDEX, "integration_inbox", ["lease_expires_at"])
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     if _has_index("integration_inbox", _INDEX):
-        op.drop_index(_INDEX, table_name="integration_inbox")
+        if bind.dialect.name == "postgresql":
+            with op.get_context().autocommit_block():
+                op.execute("SET lock_timeout = '5s'")
+                op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")
+                op.execute("RESET lock_timeout")
+        else:
+            op.drop_index(_INDEX, table_name="integration_inbox")
     if _has_column("integration_inbox", "lease_expires_at"):
         op.drop_column("integration_inbox", "lease_expires_at")
