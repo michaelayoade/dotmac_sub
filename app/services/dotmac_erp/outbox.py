@@ -75,7 +75,15 @@ _ERP_ID_KEYS = (
     "material_request_id",
     "purchase_order_id",
     "purchase_invoice_id",
+    "payment_intent_id",
 )
+
+_EXPENSE_ACTION_ENDPOINTS = {
+    "submit": "/api/v1/sync/sub/expense-claims",
+    "approve": "/api/v1/sync/sub/expense-claims/{entity_id}/approve",
+    "reject": "/api/v1/sync/sub/expense-claims/{entity_id}/reject",
+    "initiate_payment": "/api/v1/sync/sub/expense-claims/{entity_id}/payments",
+}
 
 
 @dataclass
@@ -226,7 +234,7 @@ def deliver_pending(
                 )
                 continue
 
-            endpoint = FLOW_ENDPOINTS.get(row.flow)
+            endpoint = _endpoint_for(row)
             if endpoint is None:
                 _mark_dead(row, f"No ERP endpoint mapped for flow '{row.flow}'")
                 result.processed += 1
@@ -242,6 +250,12 @@ def deliver_pending(
                     db.commit()
                     continue
 
+            if not _event_prerequisite_ready(db, row):
+                # Ordered money-path action: keep it pending without consuming
+                # retry budget until the earlier claim action is accepted.
+                db.commit()
+                continue
+
             if owned_client is None:
                 owned_client = capability_client(db)
                 created_client = True
@@ -251,7 +265,7 @@ def deliver_pending(
             try:
                 response = owned_client.post(
                     endpoint,
-                    row.payload,
+                    _transport_payload(row),
                     idempotency_key=row.idempotency_key,
                     expected_status_codes={200, 201},
                 )
@@ -274,6 +288,37 @@ def deliver_pending(
             owned_client.close()
 
     return result
+
+
+def _endpoint_for(row: FieldErpSyncEvent) -> str | None:
+    if row.flow != FieldErpSyncFlow.expense_claim.value:
+        return FLOW_ENDPOINTS.get(row.flow)
+    action = str((row.payload or {}).get("_expense_action") or "submit")
+    template = _EXPENSE_ACTION_ENDPOINTS.get(action)
+    return template.format(entity_id=row.entity_id) if template else None
+
+
+def _transport_payload(row: FieldErpSyncEvent) -> dict:
+    """Remove Sub-only ordering metadata from the typed ERP payload."""
+    return {
+        key: value
+        for key, value in (row.payload or {}).items()
+        if not str(key).startswith("_")
+    }
+
+
+def _event_prerequisite_ready(db: Session, row: FieldErpSyncEvent) -> bool:
+    prerequisite_key = (row.payload or {}).get("_depends_on_idempotency_key")
+    if not prerequisite_key:
+        return True
+    prerequisite = (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.idempotency_key == str(prerequisite_key))
+        .one_or_none()
+    )
+    return bool(
+        prerequisite and prerequisite.status == FieldErpSyncStatus.accepted.value
+    )
 
 
 def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
@@ -336,11 +381,20 @@ def _apply_response(
     row.last_error = None
 
     status_signal = _extract_status(response)
-    if status_signal in _REJECTED_STATUSES:
+    expected_rejection = (
+        row.flow == FieldErpSyncFlow.expense_claim.value
+        and str((row.payload or {}).get("_expense_action")) == "reject"
+        and status_signal in _REJECTED_STATUSES
+    )
+    if status_signal in _REJECTED_STATUSES and not expected_rejection:
         row.status = FieldErpSyncStatus.rejected.value
         result.rejected += 1
         return
-    if status_signal in _ACCEPTED_STATUSES or _has_erp_id(response):
+    if (
+        expected_rejection
+        or status_signal in _ACCEPTED_STATUSES
+        or _has_erp_id(response)
+    ):
         row.status = FieldErpSyncStatus.accepted.value
         result.accepted += 1
         return

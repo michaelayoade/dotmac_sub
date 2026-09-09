@@ -530,6 +530,9 @@ class FieldExpenseRequestRead(BaseModel):
     expense_claim_status: str | None = None
     erp_sync_status: str | None = None
     erp_sync_error: str | None = None
+    payment_status: str | None = None
+    payment_intent_id: str | None = None
+    payment_error: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None
@@ -548,6 +551,22 @@ class FieldExpenseApprovalRead(BaseModel):
     erp_sync_status: str
     erp_sync_event_id: UUID | None = None
     erp_sync_error: str | None = None
+
+
+class FieldExpenseRejectionRead(BaseModel):
+    id: UUID
+    status: Literal["rejected"]
+    rejected_at: datetime
+    rejection_reason: str
+    erp_sync_event_id: UUID
+
+
+class FieldExpensePaymentRead(BaseModel):
+    id: UUID
+    status: Literal["approved"]
+    payment_status: Literal["queued"]
+    payment_command_id: UUID
+    erp_sync_event_id: UUID
 
 
 class FieldJobHistoryItem(BaseModel):

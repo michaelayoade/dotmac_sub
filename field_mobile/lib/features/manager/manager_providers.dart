@@ -33,6 +33,7 @@ class ManagerProfile {
   }
 
   bool get canViewTeamMap => allows('operations:dispatch:read');
+  bool get canPayExpenses => allows('operations:expense_request:pay');
 
   factory ManagerProfile.fromJson(Map<String, dynamic> json) => ManagerProfile(
     name: json['name']?.toString() ?? 'Manager',
@@ -308,6 +309,28 @@ class ExpenseApprovalResult {
       );
 }
 
+class ExpensePaymentResult {
+  const ExpensePaymentResult({
+    required this.id,
+    required this.paymentStatus,
+    required this.paymentCommandId,
+    required this.erpSyncEventId,
+  });
+
+  final String id;
+  final String paymentStatus;
+  final String paymentCommandId;
+  final String erpSyncEventId;
+
+  factory ExpensePaymentResult.fromJson(Map<String, dynamic> json) =>
+      ExpensePaymentResult(
+        id: json['id']?.toString() ?? '',
+        paymentStatus: json['payment_status']?.toString() ?? 'queued',
+        paymentCommandId: json['payment_command_id']?.toString() ?? '',
+        erpSyncEventId: json['erp_sync_event_id']?.toString() ?? '',
+      );
+}
+
 class ManagerRepository {
   const ManagerRepository(this._ref);
 
@@ -427,7 +450,21 @@ class ManagerRepository {
         .post(
           '/api/v1/field/manager/expenses/$id/reject',
           data: {'reason': reason},
+          options: Options(headers: {'X-Request-ID': const Uuid().v4()}),
         );
+  }
+
+  Future<ExpensePaymentResult> payExpense(String id) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .post(
+          '/api/v1/field/manager/expenses/$id/pay',
+          options: Options(headers: {'X-Request-ID': const Uuid().v4()}),
+        );
+    return ExpensePaymentResult.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
   }
 }
 

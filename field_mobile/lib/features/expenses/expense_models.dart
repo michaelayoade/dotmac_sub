@@ -120,6 +120,9 @@ class ExpenseRequest {
     this.erpClaimStatus,
     this.erpSyncStatus,
     this.erpSyncError,
+    this.paymentStatus,
+    this.paymentIntentId,
+    this.paymentError,
     this.total,
     this.ticketId,
     this.projectId,
@@ -145,6 +148,9 @@ class ExpenseRequest {
   final String? erpClaimStatus;
   final String? erpSyncStatus;
   final String? erpSyncError;
+  final String? paymentStatus;
+  final String? paymentIntentId;
+  final String? paymentError;
   final double? total;
   final String? ticketId;
   final String? projectId;
@@ -174,6 +180,9 @@ class ExpenseRequest {
     ),
     erpSyncStatus: _string(json['erp_sync_status'] ?? json['expense_system']),
     erpSyncError: _string(json['erp_sync_error']),
+    paymentStatus: _string(json['payment_status']),
+    paymentIntentId: _string(json['payment_intent_id']),
+    paymentError: _string(json['payment_error']),
     total: _double(json['total_amount']),
     ticketId: json['ticket_id']?.toString(),
     projectId: json['project_id']?.toString(),
