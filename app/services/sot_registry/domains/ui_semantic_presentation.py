@@ -441,6 +441,8 @@ DOMAIN = DomainSOT(
                     "tests/test_operational_evidence_followup.py",
                     "tests/test_web_network_noc.py",
                     "tests/test_integrations_observability.py",
+                    "tests/test_web_control_plane.py",
+                    "tests/architecture/test_integration_platform_boundary.py",
                 ),
             ),
         ),

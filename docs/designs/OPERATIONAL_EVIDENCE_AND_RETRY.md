@@ -134,8 +134,12 @@ outcomes are dashboard signals, not pages.
 
 The NOC page shows the three operational evidence checks and exact per-router
 collector failures. Installed Integrations shows the last observed runtime
-result and the CRM capability contract instead of generic health badges.
-Templates do not calculate freshness, classify failures, or decide retries.
+result and the CRM capability contract instead of generic health badges. The
+admin control-plane projection consumes the same typed installation/evidence
+boundary: it presents the exact last result and source timestamp, marks an
+administratively disabled installation as disabled, and otherwise makes no
+aggregate health claim. Templates do not calculate freshness, classify
+failures, or decide retries.
 
 The fleet-wide `network.device_state` owner now exposes only
 `working`/`not_working`. Collector freshness and retry evidence remain internal
