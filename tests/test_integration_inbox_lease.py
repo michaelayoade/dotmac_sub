@@ -38,6 +38,7 @@ from app.models.integration_platform import IntegrationInbox
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services.api_billing_webhooks import process_paystack_webhook
+from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.inbox import InboxError, InboxLeaseLost
 from app.services.owner_commands import CommandContext
@@ -353,7 +354,8 @@ def test_a_zombie_worker_cannot_complete_a_reclaimed_receipt(db_session, subscri
     )
     db_session.commit()
     assert reclaimed_should_process is True
-    assert reclaimed_receipt.attempt_count == stale_claimed_attempt + 1
+    reclaimed_attempt = reclaimed_receipt.attempt_count
+    assert reclaimed_attempt == stale_claimed_attempt + 1
     assert reclaimed_receipt.state == "processing"  # reclaim does not change state
 
     # Step 3: "worker A" (still holding its now-stale claimed_attempt) finally
@@ -362,6 +364,13 @@ def test_a_zombie_worker_cannot_complete_a_reclaimed_receipt(db_session, subscri
     # `receipt.state == "processing"` check alone would let this through
     # unchanged (reclaim never changes `state`) — proving the fence, not the
     # state check, is what has to catch this.
+    #
+    # `execute_owner_command` requires a transaction-free session at entry;
+    # the attribute reads above re-opened an implicit SQLAlchemy read
+    # transaction (post-commit attributes are expired), so release it first —
+    # mirrors `db_session_adapter.release_read_transaction` immediately before
+    # `process_claimed_payment_webhook` in `api_billing_webhooks.py`.
+    db_session_adapter.release_read_transaction(db_session)
     with pytest.raises(InboxLeaseLost):
         process_claimed_payment_webhook(
             db_session,
@@ -384,15 +393,16 @@ def test_a_zombie_worker_cannot_complete_a_reclaimed_receipt(db_session, subscri
     assert db_session.query(Payment).filter_by(external_id="zombie-1").count() == 0
     stale_check = db_session.get(IntegrationInbox, receipt_id)
     assert stale_check.state == "processing"
-    assert stale_check.attempt_count == stale_claimed_attempt + 1
+    assert stale_check.attempt_count == reclaimed_attempt
 
     # Step 4: worker B, using the CURRENT attempt, completes normally.
+    db_session_adapter.release_read_transaction(db_session)
     result = process_claimed_payment_webhook(
         db_session,
         ProcessClaimedPaymentWebhookCommand(
             receipt_id=receipt_id,
             provider=PaymentWebhookProvider.PAYSTACK,
-            claimed_attempt=reclaimed_receipt.attempt_count,
+            claimed_attempt=reclaimed_attempt,
         ),
         context=CommandContext.system(
             actor="test:worker-b",

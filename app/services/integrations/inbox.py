@@ -248,9 +248,10 @@ def claim_for_processing(
         # fact without attempting a second consequence.
         return False
     if receipt.state == "processing":
-        live_lease = receipt.lease_expires_at is not None and _as_aware_utc(
-            receipt.lease_expires_at
-        ) > now
+        live_lease = (
+            receipt.lease_expires_at is not None
+            and _as_aware_utc(receipt.lease_expires_at) > now
+        )
         if live_lease:
             # A genuinely live claim. Refuse — this is not a reclaim.
             return False
