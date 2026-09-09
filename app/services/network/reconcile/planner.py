@@ -330,7 +330,7 @@ def compute_plan(
     # BEFORE the mode branches below and, when it fires, skips all of them —
     # ``wifi_only_change``/``remote_only_change`` never touch the OLT side
     # regardless, so they are the only ones exempt.
-    olt_identity_gate = _olt_identity_gate(observed)
+    olt_identity_gate = _olt_identity_gate(desired, observed)
     if olt_identity_gate is not None and not (wifi_only_change or remote_only_change):
         drifts.append(_olt_identity_drift(desired, observed))
         olt_wait_reason = olt_identity_gate
@@ -403,16 +403,33 @@ def compute_plan(
 # ── OLT-side planning ───────────────────────────────────────────────────────
 
 
-def _olt_identity_gate(observed: OntObservedState) -> str | None:
+def _olt_identity_gate(
+    desired: OntDesiredState, observed: OntObservedState
+) -> str | None:
     """Whether this pass's OLT read confirmed the STORED target's identity.
 
     Returns ``None`` when bound (safe to plan OLT actions against
     ``desired.fsp``/``desired.olt_ont_id``), else the
     ``ReconcileFailureReason`` naming why every OLT action is withheld this
-    pass. Reads ``observed.olt.olt_identity_status`` — set by
-    ``readers.olt_reader`` after checking a found registration's fsp+onu_id
-    against the desired target (or noting there was no target to check).
+    pass.
+
+    Two independent signals, checked in order:
+
+    1. ``is_deliverable("olt_ont_id", ...)``/``is_deliverable("fsp", ...)`` —
+       the STORED target itself is a registered inadmissible sentinel
+       (``olt_ont_id is None`` / ``fsp == ""``). Checked directly against
+       ``desired`` rather than trusting ``observed.olt.olt_identity_status``
+       alone, so a caller that builds ``OntObservedState`` without correctly
+       threading identity_status (e.g. a cached fallback that defaults to
+       ``"bound"``) cannot accidentally let an unresolved target through.
+    2. ``observed.olt.olt_identity_status`` — set by ``readers.olt_reader``
+       after checking a found registration's fsp+onu_id against the desired
+       target (or noting there was no target to check).
     """
+    if not is_deliverable("olt_ont_id", desired.olt_ont_id) or not is_deliverable(
+        "fsp", desired.fsp
+    ):
+        return ReconcileFailureReason.OLT_IDENTITY_UNRESOLVED
     status = observed.olt.olt_identity_status
     if status == "bound":
         return None
