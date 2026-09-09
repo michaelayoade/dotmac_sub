@@ -220,7 +220,17 @@ def test_release_candidate_build_is_explicit_green_main_and_digest_evidenced() -
     assert '"refs/heads/main"' in workflow
     assert 'const required = ["CI", "Mobile CI"]' in workflow
     assert "Refusing stale candidate" in workflow
-    assert "Candidate image already exists" in workflow
+    # A pre-existing `candidate-<sha>` tag no longer permanently refuses the
+    # build (that was the 2026-09-09 incident: one flaky digest-visibility
+    # failure after a successful push blocked every future rerun for that
+    # commit). Ambiguous registry reads still fail closed with the original
+    # message; only a genuine provenance disagreement is a new, distinct
+    # fail-closed message.
+    assert "Candidate image already exists" not in workflow
+    assert (
+        "Refusing candidate build: existing candidate image disagrees with "
+        "this commit's provenance." in workflow
+    )
     assert "Cannot safely determine whether" in workflow
     assert "runs-on: ubuntu-latest" in workflow
     assert "self-hosted" not in workflow
@@ -240,6 +250,34 @@ def test_release_candidate_build_is_explicit_green_main_and_digest_evidenced() -
     assert "python -m scripts.release_candidate_evidence write-candidate" in workflow
     assert "name: release-candidate-evidence" in workflow
     assert "retention-days: 90" in workflow
+
+    # The build step alone is skipped in reuse mode; every other
+    # accepted-mode step (visibility check, manifest extraction, evidence
+    # write, upload) must run in EVERY accepted mode, or a reused candidate
+    # would strand staging with a missing evidence artifact.
+    assert workflow.count("if: steps.reconcile.outputs.mode == 'build'") == 1
+    build_step_index = workflow.index("- name: Build and push candidate once")
+    gate_index = workflow.index(
+        "if: steps.reconcile.outputs.mode == 'build'", build_step_index
+    )
+    assert gate_index - build_step_index < 200
+    for never_gated in (
+        "- name: Verify published digest",
+        "- name: Extract and verify the embedded product manifest",
+        "- name: Write typed candidate evidence",
+        "- name: Upload candidate evidence",
+    ):
+        step_index = workflow.index(never_gated)
+        next_step_marker = workflow.find("\n      - name:", step_index + 1)
+        step_body = workflow[step_index:next_step_marker]
+        assert "if: steps.reconcile.outputs.mode" not in step_body
+
+    # A registry-read retry loop, bounded and configurable by repository
+    # variable, on both reads exposed to the same GHCR propagation delay that
+    # caused the incident (the post-push digest check, and the product-
+    # manifest pull immediately after it).
+    assert "REGISTRY_VISIBILITY_MAX_ATTEMPTS" in workflow
+    assert workflow.count("backoffs=(2 4 8 15 15 30 30)") == 2
 
 
 def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
