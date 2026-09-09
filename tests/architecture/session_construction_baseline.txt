@@ -1,0 +1,33 @@
+# Runtime-readiness inventory baseline: local engine/session construction
+# outside app.db's canonical SessionLocal factory, in production/operational
+# surfaces (app/, scripts/, alembic/ — tests/ is tracked separately, see
+# test_test_fixture_engine_family_is_swept).
+#
+# Format: "<repo-relative path> <construction-site count>". A path's count
+# only ever moves when the change that moved it explains why (new local
+# construction the DatabaseRuntime seam must account for, or a site
+# retired/migrated onto SessionLocal). See
+# docs/sub-runtime-readiness-inventory.md for what each site is and why it
+# exists.
+alembic/env.py 1
+app/db.py 2
+app/services/auth_flow.py 1
+app/services/db_session_adapter.py 1
+app/services/events/dispatcher.py 1
+app/services/events/handlers/owner_session.py 1
+app/services/external_radius_targets.py 1
+app/services/financial_imports.py 1
+app/services/session_hooks.py 1
+app/services/usage.py 1
+app/tasks/_postgres_lock.py 1
+scripts/billing/backfill_ledger_effective_date.py 1
+scripts/ci/migrated_test_database.py 1
+scripts/migration/backfill_crm_subscriber_links.py 1
+scripts/migration/backfill_party_status.py 1
+scripts/migration/build_crm_staff_map.py 1
+scripts/migration/import_crm_tickets_phase1.py 1
+scripts/migration/preflight_crm_ticket_import.py 1
+scripts/migration/provision_staff_from_map.py 2
+scripts/negotiated_price_offer_inventory.py 2
+scripts/network/stage_crm_network_map.py 1
+scripts/one_off/shadow_diff_committed_rate.py 1
