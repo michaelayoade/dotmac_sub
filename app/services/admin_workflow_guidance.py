@@ -192,6 +192,23 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "ont-wifi-pppoe-actions",
+        "Network and access",
+        "Push WiFi, PPPoE, and resync changes to an ONT",
+        "NOC, field operations",
+        "Update a customer's WiFi or PPPoE settings on their ONT, or recover a device stuck out of sync after a failed push.",
+        ("/admin/network/onts",),
+        "Confirm the exact ONT by serial number, account, and OLT/port before changing anything.",
+        "Use Set WiFi Password or Set WiFi SSID for a routine change; the value is saved immediately but only pushed to the device at its next check-in unless you force it.",
+        "Use Force-Push WiFi Password when the customer reports the change did not take effect (for example, after a factory reset wiped the device's saved settings) and it needs to apply right away.",
+        "Use Force Resync only after a previous attempt failed and you have checked it is safe to retry — this re-attempts the whole reconcile against the device, not just the one field you changed.",
+        "If the device is on a known-slow OLT shelf, ask for the longer wait-time option so a slow OLT does not cut the change off partway through.",
+        notes=(
+            "Force Resync is refused on purpose when the last attempt left the ONT out of sync — that is a deliberate checkpoint asking you to confirm it is safe before retrying, not a bug.",
+            "A failed push does not necessarily mean nothing happened on the device; check the ONT's actual status before assuming it is still on the old settings.",
+        ),
+    ),
+    _guide(
         "work-order-expenses",
         "Operations",
         "Record a work-order expense",
