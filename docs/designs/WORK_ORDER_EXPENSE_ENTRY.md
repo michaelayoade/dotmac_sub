@@ -38,6 +38,9 @@ Receipt bytes use the existing private attachment storage owner. Metadata is
 staged flush-only inside the expense command transaction. A deterministic
 per-line receipt client reference makes a repeated claim submission safe. The
 existing general field receipt endpoint remains assigned-technician scoped.
+Staff uploader identity is recorded on `FieldAttachment`; the legacy
+subscriber-only `StoredFile.uploaded_by` field remains empty for these staff
+uploads.
 
 ## State and delivery semantics
 
@@ -67,9 +70,10 @@ positive-amount lines. Each line requires an active ERP category and a
 description of at most 500 characters. A receipt URL and receipt upload are
 individually optional alternatives; when the selected ERP category requires
 receipt evidence, either one satisfies that rule. The browser never marks the
-file input itself as required. Category receipt and maximum rules are enforced
-again by the command owner. Browser calculations and required markers are
-assistance only.
+file input itself as required. It changes the shared Receipt marker and help
+text when the category changes, then validates the URL-or-file choice as one
+requirement. Category receipt and maximum rules are enforced again by the
+command owner. Browser calculations and required markers are assistance only.
 
 Text values and the stable claim client reference survive validation errors.
 Browsers cannot repopulate file inputs, so a selected receipt is cleared and an

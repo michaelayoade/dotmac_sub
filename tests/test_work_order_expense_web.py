@@ -13,12 +13,14 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
+from app.models.field_attachment import FieldAttachment
 from app.models.field_erp_sync import (
     FieldErpSyncEvent,
     FieldErpSyncFlow,
     FieldErpSyncStatus,
 )
 from app.models.field_expense import FieldExpenseRequest, FieldExpenseRequestItem
+from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
@@ -349,6 +351,54 @@ def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     assert db_session.query(FieldExpenseRequest).count() == 0
 
 
+def test_staff_receipt_upload_avoids_legacy_subscriber_uploader_fk(
+    db_session, monkeypatch
+):
+    class _StageUploads:
+        @staticmethod
+        def stage_upload(**kwargs):
+            assert kwargs["uploaded_by"] is None
+            stored = StoredFile(
+                entity_type=kwargs["entity_type"],
+                entity_id=kwargs["entity_id"],
+                original_filename=kwargs["original_filename"],
+                storage_key_or_relative_path="attachments/receipt.pdf",
+                file_size=len(kwargs["data"]),
+                content_type=kwargs["content_type"],
+                storage_provider="s3",
+                uploaded_by=kwargs["uploaded_by"],
+                owner_subscriber_id=kwargs["owner_subscriber_id"],
+            )
+            kwargs["db"].add(stored)
+            kwargs["db"].flush()
+            return stored
+
+    monkeypatch.setattr(attachments_module, "file_uploads", _StageUploads())
+    user = _user(db_session, "StaffReceipt")
+    work_order = _work_order(db_session, "sub-expense-staff-receipt")
+    upload = ExpenseReceiptUploadInput(
+        file_name="receipt.pdf",
+        mime_type="application/pdf",
+        content=b"%PDF-1.4",
+        client_ref=uuid4(),
+    )
+    command = _command(
+        user,
+        work_order,
+        items=(_line(receipt_upload=upload),),
+        category_rules=_rules(receipt=True),
+    )
+    db_session.commit()
+
+    outcome = submit_field_expense_request_command(db_session, command)
+
+    stored_file = db_session.query(StoredFile).one()
+    attachment = db_session.query(FieldAttachment).one()
+    assert outcome.items[0].receipt_attachment_id == attachment.id
+    assert stored_file.uploaded_by is None
+    assert attachment.uploaded_by_system_user_id == user.id
+
+
 def test_unassigned_work_order_disables_expense_action(db_session, monkeypatch):
     monkeypatch.setattr(
         expense_web,
@@ -525,6 +575,10 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert 'name="receipt_file_{{ line.key }}"' in expense_form
     assert 'name="receipt_file_{{ line.key }}" required' not in expense_form
     assert 'name="receipt_url_{{ line.key }}" required' not in expense_form
+    assert "data-receipt-required-marker hidden" in expense_form
+    assert "'(required — choose one)'" in expense_form
+    assert "receiptUrl.setCustomValidity" in expense_form
+    assert "receiptFile.files?.length" in expense_form
     assert (
         "When a receipt is required, provide either a receipt URL or an uploaded file."
         in expense_form
