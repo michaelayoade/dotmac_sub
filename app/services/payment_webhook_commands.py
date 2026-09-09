@@ -10,10 +10,11 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    Payment,
     PaymentProvider,
     PaymentProviderEvent,
     PaymentProviderEventFinancialEffect,
@@ -75,6 +76,64 @@ class PaymentWebhookProvider(StrEnum):
 
     PAYSTACK = "paystack"
     FLUTTERWAVE = "flutterwave"
+
+
+# --- Paystack refund/dispute vocabulary -------------------------------------
+#
+# One explicit, named set per family. `_settlement_observation` and
+# `identify_verified_payment_webhook` both dispatch off these sets rather than
+# repeating string literals, so a future Paystack event type cannot silently
+# reach either function's generic/default path by accident (the original bug
+# this PR fixes) and so the two functions cannot drift out of sync with each
+# other. `tests/architecture` pins non-vacuity: every member here produces
+# behavior distinguishable from the informational default, and a synthetic
+# unlisted event type does not.
+_PAYSTACK_SETTLEMENT_EVENT_TYPES: frozenset[str] = frozenset({"charge.success"})
+
+_PAYSTACK_REFUND_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "refund.processed",
+        "refund.pending",
+        "refund.processing",
+        "refund.failed",
+    }
+)
+
+_PAYSTACK_DISPUTE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "charge.dispute.create",
+        "charge.dispute.resolve",
+        "charge.dispute.remind",
+    }
+)
+
+# Refund/dispute events are NEWLY recognized here; their receipt identity must
+# be event-scoped (Defect D) because their payload's `id` (or, if Paystack
+# ever adds one, `reference`) can equal the ORIGINAL charge's `charge.success`
+# reference. An unscoped identity would make the inbox's tamper-collision
+# detector treat the refund as a mismatched duplicate of the original charge
+# receipt and quarantine the whole installation. `charge.success` (and every
+# other already-live event identity, including Flutterwave's) keeps its
+# existing unscoped format below, unchanged, so Paystack's retries of an
+# already-processed event still resolve to the same receipt.
+_PAYSTACK_EVENT_SCOPED_IDENTITY_TYPES: frozenset[str] = (
+    _PAYSTACK_REFUND_EVENT_TYPES | _PAYSTACK_DISPUTE_EVENT_TYPES
+)
+
+_PAYSTACK_RECOGNIZED_EVENT_TYPES: frozenset[str] = (
+    _PAYSTACK_SETTLEMENT_EVENT_TYPES | _PAYSTACK_EVENT_SCOPED_IDENTITY_TYPES
+)
+
+# ASSUMPTION, unverified against live Paystack documentation/sandbox payloads
+# (no network access in this environment): the dispute-resolution outcome is
+# read from `data.resolution` (falling back to `data.status`), and the two
+# values below are the ones believed to indicate the merchant lost/won. An
+# unrecognized value raises loudly (`dispute_resolution_unrecognized`, dead
+# lettered on first attempt) rather than guessing which way to move money.
+# CONFIRM THESE VALUES against a real Paystack `charge.dispute.resolve`
+# payload before relying on this in production.
+_DISPUTE_RESOLUTION_MERCHANT_LOST: frozenset[str] = frozenset({"merchant-accepted"})
+_DISPUTE_RESOLUTION_MERCHANT_WON: frozenset[str] = frozenset({"declined"})
 
 
 class IntegratorSettlementKind(StrEnum):
@@ -231,6 +290,13 @@ class _SettlementObservation:
     currency: str | None
     reference: str | None
     metadata: Mapping[str, Any]
+    # Set only for refund/reversal observations, whose event type is never in
+    # `payment_provider_events._FINANCIAL_EFFECT_BY_EVENT_TYPE` (a
+    # `charge.dispute.resolve` outcome is payload-dependent, not a pure
+    # event-type map entry) -- normalization REQUIRES this to be present for
+    # `refunded`/`reversed` observed statuses, so leaving it unset is a loud
+    # failure (`financial_effect_required`), not a silent one.
+    financial_effect: PaymentProviderEventFinancialEffect | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +320,22 @@ def identify_verified_payment_webhook(
 
     data = _mapping(payload.get("data", {}), field="data")
     event_type = str(payload.get("event") or "unknown").strip() or "unknown"
+    if (
+        provider is PaymentWebhookProvider.PAYSTACK
+        and event_type in _PAYSTACK_EVENT_SCOPED_IDENTITY_TYPES
+    ):
+        own_id = str(data.get("id") or "").strip()
+        if not own_id:
+            raise _error(
+                "payload_invalid",
+                "Payment webhook omitted its provider event identity",
+                provider=provider.value,
+            )
+        return PaymentWebhookReceiptIdentity(
+            provider=provider,
+            provider_event_id=f"{provider.value}-{event_type}-{own_id}",
+            event_type=event_type,
+        )
     reference_field = (
         "reference" if provider is PaymentWebhookProvider.PAYSTACK else "tx_ref"
     )
@@ -298,6 +380,37 @@ def _currency(value: object) -> str:
     return currency
 
 
+def _paystack_original_transaction(
+    data: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    """The ORIGINAL charge's transaction id/reference from a refund/dispute
+    payload.
+
+    A refund or dispute payload's own top-level `id`/`reference` identify the
+    refund/dispute itself, never the charge it applies to (Defect C) --
+    matching those against `Payment.external_id` can never succeed. Paystack
+    nests the original transaction under `data.transaction`.
+    """
+
+    transaction = data.get("transaction")
+    transaction = transaction if isinstance(transaction, Mapping) else None
+    tx_id = (
+        str(transaction.get("id") or "").strip()
+        if transaction is not None and transaction.get("id") is not None
+        else None
+    )
+    tx_reference: str | None = None
+    if transaction is not None and transaction.get("reference"):
+        tx_reference = str(transaction["reference"]).strip()
+    elif data.get("transaction_reference"):
+        # ASSUMPTION, unverified: the design brief names this exact top-level
+        # field; Paystack's documented payload nests the reference under
+        # `transaction.reference` instead, so this is a defensive fallback,
+        # not a confirmed field name.
+        tx_reference = str(data["transaction_reference"]).strip()
+    return tx_id or None, tx_reference or None
+
+
 def _settlement_observation(
     provider: PaymentWebhookProvider,
     *,
@@ -305,18 +418,82 @@ def _settlement_observation(
     data: Mapping[str, Any],
 ) -> _SettlementObservation | None:
     if provider is PaymentWebhookProvider.PAYSTACK:
-        if event_type != "charge.success":
+        if event_type not in _PAYSTACK_RECOGNIZED_EVENT_TYPES:
             return None
-        metadata = data.get("metadata")
+
+        if event_type in _PAYSTACK_SETTLEMENT_EVENT_TYPES:
+            metadata = data.get("metadata")
+            return _SettlementObservation(
+                status=PaymentStatus.succeeded,
+                amount=_money(
+                    data.get("amount", 0), field="amount", divisor=Decimal(100)
+                ),
+                provider_fee=_money(
+                    data.get("fees", 0), field="fees", divisor=Decimal(100)
+                ),
+                currency=_currency(data.get("currency")),
+                reference=str(data.get("reference") or "").strip() or None,
+                metadata=metadata if isinstance(metadata, Mapping) else {},
+            )
+
+        if event_type in _PAYSTACK_REFUND_EVENT_TYPES:
+            if event_type != "refund.processed":
+                # `refund.pending`/`refund.processing`/`refund.failed`: no
+                # money has moved (or, for `.failed`, none ever will for this
+                # attempt). The event is still admitted and recorded under
+                # its own `event_type` -- that column is what makes it
+                # distinguishable from a real settlement in the record -- but
+                # it must not be interpreted as one.
+                return None
+            _, tx_reference = _paystack_original_transaction(data)
+            return _SettlementObservation(
+                status=PaymentStatus.refunded,
+                amount=_money(
+                    data.get("amount", 0), field="amount", divisor=Decimal(100)
+                ),
+                provider_fee=Decimal("0.00"),
+                currency=_currency(data.get("currency")),
+                reference=tx_reference,
+                metadata={},
+                financial_effect=PaymentProviderEventFinancialEffect.refund_confirmed,
+            )
+
+        # event_type in _PAYSTACK_DISPUTE_EVENT_TYPES
+        if event_type != "charge.dispute.resolve":
+            # `charge.dispute.create`: informational + alertable -- funds are
+            # held, not yet lost. A full dispute lifecycle (due dates,
+            # evidence submission) is out of scope; the audit event/emitted
+            # event already produced for every staged provider event is this
+            # PR's alerting surface. `charge.dispute.remind`: informational
+            # only.
+            return None
+        resolution = (
+            str(data.get("resolution") or data.get("status") or "").strip().lower()
+        )
+        if resolution in _DISPUTE_RESOLUTION_MERCHANT_WON:
+            # Merchant kept the funds; nothing to reverse.
+            return None
+        if resolution not in _DISPUTE_RESOLUTION_MERCHANT_LOST:
+            raise _error(
+                "dispute_resolution_unrecognized",
+                "Paystack dispute resolution outcome was not recognized; "
+                "verify the payload contract before treating this as "
+                "either a loss or a win",
+                resolution=resolution or None,
+            )
+        _, tx_reference = _paystack_original_transaction(data)
         return _SettlementObservation(
-            status=PaymentStatus.succeeded,
-            amount=_money(data.get("amount", 0), field="amount", divisor=Decimal(100)),
-            provider_fee=_money(
-                data.get("fees", 0), field="fees", divisor=Decimal(100)
+            status=PaymentStatus.reversed,
+            amount=_money(
+                data.get("refund_amount", 0),
+                field="refund_amount",
+                divisor=Decimal(100),
             ),
+            provider_fee=Decimal("0.00"),
             currency=_currency(data.get("currency")),
-            reference=str(data.get("reference") or "").strip() or None,
-            metadata=metadata if isinstance(metadata, Mapping) else {},
+            reference=tx_reference,
+            metadata={},
+            financial_effect=PaymentProviderEventFinancialEffect.reversal_confirmed,
         )
 
     if event_type != "charge.completed":
@@ -414,6 +591,69 @@ def _resolve_topup_intent(
     return intent
 
 
+def _resolve_reversal_payment_id(
+    db: Session,
+    *,
+    provider_id: UUID,
+    data: Mapping[str, Any],
+) -> UUID | None:
+    """Resolve the ORIGINAL payment for a refund/reversal observation.
+
+    The observation's own `data.id` is the refund/dispute's own identity, not
+    the original charge's (Defect C) -- matching it against
+    `Payment.external_id` the way a settlement is matched can never succeed
+    and would silently route every refund/dispute to `payment_not_found`.
+    Priority order, each strictly more indirect than the last:
+
+    1. The nested original transaction's own id, matched the same way a
+       settlement is (`Payment.external_id`).
+    2. The original transaction's reference, resolved against Sub's OWN prior
+       succeeded observation (`PaymentProviderEvent.provider_reference`) --
+       not against a live call to Paystack's API.
+
+    A merchant-note/request-key third step (matching a Sub-initiated refund
+    echoed back by Paystack) is deliberately NOT implemented here: grepping
+    this codebase shows `PaymentGatewayAdapter.refund`, the only writer of a
+    `merchant_note`/`request_key`, has no caller anywhere in `app/` today, and
+    `_validate_refund_provider_event` explicitly rejects a manual refund for
+    any provider-backed payment. There is no durable request-key record to
+    match against yet; inventing one now would be a new persistence decision,
+    not an implementation detail of this fix.
+    """
+
+    tx_id, tx_reference = _paystack_original_transaction(data)
+    if tx_id:
+        payment = db.scalar(
+            select(Payment)
+            .where(Payment.external_id == tx_id)
+            .where(
+                or_(
+                    Payment.provider_id == provider_id,
+                    Payment.provider_id.is_(None),
+                )
+            )
+            .order_by((Payment.provider_id == provider_id).desc())
+        )
+        if payment is not None:
+            return payment.id
+
+    if tx_reference:
+        prior_event = db.scalar(
+            select(PaymentProviderEvent)
+            .where(PaymentProviderEvent.provider_id == provider_id)
+            .where(PaymentProviderEvent.provider_reference == tx_reference)
+            .where(
+                PaymentProviderEvent.observed_payment_status == PaymentStatus.succeeded
+            )
+            .where(PaymentProviderEvent.payment_id.is_not(None))
+            .order_by(PaymentProviderEvent.received_at.desc())
+        )
+        if prior_event is not None:
+            return prior_event.payment_id
+
+    return None
+
+
 def _prepare_payment_webhook(
     db: Session,
     *,
@@ -446,6 +686,23 @@ def _prepare_payment_webhook(
         provider=provider,
         settlement=settlement,
     )
+    if settlement.status in (PaymentStatus.refunded, PaymentStatus.reversed):
+        resolved_payment_id = _resolve_reversal_payment_id(
+            db, provider_id=provider_id, data=data
+        )
+        return _PreparedPaymentWebhook(
+            ingest=replace(
+                ingest,
+                observed_payment_status=settlement.status,
+                financial_effect=settlement.financial_effect,
+                amount=settlement.amount,
+                currency=settlement.currency,
+                provider_reference=settlement.reference,
+                payment_id=resolved_payment_id,
+            ),
+            settlement=settlement,
+            topup_intent=topup_intent,
+        )
     if settlement.status != PaymentStatus.succeeded:
         return _PreparedPaymentWebhook(
             ingest=replace(ingest, observed_payment_status=settlement.status),
