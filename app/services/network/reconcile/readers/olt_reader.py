@@ -135,36 +135,48 @@ def read_olt_state(
         # by-serial CLI query (its serial IS the query), but a future
         # adapter implementation (or a scan-based fallback) could return a
         # substring match — refuse rather than trust it.
+        #
+        # ``status="unavailable"`` — NOT "present" — because this observation
+        # cannot be trusted as being of the STORED target at all. A
+        # "present"/"absent" result flows straight into
+        # ``upsert_ont_observation`` and overwrites the OLT columns with
+        # whatever ``observed`` carries; treating an unconfirmed identity as
+        # a clean read would silently null the last genuine evidence and
+        # stamp a fresh ``olt_observed_at`` for a pass that observed nothing
+        # of the named target. See ``ReadResult.identity_status``.
         return ReadResult(
-            status="present",
-            observed=_identity_fields("unresolved"),
+            status="unavailable",
+            observed=None,
             error=(
                 f"ONT lookup for serial {desired.serial_number} returned a "
                 f"registration for a different serial ({reg_serial!r})"
             ),
+            identity_status="unresolved",
         )
 
     if not target_known:
         return ReadResult(
-            status="present",
-            observed=_identity_fields("unresolved"),
+            status="unavailable",
+            observed=None,
             error=(
                 f"ONT {desired.serial_number} is registered on the OLT, but "
                 "the desired state has no fsp/olt_ont_id to confirm it "
                 "against — cannot query per-ONT detail safely."
             ),
+            identity_status="unresolved",
         )
 
     if reg_fsp != desired.fsp or reg_onu_id != desired.olt_ont_id:
         return ReadResult(
-            status="present",
-            observed=_identity_fields("mismatch"),
+            status="unavailable",
+            observed=None,
             error=(
                 f"ONT {desired.serial_number} is registered at {reg_fsp}/"
                 f"{reg_onu_id}, not the desired target "
                 f"{desired.fsp}/{desired.olt_ont_id} — refusing to read or "
                 "write against either."
             ),
+            identity_status="mismatch",
         )
 
     # Bound: confirmed the registration IS an observation of the stored
@@ -292,39 +304,6 @@ def _absent_fields(
         olt_tr069_profile_id=None,
         olt_service_ports=(),
         olt_identity_status=identity_status,
-    )
-
-
-def _identity_fields(
-    status: Literal["mismatch", "unresolved"],
-) -> OltObservedFields:
-    """Field set for an ONT confirmed registered on the OLT, but whose
-    physical position could not be confirmed as the desired target.
-
-    ``olt_present=True`` because the serial genuinely IS on the OLT — only
-    the per-ONT detail fields are withheld, since querying them would mean
-    trusting either the stored (unproven) or the found (unrequested)
-    coordinates.
-    """
-    return OltObservedFields(
-        olt_present=True,
-        olt_match_state=None,
-        olt_run_state=None,
-        olt_distance_m=None,
-        olt_rx_dbm=None,
-        olt_tx_dbm=None,
-        olt_temperature_c=None,
-        olt_description=None,
-        olt_mgmt_ip=None,
-        olt_mgmt_vlan=None,
-        olt_line_profile_id=None,
-        olt_service_profile_id=None,
-        olt_tr069_profile_id=None,
-        # ``None``, not ``()``: service ports were never queried in this
-        # path, so the real set is unknown — see the field docstring on
-        # ``OltObservedFields.olt_service_ports``.
-        olt_service_ports=None,
-        olt_identity_status=status,
     )
 
 

@@ -973,6 +973,80 @@ def test_failed_read_preserves_the_previous_observation(
     assert row.olt_read_status == "unavailable"
 
 
+def test_identity_mismatch_preserves_the_previous_observation(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """An OLT identity mismatch (the serial is registered somewhere other
+    than the desired fsp/olt_ont_id target) must not overwrite the last
+    genuine OLT observation either — same evidence-preservation contract as
+    a transport failure or an unparseable reply, since the reader now
+    reports it as ``status="unavailable"`` (not "present" with nulled
+    fields, which would flow straight through ``_surfaces_observed`` as a
+    trustworthy read and null the row while stamping a fresh
+    ``olt_observed_at``).
+    """
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_identity_mismatch_read(adapter, desired, *, deadline=None):
+        return ReadResult(
+            status="unavailable",
+            observed=None,
+            error="registered at a different fsp/onu_id than desired",
+            identity_status="mismatch",
+        )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    first = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    assert first.success is True
+
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    previous_observed_at = row.olt_observed_at
+    assert previous_observed_at is not None
+    assert row.olt_read_status == "present"
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_identity_mismatch_read,
+    )
+    second = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert second.success is False
+    assert second.failure.reason == ReconcileFailureReason.OLT_IDENTITY_MISMATCH
+
+    db_session.expire_all()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # The previous evidence — mgmt IP, presence, everything — survives an
+    # identity-mismatch pass exactly as it survives a transport failure.
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    assert row.olt_observed_at == previous_observed_at
+    assert row.olt_read_status == "unavailable"
+
+
 def test_apply_failure_marks_ont_out_of_sync(
     db_session, ont, stub_desired, stub_ont_status
 ):

@@ -212,16 +212,19 @@ def test_serial_found_on_a_different_port_is_not_an_observation(monkeypatch):
     )
     result = read_olt_state(adapter, _desired())
 
-    assert result.success is True
-    assert result.observed is not None
-    assert result.observed.olt_present is True
-    assert result.observed.olt_identity_status == "mismatch"
+    # status="unavailable" — NOT "present" — so this can never flow into
+    # upsert_ont_observation and overwrite the last genuine OLT evidence
+    # with a null placeholder while stamping a fresh olt_observed_at. A
+    # "present" result here was the exact re-opened hazard an earlier
+    # version of this fix had: the observed fields all being None doesn't
+    # stop `_surfaces_observed` from treating "present" as a trustworthy
+    # OLT read.
+    assert result.success is False
+    assert result.unreachable is False
+    assert result.observed is None
+    assert result.identity_status == "mismatch"
     # No per-ONT query was ever attempted against either coordinate pair.
     assert calls == []
-    # No detail was populated either — the observation carries nothing that
-    # could be mistaken for the stored target's real state.
-    assert result.observed.olt_description is None
-    assert result.observed.olt_mgmt_ip is None
 
 
 def test_unresolved_target_with_a_found_registration_is_not_an_observation(
@@ -237,10 +240,10 @@ def test_unresolved_target_with_a_found_registration_is_not_an_observation(
     )
     result = read_olt_state(adapter, _desired(olt_ont_id=None))
 
-    assert result.success is True
-    assert result.observed is not None
-    assert result.observed.olt_present is True
-    assert result.observed.olt_identity_status == "unresolved"
+    assert result.success is False
+    assert result.unreachable is False
+    assert result.observed is None
+    assert result.identity_status == "unresolved"
 
 
 def test_matching_fsp_and_onu_id_is_bound_and_reads_normally(monkeypatch):

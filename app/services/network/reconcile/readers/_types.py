@@ -58,6 +58,16 @@ class ReadResult(Generic[T]):
     observed: T | None
     error: str | None
     transport_unreachable: bool = False
+    #: Sub-classification of an ``"unavailable"`` OLT read that stems from a
+    #: physical-identity problem rather than a transport failure or an
+    #: unparseable reply: the OLT reported this ONT's serial registered
+    #: somewhere other than the desired fsp/olt_ont_id target
+    #: (``"mismatch"``), or a registration was found with no confirmed target
+    #: to compare it against (``"unresolved"``). ``None`` for every other
+    #: ``"unavailable"`` cause. Lets ``reconcile.core`` report
+    #: ``OLT_IDENTITY_MISMATCH``/``OLT_IDENTITY_UNRESOLVED`` instead of the
+    #: generic ``OLT_OBSERVATION_UNAVAILABLE``.
+    identity_status: Literal["mismatch", "unresolved"] | None = None
 
     def __post_init__(self) -> None:
         if self.status == "unavailable" and self.observed is not None:
@@ -70,6 +80,13 @@ class ReadResult(Generic[T]):
         if self.transport_unreachable and self.status != "unavailable":
             raise ValueError(
                 "transport_unreachable only applies to an 'unavailable' status"
+            )
+        if self.identity_status is not None and self.status != "unavailable":
+            raise ValueError("identity_status only applies to an 'unavailable' status")
+        if self.identity_status is not None and self.transport_unreachable:
+            raise ValueError(
+                "identity_status and transport_unreachable are mutually exclusive "
+                "— a transport failure never carries identity information"
             )
 
     @property

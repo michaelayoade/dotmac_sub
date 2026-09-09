@@ -372,11 +372,7 @@ def reconcile_ont(
             # preserve whatever OLT evidence is already on file (see
             # ``observed_surfaces`` below).
             if olt_result.status == "unavailable":
-                olt_unavailable_reason = (
-                    ReconcileFailureReason.OLT_UNREACHABLE
-                    if olt_result.unreachable
-                    else ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
-                )
+                olt_unavailable_reason = _olt_unavailable_reason(olt_result)
                 return _finalise(
                     db,
                     ont,
@@ -658,11 +654,7 @@ def reconcile_ont(
             # fabricated "not there" and could still report false convergence
             # if the plan happened to be a delete-only pass.
             if verify_olt_result.status == "unavailable":
-                verify_olt_reason = (
-                    ReconcileFailureReason.OLT_UNREACHABLE
-                    if verify_olt_result.unreachable
-                    else ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
-                )
+                verify_olt_reason = _olt_unavailable_reason(verify_olt_result)
                 return _finalise(
                     db,
                     ont,
@@ -1096,6 +1088,25 @@ def _absent_acs() -> AcsObservedFields:
         acs_observed_wan_instance_index=None,
         acs_observed_wan_ppp_locations=(),
     )
+
+
+def _olt_unavailable_reason(result: ReadResult) -> str:
+    """Map an ``"unavailable"`` OLT ``ReadResult`` to its specific failure reason.
+
+    Three distinct causes share the tri-state's ``"unavailable"`` bucket —
+    couldn't contact the device at all, a reachable-but-untrustworthy reply,
+    and a physical-identity problem (Astra Bug 1: a registration found at a
+    different fsp/onu_id than the desired target, or with no target to
+    compare against at all) — and each gets its own operator-facing reason
+    rather than collapsing into the generic ``OLT_OBSERVATION_UNAVAILABLE``.
+    """
+    if result.unreachable:
+        return ReconcileFailureReason.OLT_UNREACHABLE
+    if result.identity_status == "mismatch":
+        return ReconcileFailureReason.OLT_IDENTITY_MISMATCH
+    if result.identity_status == "unresolved":
+        return ReconcileFailureReason.OLT_IDENTITY_UNRESOLVED
+    return ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
 
 
 def _surfaces_observed(
