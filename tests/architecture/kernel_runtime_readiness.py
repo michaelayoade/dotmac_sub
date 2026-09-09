@@ -52,6 +52,17 @@ RECORD_PATH = REPO_ROOT / "docs" / "kernel-runtime-readiness.json"
 REQUIRED_SCHEMA = "kernel-runtime-readiness.v1"
 REQUIRED_PRODUCT = "dotmac_sub"
 
+#: The envelope Starter owns (see the brief this record answers): exactly
+#: these six top-level keys, never more. An extra key is refused rather than
+#: ignored -- Starter's gate parses this envelope by name, and a field it
+#: does not expect is exactly how a producer smuggles an unreviewed claim
+#: past a consumer that only reads six named fields.
+ENVELOPE_KEYS = frozenset(
+    {"schema", "product", "subject", "requirements", "composition", "source_references"}
+)
+REQUIREMENT_KEYS = frozenset({"id", "statement", "satisfied", "source_reference"})
+COMPOSITION_KEYS = frozenset({"declaration", "source_reference"})
+
 _SOURCE_REF_RE = re.compile(r"^(?P<path>[\w./-]+):(?P<start>\d+)(-(?P<end>\d+))?$")
 
 
@@ -69,6 +80,11 @@ def load_record(path: Path = RECORD_PATH) -> dict[str, Any]:
 
 
 def validate_envelope(record: dict[str, Any]) -> None:
+    extra = set(record.keys()) - ENVELOPE_KEYS
+    if extra:
+        raise RecordValidationError(
+            f"unexpected top-level key(s) not in the owned envelope: {sorted(extra)!r}"
+        )
     if record.get("schema") != REQUIRED_SCHEMA:
         raise RecordValidationError(
             f"schema must be {REQUIRED_SCHEMA!r}: {record.get('schema')!r}"
@@ -91,7 +107,12 @@ def validate_envelope(record: dict[str, Any]) -> None:
 
     seen_ids: set[str] = set()
     for entry in record["requirements"]:
-        for key in ("id", "statement", "satisfied", "source_reference"):
+        entry_extra = set(entry.keys()) - REQUIREMENT_KEYS
+        if entry_extra:
+            raise RecordValidationError(
+                f"unexpected key(s) on a requirement entry: {sorted(entry_extra)!r}: {entry!r}"
+            )
+        for key in REQUIREMENT_KEYS:
             if key not in entry:
                 raise RecordValidationError(
                     f"requirement missing key {key!r}: {entry!r}"
@@ -105,7 +126,12 @@ def validate_envelope(record: dict[str, Any]) -> None:
         seen_ids.add(entry["id"])
 
     for entry in record["composition"]:
-        for key in ("declaration", "source_reference"):
+        entry_extra = set(entry.keys()) - COMPOSITION_KEYS
+        if entry_extra:
+            raise RecordValidationError(
+                f"unexpected key(s) on a composition entry: {sorted(entry_extra)!r}: {entry!r}"
+            )
+        for key in COMPOSITION_KEYS:
             if key not in entry:
                 raise RecordValidationError(
                     f"composition entry missing key {key!r}: {entry!r}"
@@ -358,6 +384,26 @@ def check_no_set_transaction_sql_is_issued_for_isolation_mode() -> bool:
     return True
 
 
+def check_tenant_guc_issues_no_set_transaction_sql() -> bool:
+    """The Sub-side half of the declared ordering requirement below: the
+    tenant-GUC hook itself never issues a literal `SET TRANSACTION` (it
+    issues `set_config`, checked separately), so it can never compete for
+    "first statement in the transaction" position with a Kernel-successor
+    isolation pin applied via `execution_options` before `BEGIN` -- whichever
+    of the two actually runs first, neither is a `SET TRANSACTION` statement
+    racing the other for that one-shot slot.
+    """
+
+    path = REPO_ROOT / "app/services/operator_tenant.py"
+    for node in python_nodes(path):
+        if isinstance(node, ast.Call):
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if "SET TRANSACTION" in arg.value.upper():
+                        return False
+    return True
+
+
 REQUIREMENT_CHECKS: dict[str, Callable[[], bool]] = {
     "tenant-guc-is-a-class-scoped-after-begin-listener": check_tenant_guc_is_class_scoped_after_begin_listener,
     "tenant-guc-fires-only-on-root-transactions": check_tenant_guc_fires_only_on_root_transactions,
@@ -370,6 +416,9 @@ REQUIREMENT_CHECKS: dict[str, Callable[[], bool]] = {
         check_serializable_write_mode_is_serializable_false
     ),
     "no-set-transaction-sql-is-issued-for-isolation-mode": check_no_set_transaction_sql_is_issued_for_isolation_mode,
+    "tenant-guc-ordering-is-compatible-with-a-pre-begin-kernel-isolation-pin": (
+        check_tenant_guc_issues_no_set_transaction_sql
+    ),
 }
 
 

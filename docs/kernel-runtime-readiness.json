@@ -44,6 +44,12 @@
       "statement": "Sub applies isolation mode through SQLAlchemy execution_options rather than issuing a literal SET TRANSACTION ISOLATION LEVEL statement, precisely because the tenant-GUC after_begin listener above always runs a statement first -- so the two mechanisms (a class-scoped after_begin listener and a connection-level execution_options isolation pin) do not compete for \"first statement in the transaction\" position the way two literal SQL statements would.",
       "satisfied": true,
       "source_reference": "app/db.py:113-121"
+    },
+    {
+      "id": "tenant-guc-ordering-is-compatible-with-a-pre-begin-kernel-isolation-pin",
+      "statement": "DECLARED, not fully measured by this validator: Starter's Kernel successor (Slice 3, merged on Starter main) applies readonly_session()/serializable_session()'s isolation mode via execution_options set before the transaction's BEGIN, so it precedes every after_begin listener -- that half is a fact about Starter's own tree, which this repository does not contain and this validator does not sweep; it is taken as given from the landed Starter change, not re-derived here. What IS measured, from Sub's own tree, is the half that makes the declared ordering relevant: Sub's tenant-GUC hook fires via after_begin (see tenant-guc-is-a-class-scoped-after-begin-listener) and issues no literal SET TRANSACTION statement of its own (checked here), so it never competes with a pre-BEGIN isolation pin for the one-shot 'first statement' position PostgreSQL enforces for SET TRANSACTION. The satisfied value below reflects only that measured Sub-side half; it is not, and cannot be, a claim this validator makes about Starter's session_runtime.py.",
+      "satisfied": true,
+      "source_reference": "app/services/operator_tenant.py:62-89"
     }
   ],
   "composition": [

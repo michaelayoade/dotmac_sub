@@ -79,24 +79,37 @@ def test_each_requirement_checker_currently_returns_true(checker_name: str) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_planted_false_requirement_is_rejected() -> None:
-    """Plant: flip a TRUE requirement's `satisfied` to `false`. The checker
-    still recomputes the real (true) fact from the tree, so the mismatch
-    must be caught -- this is the exact shape of defect the record exists
-    to make impossible: a boolean nobody can check."""
+@pytest.mark.parametrize("requirement_id", sorted(REQUIREMENT_CHECKS))
+def test_planted_flip_of_each_requirement_is_caught(requirement_id: str) -> None:
+    """Flip EVERY requirement's `satisfied` in turn (not just one) and prove
+    the checker's tree-derived answer actually DISAGREES with the flipped
+    value -- not merely that `validate_record` raises today, which a checker
+    that always returns `True` would also produce for the id whose baseline
+    is `True`. Asserting the disagreement directly is what a checker that
+    silently degrades to "always true" cannot pass."""
 
     record = copy.deepcopy(load_record())
-    target_id = "tenant-guc-is-a-class-scoped-after-begin-listener"
-    flipped = False
-    for entry in record["requirements"]:
-        if entry["id"] == target_id:
-            assert entry["satisfied"] is True, "plant assumes the baseline claims True"
-            entry["satisfied"] = False
-            flipped = True
-    assert flipped, f"fixture drift: {target_id!r} not found in the record"
+    target = next(e for e in record["requirements"] if e["id"] == requirement_id)
+    baseline = target["satisfied"]
+    flipped = not baseline
 
+    actual = REQUIREMENT_CHECKS[requirement_id]()
+    assert actual == baseline, (
+        f"{requirement_id!r}: checker currently disagrees with the committed "
+        f"record before any plant is applied -- fix the record or the "
+        f"checker, this test cannot proceed"
+    )
+    assert actual != flipped, (
+        f"{requirement_id!r}: the checker returns the SAME value ({actual!r}) "
+        f"regardless of what 'satisfied' claims, which means it is not "
+        f"actually sensitive to the tree -- a manufactured boolean, not a "
+        f"measured one"
+    )
+
+    target["satisfied"] = flipped
     with pytest.raises(
-        RecordValidationError, match=rf"{target_id}.*satisfied=False.*True"
+        RecordValidationError,
+        match=rf"{requirement_id}.*satisfied={flipped!r}.*{actual!r}",
     ):
         validate_record(record)
 
@@ -154,6 +167,43 @@ def test_planted_wrong_isolation_dict_value_is_rejected() -> None:
     assert values == {"isolation_level": "REPEATABLE READ", "postgresql_readonly": True}
     wrong = {"isolation_level": "SERIALIZABLE", "postgresql_readonly": True}
     assert values != wrong
+
+
+def test_planted_wrong_schema_is_rejected() -> None:
+    record = copy.deepcopy(load_record())
+    record["schema"] = "kernel-runtime-readiness.v2"
+
+    with pytest.raises(RecordValidationError, match="schema must be"):
+        validate_record(record)
+
+
+def test_planted_wrong_product_is_rejected() -> None:
+    record = copy.deepcopy(load_record())
+    record["product"] = "dotmac_erp"
+
+    with pytest.raises(RecordValidationError, match="product must be"):
+        validate_record(record)
+
+
+def test_planted_extra_top_level_key_is_rejected() -> None:
+    """Envelope stays exactly the six keys Starter owns -- a seventh field
+    is refused rather than silently ignored, because Starter's gate only
+    ever reads the named six and an extra field is exactly how an unreviewed
+    claim would sneak past it."""
+
+    record = copy.deepcopy(load_record())
+    record["confidence"] = "high"
+
+    with pytest.raises(RecordValidationError, match="unexpected top-level key"):
+        validate_record(record)
+
+
+def test_planted_extra_requirement_key_is_rejected() -> None:
+    record = copy.deepcopy(load_record())
+    record["requirements"][0]["notes"] = "trust me"
+
+    with pytest.raises(RecordValidationError, match="unexpected key"):
+        validate_record(record)
 
 
 # ---------------------------------------------------------------------------
