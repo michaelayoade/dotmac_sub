@@ -125,6 +125,42 @@ def test_service_detail_exposes_customer_reboot_when_ont_is_linked(db_session):
     assert detail["customer_ont"].id == ont.id
 
 
+def test_service_detail_fails_closed_on_ambiguous_active_ont_assignments(db_session):
+    subscriber, subscription, _ont = _active_subscription_with_ont(db_session)
+    second_ont = OntUnit(
+        serial_number="PORTAL-ONT-AMBIGUOUS",
+        is_active=True,
+    )
+    db_session.add(second_ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=second_ont.id,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(CustomerDeviceCommandError) as exc:
+        get_subscription_wifi_status(
+            db_session,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+        )
+
+    assert exc.value.code == "device_assignment_ambiguous"
+
+    detail = get_service_detail(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+    assert detail is not None
+    assert detail["customer_wifi_operation"] is None
+
+
 def test_service_detail_renders_desired_wifi_name(db_session):
     subscriber, subscription, _ont = _active_subscription_with_ont(db_session)
     detail = get_service_detail(
