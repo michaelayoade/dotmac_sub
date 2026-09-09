@@ -202,21 +202,74 @@ def test_a_dynamic_import_of_a_crm_module_still_counts_as_a_dependency() -> None
     assert not _characterization_only(planted)
 
 
-def test_the_identical_name_as_a_path_argument_does_not_count() -> None:
+def test_a_production_read_of_a_crm_path_still_counts_as_a_dependency() -> None:
+    """Sensitivity proof (plant, same string as the near-miss below): a
+    production operation that actually TOUCHES a CRM/Omni path's content —
+    opens it, reads it, or spawns it — is a live dependency on the retired
+    surface even though the path appears only as a string argument, never
+    an import. Locating a path is not the same operation as reading it, and
+    only the first is characterization; this must not be exempted no matter
+    how it is spelled."""
+
+    bare_open = """
+        def dump():
+            with open("scripts/migration/backfill_crm_subscriber_links.py") as f:
+                return f.read()
+    """
+    assert not _characterization_only(bare_open)
+
+    chained_read = """
+        from pathlib import Path
+
+        def dump():
+            target = Path("scripts/migration/backfill_crm_subscriber_links.py")
+            return target.read_text()
+    """
+    assert not _characterization_only(chained_read)
+
+    via_subprocess = """
+        import subprocess
+
+        def run_it():
+            return subprocess.run(
+                ["python", "scripts/migration/backfill_crm_subscriber_links.py"]
+            )
+    """
+    assert not _characterization_only(via_subprocess)
+
+
+def test_the_identical_name_used_only_to_locate_a_path_does_not_count() -> None:
     """Sensitivity proof (near-miss, same string as the plant above): the
-    IDENTICAL module name, consumed only to locate a file to read rather
-    than to import it, is characterization data — same string, opposite
-    outcome, decided entirely by how it is consumed."""
+    IDENTICAL path, constructed only to be located or described — never
+    read, opened, or executed — is characterization data. Same string,
+    opposite outcome, decided entirely by how it is consumed."""
 
     near_miss = """
         from pathlib import Path
 
-        TARGET_FILE = Path("app/services/crm_client.py")
+        KNOWN_RESIDUE_EXAMPLE = Path("scripts/migration/backfill_crm_subscriber_links.py")
 
         def describe():
-            return TARGET_FILE.read_text()
+            return str(KNOWN_RESIDUE_EXAMPLE)
     """
     assert _characterization_only(near_miss)
+
+
+def test_reading_the_freezes_own_ledger_is_still_characterization() -> None:
+    """The one narrow, explicit exception: the ledger file this whole
+    module is built around is characterization data by definition — a list
+    of paths, never application code — so reading IT specifically does not
+    count, unlike reading any other CRM/Omni path."""
+
+    reads_the_ledger = """
+        from pathlib import Path
+
+        LEDGER = Path("tests/architecture/crm_vocabulary_baseline.txt")
+
+        def load():
+            return LEDGER.read_text(encoding="utf-8")
+    """
+    assert _characterization_only(reads_the_ledger)
 
 
 def test_a_crm_name_inside_a_dict_or_list_still_counts_as_a_dependency() -> None:
