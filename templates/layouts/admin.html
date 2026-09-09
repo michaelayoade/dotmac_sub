@@ -951,8 +951,9 @@
 <script>
     if (typeof initSessionRefresh === 'function') {
         initSessionRefresh({
-            refreshUrl: "/admin/session/refresh",
-            loginUrl: "/auth/login"
+            refreshUrl: "/auth/session/refresh",
+            loginUrl: "/auth/login",
+            expiresAt: {{ request.state.auth.access_expires_at|default(0, true) }}
         });
     }
 </script>
