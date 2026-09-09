@@ -620,10 +620,20 @@ def test_flutterwave_failed_charge_completed_moves_no_money(db_session, subscrib
     assert invoice.balance_due == Decimal("2500.00")
     receipt = (
         db_session.query(IntegrationInbox)
-        .filter_by(provider_event_id="flutterwave-DMAC-WH-6")
+        .filter_by(provider_event_id="flutterwave-charge.completed-881002")
         .one()
     )
     assert receipt.state == "processed"
+    # A failed attempt now gets its own independently-persisted receipt (see
+    # the Flutterwave attempt-scoped identity fix); it must still carry the
+    # `tx_ref` so the failed attempt can be correlated back to its checkout.
+    assert receipt.consequence_json.get("status") == "ok"
+    event = (
+        db_session.query(PaymentProviderEvent)
+        .filter_by(idempotency_key="flutterwave-charge.completed-881002")
+        .one()
+    )
+    assert event.provider_reference == "DMAC-WH-6"
 
 
 def test_unmatched_refund_event_does_not_return_200_with_empty_consequence(
