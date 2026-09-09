@@ -230,17 +230,11 @@ def test_refund_processed_partial_refund(db_session, subscriber):
     assert invoice.balance_due == Decimal("2000.00")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Requires PR1's provider-agnostic terminal-state guard "
-        "(branch fix/payment-webhook-terminal-state-guard) merged into main. "
-        "Today, an event recognized-but-unmatchable to a payment silently "
-        "returns 200 via mark_processed; remove this xfail once PR1 lands "
-        "and this branch is rebased onto it."
-    ),
-)
 def test_unmatched_refund_event_does_not_return_200(db_session):
+    """Defect C + PR1's terminal-state guard working together: the resolution
+    ladder correctly fails to find a payment, and PR1's guard
+    (`_expected_financial_effect_unresolved`, merged in #3017) stops that from
+    silently returning 200 with an empty consequence."""
     _make_provider(db_session)
     body = _refund_body(
         event="refund.processed",
