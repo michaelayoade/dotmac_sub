@@ -36,6 +36,7 @@ Widget _app({
   AuthController Function() controller = _AuthedController.new,
   ManagerProfile? managerProfile,
   List<ManagerJob> managerJobs = const [],
+  Future<JobList> Function()? jobsLoader,
   List<Override> extra = const [],
 }) {
   return ProviderScope(
@@ -71,7 +72,8 @@ Widget _app({
           ),
         ),
         jobsListProvider.overrideWith(
-          (ref) async => const JobList(<JobSummary>[]),
+          (ref) =>
+              jobsLoader?.call() ?? Future.value(const JobList(<JobSummary>[])),
         ),
         todayJobsProvider.overrideWith(
           (ref) async => const JobList(<JobSummary>[]),
@@ -126,6 +128,19 @@ void main() {
     await tester.tap(find.text('Schedule'));
     await tester.pumpAndSettle();
     expect(find.text('Schedule'), findsWidgets);
+  });
+
+  testWidgets('jobs failure does not crash the application shell', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(jobsLoader: () => Future.error(StateError('jobs unavailable'))),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Hello, Chidi'), findsOneWidget);
   });
 
   testWidgets('vendor shell shows work-order tabs and vendor-scoped map', (

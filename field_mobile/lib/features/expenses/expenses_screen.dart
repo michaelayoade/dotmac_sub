@@ -11,6 +11,7 @@ import '../../app/status_presentation.dart';
 import '../../app/widgets/primary_action_button.dart';
 import '../../core/offline/draft_store.dart';
 import '../execution/execution_controller.dart';
+import '../manager/manager_providers.dart';
 import 'expense_models.dart';
 import 'expenses_providers.dart';
 
@@ -863,7 +864,7 @@ class _NewExpenseRequestScreenState
             ticketId: _ticketId.text,
             items: _items,
           );
-      ref.invalidate(expenseRequestsProvider);
+      _invalidateExpenseProjections(ref);
       try {
         await ref.read(expenseRequestsProvider.future);
       } catch (_) {
@@ -887,7 +888,7 @@ class _NewExpenseRequestScreenState
               clientRef: clientRef,
               payload: payload,
             );
-        ref.invalidate(expenseRequestsProvider);
+        _invalidateExpenseProjections(ref);
         try {
           await ref.read(expenseRequestsProvider.future);
         } catch (_) {
@@ -1210,6 +1211,13 @@ class _NewExpenseRequestScreenState
       ),
     );
   }
+}
+
+void _invalidateExpenseProjections(WidgetRef ref) {
+  ref
+    ..invalidate(expenseRequestsProvider)
+    ..invalidate(managerExpensesProvider)
+    ..invalidate(managerSummaryProvider);
 }
 
 String _money(String? currency, double value) =>
