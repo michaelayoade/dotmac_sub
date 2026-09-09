@@ -76,11 +76,14 @@ jobs:
           }
           authorization_main_sha="$(git rev-parse HEAD)"
 
-          # Canary against the pin above ever being silently reverted to
-          # `ref: main`. If GitHub's workflow_dispatch semantics ever meant
-          # github.sha did not match this checkout, this fails loudly and
-          # closed here, before any side effect, rather than confusingly
-          # downstream in production-deploy.yml's verify step.
+          # Canary against the pin above (`ref: ${{ github.sha }}`) ever being
+          # silently reverted back to a moving ref like `ref: main`. This
+          # detects the checkout's `ref:` no longer matching `github.sha` --
+          # it cannot detect `github.sha` itself being wrong, since the
+          # checkout is configured FROM github.sha. That is the regression
+          # worth catching; it fails loudly and closed here, before any side
+          # effect, rather than confusingly downstream in
+          # production-deploy.yml's verify step.
           test "$authorization_main_sha" = "$GITHUB_SHA" || {
             echo "Refusing production authorization: the authorizing checkout ($authorization_main_sha) is not the dispatched commit ($GITHUB_SHA)." >&2
             exit 1
@@ -241,7 +244,7 @@ jobs:
           # protection should already prevent this; this is defense in depth)
           # is caught before any side effect.
           git fetch --no-tags origin main
-          current_main_sha="$(git rev-parse origin/main)"
+          current_main_sha="$(git rev-parse FETCH_HEAD)"
           git merge-base --is-ancestor "$STAGED_SHA" "$current_main_sha" || {
             echo "Refusing production authorization: $STAGED_SHA is no longer an ancestor of main's current tip ($current_main_sha)." >&2
             exit 1

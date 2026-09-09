@@ -537,7 +537,7 @@ def test_promotion_pins_the_authorizing_checkout_to_the_dispatched_commit() -> N
     # of main during the wait stays informational, not a failure), and it must
     # run before anything that mutates GHCR.
     assert "git fetch --no-tags origin main" in workflow
-    assert 'current_main_sha="$(git rev-parse origin/main)"' in workflow
+    assert 'current_main_sha="$(git rev-parse FETCH_HEAD)"' in workflow
     assert 'git merge-base --is-ancestor "$STAGED_SHA" "$current_main_sha"' in workflow
     assert "no longer an ancestor of main's current tip" in workflow
     assert "::notice title=main advanced during the approval window" in workflow
@@ -548,15 +548,55 @@ def test_promotion_pins_the_authorizing_checkout_to_the_dispatched_commit() -> N
     imagetools_index = workflow.index("docker buildx imagetools create")
     assert reproof_index < buildx_index < ghcr_login_index < imagetools_index
 
+    # The ordering assertion above is text-position only: a future
+    # `continue-on-error: true` or a step-level `if:` on the authorizing job
+    # would let a mutating step run even after a fail-closed check "failed",
+    # while every assertion above still passes. Guard that directly.
+    job_start = workflow.index("authorize-and-promote:")
+    job_body = workflow[
+        job_start : workflow.index("\njobs:", job_start)
+        if "\njobs:" in workflow[job_start:]
+        else len(workflow)
+    ]
+    assert "continue-on-error" not in job_body
+    assert "\n        if:" not in job_body
+
+
+def test_release_freeze_gate_documents_its_merge_time_limitation_accurately() -> None:
+    """The freeze gate's known-limitation comment must name the real blockers.
+
+    A prior draft of this comment blamed `ci.yml` and `version-bump-pr.yml`
+    for blocking merge-queue adoption; `ci.yml` already carries `merge_group:`
+    support (enforced by test_ci_workflow_contract.py) and is not the
+    blocker. The actual pull_request-only required-context workflows are
+    version-impact.yml and e2e-gate.yml. A future engineer evaluating merge
+    queue adoption must not be misled by a stale/incorrect premise on a
+    permanent, otherwise-unguarded documented limitation.
+    """
+
+    workflow = _read(".github/workflows/release-freeze-gate.yml")
+
+    assert "KNOWN LIMITATION" in workflow
+    assert "cached at the PR's" in workflow
+    assert "version-impact.yml" in workflow
+    assert "e2e-gate.yml" in workflow
+    # The corrected comment must not re-blame ci.yml for the merge-queue gap.
+    limitation = workflow[workflow.index("KNOWN LIMITATION") : workflow.index("on:")]
+    assert "`ci.yml`\n# (" not in limitation
+
 
 def test_production_deploy_binds_to_the_exact_digest_it_was_handed() -> None:
-    """The anti-rollback gate's own authorization read is bound to its inputs.
+    """The on-host anti-rollback gate's own authorization read is bound to its inputs.
 
-    Reading TARGET_REVISION from the authorization file without checking it
-    against the digest actually being deployed would let a mismatched
-    authorization/digest pair pass the gate; production-deploy.yml's later
-    call already binds `--expected-image-digest`/`--expected-source-revision`,
-    but the anti-rollback gate's own read did not, until now.
+    `production-deploy.yml`'s `verify` job already binds
+    `--expected-authorization-run-id`/`--expected-authorization-main-revision`
+    (there is no `--expected-source-revision` flag anywhere in this repo --
+    that CLI argument is dead surface). `deploy_production.sh`'s own
+    `verify-production` call previously bound neither. In the automated path
+    this closes a regression guard rather than a live gap today (DIGEST and
+    AUTHORIZATION_RUN_ID both trace back to the same authorization.json the
+    check reads), but it also protects the documented hand-invocation path on
+    the host, where no such derivation guarantee exists.
     """
 
     adapter = _read("scripts/deploy_production.sh")
