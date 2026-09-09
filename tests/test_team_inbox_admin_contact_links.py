@@ -9,8 +9,10 @@ from starlette.requests import Request
 
 from app.models.notification import Notification, NotificationStatus
 from app.models.sales import Lead
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
+    InboxAgentPresence,
     InboxChannelType,
     InboxContactLink,
     InboxConversation,
@@ -23,6 +25,7 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_operations, team_inbox_projection, team_inbox_read
 from app.web.admin import inbox as inbox_web
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _request() -> Request:
@@ -72,6 +75,30 @@ def _conversation(db_session, *, subject: str = "Ada needs help") -> InboxConver
     db_session.add(conversation)
     db_session.flush()
     return conversation
+
+
+def _online_reply_agent(db_session, conversation: InboxConversation):
+    team = ServiceTeam(
+        name=f"Reply Team {uuid.uuid4().hex[:8]}",
+        team_type=ServiceTeamType.support.value,
+    )
+    db_session.add(team)
+    db_session.flush()
+    user, person = add_bound_staff_user(db_session)
+    db_session.add_all(
+        [
+            ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True),
+            InboxAgentPresence(
+                person_id=user.id,
+                status="online",
+                manual_override_status="online",
+                last_seen_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    conversation.primary_service_team_id = team.id
+    db_session.flush()
+    return user
 
 
 def test_admin_contact_link_candidates_match_timeline_context(db_session):
@@ -287,9 +314,9 @@ def test_admin_label_routes_create_apply_and_remove_label(db_session, monkeypatc
 
 
 def test_admin_macro_create_and_reply_records_execution(db_session, monkeypatch):
-    actor_id = uuid.uuid4()
     _subscriber(db_session)
     conversation = _conversation(db_session)
+    actor_id = _online_reply_agent(db_session, conversation).id
     conversation.contact_address = "0803 555 0114"
     conversation.channel_type = InboxChannelType.whatsapp.value
     db_session.add(
@@ -376,8 +403,8 @@ def test_macro_actions_can_set_status_and_apply_label(db_session):
 
 
 def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
-    actor_id = uuid.uuid4()
     conversation = _conversation(db_session)
+    actor_id = _online_reply_agent(db_session, conversation).id
     conversation.channel_type = InboxChannelType.email.value
     conversation.contact_address = "ada@example.com"
     from app.services import web_admin as web_admin_service
