@@ -391,17 +391,7 @@ def check_no_set_transaction_sql_is_issued_for_isolation_mode() -> bool:
     return True
 
 
-def check_tenant_guc_issues_no_set_transaction_sql() -> bool:
-    """The Sub-side half of the declared ordering requirement below: the
-    tenant-GUC hook itself never issues a literal `SET TRANSACTION` (it
-    issues `set_config`, checked separately), so it can never compete for
-    "first statement in the transaction" position with a Kernel-successor
-    isolation pin applied via `execution_options` before `BEGIN` -- whichever
-    of the two actually runs first, neither is a `SET TRANSACTION` statement
-    racing the other for that one-shot slot.
-    """
-
-    path = REPO_ROOT / "app/services/operator_tenant.py"
+def _file_issues_no_set_transaction_sql(path: Path) -> bool:
     for node in python_nodes(path):
         if isinstance(node, ast.Call):
             for arg in list(node.args) + [kw.value for kw in node.keywords]:
@@ -409,6 +399,37 @@ def check_tenant_guc_issues_no_set_transaction_sql() -> bool:
                     if "SET TRANSACTION" in arg.value.upper():
                         return False
     return True
+
+
+def check_tenant_guc_issues_no_set_transaction_sql() -> bool:
+    """The Sub-side half of the declared ordering requirement below.
+
+    The tenant-GUC `after_begin` listener itself -- `session_hooks.py`'s
+    `_apply_operator_tenant_scope`, the function actually registered against
+    `Session`'s `after_begin` event (see
+    `tenant-guc-is-a-class-scoped-after-begin-listener`) -- and the function
+    it calls to do the work, `operator_tenant.py`'s
+    `apply_operator_tenant_transaction_scope`, between them never issue a
+    literal `SET TRANSACTION` (they issue `set_config`, checked separately).
+    Both files are swept: a `SET TRANSACTION` added directly to the listener
+    in `session_hooks.py` -- bypassing `operator_tenant.py` entirely -- would
+    be exactly as disqualifying as one added inside
+    `apply_operator_tenant_transaction_scope`, and a checker that only swept
+    `operator_tenant.py` would miss it. Because neither file issues one, the
+    tenant-GUC hook can never compete for "first statement in the
+    transaction" position with a Kernel-successor isolation pin applied via
+    `execution_options` before `BEGIN`.
+
+    This measures only the Sub-side half. It says nothing about, and cannot
+    verify, when Starter's Kernel successor applies its isolation pin
+    relative to `BEGIN` -- that fact lives in Starter's own tree.
+    """
+
+    hooks_path = REPO_ROOT / "app/services/session_hooks.py"
+    tenant_path = REPO_ROOT / "app/services/operator_tenant.py"
+    return _file_issues_no_set_transaction_sql(
+        hooks_path
+    ) and _file_issues_no_set_transaction_sql(tenant_path)
 
 
 REQUIREMENT_CHECKS: dict[str, Callable[[], bool]] = {

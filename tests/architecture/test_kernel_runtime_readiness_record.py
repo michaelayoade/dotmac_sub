@@ -224,3 +224,141 @@ def test_near_miss_wider_line_range_still_resolves() -> None:
 
 def test_near_miss_single_line_reference_still_resolves() -> None:
     resolve_source_reference("app/services/operator_tenant.py:29")
+
+
+# ---------------------------------------------------------------------------
+# Tree-level sensitivity: the tenant-GUC-ordering checker's two-file scope.
+# ---------------------------------------------------------------------------
+#
+# The generic `test_planted_flip_of_each_requirement_is_caught` above proves
+# every checker, including this one, disagrees when the JSON's `satisfied`
+# is flipped against today's tree. It does not prove the checker's SCOPE is
+# right -- a checker that only ever swept `operator_tenant.py` would still
+# pass that generic test today (the real tree is clean), while missing a
+# `SET TRANSACTION` planted directly in `session_hooks.py`'s listener. These
+# tests plant directly into synthetic source trees to prove the two-file
+# scope itself, independent of what today's real tree happens to contain.
+
+
+def test_file_level_helper_catches_a_planted_set_transaction_call(tmp_path) -> None:
+    """Sensitivity proof, tree-level: `_file_issues_no_set_transaction_sql`
+    catches a literal `SET TRANSACTION` issued as a call argument."""
+
+    from tests.architecture.kernel_runtime_readiness import (
+        _file_issues_no_set_transaction_sql,
+    )
+
+    planted = tmp_path / "planted_listener.py"
+    planted.write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def _apply_operator_tenant_scope(connection):\n"
+        "    connection.execute(text('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'))\n"
+    )
+    assert _file_issues_no_set_transaction_sql(planted) is False
+
+
+def test_file_level_helper_passes_a_near_miss_that_only_mentions_transaction(
+    tmp_path,
+) -> None:
+    """Near-miss: prose that merely uses the words 'set' and 'transaction'
+    without the contiguous SQL literal `SET TRANSACTION` must not trip the
+    checker -- otherwise it would be a text-grep in disguise, exactly what
+    the brief forbids."""
+
+    from tests.architecture.kernel_runtime_readiness import (
+        _file_issues_no_set_transaction_sql,
+    )
+
+    near_miss = tmp_path / "near_miss.py"
+    near_miss.write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def apply_operator_tenant_transaction_scope(connection):\n"
+        "    # This comment describes how the transaction is set up, but\n"
+        "    # issues only set_config, never SET TRANSACTION.\n"
+        "    connection.scalar(\n"
+        "        text(\"SELECT set_config('app.current_tenant', :tenant_id, true)\"),\n"
+        "        {'tenant_id': 'x'},\n"
+        "    )\n"
+    )
+    assert _file_issues_no_set_transaction_sql(near_miss) is True
+
+
+def test_requirement_checker_catches_a_set_transaction_planted_only_in_the_listener(
+    tmp_path, monkeypatch
+) -> None:
+    """The defect this checker exists to catch: a `SET TRANSACTION` added
+    directly to `session_hooks.py`'s `after_begin` listener, bypassing
+    `operator_tenant.py` entirely. A checker scoped only to
+    `operator_tenant.py` (the requirement's pre-widening shape) would wrongly
+    see this synthetic tree as clean; the two-file checker must not."""
+
+    from tests.architecture import kernel_runtime_readiness as krr
+
+    services = tmp_path / "app" / "services"
+    services.mkdir(parents=True)
+    (services / "session_hooks.py").write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def _apply_operator_tenant_scope(_session, transaction, connection):\n"
+        "    if transaction.parent is not None:\n"
+        "        return\n"
+        "    connection.execute(text('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'))\n"
+    )
+    (services / "operator_tenant.py").write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def apply_operator_tenant_transaction_scope(connection):\n"
+        "    connection.scalar(\n"
+        "        text(\"SELECT set_config('app.current_tenant', :tenant_id, true)\"),\n"
+        "        {'tenant_id': 'x'},\n"
+        "    )\n"
+    )
+
+    # A checker scoped only to operator_tenant.py -- the requirement's shape
+    # before this change -- would find this synthetic tree clean, proving
+    # the single-file scope is genuinely too narrow.
+    narrow_result = krr._file_issues_no_set_transaction_sql(
+        services / "operator_tenant.py"
+    )
+    assert narrow_result is True, (
+        "the synthetic operator_tenant.py must itself be clean, so the "
+        "failure this test proves comes from session_hooks.py, not a typo "
+        "in the fixture"
+    )
+
+    monkeypatch.setattr(krr, "REPO_ROOT", tmp_path)
+    assert krr.check_tenant_guc_issues_no_set_transaction_sql() is False
+
+
+def test_requirement_checker_passes_a_clean_two_file_near_miss(
+    tmp_path, monkeypatch
+) -> None:
+    """Near-miss: a legitimate synthetic tree, clean in both files, still
+    passes -- the widened scope must not fail everything indiscriminately."""
+
+    from tests.architecture import kernel_runtime_readiness as krr
+
+    services = tmp_path / "app" / "services"
+    services.mkdir(parents=True)
+    (services / "session_hooks.py").write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def _apply_operator_tenant_scope(_session, transaction, connection):\n"
+        "    if transaction.parent is not None:\n"
+        "        return\n"
+        "    apply_operator_tenant_transaction_scope(connection)\n"
+    )
+    (services / "operator_tenant.py").write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def apply_operator_tenant_transaction_scope(connection):\n"
+        "    connection.scalar(\n"
+        "        text(\"SELECT set_config('app.current_tenant', :tenant_id, true)\"),\n"
+        "        {'tenant_id': 'x'},\n"
+        "    )\n"
+    )
+
+    monkeypatch.setattr(krr, "REPO_ROOT", tmp_path)
+    assert krr.check_tenant_guc_issues_no_set_transaction_sql() is True
