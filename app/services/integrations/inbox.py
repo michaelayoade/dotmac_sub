@@ -144,6 +144,7 @@ def receive_verified(
     event_type: str,
     payload: dict[str, Any],
     headers: dict[str, str] | None = None,
+    legacy_provider_event_ids: tuple[str, ...] = (),
 ) -> tuple[IntegrationInbox, bool]:
     # The binding is the stable parent aggregate for receipt identity. Locking
     # it serializes the check/insert sequence so the database uniqueness rule
@@ -187,6 +188,31 @@ def receive_verified(
             )
             raise ProviderEventIdentityCollision("provider event identity collision")
         return existing, False
+    # No row under the current identity format. `legacy_provider_event_ids` is
+    # a caller-declared, generic escape hatch for a provider that changed its
+    # identity CONSTRUCTION (not its underlying events) while it already had
+    # live receipts under the old format -- the caller is asserting that this
+    # old key space is inherently ambiguous (a legacy identity may have been
+    # shared across genuinely distinct events), so a digest MISMATCH there is
+    # expected and harmless, never evidence of tampering. Only an EXACT digest
+    # match is treated as "this is the same event, already recorded" (a
+    # redelivery under the retired format); anything else falls through and is
+    # recorded fresh under the new, non-ambiguous identity below.
+    for legacy_event_id in legacy_provider_event_ids:
+        normalized_legacy_id = legacy_event_id.strip()
+        if not normalized_legacy_id:
+            continue
+        legacy_existing = (
+            db.query(IntegrationInbox)
+            .filter(
+                IntegrationInbox.capability_binding_id == binding.id,
+                IntegrationInbox.provider_event_id == normalized_legacy_id,
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if legacy_existing is not None and legacy_existing.payload_digest == digest:
+            return legacy_existing, False
     receipt = IntegrationInbox(
         installation_id=binding.installation_id,
         capability_binding_id=binding.id,
@@ -216,6 +242,7 @@ def receive_and_claim_verified(
     headers: dict[str, str] | None = None,
     now: datetime | None = None,
     lease_duration: timedelta = DEFAULT_LEASE_DURATION,
+    legacy_provider_event_ids: tuple[str, ...] = (),
 ) -> tuple[IntegrationInbox, bool]:
     """Persist a verified fact before any domain consequence runs."""
 
@@ -227,6 +254,7 @@ def receive_and_claim_verified(
             event_type=event_type,
             payload=payload,
             headers=headers,
+            legacy_provider_event_ids=legacy_provider_event_ids,
         )
         should_process = claim_for_processing(
             receipt, now=now, lease_duration=lease_duration
