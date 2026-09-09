@@ -579,6 +579,108 @@ def test_refresh_updates_status_for_in_flight_claim(db_session):
     assert request.status == "approved"
 
 
+def test_refresh_drains_a_sent_row_that_the_linked_query_could_never_select(
+    db_session,
+):
+    """A ``sent`` row has no reference BY DEFINITION — the old query excluded it
+    forever (the dead end). The widened poller must find it via the outbox and
+    drain it to ``accepted`` once ERP returns a real id.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    # Delivered with no terminal decision → sent, no reference on the request.
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    assert request.expense_claim_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+    client = _FakeERPClient(
+        status_outcomes=[
+            {
+                "claim_id": "ERP-CLAIM-LATE",
+                "claim_number": "EXP-LATE",
+                "status": "approved",
+            }
+        ]
+    )
+    result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
+
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.accepted.value
+    assert request.expense_claim_reference == "ERP-CLAIM-LATE"
+    assert result["processed"] == 1
+    assert result["updated"] == 1
+    assert client.status_calls == [str(request.id)]
+
+
+# ---------------------------------------------------------------------------
+# Write-back repair — a delivered claim whose write-back was lost, no re-emit
+# ---------------------------------------------------------------------------
+
+
+def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    client = _FakeERPClient(
+        post_outcomes=[{"claim_id": "ERP-CLAIM-REPAIR", "status": "approved"}]
+    )
+    outbox.deliver_pending(db_session, client=client)
+    db_session.refresh(request)
+    assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
+
+    # Simulate a DROPPED write-back: the outbox row is terminal but the
+    # request's own reference never landed.
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+
+    result = expense_sync.repair_expense_claim_writebacks(db_session)
+
+    db_session.refresh(request)
+    assert result["repaired"] == 1
+    assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
+    # No re-emit: still exactly one outbox row, still terminal-accepted.
+    rows = _outbox_rows(db_session, request)
+    assert len(rows) == 1
+    assert rows[0].status == FieldErpSyncStatus.accepted.value
+
+
+def test_repair_never_writes_back_a_rejected_rows_response(db_session):
+    """A rejected/dead row's stored response must never be applied as if ERP
+    had accepted it — repair is restricted to accepted/sent rows only."""
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    client = _FakeERPClient(
+        post_outcomes=[
+            {
+                "status": "rejected",
+                "rejection_reason": "over budget",
+                # A rejected response could still technically carry an id;
+                # repair must not treat that as an acceptance.
+                "claim_id": "ERP-SHOULD-NOT-LINK",
+            }
+        ]
+    )
+    outbox.deliver_pending(db_session, client=client)
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.rejected.value
+
+    result = expense_sync.repair_expense_claim_writebacks(db_session)
+
+    db_session.refresh(request)
+    assert result["repaired"] == 0
+    assert request.expense_claim_reference is None
+
+
 def test_refresh_skips_unsynced_and_terminal_requests(db_session):
     # Not synced yet (no erp id) → excluded.
     unsynced = _make_submitted_request(db_session, crm_work_order_id="wo-a")
@@ -595,3 +697,69 @@ def test_refresh_skips_unsynced_and_terminal_requests(db_session):
     assert result["processed"] == 0
     assert client.status_calls == []
     assert unsynced.expense_claim_reference is None
+
+
+# ---------------------------------------------------------------------------
+# Operator-visible diagnostic surface — delivered-but-unlinked rows per flow
+# ---------------------------------------------------------------------------
+
+
+def test_diagnostics_reports_a_stale_unlinked_sent_row(db_session):
+    from datetime import timedelta
+
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+    # Backdate as if this row has been sitting unlinked for two days.
+    row.created_at = datetime.now(UTC) - timedelta(hours=48)
+    db_session.commit()
+
+    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+
+    flow_report = report[FieldErpSyncFlow.expense_claim.value]
+    assert flow_report["count"] == 1
+    assert flow_report["max_age_hours"] >= 24
+    assert flow_report["stale"] is True
+
+
+def test_diagnostics_excludes_a_fresh_unlinked_row(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+    # Freshly delivered — must not read as stale under the default threshold.
+
+    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+
+    flow_report = report[FieldErpSyncFlow.expense_claim.value]
+    assert flow_report["count"] == 1
+    assert flow_report["max_age_hours"] < 24
+    assert flow_report["stale"] is False
+
+
+def test_diagnostics_excludes_a_row_whose_writeback_actually_landed(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(post_outcomes=[{"claim_id": "ERP-LINKED-OK"}]),
+    )
+    db_session.refresh(request)
+    assert request.expense_claim_reference == "ERP-LINKED-OK"
+
+    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+
+    flow_report = report[FieldErpSyncFlow.expense_claim.value]
+    assert flow_report["count"] == 0
+    assert flow_report["stale"] is False

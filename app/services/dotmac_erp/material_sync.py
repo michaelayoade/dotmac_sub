@@ -298,6 +298,48 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _poll_unlinked_material_requests(
+    db: Session,
+    *,
+    client: DotMacERPClient | ErpCapabilityClient,
+    limit: int,
+) -> tuple[int, int, list[str]]:
+    """Poll ``sent``/``accepted`` outbox rows whose request never got a reference.
+
+    A ``sent`` row was never eligible for the reference-gated query below (it
+    has no reference BY DEFINITION). An ``accepted`` row can also land here if
+    the same-transaction write-back failed after delivery. Keyed on Sub's own
+    request id — see ``client.get_material_request_status``'s docstring.
+    """
+    processed = 0
+    updated = 0
+    errors: list[str] = []
+    for row in outbox.unlinked_delivered_events(
+        db, flow=FieldErpSyncFlow.material_request, limit=limit
+    ):
+        request = db.get(FieldMaterialRequest, row.entity_id)
+        if request is None or request.support_reference:
+            continue
+        processed += 1
+        request_id = str(request.id)
+        try:
+            response = client.get_material_request_status(request_id)
+        except Exception as exc:  # noqa: BLE001 — one bad row can't stall the batch
+            db.rollback()
+            errors.append(f"{row.id}: {exc}")
+            logger.warning(
+                "material_sync: unlinked status poll failed for %s: %s", row.id, exc
+            )
+            continue
+        if not response:
+            continue
+        outbox.record_polled_outcome(db, row, response)
+        db.commit()
+        if request.support_reference:
+            updated += 1
+    return processed, updated, errors
+
+
 def refresh_material_request_statuses(
     db: Session,
     *,
@@ -306,10 +348,18 @@ def refresh_material_request_statuses(
 ) -> dict:
     """Poll ERP for in-flight material requests and refresh their mirror fields.
 
-    Selects synced (``support_reference`` set) requests still awaiting ERP
-    fulfillment (``approved`` / ``issued``), polls
-    ``get_material_request_status(request.id)`` for each, and applies the response
-    via ``apply_material_response``. Ports CRM's material status refresh.
+    Two candidate sets, both keyed by Sub's own request id (never the ERP id):
+
+    1. Already-linked requests (``support_reference`` set) still awaiting ERP
+       fulfillment (``approved`` / ``issued``) — the historical behaviour,
+       ported from CRM's material status refresh.
+    2. Delivered-but-unlinked outbox rows (``sent``/``accepted`` with no
+       reference yet) — the dead end where a ``sent`` row could never satisfy
+       set 1's ``.isnot(None)`` filter since it never carries a reference by
+       construction. Routed through ``outbox.record_polled_outcome`` so the
+       response is classified and written back through the same path a fresh
+       delivery uses.
+
     Read-only against ERP; idempotent; safe to re-run.
     """
     limit = max(1, min(int(limit or 100), 200))
@@ -331,8 +381,6 @@ def refresh_material_request_statuses(
 
     errors: list[str] = []
     result: dict[str, object] = {"processed": 0, "updated": 0, "errors": errors}
-    if not pending:
-        return result
 
     owned_client = client
     created_client = False
@@ -343,6 +391,13 @@ def refresh_material_request_statuses(
     processed = 0
     updated = 0
     try:
+        unlinked_processed, unlinked_updated, unlinked_errors = (
+            _poll_unlinked_material_requests(db, client=owned_client, limit=limit)
+        )
+        processed += unlinked_processed
+        updated += unlinked_updated
+        errors.extend(unlinked_errors)
+
         for request in pending:
             processed += 1
             request_id = str(request.id)

@@ -59,6 +59,36 @@ def build_health_data(db) -> dict[str, object]:
         "replication_health": _build_replication_health(db),
         "task_activity": _build_task_activity(db),
         "erp_sync_ownership": _build_erp_sync_ownership(db),
+        "erp_delivered_unlinked": _build_erp_delivered_unlinked(db),
+    }
+
+
+def _build_erp_delivered_unlinked(db) -> dict[str, object]:
+    """Surface delivered-but-unlinked ``field_erp_sync_events`` rows per flow.
+
+    A ``sent`` row can never satisfy a status poller gated on "the source
+    entity already has an ERP reference" — that row has no reference BY
+    DEFINITION (see ``dotmac_erp.outbox``'s module docstring). An ``accepted``
+    row can also land here when its same-transaction write-back silently
+    failed. Neither self-heals without an operator noticing, so this makes
+    the count and oldest age visible on the same deploy/health surface as
+    ``erp_sync_ownership`` instead of only inside the outbox table.
+
+    ``stale_after_hours=24`` is one uniform default, not a tuned per-flow SLA
+    — confirm/adjust per flow (PO/PI are accounts-payable, expense is
+    payroll-adjacent) before treating ``stale`` as an alerting contract.
+    """
+    try:
+        from app.services.dotmac_erp.outbox import delivered_unlinked_diagnostics
+
+        flows = delivered_unlinked_diagnostics(db, stale_after_hours=24)
+    except Exception as exc:
+        logger.debug("ERP delivered-unlinked surface unavailable", exc_info=True)
+        return {"status": "unknown", "flows": {}, "error": str(exc)[:200]}
+
+    return {
+        "status": "stale" if any(f["stale"] for f in flows.values()) else "ok",
+        "flows": flows,
     }
 
 
