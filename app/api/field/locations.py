@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -16,6 +18,10 @@ from app.services.field.location_tracking import (
     field_location_tracking,
 )
 from app.services.field.routing import field_routing
+from app.services.workforce_attendance import (
+    WorkforceAttendanceError,
+    WorkforceAttendanceService,
+)
 
 router = APIRouter(prefix="/locations", tags=["field-locations"])
 
@@ -60,11 +66,44 @@ def ingest_locations(
 
 @router.put("/sharing", response_model=FieldPresenceRead)
 def update_sharing(
+    request: Request,
     payload: LocationSharingUpdate,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    if payload.enabled:
+        if auth.get("principal_type") != "system_user":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "authorization_failed",
+                    "message": "Location sharing requires a technician staff account.",
+                },
+            )
+        try:
+            subject = UUID(str(auth["principal_id"]))
+            WorkforceAttendanceService(db).require_checked_in_for_shift(
+                subject=subject,
+                request_id=str(
+                    getattr(request.state, "request_id", "field-shift-gate")
+                )[:160],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "authorization_failed",
+                    "message": "Location sharing requires a technician staff account.",
+                },
+            ) from exc
+        except WorkforceAttendanceError as exc:
+            raise HTTPException(
+                status_code=503 if exc.unavailable else 409,
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
     # set_sharing is likewise an owner command; see ingest_locations above.
+    # The attendance query may also have opened a read transaction, so release
+    # it only after the gate has consumed the authoritative attendance facts.
     db_session_adapter.release_read_transaction(db)
     return field_location_tracking.set_sharing(
         db,
