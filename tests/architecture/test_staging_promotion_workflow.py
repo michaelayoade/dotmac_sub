@@ -717,7 +717,7 @@ def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> N
     existing_tag_branch = match.group(1)
 
     # Peeled commit comparison, not just tag existence.
-    assert '$TAG^{commit}' in existing_tag_branch
+    assert "$TAG^{commit}" in existing_tag_branch
     assert "git rev-parse HEAD" in existing_tag_branch
     assert "existing_commit" in existing_tag_branch
     assert "current_commit" in existing_tag_branch
@@ -734,7 +734,8 @@ def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> N
         if '$existing_commit" = "$current_commit"' in line
     )
     match_block_end = next(
-        i for i, line in enumerate(lines[match_block_start:], match_block_start)
+        i
+        for i, line in enumerate(lines[match_block_start:], match_block_start)
         if line.strip() == "fi"
     )
     after_match_block = "\n".join(lines[match_block_end + 1 :])
