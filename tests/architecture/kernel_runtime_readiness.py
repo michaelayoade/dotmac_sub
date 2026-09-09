@@ -51,6 +51,11 @@ RECORD_PATH = REPO_ROOT / "docs" / "kernel-runtime-readiness.json"
 
 REQUIRED_SCHEMA = "kernel-runtime-readiness.v1"
 REQUIRED_PRODUCT = "dotmac_sub"
+#: Canonical, owned by Starter's `PRODUCT_SPECS` -- not a phrase this record
+#: coins. The richer semantics stay in `requirements[]`; encoding them into the
+#: subject makes one identifier answer two questions, which is how three
+#: repositories came to answer one question three different ways.
+REQUIRED_SUBJECT = "sub-kernel-successor-readiness"
 
 #: The envelope Starter owns (see the brief this record answers): exactly
 #: these six top-level keys, never more. An extra key is refused rather than
@@ -93,8 +98,10 @@ def validate_envelope(record: dict[str, Any]) -> None:
         raise RecordValidationError(
             f"product must be {REQUIRED_PRODUCT!r}: {record.get('product')!r}"
         )
-    if not isinstance(record.get("subject"), str) or not record["subject"].strip():
-        raise RecordValidationError("subject must be a non-empty string")
+    if record.get("subject") != REQUIRED_SUBJECT:
+        raise RecordValidationError(
+            f"subject must be exactly {REQUIRED_SUBJECT!r}: {record.get('subject')!r}"
+        )
     if not isinstance(record.get("requirements"), list) or not record["requirements"]:
         raise RecordValidationError("requirements must be a non-empty list")
     if not isinstance(record.get("composition"), list) or not record["composition"]:

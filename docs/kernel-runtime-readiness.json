@@ -1,7 +1,7 @@
 {
   "schema": "kernel-runtime-readiness.v1",
   "product": "dotmac_sub",
-  "subject": "sub-tenant-guc-and-typed-isolation-modes-expressible-without-a-third-session-factory",
+  "subject": "sub-kernel-successor-readiness",
   "requirements": [
     {
       "id": "tenant-guc-is-a-class-scoped-after-begin-listener",
