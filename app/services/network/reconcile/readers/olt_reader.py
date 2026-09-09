@@ -320,7 +320,10 @@ def _identity_fields(
         olt_line_profile_id=None,
         olt_service_profile_id=None,
         olt_tr069_profile_id=None,
-        olt_service_ports=(),
+        # ``None``, not ``()``: service ports were never queried in this
+        # path, so the real set is unknown — see the field docstring on
+        # ``OltObservedFields.olt_service_ports``.
+        olt_service_ports=None,
         olt_identity_status=status,
     )
 
@@ -346,7 +349,9 @@ def _present_with_unknown_state() -> OltObservedFields:
         olt_line_profile_id=None,
         olt_service_profile_id=None,
         olt_tr069_profile_id=None,
-        olt_service_ports=(),
+        # Never queried on this path either (status query failed first) —
+        # unknown, not confirmed-zero.
+        olt_service_ports=None,
     )
 
 
@@ -423,21 +428,30 @@ def _read_optical(
     return rx, tx, temperature
 
 
-def _read_service_ports(olt: Any, fsp: str, ont_id: int) -> tuple[dict[str, Any], ...]:
-    """Best-effort service-port enumeration for one ONT.
+def _read_service_ports(
+    olt: Any, fsp: str, ont_id: int
+) -> tuple[dict[str, Any], ...] | None:
+    """Service-port enumeration for one ONT.
 
     Each ``ServicePortEntry`` is converted to a plain dict so the planner
     can index it with ``sp.get("index")`` regardless of whether the
-    underlying dataclass shape evolves. Returns an empty tuple on SSH
-    failure / exception — the planner will then plan against the
-    imported service-port state rather than blocking writes.
+    underlying dataclass shape evolves.
+
+    Returns ``None`` — not ``()`` — on SSH failure/exception: the OLT's real
+    port set is unknown, and treating "the read failed" as "no ports exist"
+    previously planned a CREATE against an index that already had a live
+    port (and no delete for anything, since an empty observed list also
+    happens to protect every stale port from the delete sweep). ``()`` is
+    reserved for a genuine successful read that found none.
     """
     try:
         ok, _msg, entries = get_service_ports_for_ont(olt, fsp, ont_id)
     except Exception:
         logger.debug("olt_reader_service_ports_unavailable", exc_info=True)
-        return ()
-    if not ok or not entries:
+        return None
+    if not ok:
+        return None
+    if not entries:
         return ()
 
     return tuple(

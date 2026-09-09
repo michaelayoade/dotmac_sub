@@ -664,7 +664,11 @@ def observed_from_ont_observation(
             olt_line_profile_id=obs.olt_line_profile_id,
             olt_service_profile_id=obs.olt_service_profile_id,
             olt_tr069_profile_id=obs.olt_tr069_profile_id,
-            olt_service_ports=tuple(obs.olt_service_ports or ()),
+            olt_service_ports=(
+                tuple(obs.olt_service_ports)
+                if obs.olt_service_ports is not None
+                else None
+            ),
         ),
         acs=AcsObservedFields(
             acs_present=obs.acs_present,
@@ -777,7 +781,11 @@ def upsert_ont_observation(
         row.olt_line_profile_id = observed.olt.olt_line_profile_id
         row.olt_service_profile_id = observed.olt.olt_service_profile_id
         row.olt_tr069_profile_id = observed.olt.olt_tr069_profile_id
-        row.olt_service_ports = list(observed.olt.olt_service_ports)
+        row.olt_service_ports = (
+            list(observed.olt.olt_service_ports)
+            if observed.olt.olt_service_ports is not None
+            else None
+        )
     elif existing is None:
         # First-ever row for this ONT and the OLT read was unavailable on
         # this very first pass — there is no prior evidence to preserve.

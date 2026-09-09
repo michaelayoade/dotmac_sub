@@ -229,14 +229,14 @@ def stub_ont_status(monkeypatch, ont):
                 olt_service_ports=(
                     {
                         "index": desired.mgmt_service_port_index,
-                        "vlan": desired.mgmt_vlan,
-                        "gem": 2,
+                        "vlan_id": desired.mgmt_vlan,
+                        "gem_index": 2,
                         "state": "up",
                     },
                     {
                         "index": desired.wan_service_port_index,
-                        "vlan": desired.wan_vlan,
-                        "gem": desired.wan_gem_index,
+                        "vlan_id": desired.wan_vlan,
+                        "gem_index": desired.wan_gem_index,
                         "state": "up",
                     },
                 ),
@@ -1004,6 +1004,104 @@ def test_apply_failure_marks_ont_out_of_sync(
     assert "ACS exploded" in (status[1] or "")
 
 
+def test_bootstrap_reconcile_still_converges(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Non-vacuity guard: bootstrap mode always re-plans the WiFi/PSK push
+    regardless of drift (``_should_push_wifi_password`` returns True
+    unconditionally for ``mode=="bootstrap"``, on both the pre-apply AND the
+    post-apply verify plan). The Astra Bug 2 verification-debt tracking added
+    for service-port creates must not turn every ordinary, already-synced
+    bootstrap pass into a false ``VERIFICATION_MISMATCH``."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert result.failure is None
+    assert result.sync_status == "synced"
+
+
+def test_a_create_that_silently_no_ops_fails_verification(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """A service-port CREATE the OLT silently no-ops (the write is accepted,
+    but the port never actually appears) must not report convergence. The
+    post-apply verify read still shows the port missing; the SAME create
+    re-plans with its verification-debt Drift instead of a driftless
+    (falsely converged) plan — Astra Bug 2.
+
+    Uses the MANAGEMENT slot deliberately: PPP delivery authorization would
+    withhold a WAN-slot create against this bare fixture ONT (no active
+    subscription), which would test the authorization gate instead of the
+    verification-debt behaviour this test targets.
+    """
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_olt_read_missing_mgmt_port(adapter, target, *, deadline=None):
+        # The WAN port is present and matches; the mgmt port (index 23)
+        # never appears, before OR after the "create" write.
+        return ReadResult(
+            status="present",
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=None,
+                olt_rx_dbm=None,
+                olt_tx_dbm=None,
+                olt_temperature_c=None,
+                olt_description=target.description,
+                olt_mgmt_ip=target.mgmt_ip,
+                olt_mgmt_vlan=target.mgmt_vlan,
+                olt_line_profile_id=target.line_profile_id,
+                olt_service_profile_id=target.service_profile_id,
+                olt_service_ports=(
+                    {
+                        "index": target.wan_service_port_index,
+                        "vlan_id": target.wan_vlan,
+                        "gem_index": target.wan_gem_index,
+                        "ont_id": target.olt_ont_id,
+                        "fsp": target.fsp,
+                        "state": "up",
+                    },
+                ),
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_olt_read_missing_mgmt_port,
+    )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert "create_service_port" in olt.calls  # the write WAS attempted
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.VERIFICATION_MISMATCH
+    assert any(
+        "olt_service_ports" in f"{d.surface}:{d.field}" for d in result.drift_after
+    )
+
+
 # ── Status persistence ─────────────────────────────────────────────────────
 
 
@@ -1174,14 +1272,14 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
             olt_service_ports=(
                 {
                     "index": desired.mgmt_service_port_index,
-                    "vlan": desired.mgmt_vlan,
-                    "gem": 2,
+                    "vlan_id": desired.mgmt_vlan,
+                    "gem_index": 2,
                     "state": "up",
                 },
                 {
                     "index": desired.wan_service_port_index,
-                    "vlan": desired.wan_vlan,
-                    "gem": desired.wan_gem_index,
+                    "vlan_id": desired.wan_vlan,
+                    "gem_index": desired.wan_gem_index,
                     "state": "up",
                 },
             ),
@@ -1264,14 +1362,14 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
                     olt_service_ports=(
                         {
                             "index": desired.mgmt_service_port_index,
-                            "vlan": desired.mgmt_vlan,
-                            "gem": 2,
+                            "vlan_id": desired.mgmt_vlan,
+                            "gem_index": 2,
                             "state": "up",
                         },
                         {
                             "index": desired.wan_service_port_index,
-                            "vlan": desired.wan_vlan,
-                            "gem": desired.wan_gem_index,
+                            "vlan_id": desired.wan_vlan,
+                            "gem_index": desired.wan_gem_index,
                             "state": "up",
                         },
                     ),

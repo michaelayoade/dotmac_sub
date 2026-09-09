@@ -518,8 +518,8 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             olt_line_profile_id=40,
             olt_service_profile_id=42,
             olt_service_ports=(
-                {"index": 22, "vlan": 203, "gem": 1, "state": "up"},
-                {"index": 23, "vlan": 201, "gem": 2, "state": "up"},
+                {"index": 22, "vlan_id": 203, "gem_index": 1, "state": "up"},
+                {"index": 23, "vlan_id": 201, "gem_index": 2, "state": "up"},
             ),
         ),
         acs=AcsObservedFields(

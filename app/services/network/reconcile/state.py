@@ -314,8 +314,17 @@ class OltObservedFields:
     olt_mgmt_vlan: int | None
     olt_line_profile_id: int | None
     olt_service_profile_id: int | None
-    # Each service-port entry: {index, vlan, gem, state}. Tuple to keep frozen.
-    olt_service_ports: tuple[dict[str, Any], ...]
+    # Each service-port entry: {index, vlan_id, ont_id, gem_index, flow_type,
+    # flow_para, state, fsp, tag_transform}. Tuple to keep frozen.
+    #
+    # ``None`` is distinct from ``()``: ``None`` means the enumeration itself
+    # failed (SSH error/exception) and the OLT's real port set is UNKNOWN —
+    # never "confirmed zero". Conflating the two let a transient read failure
+    # look like "no ports observed", which planned a CREATE for an index that
+    # already had a port (and planned NO delete for anything, since an empty
+    # list also protects every stale port). ``()`` means the read succeeded
+    # and genuinely found none.
+    olt_service_ports: tuple[dict[str, Any], ...] | None
     olt_tr069_profile_id: int | None = None
     # Whether this pass's reader could prove the observation it collected is
     # really of the STORED (``desired.fsp``/``desired.olt_ont_id``) target:

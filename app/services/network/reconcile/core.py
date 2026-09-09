@@ -714,6 +714,18 @@ def reconcile_ont(
                 proposed_fields=proposed_fields,
                 force_proposed_writes=False,
             )
+            # Every planned service-port CREATE also recorded an entry in
+            # ``verification_debt`` (never observable as ordinary "drift" at
+            # plan time — the port doesn't exist yet, so there is no
+            # divergent value to diff against). Combined here — rather than
+            # trusting ``verify_plan.drifts`` alone, or the much weaker
+            # ``verify_plan.actions`` (which bootstrap mode always
+            # repopulates with the WiFi/PSK push regardless of whether
+            # anything is actually wrong) — so a create the OLT silently
+            # no-op'd cannot re-plan as "another driftless create" and slip
+            # past this gate reporting false convergence.
+            verify_debt = verify_plan.drifts + verify_plan.verification_debt
+
             # Drift that only exists because delivery authorization withheld
             # the repair is not a verification failure -- the reconciler did
             # not fail to converge it, it was forbidden from trying. Left
@@ -725,11 +737,9 @@ def reconcile_ont(
             # have no repair. Every drift not attributable to the withheld PPP
             # work is preserved and still fails verification.
             unattributed = tuple(
-                drift
-                for drift in verify_plan.drifts
-                if not is_ppp_attributable_drift(drift)
+                drift for drift in verify_debt if not is_ppp_attributable_drift(drift)
             )
-            if verify_plan.drifts and residual_ppp_drift and not unattributed:
+            if verify_debt and residual_ppp_drift and not unattributed:
                 return _finalise(
                     db,
                     ont,
@@ -746,13 +756,13 @@ def reconcile_ont(
                     olt_read_status=verify_olt_result.status,
                 )
 
-            if verify_plan.drifts:
+            if verify_debt:
                 # Classify residual drift as ACS inform-lag or genuine. This
                 # reconcile pass still returns VERIFICATION_MISMATCH; the
                 # durable configuration lifecycle uses readback_pending
                 # evidence to schedule bounded delayed verification.
                 _cache_lag, _genuine = _classify_verify_drifts(
-                    verify_plan.drifts, apply_outcome.actions_applied
+                    verify_debt, apply_outcome.actions_applied
                 )
                 logger.warning(
                     "acs_verify_mismatch",
@@ -760,15 +770,13 @@ def reconcile_ont(
                         "event": "acs_verify_mismatch",
                         "ont_id": str(ont.id),
                         "mode": mode,
-                        "total_drifts": len(verify_plan.drifts),
+                        "total_drifts": len(verify_debt),
                         "acs_cache_lag_candidates": len(_cache_lag),
                         "genuine_drifts": len(_genuine),
                         # If true, a lifecycle owner may wait for a fresh Inform
                         # rather than treating stale cache as a terminal fault.
                         "would_be_graced": not _genuine,
-                        "drift_fields": [
-                            f"{d.surface}:{d.field}" for d in verify_plan.drifts
-                        ],
+                        "drift_fields": [f"{d.surface}:{d.field}" for d in verify_debt],
                     },
                 )
                 return _finalise(
@@ -779,13 +787,13 @@ def reconcile_ont(
                         reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
                         message=(
                             "Post-apply state still diverges from desired: "
-                            f"{_summarise_drifts(verify_plan.drifts)}"
+                            f"{_summarise_drifts(verify_debt)}"
                         ),
                         evidence={
                             "readback_pending": not _genuine,
                             "drift_fields": [
                                 f"{drift.surface}:{drift.field}"
-                                for drift in verify_plan.drifts
+                                for drift in verify_debt
                             ],
                         },
                     ),
@@ -793,7 +801,7 @@ def reconcile_ont(
                     observed_after=observed_after,
                     actions_applied=apply_outcome.actions_applied,
                     drift_before=plan.drifts,
-                    drift_after=verify_plan.drifts,
+                    drift_after=verify_debt,
                     observed_surfaces=_surfaces_observed(
                         verify_olt_result, verify_acs_result
                     ),

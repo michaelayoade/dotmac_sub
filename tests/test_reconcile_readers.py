@@ -736,9 +736,13 @@ def test_olt_reader_populates_service_ports_from_get_service_ports_for_ont(
     assert isinstance(result.observed.olt_service_ports, tuple)
 
 
-def test_olt_reader_service_ports_empty_on_failure(monkeypatch):
-    """SSH failure on service-port read leaves olt_service_ports as ()
-    without failing the whole read."""
+def test_service_port_read_failure_is_not_an_empty_port_list(monkeypatch):
+    """SSH failure on service-port read must leave ``olt_service_ports`` as
+    ``None`` (unknown), never ``()`` (Astra Bug 2 follow-on). Conflating "the
+    read failed" with "confirmed zero ports" previously planned a CREATE
+    against an index that may already hold a live port, and protected every
+    genuinely stale port from deletion — an empty list looks exactly like a
+    clean sweep to the planner."""
     adapter = _StubAdapter(
         find_success=True,
         registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
@@ -763,6 +767,40 @@ def test_olt_reader_service_ports_empty_on_failure(monkeypatch):
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
         lambda *_a, **_k: (False, "SSH error", []),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed.olt_service_ports is None
+
+
+def test_olt_reader_service_ports_genuinely_empty_stays_an_empty_tuple(monkeypatch):
+    """The paired negative: a SUCCESSFUL read that finds no ports is a real
+    ``()``, not ``None`` — the two must stay distinguishable in both
+    directions."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
+        lambda *_a, **_k: (True, "ok", []),
     )
     result = read_olt_state(adapter, _desired())
     assert result.success is True
@@ -803,7 +841,9 @@ def test_olt_reader_catches_service_ports_exception(monkeypatch):
     )
     result = read_olt_state(adapter, _desired())
     assert result.success is True
-    assert result.observed.olt_service_ports == ()
+    # Not () — the port set is unknown after an exception, not confirmed
+    # empty. See ``test_service_port_read_failure_is_not_an_empty_port_list``.
+    assert result.observed.olt_service_ports is None
 
 
 def test_olt_reader_catches_optical_exception(monkeypatch):

@@ -139,6 +139,17 @@ class Plan:
     actions: tuple[Action, ...]
     drifts: tuple[Drift, ...]
     required_surfaces: frozenset[WriteSurface]
+    # Every planned service-port CREATE (never observable as "drift" at plan
+    # time — the port doesn't exist yet, so there's no divergent value to
+    # diff, just an absence) records ONE entry here as well as in ``drifts``.
+    # ``reconcile_ont`` re-checks this set (not just ``drifts``) on the
+    # post-apply verify pass, so a create the OLT silently no-op'd cannot
+    # re-plan as "another driftless create" and slip past the no-drift
+    # convergence gate. Deliberately NOT ``verify_plan.actions`` — bootstrap
+    # mode always re-plans the WiFi/PSK push regardless of whether anything
+    # is actually wrong, which would turn every bootstrap pass into a false
+    # mismatch.
+    verification_debt: tuple[Drift, ...] = ()
     # Set when the ACS half of this plan could not be built because the device
     # has no ACS document or no unambiguous GenieACS ``_id``. The plan then
     # carries OLT actions ONLY. ``reconcile_ont`` still applies those, then
@@ -305,6 +316,7 @@ def compute_plan(
     """
     actions: list[Action] = []
     drifts: list[Drift] = []
+    verification_debt: list[Drift] = []
     proposed_fields = proposed_fields or frozenset()
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
     remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
@@ -329,11 +341,13 @@ def compute_plan(
     elif wifi_only_change or remote_only_change:
         omci_wan_planned = False
     elif wan_only_change:
-        _plan_wan_service_port(desired, observed, actions)
+        _plan_wan_service_port(desired, observed, actions, drifts, verification_debt)
         omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
         _append_reset_if_needed(desired, actions)
     else:
-        olt_wait_reason = _plan_olt_side(desired, observed, mode, actions, drifts)
+        olt_wait_reason = _plan_olt_side(
+            desired, observed, mode, actions, drifts, verification_debt
+        )
         omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
         _append_reset_if_needed(desired, actions)
     acs_identity = AcsIdentity(device_id=None, wait_reason=None, detail="")
@@ -368,7 +382,7 @@ def compute_plan(
         olt_wait_detail = (
             f"ONT {desired.serial_number}: one or more OLT service-port "
             "indices (mgmt and/or WAN) are unallocated while "
-            f"{len(observed.olt.olt_service_ports)} service port(s) are "
+            f"{len(observed.olt.olt_service_ports or ())} service port(s) are "
             "observed; refusing to delete the correlated port(s) with no "
             "target to recreate them."
         )
@@ -378,6 +392,7 @@ def compute_plan(
         actions=tuple(actions),
         drifts=tuple(drifts),
         required_surfaces=required_surfaces,
+        verification_debt=tuple(verification_debt),
         acs_wait_reason=acs_identity.wait_reason,
         acs_wait_detail=acs_identity.detail,
         olt_wait_reason=olt_wait_reason,
@@ -460,6 +475,7 @@ def _plan_olt_side(
     mode: ReconcileMode,
     actions: list[Action],
     drifts: list[Drift],
+    verification_debt: list[Drift],
 ) -> str | None:
     """Plan the OLT half; returns a wait reason when it was withheld.
 
@@ -597,7 +613,9 @@ def _plan_olt_side(
 
     # 2. Service-port repair — strict, system-managed. Stale ports removed,
     # missing ports created.
-    service_port_wait_reason = _plan_service_ports(desired, observed, actions, drifts)
+    service_port_wait_reason = _plan_service_ports(
+        desired, observed, actions, drifts, verification_debt
+    )
 
     # 3. IPHOST — only meaningful when mgmt VLAN is set.
     if desired.mgmt_vlan is not None and desired.mgmt_ip is not None:
@@ -652,11 +670,63 @@ def _plan_olt_side(
     return service_port_wait_reason
 
 
+def _sp_int(sp: object, *names: str) -> int | None:
+    """Coerce a named field of an observed service-port dict to ``int``."""
+    if not isinstance(sp, dict):
+        return None
+    for name in names:
+        value = sp.get(name)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _service_port_matches(
+    sp: object,
+    *,
+    index: int,
+    vlan: int,
+    gem_index: int,
+    ont_id: int,
+    fsp: str,
+) -> bool:
+    """Whether an observed service-port entry IS the desired slot.
+
+    Full identity — index, VLAN, GEM, ONT-ID, and fsp — not just the global
+    index. Astra Bug 2: comparing on index alone means a create whose write
+    silently no-ops (or a port some other process repointed to a different
+    VLAN/GEM) still reads back "index present" and is reported converged.
+    ``ont_id``/``fsp`` are compared only when the observed entry actually
+    carries them (older/partial readers may not populate every field);
+    their absence is not itself a mismatch.
+    """
+    if not isinstance(sp, dict):
+        return False
+    if _sp_int(sp, "index") != index:
+        return False
+    if _sp_int(sp, "vlan_id", "vlan") != vlan:
+        return False
+    if _sp_int(sp, "gem_index", "gem") != gem_index:
+        return False
+    observed_ont_id = _sp_int(sp, "ont_id")
+    if observed_ont_id is not None and observed_ont_id != ont_id:
+        return False
+    observed_fsp = sp.get("fsp")
+    if observed_fsp not in (None, "", fsp):
+        return False
+    return True
+
+
 def _plan_service_ports(
     desired: OntDesiredState,
     observed: OntObservedState,
     actions: list[Action],
     drifts: list[Drift],
+    verification_debt: list[Drift],
 ) -> str | None:
     """Repair OLT service ports; returns a wait reason when deletes are withheld.
 
@@ -688,23 +758,38 @@ def _plan_service_ports(
     guard existed. Every withheld port also gets an unrepairable ``Drift``
     entry, so ``plan.drifts`` reflects the withheld state instead of
     looking clean.
+
+    A port that occupies the desired index but with the WRONG VLAN/GEM/ONT-ID
+    (Astra Bug 2) is never auto delete+recreated — that is a live customer
+    port and repairing it is a separate, human-owned decision. It is recorded
+    as unrepairable drift instead, and no create is planned for that slot
+    (the index is occupied, just not correctly).
     """
     if desired.olt_ont_id is None:
         # ``compute_plan`` never reaches this function while the identity
         # gate is open; this guard exists only to narrow the type for mypy
         # and as a second line of defense.
         return None
-
-    def _sp_int(sp: dict, *names: str) -> int | None:
-        for name in names:
-            value = sp.get(name)
-            if value is None:
-                continue
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
+    if observed.olt.olt_service_ports is None:
+        # Astra Bug 2 follow-on: the enumeration itself failed (SSH
+        # error/exception), so the OLT's real service-port set is UNKNOWN —
+        # never "confirmed empty". Treating it as empty would plan a CREATE
+        # for an index that may already hold a live port, and protect every
+        # genuinely stale port from deletion by accident. Record the gap as
+        # drift (blocks the no-drift-tolerance convergence check) and plan
+        # no service-port action at all this pass.
+        drifts.append(
+            Drift(
+                field="olt_service_ports",
+                surface="olt",
+                desired="known",
+                observed=None,
+                repairable=False,
+            )
+        )
         return None
+    fsp = desired.fsp
+    ont_id = desired.olt_ont_id
 
     def _matches_unindexed_desired_slot(sp: dict) -> bool:
         if desired.mgmt_service_port_index is None and desired.mgmt_vlan is not None:
@@ -730,6 +815,10 @@ def _plan_service_ports(
     }
     desired_indices.discard(None)
 
+    # Ports occupying a desired index but not matching it exactly — recorded
+    # as unrepairable drift below, never deleted or recreated.
+    mismatched_at_index: dict[str, dict] = {}
+
     # Build the candidate delete list first without mutating ``actions``/
     # ``drifts`` yet, so the "every observed port would be deleted with
     # nothing protecting any of them" hazard can be detected before
@@ -737,11 +826,28 @@ def _plan_service_ports(
     indexed_observed_count = 0
     delete_candidates: list[tuple[int, str, dict]] = []
     for sp in observed.olt.olt_service_ports:
-        idx = sp.get("index") if isinstance(sp, dict) else None
-        if idx is None:
+        idx = _sp_int(sp, "index")
+        if idx is None or not isinstance(sp, dict):
             continue
         indexed_observed_count += 1
-        if idx in desired_indices:
+        if idx == desired.mgmt_service_port_index:
+            if desired.mgmt_vlan is not None and _service_port_matches(
+                sp, index=idx, vlan=desired.mgmt_vlan, gem_index=2, ont_id=ont_id, fsp=fsp
+            ):
+                continue
+            mismatched_at_index["mgmt"] = sp
+            continue
+        if idx == desired.wan_service_port_index:
+            if desired.wan_vlan is not None and _service_port_matches(
+                sp,
+                index=idx,
+                vlan=desired.wan_vlan,
+                gem_index=desired.wan_gem_index or 1,
+                ont_id=ont_id,
+                fsp=fsp,
+            ):
+                continue
+            mismatched_at_index["wan"] = sp
             continue
         if _matches_unindexed_desired_slot(sp):
             continue
@@ -749,7 +855,7 @@ def _plan_service_ports(
         # desired index, so the desired state cannot name it; the VLAN is the
         # only evidence of what it was for. Unrecoverable stays "unknown",
         # which PPP delivery authorization treats as fail-closed.
-        observed_vlan = _sp_int(sp, "vlan_id", "vlan") if isinstance(sp, dict) else None
+        observed_vlan = _sp_int(sp, "vlan_id", "vlan")
         slot = "unknown"
         if observed_vlan is not None:
             if desired.mgmt_vlan is not None and int(observed_vlan) == int(
@@ -761,6 +867,19 @@ def _plan_service_ports(
             ):
                 slot = "wan"
         delete_candidates.append((int(idx), slot, sp))
+
+    for slot, sp in mismatched_at_index.items():
+        expected_vlan = desired.mgmt_vlan if slot == "mgmt" else desired.wan_vlan
+        expected_gem = 2 if slot == "mgmt" else (desired.wan_gem_index or 1)
+        drifts.append(
+            Drift(
+                field=f"olt_service_ports[{slot}]",
+                surface="olt",
+                desired={"vlan": expected_vlan, "gem": expected_gem},
+                observed=sp,
+                repairable=False,
+            )
+        )
 
     if (
         not desired_indices
@@ -822,32 +941,34 @@ def _plan_service_ports(
             )
         )
 
-    # Create missing service-ports — but only when a real index is set. There
-    # is no allocator: an index either arrives from operator input
+    # Create missing service-ports — but only when a real index is set AND
+    # nothing (matched or mismatched) already occupies it. There is no
+    # allocator: an index either arrives from operator input
     # (``desired.mgmt_service_port_index``/``wan_service_port_index``, see
     # ``adapters.py``) or stays ``None``. A ``None`` index here plans no
     # create action; the both-slots-unallocated case already returned above,
     # and the per-slot case leaves ``slot_index_unallocated`` set so the
     # caller still learns nothing was recreated for the withheld slot.
     observed_indices = {
-        sp.get("index") for sp in observed.olt.olt_service_ports if isinstance(sp, dict)
+        _sp_int(sp, "index") for sp in observed.olt.olt_service_ports
     }
+    observed_indices.discard(None)
     if (
         desired.mgmt_service_port_index is not None
         and desired.mgmt_service_port_index not in observed_indices
         and desired.mgmt_vlan is not None
     ):
-        actions.append(
-            OltCreateServicePort(
-                fsp=desired.fsp,
-                ont_id=desired.olt_ont_id,
-                service_port_index=desired.mgmt_service_port_index,
-                vlan=desired.mgmt_vlan,
-                gem_index=2,  # GEM 2 is the mgmt slot in line profile 40
-                slot="mgmt",
-            )
+        _plan_service_port_create(
+            desired,
+            actions,
+            drifts,
+            verification_debt,
+            slot="mgmt",
+            index=desired.mgmt_service_port_index,
+            vlan=desired.mgmt_vlan,
+            gem_index=2,
         )
-    _plan_wan_service_port(desired, observed, actions)
+    _plan_wan_service_port(desired, observed, actions, drifts, verification_debt)
     return (
         ReconcileFailureReason.SERVICE_PORT_INDEX_UNALLOCATED
         if slot_index_unallocated
@@ -855,10 +976,54 @@ def _plan_service_ports(
     )
 
 
+def _plan_service_port_create(
+    desired: OntDesiredState,
+    actions: list[Action],
+    drifts: list[Drift],
+    verification_debt: list[Drift],
+    *,
+    slot: str,
+    index: int,
+    vlan: int,
+    gem_index: int,
+) -> None:
+    """Emit an ``OltCreateServicePort`` plus its verification-debt ``Drift``.
+
+    A create is not observable as drift the way a value mismatch is — the
+    port simply doesn't exist yet, so there's nothing to diff. The debt entry
+    is what lets ``reconcile_ont``'s post-apply verify pass detect a silent
+    no-op: if the create didn't really take, the SAME comparison
+    (``_service_port_matches``) fails again on the fresh read and this
+    function runs again, reproducing the debt entry instead of a clean plan.
+    """
+    assert desired.olt_ont_id is not None  # guaranteed by every caller
+    actions.append(
+        OltCreateServicePort(
+            fsp=desired.fsp,
+            ont_id=desired.olt_ont_id,
+            service_port_index=index,
+            vlan=vlan,
+            gem_index=gem_index,
+            slot=slot,
+        )
+    )
+    debt = Drift(
+        field=f"olt_service_ports[{slot}]",
+        surface="olt",
+        desired={"index": index, "vlan": vlan, "gem": gem_index},
+        observed=None,
+        repairable=True,
+    )
+    drifts.append(debt)
+    verification_debt.append(debt)
+
+
 def _plan_wan_service_port(
     desired: OntDesiredState,
     observed: OntObservedState,
     actions: list[Action],
+    drifts: list[Drift],
+    verification_debt: list[Drift],
 ) -> None:
     """Create a missing WAN port without treating other ports as disposable."""
     if desired.olt_ont_id is None:
@@ -866,26 +1031,47 @@ def _plan_wan_service_port(
         # gate is open; this guard exists only to narrow the type for mypy
         # and as a second line of defense.
         return
-    observed_indices = {
-        sp.get("index") for sp in observed.olt.olt_service_ports if isinstance(sp, dict)
-    }
+    if observed.olt.olt_service_ports is None:
+        # Reachable directly from ``compute_plan``'s ``wan_only_change``
+        # branch, which never goes through ``_plan_service_ports``'s own
+        # guard — see that function's identical check for why ``None`` must
+        # never be treated as "no ports".
+        drifts.append(
+            Drift(
+                field="olt_service_ports",
+                surface="olt",
+                desired="known",
+                observed=None,
+                repairable=False,
+            )
+        )
+        return
     if (
         desired.wan_service_port_index is not None
-        and desired.wan_service_port_index not in observed_indices
         and desired.wan_vlan is not None
         and is_deliverable("wan_vlan", desired.wan_vlan)
         and desired.wan_mode == "pppoe"
     ):
-        actions.append(
-            OltCreateServicePort(
-                fsp=desired.fsp,
-                ont_id=desired.olt_ont_id,
-                service_port_index=desired.wan_service_port_index,
-                vlan=desired.wan_vlan,
-                gem_index=desired.wan_gem_index or 1,
-                slot="wan",
-            )
+        gem_index = desired.wan_gem_index or 1
+        # A create is planned only when NOTHING occupies the index —
+        # matched or mismatched. A mismatched occupant is a live customer
+        # port and is flagged as unrepairable drift by the main per-port
+        # loop in ``_plan_service_ports``, never auto delete+recreated here.
+        occupied = any(
+            _sp_int(sp, "index") == desired.wan_service_port_index
+            for sp in observed.olt.olt_service_ports
         )
+        if not occupied:
+            _plan_service_port_create(
+                desired,
+                actions,
+                drifts,
+                verification_debt,
+                slot="wan",
+                index=desired.wan_service_port_index,
+                vlan=desired.wan_vlan,
+                gem_index=gem_index,
+            )
 
 
 def _plan_olt_omci_wan(
