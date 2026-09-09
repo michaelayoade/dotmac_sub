@@ -249,7 +249,9 @@ def reconcile_ont(
             # If we crash mid-pass, the rollback wipes this and the next
             # reconcile sees the previous status; if we exit normally it gets
             # overwritten with synced/out_of_sync at the end.
-            ont.sync_status = OntSyncStatus.reconciling
+            from app.services.network.ont_status import set_sync_status
+
+            set_sync_status(ont, OntSyncStatus.reconciling, reason="reconcile_started")
             ont.last_reconcile_started_at = started_at
 
             # ── Resolve desired ─────────────────────────────────────────────
@@ -1018,6 +1020,8 @@ def _finalise(
     Called inside the lock context — the caller's transaction commits when
     the context exits normally.
     """
+    from app.services.network.ont_status import set_sync_status
+
     now = datetime.now(UTC)
     duration_ms = int((time.monotonic() - started_monotonic) * 1000)
 
@@ -1026,10 +1030,10 @@ def _finalise(
         # Not `synced` (which asserts zero residual drift) and not a failure
         # either -- no write was rejected. The drift stays visible so the
         # withheld PPP work is discoverable rather than silently absent.
-        ont.sync_status = OntSyncStatus.out_of_sync
+        set_sync_status(ont, OntSyncStatus.out_of_sync, reason="drift_withheld")
         ont.last_error = None
     elif success:
-        ont.sync_status = OntSyncStatus.synced
+        set_sync_status(ont, OntSyncStatus.synced, reason="reconcile_succeeded")
         ont.last_error = None
         cleared = clear_acs_delivery_fault(ont)
         if cleared:
@@ -1039,7 +1043,7 @@ def _finalise(
                 before=cleared,
             )
     else:
-        ont.sync_status = OntSyncStatus.out_of_sync
+        set_sync_status(ont, OntSyncStatus.out_of_sync, reason="reconcile_failed")
         ont.last_error = failure.message if failure else "unknown failure"
         _record_acs_delivery_fault(ont, failure)
     ont.last_reconciled_at = now
