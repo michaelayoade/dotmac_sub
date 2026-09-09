@@ -61,6 +61,7 @@ from app.db import read_only_snapshot_session
 from app.models.network import OntUnit
 from app.models.ont_observation import OntObservation
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.reconcile.adapters import _FSP_RE
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
 EXIT_CLEAN = 0
@@ -78,11 +79,19 @@ class Row:
 
 
 def _fsp(board: str | None, port: str | None) -> str:
+    """Exactly ``adapters._fsp_from_ont`` — imported ``_FSP_RE`` rather than a
+    local copy, so this census can never drift from what production actually
+    validates. A truthy board+port is not sufficient: ``board="0"``,
+    ``port="1"`` joins to ``"0/1"``, which is only two segments and fails
+    ``_FSP_RE`` in production (resolves to ``fsp=""``) even though a naive
+    "both fields are set" check would call it clean.
+    """
     board = (board or "").strip()
     port = (port or "").strip()
     if not board or not port:
         return ""
-    return f"{board}/{port}"
+    fsp = f"{board}/{port}"
+    return fsp if _FSP_RE.fullmatch(fsp) else ""
 
 
 def _sp_int(sp: object, *names: str) -> int | None:
@@ -105,12 +114,20 @@ def _observed_mismatch_at_index(
     index: int | None,
     vlan: int | None,
     gem_index: int,
+    ont_id: int | None,
+    fsp: str,
 ) -> bool:
-    """Whether a persisted observation shows a DIFFERENT vlan/gem at ``index``.
+    """Whether a persisted observation shows a DIFFERENT identity at ``index``.
 
-    Mirrors ``reconcile.planner._service_port_matches``'s vlan/gem comparison
-    without importing the planner module — this script stays independent of
-    reconciler internals so it keeps working even if that module changes.
+    Mirrors ``reconcile.planner._service_port_matches`` exactly — including
+    treating a NULL observed vlan_id/gem_index as a mismatch against a real
+    desired value, not as "no evidence, skip". The planner's own comparison
+    is a plain ``!=``: ``None != 201`` is ``True``, so a persisted port with
+    unpopulated vlan_id/gem_index at the desired index is unrepairable drift
+    in production, not a clean row — undercounting it here would report this
+    census clean for ONTs that fail to converge. Not imported directly from
+    ``reconcile.planner`` so this script keeps working independent of that
+    module's internals; kept in exact sync by design intent, not by import.
     """
     if index is None or vlan is None or not observed_ports:
         return False
@@ -119,9 +136,16 @@ def _observed_mismatch_at_index(
             continue
         observed_vlan = _sp_int(sp, "vlan_id", "vlan")
         observed_gem = _sp_int(sp, "gem_index", "gem")
-        if observed_vlan is None and observed_gem is None:
-            continue
-        return observed_vlan != vlan or observed_gem != gem_index
+        if observed_vlan != vlan or observed_gem != gem_index:
+            return True
+        observed_ont_id = _sp_int(sp, "ont_id")
+        if observed_ont_id is not None and ont_id is not None:
+            if observed_ont_id != ont_id:
+                return True
+        observed_fsp = sp.get("fsp") if isinstance(sp, dict) else None
+        if observed_fsp not in (None, "", fsp):
+            return True
+        return False
     return False
 
 
@@ -192,13 +216,22 @@ def collect(db: Session) -> list[Row]:
         except (TypeError, ValueError):
             wan_vlan_int = None
 
+        fsp = _fsp(ont.board, ont.port)
+        ont_id = parse_ont_id_on_olt(ont.external_id)
         if _observed_mismatch_at_index(
-            observed_ports, index=mgmt_index_int, vlan=mgmt_vlan_int, gem_index=2
+            observed_ports,
+            index=mgmt_index_int,
+            vlan=mgmt_vlan_int,
+            gem_index=2,
+            ont_id=ont_id,
+            fsp=fsp,
         ) or _observed_mismatch_at_index(
             observed_ports,
             index=wan_index_int,
             vlan=wan_vlan_int,
             gem_index=int(wan_gem_index),
+            ont_id=ont_id,
+            fsp=fsp,
         ):
             row.issues.append("observed_vlan_gem_mismatch")
 
