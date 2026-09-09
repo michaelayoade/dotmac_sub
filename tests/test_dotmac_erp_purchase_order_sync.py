@@ -412,3 +412,55 @@ def test_repair_never_writes_back_a_rejected_or_dead_row(db_session):
     assert result["repaired"] == 0
     assert install.procurement_order_reference is None
     assert install.procurement_delivery_status != "accepted"
+
+
+def test_repair_makes_no_erp_call_for_a_crm_owned_flow(db_session, monkeypatch):
+    """Michael's finding: a scheduled repair must re-check ownership on every
+    run, not just at write-time of the original event. A CRM-owned flow must
+    see the write-back consequence skipped entirely — no mutation of the
+    installation project — and the row must be counted under
+    ``skipped_not_owned``, not as a success.
+    """
+    # Deliver a PO while sub owns the flow, so a terminal-accepted outbox row
+    # with a stored ``erp_response`` exists as a repair candidate.
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_order.value})
+    install = _approved_install(db_session)
+    purchase_order_sync.enqueue_purchase_order(db_session, install)
+    client = _FakeERPClient(post_outcomes=[{"purchase_order_id": "PO-ERP-11"}])
+    outbox.deliver_pending(db_session, client=client)
+
+    # Simulate a DROPPED write-back, then ownership moves back to CRM before
+    # the scheduled repair sweep next runs.
+    db_session.refresh(install)
+    install.procurement_order_reference = None
+    install.procurement_system = None
+    install.procurement_delivery_status = None
+    db_session.commit()
+
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_order.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    calls: list[object] = []
+    original_apply = purchase_order_sync.apply_purchase_order_response
+
+    def _spy_apply(installation_project, response):
+        calls.append(installation_project)
+        return original_apply(installation_project, response)
+
+    monkeypatch.setattr(
+        purchase_order_sync, "apply_purchase_order_response", _spy_apply
+    )
+
+    result = purchase_order_sync.repair_purchase_order_writebacks(db_session)
+
+    db_session.refresh(install)
+    assert calls == []
+    assert install.procurement_order_reference is None
+    assert install.procurement_delivery_status != "accepted"
+    assert result["repaired"] == 0
+    assert result["skipped_not_owned"] == 1
