@@ -218,7 +218,7 @@ def _process_webhook(
             event_type=identity.event_type,
             payload=payload,
             headers={"provider": provider.value},
-            legacy_provider_event_ids=identity.legacy_provider_event_ids,
+            legacy_provider_event_id=identity.legacy_provider_event_id,
         )
         receipt_id = receipt.id
         receipt_state = receipt.state

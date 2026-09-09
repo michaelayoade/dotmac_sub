@@ -12,12 +12,20 @@ Flutterwave capability on the installation (checkout, verify, reconciliation,
 refunds), not just webhook ingress.
 
 The fix scopes the Flutterwave `charge.completed` receipt identity to the
-provider's own per-attempt id (`data.id`, falling back to `data.flw_ref`), and
-adds a GENERIC (not payment-specific) legacy-alias mechanism in
-`app.services.integrations.inbox` so a redelivery of an event already recorded
-under the OLD `flutterwave-<tx_ref>` format still resolves to the same
-receipt on an exact `payload_digest` match, while a digest mismatch under that
-old key is silently ignored (not a collision) rather than quarantined.
+provider's own per-attempt id (`data.id`, REQUIRED -- Flutterwave's webhook
+documentation confirms `data.id` is present on both successful and failed
+`charge.completed` deliveries, so there is deliberately no `data.flw_ref`
+fallback: an earlier draft of this fix carried that fallback as an unverified
+assumption and it has been removed rather than kept as an unconfirmed escape
+hatch), and adds a single-alias legacy-identity mechanism in
+`app.services.integrations.inbox` so a redelivery of an event already
+recorded under the OLD `flutterwave-<tx_ref>` format still resolves to the
+same receipt on an exact `payload_digest` match, while a digest mismatch
+under that old key is silently ignored (not a collision) rather than
+quarantined. The mechanism is deliberately bounded to exactly one legacy
+identity per call (`legacy_provider_event_id: str | None`, not a collection)
+-- a narrow, auditable migration aid for this one retired format, not an
+open-ended alternate identity namespace.
 
 Companion to `tests/test_payment_webhook_settlement.py` (general settlement)
 and `tests/test_paystack_refund_dispute_webhooks.py` (the analogous Paystack
@@ -47,7 +55,9 @@ from app.models.integration_platform import IntegrationInbox
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services.api_billing_webhooks import process_flutterwave_webhook
+from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.delivery import payload_digest
+from app.services.integrations.inbox import InboxError
 from app.services.payment_webhook_commands import (
     PaymentWebhookError,
     PaymentWebhookProvider,
@@ -373,7 +383,12 @@ def test_identity_construction_rejects_payload_missing_id_and_flw_ref():
     assert captured.value.code == "financial.payment_webhooks.payload_invalid"
 
 
-def test_identity_uses_flw_ref_fallback_when_id_is_absent():
+def test_identity_construction_rejects_flw_ref_only_payload_no_fallback():
+    """`data.id` is REQUIRED (Flutterwave's webhook documentation confirms it
+    is present on both successful and failed `charge.completed` deliveries).
+    A payload carrying only `data.flw_ref` must now be REJECTED outright, not
+    silently accepted via the flw_ref fallback an earlier draft of this fix
+    carried as an unverified assumption -- that fallback has been removed."""
     payload = {
         "event": "charge.completed",
         "data": {
@@ -385,12 +400,10 @@ def test_identity_uses_flw_ref_fallback_when_id_is_absent():
         },
     }
 
-    identity = identify_verified_payment_webhook(
-        PaymentWebhookProvider.FLUTTERWAVE, payload
-    )
+    with pytest.raises(PaymentWebhookError) as captured:
+        identify_verified_payment_webhook(PaymentWebhookProvider.FLUTTERWAVE, payload)
 
-    assert identity.provider_event_id == "flutterwave-charge.completed-FLW-REF-99"
-    assert identity.legacy_provider_event_ids == ("flutterwave-DMAC-FLWREF-1",)
+    assert captured.value.code == "financial.payment_webhooks.payload_invalid"
 
 
 def test_shared_tx_ref_different_ids_produce_different_identities():
@@ -411,7 +424,7 @@ def test_shared_tx_ref_different_ids_produce_different_identities():
     )
 
     assert first.provider_event_id != second.provider_event_id
-    assert first.legacy_provider_event_ids == second.legacy_provider_event_ids
+    assert first.legacy_provider_event_id == second.legacy_provider_event_id
 
 
 def test_shared_id_produces_the_same_identity():
@@ -432,3 +445,152 @@ def test_shared_id_produces_the_same_identity():
     )
 
     assert first.provider_event_id == second.provider_event_id
+
+
+def test_legacy_provider_event_id_rejects_empty_string(db_session, flutterwave_binding):
+    """The legacy-identity escape hatch is a narrow, auditable single-alias
+    mechanism, not an open-ended parallel identity system: a caller that
+    supplies an empty (whitespace-only) legacy id is a caller bug, and must be
+    rejected loudly rather than silently ignored."""
+    with pytest.raises(InboxError):
+        integration_inbox.receive_verified(
+            db_session,
+            capability_binding_id=flutterwave_binding.id,
+            provider_event_id="flutterwave-charge.completed-shape-1",
+            event_type="charge.completed",
+            payload={"event": "charge.completed", "data": {"id": "shape-1"}},
+            legacy_provider_event_id="   ",
+        )
+
+
+def test_legacy_provider_event_id_rejects_self_alias(db_session, flutterwave_binding):
+    """A legacy id identical to the current provider_event_id would make the
+    legacy fallback check a silent no-op that always resolves off the primary
+    lookup -- almost certainly a caller bug, not a legitimate migration alias.
+    This proves the constraint is enforced, not merely documented."""
+    with pytest.raises(InboxError):
+        integration_inbox.receive_verified(
+            db_session,
+            capability_binding_id=flutterwave_binding.id,
+            provider_event_id="flutterwave-charge.completed-shape-2",
+            event_type="charge.completed",
+            payload={"event": "charge.completed", "data": {"id": "shape-2"}},
+            legacy_provider_event_id="flutterwave-charge.completed-shape-2",
+        )
+
+
+def test_legacy_provider_event_id_rejects_oversized_value(
+    db_session, flutterwave_binding
+):
+    """`IntegrationInbox.provider_event_id` is `String(240)`; a legacy id that
+    could never fit that column is refused up front rather than surfacing as
+    an opaque database error later."""
+    with pytest.raises(InboxError):
+        integration_inbox.receive_verified(
+            db_session,
+            capability_binding_id=flutterwave_binding.id,
+            provider_event_id="flutterwave-charge.completed-shape-3",
+            event_type="charge.completed",
+            payload={"event": "charge.completed", "data": {"id": "shape-3"}},
+            legacy_provider_event_id="x" * 241,
+        )
+
+
+def test_legacy_provider_event_id_accepts_a_valid_near_miss(
+    db_session, flutterwave_binding
+):
+    """Sensitivity check for the three guards above: a legitimate, distinct,
+    in-bounds legacy id (the actual Flutterwave shape,
+    `flutterwave-<tx_ref>`) must NOT be rejected -- the validation targets the
+    malformed cases, not every legacy id."""
+    receipt, created = integration_inbox.receive_verified(
+        db_session,
+        capability_binding_id=flutterwave_binding.id,
+        provider_event_id="flutterwave-charge.completed-shape-4",
+        event_type="charge.completed",
+        payload={"event": "charge.completed", "data": {"id": "shape-4"}},
+        legacy_provider_event_id="flutterwave-DMAC-SHAPE-4",
+    )
+
+    assert created is True
+    assert receipt.provider_event_id == "flutterwave-charge.completed-shape-4"
+
+
+def test_same_data_id_status_transition_does_not_reach_the_collision_path(
+    db_session, subscriber
+):
+    """Investigates Michael's concrete worry: could the SAME transaction
+    (`data.id`) legitimately be delivered twice with a genuinely different
+    payload (e.g. an interim `status` value followed by the final outcome),
+    which would hit the inbox's same-identity-different-digest path and
+    incorrectly quarantine the installation?
+
+    Findings, traced through the actual code and the two documentation pages
+    Michael cited (webhooks: https://developer.flutterwave.com/v3.0/docs/webhooks;
+    checkout retry behavior:
+    https://developer.flutterwave.com/v3.0/docs/flutterwave-standard-1):
+
+    1. Flutterwave's checkout retry behavior mints a NEW transaction id
+       (`data.id`) for every retried ATTEMPT on a checkout -- the retry
+       produces a different `data.id` sharing the same merchant `tx_ref`
+       (that is the entire subject of this fix, pinned by
+       `test_failed_attempt_then_successful_retry_same_tx_ref_does_not_quarantine`
+       above). A "pending -> successful" status transition on a SINGLE
+       attempt therefore has no retry-driven mechanism to redeliver under
+       the SAME `data.id` with a changed `status`.
+    2. Independently of Flutterwave's own delivery model, THIS codebase's own
+       domain layer already assumes one event per `data.id`:
+       `PaymentProviderEvent.external_id` carries
+       `uq_payment_provider_events_external_id`, a unique index per
+       `provider_id` (see `app/models/billing.py`). If Flutterwave ever did
+       redeliver a second `charge.completed` for the same `data.id` with a
+       different `status`, the domain layer downstream of the inbox would
+       reject the second one on that unique constraint regardless of what
+       the inbox layer did -- so quarantining early, at the inbox layer, is
+       not introducing a NEW failure mode; it is surfacing the same
+       "this codebase does not model a status transition under one
+       `data.id`" fact earlier and more loudly.
+    3. Conclusion: given (1) and (2), a genuine same-`data.id` status
+       transition is not a real risk in this code today. This test proves
+       the current, ACTUAL behavior for that shape (same `data.id`, `status`
+       field differs) is the existing tamper-collision response --
+       `quarantine_installation` is called and the second delivery is
+       rejected (409) -- and documents why that is correct, not a bug to
+       route around. Tamper detection is intentionally NOT weakened here:
+       weakening it (e.g. excluding `status` from the digest) would let a
+       payload whose `amount`/`currency` legitimately never changes under
+       one `data.id` sail through a real tampering attempt disguised as a
+       "status update".
+
+    If a future Flutterwave delivery is ever observed in production sending
+    two distinct payloads under one `data.id` for a legitimate reason, that
+    is new evidence this reasoning should be revisited -- but nothing in the
+    current code or the cited documentation supports designing for it now.
+    """
+    _make_provider(db_session)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="450.00", invoice_number="INV-STATUS-1"
+    )
+    pending_body = _flutterwave_body(
+        tx_ref="DMAC-STATUS-1",
+        tx_id="500",
+        amount="450.00",
+        status="pending",
+        meta={"invoice_id": str(invoice.id)},
+    )
+    successful_body = _flutterwave_body(
+        tx_ref="DMAC-STATUS-1",
+        tx_id="500",
+        amount="450.00",
+        status="successful",
+        meta={"invoice_id": str(invoice.id)},
+    )
+
+    with patch("app.services.integrations.inbox.quarantine_installation") as quarantine:
+        pending_response = _post_flutterwave(db_session, pending_body)
+        successful_response = _post_flutterwave(db_session, successful_body)
+
+    assert pending_response.status_code == 200
+    assert successful_response.status_code == 409
+    quarantine.assert_called_once()
+    assert db_session.query(Payment).count() == 0
