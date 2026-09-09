@@ -12,8 +12,8 @@ Expand-only: both columns are nullable, no backfill. Existing rows carry no
 history to backfill from — they simply have no read-status until the next
 reconcile pass runs and stamps one.
 
-Revision ID: 589_olt_observation_read_status
-Revises: 588_team_inbox_queue_correctness
+Revision ID: 590_olt_observation_read_status
+Revises: 589_payment_inbox_lease
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "589_olt_observation_read_status"
-down_revision = "588_team_inbox_queue_correctness"
+revision = "590_olt_observation_read_status"
+down_revision = "589_payment_inbox_lease"
 branch_labels = None
 depends_on = None
 
