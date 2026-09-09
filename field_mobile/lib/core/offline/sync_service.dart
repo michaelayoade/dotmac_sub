@@ -31,6 +31,38 @@ class OfflineRequestHistoryEntry {
   final String? lastError;
 }
 
+enum MutationDeliveryState { delivered, queued, failed }
+
+class MutationDeliveryResult {
+  const MutationDeliveryResult({
+    required this.clientRef,
+    required this.state,
+    this.error,
+  });
+
+  final String clientRef;
+  final MutationDeliveryState state;
+  final String? error;
+}
+
+class OfflineNoteProjection {
+  const OfflineNoteProjection({
+    required this.clientRef,
+    required this.body,
+    required this.isInternal,
+    required this.createdAt,
+    required this.state,
+    this.error,
+  });
+
+  final String clientRef;
+  final String body;
+  final bool isInternal;
+  final DateTime createdAt;
+  final MutationDeliveryState state;
+  final String? error;
+}
+
 /// Maps an outbox entry kind to its API call.
 class OutboxRouting {
   static (String method, String path) route(
@@ -269,6 +301,26 @@ class SyncService {
           ))
           .getSingleOrNull();
 
+  Future<MutationDeliveryResult> deliveryResult(String clientRef) async {
+    final entry = await outboxEntry(clientRef);
+    if (entry == null) {
+      return MutationDeliveryResult(
+        clientRef: clientRef,
+        state: MutationDeliveryState.failed,
+        error: 'Queued note could not be found',
+      );
+    }
+    return MutationDeliveryResult(
+      clientRef: clientRef,
+      state: switch (entry.status) {
+        'sent' => MutationDeliveryState.delivered,
+        'conflict' => MutationDeliveryState.failed,
+        _ => MutationDeliveryState.queued,
+      },
+      error: entry.lastError,
+    );
+  }
+
   /// Queued mutations carry the customer's own words and readings, so the
   /// payload column holds an envelope bound to this scope and this client ref.
   /// Nothing else can open it, which is also what stops a queue left behind by
@@ -310,6 +362,26 @@ class SyncService {
           createdAt: row.createdAt,
           lastError: row.lastError,
         ),
+    ];
+  }
+
+  Future<List<OfflineNoteProjection>> offlineNotesForJob(
+    String workOrderId,
+  ) async {
+    final entries = await offlineRequestHistory('note');
+    return [
+      for (final entry in entries)
+        if (entry.payload['work_order_id'] == workOrderId)
+          OfflineNoteProjection(
+            clientRef: entry.clientRef,
+            body: entry.payload['body'] as String? ?? '',
+            isInternal: entry.payload['is_internal'] as bool? ?? true,
+            createdAt: entry.createdAt,
+            state: entry.status == 'conflict'
+                ? MutationDeliveryState.failed
+                : MutationDeliveryState.queued,
+            error: entry.lastError,
+          ),
     ];
   }
 
@@ -361,7 +433,8 @@ class SyncService {
           continue;
         }
         if (entry.kind == 'material_request' ||
-            entry.kind == 'expense_request') {
+            entry.kind == 'expense_request' ||
+            entry.kind == 'note') {
           payload['client_ref'] = entry.clientRef;
         }
         final (method, path) = OutboxRouting.route(entry.kind, payload);

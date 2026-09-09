@@ -38,6 +38,7 @@ from app.services.auth_dependencies import (
     require_permission,
 )
 from app.services.domain_errors import DomainError
+from app.web.admin.field_note_access import resolve_staff_field_note_access
 
 
 class ProjectDomainRoute(APIRoute):
@@ -374,6 +375,9 @@ def project_task_detail(request: Request, task_ref: str, db: Session = Depends(g
             task=task,
             can_read_work_orders=can(request, "operations:dispatch:read"),
             can_read_material_requests=can(request, "operations:material_request:read"),
+            field_note_access=resolve_staff_field_note_access(
+                db, getattr(request.state, "auth", None)
+            ),
         )
     )
     return templates.TemplateResponse(

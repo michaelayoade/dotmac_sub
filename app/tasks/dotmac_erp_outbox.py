@@ -164,6 +164,16 @@ def repair_purchase_invoice_sync() -> dict:
     return run_repair_purchase_invoice_sync()
 
 
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks")
+def repair_purchase_order_writebacks() -> dict:
+    """Re-apply a delivered PO's ERP id onto its install when the write-back was lost."""
+    from app.services.dotmac_erp.purchase_order_sync import (
+        run_repair_purchase_order_writebacks,
+    )
+
+    return run_repair_purchase_order_writebacks()
+
+
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses")
 def refresh_purchase_invoice_statuses() -> dict:
     """Poll ERP for current vendor supplier-invoice settlement observations."""

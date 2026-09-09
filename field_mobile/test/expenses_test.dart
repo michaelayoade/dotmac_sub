@@ -9,6 +9,7 @@ import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
+import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -375,6 +376,9 @@ void main() {
       'erp_claim_status': 'rejected',
       'erp_sync_status': 'failed',
       'erp_sync_error': 'timeout',
+      'payment_status': 'processing',
+      'payment_intent_id': 'payment-12',
+      'payment_error': 'Awaiting provider confirmation',
       'submitted_at': '2026-07-01T08:00:00Z',
       'rejected_at': '2026-07-02T09:00:00Z',
       'items': [
@@ -397,6 +401,9 @@ void main() {
     expect(request.rejectionReason, 'Missing receipt');
     expect(request.erpClaimNumber, 'EC-12');
     expect(request.erpSyncStatus, 'failed');
+    expect(request.paymentStatus, 'processing');
+    expect(request.paymentIntentId, 'payment-12');
+    expect(request.paymentError, 'Awaiting provider confirmation');
     expect(request.items, hasLength(1));
     expect(request.items.single.amount, 80.0);
     expect(request.items.single.vendorName, 'City Cabs');
@@ -509,6 +516,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     Map<String, dynamic>? posted;
+    var managerExpenseLoads = 0;
     adapter.on('POST', '/api/v1/field/expense-requests/submit', (options) {
       posted = (options.data as Map).cast<String, dynamic>();
       return (
@@ -555,11 +563,21 @@ void main() {
               ),
             ],
           ),
+          managerExpensesProvider.overrideWith((ref) async {
+            managerExpenseLoads += 1;
+            return const [];
+          }),
         ],
-        child: MaterialApp.router(routerConfig: router),
+        child: Consumer(
+          builder: (context, ref, _) {
+            ref.watch(managerExpensesProvider);
+            return MaterialApp.router(routerConfig: router);
+          },
+        ),
       ),
     );
     await tester.pumpAndSettle();
+    expect(managerExpenseLoads, 1);
 
     expect(find.text('New expense request'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
@@ -614,6 +632,7 @@ void main() {
       },
     ]);
     expect(find.text('Expenses list'), findsOneWidget);
+    expect(managerExpenseLoads, 2);
 
     // Let the confirmation SnackBar timer expire.
     await tester.pump(const Duration(seconds: 5));

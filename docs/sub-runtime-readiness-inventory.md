@@ -91,7 +91,7 @@ repository. Full raw counts:
 | Alembic migration runner | `alembic/` | 1 | 1 |
 | Standalone operational/migration scripts — live | `scripts/` | 4 | 5 |
 | Standalone operational/migration scripts — historical residue (see below; excluded, not a `DatabaseRuntime` requirement) | `scripts/` | 7 | 8 |
-| Test fixtures, migration rehearsals, integration/playwright harnesses | `tests/` | 63 | 115 |
+| Test fixtures, migration rehearsals, integration/playwright harnesses | `tests/` | 65 | 119 |
 
 The mechanical AST sweep itself found 22 production/operational files (25
 sites) with no interpretation applied. Seven of those files are historical
@@ -175,7 +175,7 @@ its target database is reachable) is a Sub repository-hygiene /
 residue-deletion question for that decommissioning programme to close —
 not a Kernel capability requirement, and out of scope for this inventory.
 
-### Test/fixture family — 63 files, 115 sites (tracked as an aggregate, not
+### Test/fixture family — 65 files, 119 sites (tracked as an aggregate, not
 per-file — see the ratchet's rationale below)
 
 Dominated by: migration rehearsal harnesses that build a real Postgres

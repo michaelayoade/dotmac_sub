@@ -43,7 +43,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: two-session Postgres concurrency tests for the payment-inbox lease
 #: (reclaim-vs-reclaim and reclaim-vs-completion), each with its own
 #: `sessionmaker`, mirroring the file's existing test fixture pattern.
-TEST_FIXTURE_BASELINE_TOTAL = 117
+#: +2 from tests/integration/test_auth_session_refresh_concurrency.py: the
+#: setup/verification factory and two concurrent owner-command sessions.
+TEST_FIXTURE_BASELINE_TOTAL = 119
 
 
 def _baseline() -> dict[str, int]:

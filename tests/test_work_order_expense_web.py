@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -12,12 +13,14 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
+from app.models.field_attachment import FieldAttachment
 from app.models.field_erp_sync import (
     FieldErpSyncEvent,
     FieldErpSyncFlow,
     FieldErpSyncStatus,
 )
 from app.models.field_expense import FieldExpenseRequest, FieldExpenseRequestItem
+from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
@@ -277,6 +280,44 @@ def test_form_enforces_zero_lines_category_maximum_and_required_receipt():
     }
 
 
+def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
+    prepared = expense_web.validate_work_order_expense_form(
+        _valid_form(), category_rules=_rules(receipt=False)
+    )
+
+    assert prepared.lines[0].receipt_url is None
+    assert prepared.lines[0].receipt_upload is None
+
+    form = _valid_form()
+    line = form.lines[0]
+    with_url = expense_web.WorkOrderExpenseFormInput(
+        request_id=form.request_id,
+        purpose=form.purpose,
+        expense_date=form.expense_date,
+        currency=form.currency,
+        notes=form.notes,
+        lines=(
+            expense_web.ExpenseLineFormInput(
+                key=line.key,
+                category_code=line.category_code,
+                description=line.description,
+                amount=line.amount,
+                expense_date=line.expense_date,
+                vendor_name=line.vendor_name,
+                receipt_url="https://example.com/receipt.pdf",
+                notes=line.notes,
+            ),
+        ),
+    )
+
+    prepared_with_url = expense_web.validate_work_order_expense_form(
+        with_url, category_rules=_rules(receipt=True)
+    )
+
+    assert prepared_with_url.lines[0].receipt_url == ("https://example.com/receipt.pdf")
+    assert prepared_with_url.lines[0].receipt_upload is None
+
+
 def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     class _RejectUploads:
         @staticmethod
@@ -308,6 +349,54 @@ def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
 
     assert "File extension not allowed" in exc.value.message
     assert db_session.query(FieldExpenseRequest).count() == 0
+
+
+def test_staff_receipt_upload_avoids_legacy_subscriber_uploader_fk(
+    db_session, monkeypatch
+):
+    class _StageUploads:
+        @staticmethod
+        def stage_upload(**kwargs):
+            assert kwargs["uploaded_by"] is None
+            stored = StoredFile(
+                entity_type=kwargs["entity_type"],
+                entity_id=kwargs["entity_id"],
+                original_filename=kwargs["original_filename"],
+                storage_key_or_relative_path="attachments/receipt.pdf",
+                file_size=len(kwargs["data"]),
+                content_type=kwargs["content_type"],
+                storage_provider="s3",
+                uploaded_by=kwargs["uploaded_by"],
+                owner_subscriber_id=kwargs["owner_subscriber_id"],
+            )
+            kwargs["db"].add(stored)
+            kwargs["db"].flush()
+            return stored
+
+    monkeypatch.setattr(attachments_module, "file_uploads", _StageUploads())
+    user = _user(db_session, "StaffReceipt")
+    work_order = _work_order(db_session, "sub-expense-staff-receipt")
+    upload = ExpenseReceiptUploadInput(
+        file_name="receipt.pdf",
+        mime_type="application/pdf",
+        content=b"%PDF-1.4",
+        client_ref=uuid4(),
+    )
+    command = _command(
+        user,
+        work_order,
+        items=(_line(receipt_upload=upload),),
+        category_rules=_rules(receipt=True),
+    )
+    db_session.commit()
+
+    outcome = submit_field_expense_request_command(db_session, command)
+
+    stored_file = db_session.query(StoredFile).one()
+    attachment = db_session.query(FieldAttachment).one()
+    assert outcome.items[0].receipt_attachment_id == attachment.id
+    assert stored_file.uploaded_by is None
+    assert attachment.uploaded_by_system_user_id == user.id
 
 
 def test_unassigned_work_order_disables_expense_action(db_session, monkeypatch):
@@ -461,7 +550,9 @@ def test_redisplay_preserves_values_and_explicitly_clears_file_input():
 
 
 def test_work_order_template_owns_context_and_supports_responsive_lines():
-    source = Path("templates/admin/dispatch/work_order_detail.html").read_text()
+    source = Path("templates/admin/dispatch/work_order_detail.html").read_text(
+        encoding="utf-8"
+    )
     expense_form = next(form for form in source.split("</form>") if "/expenses" in form)
 
     assert "components/forms/csrf_input.html" in expense_form
@@ -475,3 +566,56 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert source.count(">New Expense Claim<") >= 2
     assert 'aria-describedby="expense-creation-unavailable"' in source
     assert 'id="expense-creation-unavailable"' in source
+    assert (
+        'Title <span class="text-rose-600" aria-hidden="true">*</span><input' in source
+    )
+    assert (
+        'Technician <span class="text-rose-600" aria-hidden="true">*</span><select'
+        in source
+    )
+    assert "receipt.required" not in expense_form
+    assert 'name="receipt_file_{{ line.key }}"' in expense_form
+    assert 'name="receipt_file_{{ line.key }}" required' not in expense_form
+    assert 'name="receipt_url_{{ line.key }}" required' not in expense_form
+    assert "data-receipt-required-marker hidden" in expense_form
+    assert "'(required — choose one)'" in source
+    assert "receiptUrl.setCustomValidity" in source
+    assert "receiptFile.files?.length" in source
+    assert (
+        "When a receipt is required, provide either a receipt URL or an uploaded file."
+        in source
+    )
+
+    required_names = {
+        match.group(1)
+        for tag in re.findall(
+            r"<(?:input|select|textarea)\b[^>]*\brequired\b[^>]*>",
+            expense_form,
+        )
+        if (match := re.search(r'name="([^"]+)"', tag))
+    }
+    assert required_names == {
+        "purpose",
+        "expense_date",
+        "currency",
+        "category_code_{{ line.key }}",
+        "amount_{{ line.key }}",
+        "description_{{ line.key }}",
+    }
+
+    line_template = source.split("<template data-expense-line-template>", 1)[1].split(
+        "</template>", 1
+    )[0]
+    template_required_names = {
+        match.group(1)
+        for tag in re.findall(
+            r"<(?:input|select|textarea)\b[^>]*\brequired\b[^>]*>",
+            line_template,
+        )
+        if (match := re.search(r'name="([^"]+)"', tag))
+    }
+    assert template_required_names == {
+        "category_code___KEY__",
+        "amount___KEY__",
+        "description___KEY__",
+    }

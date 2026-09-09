@@ -1630,6 +1630,22 @@ def team_inbox_reply(
         )
         response.headers["Retry-After"] = "1"
         return response
+    except team_inbox_commands.ConversationAssignedToAnotherAgentError as exc:
+        if _is_htmx_request(request):
+            return _reply_presentation_response(
+                conversation_id,
+                status="error",
+                outcome="error",
+                message=exc.message,
+                error_code=exc.code,
+                http_status=409,
+            )
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=exc.message,
+            next_url=next_url,
+        )
     except team_inbox_commands.ConversationNotFoundError:
         if _is_htmx_request(request):
             return _reply_presentation_response(

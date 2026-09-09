@@ -531,6 +531,187 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="operations.field_notes",
+        module="app.services.field.note_commands",
+        owns=(
+            "native field work-order note creation",
+            "authorized staff field-note related-context projection",
+        ),
+        depends_on=(
+            "auth.permission_gate",
+            "events.owner_outputs",
+            "operations.work_order_commands",
+            "operations.work_orders",
+        ),
+        notes=(
+            "The typed owner creates technician-scoped native notes and stages "
+            "their durable output. A stable mobile client reference is the "
+            "idempotency key; the field API and offline outbox are adapters. "
+            "Authorized staff pages compose the same canonical rows through "
+            "native work-order, project-task, and origin-ticket bindings."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="native field work-order note creation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "authenticated technician identity",
+                        "assigned work-order state",
+                        "field-note client request identity",
+                    ),
+                    canonical_writer="operations.field_notes",
+                ),
+                ConcernContract(
+                    name="authorized staff field-note related-context projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical field work-order note state",
+                        "native work-order relationship bindings",
+                        "staff field-note authorization evidence",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated technician identity",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Authenticated SystemUser resolved to one active "
+                        "TechnicianProfile"
+                    ),
+                ),
+                AuthorityInput(
+                    name="assigned work-order state",
+                    owner="operations.work_orders",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Active WorkOrder and current technician or vendor "
+                        "assignment scope"
+                    ),
+                ),
+                AuthorityInput(
+                    name="field-note client request identity",
+                    owner="operations.field_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Stable client_ref plus the normalized work-order, body, "
+                        "visibility, and attachment fingerprint"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical field work-order note state",
+                    owner="operations.field_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "FieldWorkOrderNote rows and their active field attachment links"
+                    ),
+                ),
+                AuthorityInput(
+                    name="native work-order relationship bindings",
+                    owner="operations.work_order_commands",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "WorkOrder public identity, project_task_id, and "
+                        "origin_ticket_id foreign keys"
+                    ),
+                ),
+                AuthorityInput(
+                    name="staff field-note authorization evidence",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Exact admin work-order scope and operations:dispatch:read "
+                        "permission evaluated by the web adapter"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The note, attachment links, provenance fingerprint, and "
+                    "owner output commit in one owner-managed transaction."
+                ),
+                locking=(
+                    "Lock the authenticated SystemUser before replay lookup, then "
+                    "lock the assigned WorkOrder before note creation."
+                ),
+                idempotency=(
+                    "The unique author_system_user_id/client_ref pair replays only "
+                    "when the normalized command fingerprint is identical."
+                ),
+                retries=(
+                    "Equivalent offline retries return the original note; a reused "
+                    "key with changed inputs fails closed as a conflict."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "operations.field_notes.attachment_forbidden",
+                    "operations.field_notes.attachment_not_found",
+                    "operations.field_notes.idempotency_conflict",
+                    "operations.field_notes.invalid_request",
+                    "operations.field_notes.requester_not_found",
+                    "operations.field_notes.work_order_not_found",
+                    *owner_command_boundary_error_codes("operations.field_notes"),
+                ),
+                mapping_owner="field work-order note API and admin web adapters",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "unknown or inactive technician identity",
+                    "unassigned or inaccessible work order",
+                    "foreign, missing, or already-linked attachment",
+                    "missing or unrelated staff work-order read scope",
+                    "client-reference fingerprint conflict",
+                ),
+            ),
+            events=EventContract(
+                event_types=("field_work_order_note.created",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is additive and excludes the private note body; it "
+                    "carries stable note, work-order, actor, and command evidence."
+                ),
+                replay=(
+                    "The canonical note row, attachment links, and command "
+                    "fingerprint rebuild the creation output."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="app.services.field.notes.FieldNotes.create",
+                new_owner="operations.field_notes",
+                verification=(
+                    "Owner-command, exact replay, conflict, mobile queued/failed "
+                    "projection, and predecessor-to-head migration tests pass."
+                ),
+                cutover_gate=(
+                    "Revision 590 is applied before a mobile build that sends "
+                    "field-note client references is released."
+                ),
+                fallback_retirement=(
+                    "The adapter-generated reference remains only for older mobile "
+                    "clients and can be made required after their support window."
+                ),
+            ),
+            steward="field operations",
+            design_refs=(
+                "docs/designs/FIELD_WORK_ORDER_NOTES.md",
+                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+            ),
+            test_refs=(
+                "tests/test_field_notes.py",
+                "tests/test_field_note_staff_projection.py",
+                "tests/architecture/test_field_note_delivery_contract.py",
+                "tests/integration/test_field_note_delivery_migration.py",
+                "field_mobile/test/execution_test.dart",
+                "field_mobile/test/jobs_screens_test.dart",
+            ),
+        ),
+    ),
+    SOTService(
         name="operations.field_completion",
         module="app.services.field.transitions",
         owns=(
@@ -709,6 +890,7 @@ SERVICES: tuple[SOTService, ...] = (
             "field expense request submission",
             "expense receipt staging for submitted claims",
             "field expense approval and ERP delivery staging",
+            "field expense payment initiation and ERP delivery staging",
             "field expense vendor picker",
             "requester-owned field expense history",
             "field expense requester-identity repair",
@@ -725,9 +907,10 @@ SERVICES: tuple[SOTService, ...] = (
             "supplies exact RBAC-authorized work-order evidence and derives the actor "
             "from the authenticated session. Every submission requires current "
             "technician-assignment evidence. Receipt metadata is staged flush-only "
-            "inside the same command. A separate typed manager approval owns the "
-            "local financial decision and stages the idempotent ERP delivery intent; "
-            "submission never sends an unapproved expense. The client reference and "
+            "inside the same command. Submission stages ERP claim visibility; typed "
+            "manager approval and rejection commands stage ordered ERP decisions. A "
+            "separately authorized payment command stages reimbursement initiation, "
+            "while ERP remains the payment and settlement authority. The client reference and "
             "normalized fingerprint make retries safe. The vendor picker remains "
             "read-only and projects active vendor labels for expense entry."
         ),
@@ -759,6 +942,15 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical submitted expense request",
+                        "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense payment initiation and ERP delivery staging",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical approved expense request",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -835,6 +1027,15 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="canonical approved expense request",
+                    owner="operations.expense_requests",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Locked active FieldExpenseRequest with manager approval "
+                        "evidence and no active or unresolved payment command"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical field expense request state",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -866,31 +1067,33 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Create, submit, optional receipt metadata, and work-order activity "
-                    "marking complete in one owner transaction without ERP delivery. "
-                    "Receipt storage is a flush-only participant. Manager approval "
-                    "locks the request and, after cutover, stages its ERP outbox intent "
-                    "in the same owner transaction. The vendor picker performs a "
+                    "marking and submitted ERP outbox staging complete in one owner "
+                    "transaction. Receipt storage is a flush-only participant. Manager "
+                    "approval, rejection, and payment initiation each lock the request "
+                    "and stage an ordered ERP intent in the same owner transaction. "
+                    "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
                     "side-effect free; revision 584 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
-                    "Submission locks the scoped active work order; approval locks "
-                    "the active expense request before its status transition."
+                    "Submission locks the scoped active work order; approval, "
+                    "rejection, and payment initiation lock the active expense "
+                    "request before their transitions."
                 ),
                 idempotency=(
                     "A unique client reference replays only when the normalized "
                     "submission fingerprint is identical. An already-approved "
                     "request returns its current delivery outcome; the first "
-                    "transition records its command id, and "
-                    "exp-{request_id}-submit-v1 remains the stable compatibility "
-                    "delivery key."
+                    "transition records its command id. Submit and manager decisions "
+                    "have stable per-request delivery keys; each payment command id "
+                    "has one stable key and one ERP payment intent."
                 ),
                 retries=(
                     "Identical submission retries return the committed request. "
-                    "A staging failure rolls back approval for safe command retry; "
-                    "after staging, ERP transport retries from the durable outbox "
-                    "without reversing the local approval."
+                    "A staging failure rolls back the manager action for safe command "
+                    "retry. Ordered ERP transport retries from the durable outbox; an "
+                    "indeterminate provider outcome blocks another payment command."
                 ),
             ),
             errors=ErrorContract(
@@ -901,6 +1104,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.erp_staging_failed",
                     "operations.expense_requests.incomplete_approval",
                     "operations.expense_requests.invalid_transition",
+                    "operations.expense_requests.manager_email_required",
+                    "operations.expense_requests.payment_already_active",
                     "operations.expense_requests.requester_not_found",
                     "operations.expense_requests.request_not_found",
                     "operations.expense_requests.work_order_not_found",
@@ -939,6 +1144,31 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             projections=(
                 ProjectionContract(
+                    name="field expense ERP payment projection",
+                    input_names=(
+                        "canonical approved expense request",
+                        "expense ERP delivery cutover control",
+                    ),
+                    writer="operations.expense_requests",
+                    freshness=(
+                        "Updated after each accepted payment command response and by "
+                        "scheduled ERP claim-status reconciliation."
+                    ),
+                    stale_behavior=(
+                        "The last observed payment status remains visible with its "
+                        "timestamp; unknown outcomes remain blocking, never failed."
+                    ),
+                    drift_signal=(
+                        "ERP reports a payment intent or paid claim state that differs "
+                        "from the request's erp_payment metadata projection."
+                    ),
+                    rebuild_operation=(
+                        "Poll the ERP expense-claim status endpoint by the stable Sub "
+                        "request id and reapply the typed claim/payment response."
+                    ),
+                    repair_owner="operations.expense_requests",
+                ),
+                ProjectionContract(
                     name="field expense requester identity bridge",
                     input_names=(
                         "canonical field expense request state",
@@ -974,9 +1204,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "conflict, requester-history, and exact identity-repair tests pass."
                 ),
                 cutover_gate=(
-                    "Mobile clients use the typed approval endpoint, ERP delivery "
+                    "Mobile clients use the typed submit, decision, and payment "
+                    "endpoints, ERP delivery "
                     "capabilities are enabled, and expense_claim ownership moves to "
-                    "Sub before approving a new production expense. Historical test "
+                    "Sub before submitting a new production expense. Historical test "
                     "expenses are not backfilled into ERP delivery; exact requester-"
                     "identity repair remains a separate local migration."
                 ),

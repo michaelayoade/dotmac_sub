@@ -47,6 +47,7 @@ from app.tasks.dotmac_erp_outbox import (
     refresh_material_request_statuses,
     refresh_purchase_invoice_statuses,
     repair_purchase_invoice_sync,
+    repair_purchase_order_writebacks,
     sync_erp_operational_domains,
 )
 from app.tasks.dotmac_erp_outbox import (
@@ -306,6 +307,7 @@ __all__ = [
     "refresh_material_catalog",
     "refresh_purchase_invoice_statuses",
     "repair_purchase_invoice_sync",
+    "repair_purchase_order_writebacks",
     "sync_erp_operational_domains",
     "run_usage_rating",
     "import_radius_accounting",

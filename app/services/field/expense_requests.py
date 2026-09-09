@@ -33,7 +33,11 @@ from app.services.backoffice import (
     BackofficeDeliveryView,
     BackofficeEnqueueResult,
     BackofficeEnqueueStatus,
+    expense_payment_projection,
     get_expense_claim_deliveries,
+    get_expense_decision_delivery,
+    get_expense_payment_deliveries,
+    mark_expense_payment_queued,
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
@@ -135,6 +139,21 @@ class ApproveFieldExpenseRequest:
     reviewer_system_user_id: UUID
 
 
+@dataclass(frozen=True, slots=True)
+class RejectFieldExpenseRequest:
+    context: CommandContext
+    expense_request_id: UUID
+    reviewer_system_user_id: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class InitiateFieldExpensePayment:
+    context: CommandContext
+    expense_request_id: UUID
+    manager_system_user_id: UUID
+
+
 class ExpenseErpSyncStatus(str, Enum):
     PENDING = "pending"
     SENT = "sent"
@@ -153,6 +172,24 @@ class ExpenseRequestApprovalOutcome:
     erp_sync_status: ExpenseErpSyncStatus
     erp_sync_event_id: UUID | None
     erp_sync_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ExpenseRequestRejectionOutcome:
+    id: UUID
+    status: Literal["rejected"]
+    rejected_at: datetime
+    rejection_reason: str
+    erp_sync_event_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ExpensePaymentInitiationOutcome:
+    id: UUID
+    status: Literal["approved"]
+    payment_status: Literal["queued"]
+    payment_command_id: UUID
+    erp_sync_event_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +252,18 @@ _EXPENSE_APPROVAL_COMMAND = OwnerCommandDefinition(
     owner="operations.expense_requests",
     concern="field expense approval and ERP delivery staging",
     name="approve_field_expense_request",
+)
+
+_EXPENSE_REJECTION_COMMAND = OwnerCommandDefinition(
+    owner="operations.expense_requests",
+    concern="field expense approval and ERP delivery staging",
+    name="reject_field_expense_request",
+)
+
+_EXPENSE_PAYMENT_COMMAND = OwnerCommandDefinition(
+    owner="operations.expense_requests",
+    concern="field expense payment initiation and ERP delivery staging",
+    name="initiate_field_expense_payment",
 )
 
 
@@ -432,6 +481,23 @@ def submit_field_expense_request_command(
             request.items.append(FieldExpenseRequestItem(**item))
         _mark_sub_authoritative(row)
         db.flush()
+        # Submission is now the ERP visibility release point. The ownership
+        # gate keeps pre-cutover deployments inert; once Sub owns the flow the
+        # claim and its durable delivery intent commit atomically.
+        from app.services.backoffice import enqueue_expense_claim
+
+        delivery = enqueue_expense_claim(db, request)
+        if delivery.status not in {
+            BackofficeEnqueueStatus.ENQUEUED,
+            BackofficeEnqueueStatus.NOT_OWNED,
+        }:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.erp_staging_failed",
+                message=(
+                    "The expense was not submitted because its ERP delivery "
+                    "could not be queued. Please retry."
+                ),
+            )
         return _submission_outcome(request)
 
     return execute_owner_command(
@@ -465,7 +531,14 @@ def approve_field_expense_request_command(
         _mark_sub_authoritative(request.work_order_mirror)
 
         try:
-            result = _enqueue_approved_backoffice(db, request)
+            result = _enqueue_decision_backoffice(
+                db,
+                request,
+                action="approve",
+                decision_id=command.context.command_id,
+                reviewer_system_user_id=command.reviewer_system_user_id,
+                decided_at=now,
+            )
         except Exception as exc:
             raise FieldExpenseRequestError(
                 code="operations.expense_requests.erp_staging_failed",
@@ -494,6 +567,165 @@ def approve_field_expense_request_command(
     return execute_owner_command(
         db,
         definition=_EXPENSE_APPROVAL_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def reject_field_expense_request_command(
+    db: Session, *, command: RejectFieldExpenseRequest
+) -> ExpenseRequestRejectionOutcome:
+    """Reject locally and durably deliver the same manager decision to ERP."""
+
+    def operation() -> ExpenseRequestRejectionOutcome:
+        request = _locked_expense_request(db, command.expense_request_id)
+        if request.status == "rejected":
+            delivery = get_expense_decision_delivery(db, request.id, action="reject")
+            if request.rejected_at is None or delivery.event_id is None:
+                raise FieldExpenseRequestError(
+                    code="operations.expense_requests.invalid_request",
+                    message="Rejected expense evidence is incomplete.",
+                )
+            return ExpenseRequestRejectionOutcome(
+                id=request.id,
+                status="rejected",
+                rejected_at=request.rejected_at,
+                rejection_reason=request.rejection_reason or "Rejected",
+                erp_sync_event_id=delivery.event_id,
+            )
+        if request.status != "submitted":
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_transition",
+                message="Only submitted expense requests can be rejected.",
+            )
+        reason = command.reason.strip()
+        if not reason:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_request",
+                message="A rejection reason is required.",
+            )
+        now = datetime.now(UTC)
+        request.status = "rejected"
+        request.rejected_at = now
+        request.rejection_reason = reason[:500]
+        _note_manager_command(
+            request,
+            event="rejected",
+            context=command.context,
+            reviewer_system_user_id=command.reviewer_system_user_id,
+            occurred_at=now,
+        )
+        _mark_sub_authoritative(request.work_order_mirror)
+        result = _enqueue_decision_backoffice(
+            db,
+            request,
+            action="reject",
+            decision_id=command.context.command_id,
+            reviewer_system_user_id=command.reviewer_system_user_id,
+            decided_at=now,
+            reason=reason,
+        )
+        if (
+            result.status is not BackofficeEnqueueStatus.ENQUEUED
+            or result.event is None
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.erp_staging_failed",
+                message=(
+                    "The expense was not rejected because its ERP decision "
+                    "could not be queued. Please retry."
+                ),
+            )
+        db.flush()
+        return ExpenseRequestRejectionOutcome(
+            id=request.id,
+            status="rejected",
+            rejected_at=now,
+            rejection_reason=request.rejection_reason,
+            erp_sync_event_id=result.event.id,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_EXPENSE_REJECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def initiate_field_expense_payment_command(
+    db: Session, *, command: InitiateFieldExpensePayment
+) -> ExpensePaymentInitiationOutcome:
+    """Queue one manager-authorized ERP reimbursement command."""
+
+    def operation() -> ExpensePaymentInitiationOutcome:
+        request = _locked_expense_request(db, command.expense_request_id)
+        if request.status != "approved":
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_transition",
+                message="Only approved expense requests can be paid.",
+            )
+        current = expense_payment_projection(request)
+        if current.status in {
+            "queued",
+            "pending",
+            "processing",
+            "completed",
+            "indeterminate",
+        }:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.payment_already_active",
+                message="This expense already has an active or unresolved payment.",
+            )
+        manager = db.get(SystemUser, command.manager_system_user_id)
+        manager_email = (manager.email if manager else "").strip()
+        if not manager_email:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.manager_email_required",
+                message="The manager must have an ERP-matched email to pay expenses.",
+            )
+        from app.services.backoffice import enqueue_expense_payment
+
+        now = datetime.now(UTC)
+        result = enqueue_expense_payment(
+            db,
+            request,
+            command_id=command.context.command_id,
+            initiated_by_email=manager_email,
+            initiated_at=now,
+        )
+        if (
+            result.status is not BackofficeEnqueueStatus.ENQUEUED
+            or result.event is None
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.erp_staging_failed",
+                message="Payment could not be queued for ERP. Please retry.",
+            )
+        mark_expense_payment_queued(
+            request,
+            command_id=command.context.command_id,
+            event_id=result.event.id,
+        )
+        _note_manager_command(
+            request,
+            event="payment_queued",
+            context=command.context,
+            reviewer_system_user_id=command.manager_system_user_id,
+            occurred_at=now,
+        )
+        db.flush()
+        return ExpensePaymentInitiationOutcome(
+            id=request.id,
+            status="approved",
+            payment_status="queued",
+            payment_command_id=command.context.command_id,
+            erp_sync_event_id=result.event.id,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_EXPENSE_PAYMENT_COMMAND,
         context=command.context,
         operation=operation,
     )
@@ -569,8 +801,18 @@ def serialize_expense_request(
     request: FieldExpenseRequest,
     *,
     delivery: BackofficeDeliveryView | None = None,
+    payment_delivery: BackofficeDeliveryView | None = None,
 ) -> dict:
     sync_status = _expense_sync_status(request, delivery)
+    payment = expense_payment_projection(request)
+    payment_status = payment.status
+    payment_error = payment.error
+    if payment_delivery is not None:
+        if payment_delivery.event_status in {"pending", "sent"} and not payment_status:
+            payment_status = "queued"
+        elif payment_delivery.event_status == "dead":
+            payment_status = "delivery_failed"
+            payment_error = payment_delivery.last_error
     return {
         "id": request.id,
         "work_order_id": request.work_order_mirror.public_id,
@@ -589,6 +831,9 @@ def serialize_expense_request(
         "expense_claim_status": request.expense_claim_status,
         "erp_sync_status": sync_status.value if sync_status is not None else None,
         "erp_sync_error": _expense_sync_error(delivery),
+        "payment_status": payment_status,
+        "payment_intent_id": payment.intent_id,
+        "payment_error": payment_error,
         "client_ref": request.client_ref,
         "total_amount": request.total_amount,
         "submitted_at": request.submitted_at,
@@ -619,8 +864,15 @@ def _serialize_expense_requests(
     db: Session, requests: list[FieldExpenseRequest]
 ) -> list[dict]:
     deliveries = get_expense_claim_deliveries(db, [request.id for request in requests])
+    payment_deliveries = get_expense_payment_deliveries(
+        db, [request.id for request in requests]
+    )
     return [
-        serialize_expense_request(request, delivery=deliveries.get(request.id))
+        serialize_expense_request(
+            request,
+            delivery=deliveries.get(request.id),
+            payment_delivery=payment_deliveries.get(request.id),
+        )
         for request in requests
     ]
 
@@ -747,6 +999,9 @@ class FieldExpenseRequests:
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
         _mark_sub_authoritative(request.work_order_mirror)
+        from app.services.backoffice import enqueue_expense_claim
+
+        enqueue_expense_claim(db, request)
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
@@ -1027,13 +1282,38 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "expense_requests")
 
 
-def _enqueue_approved_backoffice(
-    db: Session, request: FieldExpenseRequest
+def _enqueue_decision_backoffice(
+    db: Session,
+    request: FieldExpenseRequest,
+    *,
+    action: str,
+    decision_id: UUID,
+    reviewer_system_user_id: UUID,
+    decided_at: datetime,
+    reason: str | None = None,
 ) -> BackofficeEnqueueResult:
-    """Flush-only required participant used by the approval owner after cutover."""
-    from app.services.backoffice import enqueue_expense_claim
+    """Ensure claim creation, then stage an ordered manager decision."""
+    from app.services.backoffice import (
+        enqueue_expense_claim,
+        enqueue_expense_decision,
+    )
 
-    result = enqueue_expense_claim(db, request)
+    submission = enqueue_expense_claim(db, request)
+    if submission.status is not BackofficeEnqueueStatus.ENQUEUED:
+        return submission
+    reviewer = db.get(SystemUser, reviewer_system_user_id)
+    reviewer_email = (reviewer.email if reviewer else "").strip()
+    if not reviewer_email:
+        return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_ENQUEUED)
+    result = enqueue_expense_decision(
+        db,
+        request,
+        action=action,
+        decision_id=decision_id,
+        decided_by_email=reviewer_email,
+        decided_at=decided_at,
+        reason=reason,
+    )
     db.flush()
     return result
 
@@ -1044,15 +1324,32 @@ def _note_approval_command(
     *,
     occurred_at: datetime,
 ) -> None:
+    _note_manager_command(
+        request,
+        event="approved",
+        context=command.context,
+        reviewer_system_user_id=command.reviewer_system_user_id,
+        occurred_at=occurred_at,
+    )
+
+
+def _note_manager_command(
+    request: FieldExpenseRequest,
+    *,
+    event: str,
+    context: CommandContext,
+    reviewer_system_user_id: UUID,
+    occurred_at: datetime,
+) -> None:
     metadata = dict(request.metadata_ or {})
     events = list(metadata.get("manager_events") or [])
     events.append(
         {
-            "event": "approved",
+            "event": event,
             "occurred_at": occurred_at.isoformat(),
-            "actor": command.context.actor,
-            "reviewer_system_user_id": str(command.reviewer_system_user_id),
-            "command_id": str(command.context.command_id),
+            "actor": context.actor,
+            "reviewer_system_user_id": str(reviewer_system_user_id),
+            "command_id": str(context.command_id),
         }
     )
     metadata["manager_events"] = events[-100:]
@@ -1067,7 +1364,7 @@ def _approval_outcome(
             code="operations.expense_requests.incomplete_approval",
             message="Approved expense evidence is incomplete.",
         )
-    delivery = get_expense_claim_deliveries(db, [request.id])[request.id]
+    delivery = get_expense_decision_delivery(db, request.id, "approve")
     sync_status = _expense_sync_status(request, delivery)
     if sync_status is None:
         sync_status = ExpenseErpSyncStatus.NOT_QUEUED

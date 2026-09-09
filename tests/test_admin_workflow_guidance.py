@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.services.admin_workflow_guidance import (
     WORKFLOW_GUIDANCE,
     guidance_categories,
@@ -14,16 +16,54 @@ def test_every_guide_has_plain_language_content_and_a_route() -> None:
         assert guide.title
         assert guide.purpose
         assert guide.steps
-        assert guide.route_prefixes
-        assert all(route.startswith("/admin") for route in guide.route_prefixes)
+        selectors = (*guide.route_prefixes, *guide.route_templates)
+        assert selectors
+        assert all(route.startswith("/admin") for route in selectors)
+        assert all(
+            route.startswith("/admin") for route in guide.excluded_route_prefixes
+        )
 
 
-def test_change_plan_guide_is_searchable_and_contextual() -> None:
+def test_subscription_lifecycle_guide_includes_plan_changes() -> None:
     guide = guidance_for_path("/admin/catalog/subscriptions/123")
     assert guide is not None
-    assert guide.id == "change-plan"
-    assert "change-plan" in {article.id for article in search_guidance(query="plan")}
+    assert guide.id == "subscription-lifecycle"
+    assert "subscription-lifecycle" in {
+        article.id for article in search_guidance(query="plan")
+    }
     assert "Subscriptions" in guidance_categories()
+
+
+def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
+    expected = {
+        "/admin/dashboard": "admin-workspace",
+        "/admin/customers": "find-customer",
+        "/admin/customers/wizard": "create-customer",
+        "/admin/customers/person/customer-id": "customer-detail",
+        "/admin/catalog/subscriptions/new": "new-subscription",
+        "/admin/catalog/subscriptions/subscription-id": "subscription-lifecycle",
+        "/admin/catalog/subscriptions/subscription-id/access/move": "service-access",
+        "/admin/network": "network-access",
+        "/admin/dispatch/work-orders/work-order-id": "work-order-expenses",
+        "/admin/projects/project-id/edit": "project-authoring",
+        "/admin/billing": "billing-overview",
+        "/admin/billing/payments/reconciliation": "payment-reconciliation",
+        "/admin/support/tickets/ticket-id": "support-tickets",
+        "/admin/inbox/manager-ai": "team-inbox",
+        "/admin/network/olts": "olt-operational-health",
+    }
+    for path, guide_id in expected.items():
+        guide = guidance_for_path(path)
+        assert guide is not None
+        assert guide.id == guide_id
+
+    for unrelated_path in (
+        "/admin/projects/templates",
+        "/admin/projects/tasks",
+        "/admin/support/automation",
+        "/admin/support/assignment-rules",
+    ):
+        assert guidance_for_path(unrelated_path) is None
 
 
 def test_customer_detail_guidance_explains_service_extension_states() -> None:
@@ -141,3 +181,31 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
     assert "creates and pays one invoice" in content
     assert "complete prepaid charge is unavailable" in content
     assert "billing date is not moved" in content
+
+
+def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
+    layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
+    billing = Path("templates/admin/billing/index.html").read_text(encoding="utf-8")
+
+    assert "{% block workflow_guidance %}" in layout
+    assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in layout
+    assert 'aria-haspopup="dialog"' in layout
+    assert 'aria-modal="true"' in layout
+    assert 'x-trap.inert.noscroll="workflowHelpOpen"' in layout
+    assert "items-center justify-center" in layout
+    assert "{{ workflow_guide.purpose }}" in layout
+    assert "{% for step in workflow_guide.steps %}" in layout
+    assert "billingHelpOpen" not in billing
+
+
+def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:
+    guide = guidance_for_path("/admin/network/olts/olt-id")
+
+    assert guide is not None
+    assert guide.id == "olt-operational-health"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "working or not working" in content
+    assert "administrative active or inactive" in content
+    assert "fresh successful native olt poll" in content
+    assert "linked monitoring record" in content
+    assert "active" in content and "current" in content

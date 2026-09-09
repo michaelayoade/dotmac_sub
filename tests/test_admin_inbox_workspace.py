@@ -52,6 +52,32 @@ def _conversation(db_session) -> uuid.UUID:
     return conversation_id
 
 
+def _eligible_reply_actor(db_session, conversation_id: uuid.UUID) -> uuid.UUID:
+    conversation = db_session.get(InboxConversation, conversation_id)
+    assert conversation is not None
+    team = ServiceTeam(
+        name=f"Reply Team {uuid.uuid4().hex[:10]}",
+        team_type=ServiceTeamType.support.value,
+    )
+    user, person = add_bound_staff_user(db_session)
+    db_session.add(team)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ServiceTeamMember(team_id=team.id, person_id=person.id),
+            InboxAgentPresence(
+                person_id=user.id,
+                status=InboxAgentPresenceStatus.online.value,
+                manual_override_status=InboxAgentPresenceStatus.online.value,
+                last_seen_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    conversation.primary_service_team_id = team.id
+    db_session.flush()
+    return user.id
+
+
 def test_activity_distinguishes_viewing_from_open_status_transition(db_session):
     conversation_id = _conversation(db_session)
     conversation = db_session.get(InboxConversation, conversation_id)
@@ -1009,6 +1035,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
     monkeypatch,
 ):
     conversation_id = _conversation(db_session)
+    actor_id = _eligible_reply_actor(db_session, conversation_id)
     calls = 0
 
     def fake_send(db, *, conversation, payload, record_failure):
@@ -1026,6 +1053,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
                 **dict(payload.metadata or {}),
                 "body_text": payload.body_text,
                 "delivery_status": "queued",
+                "sent_by_person_id": str(payload.sent_by_person_id),
             },
         )
         db.add(message)
@@ -1048,7 +1076,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="We are checking.",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-1",
         ),
     )
@@ -1057,7 +1085,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="We are checking.",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-1",
         ),
     )
@@ -1072,6 +1100,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
 
 def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
     conversation_id = _conversation(db_session)
+    actor_id = _eligible_reply_actor(db_session, conversation_id)
 
     def fake_send(db, *, conversation, payload, record_failure):
         message = InboxMessage(
@@ -1086,6 +1115,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
                 **dict(payload.metadata or {}),
                 "body_text": payload.body_text,
                 "delivery_status": "queued",
+                "sent_by_person_id": str(payload.sent_by_person_id),
             },
         )
         db.add(message)
@@ -1106,7 +1136,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="Original",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-2",
         ),
     )
@@ -1120,7 +1150,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
             command=team_inbox_commands.ReplyCommand(
                 conversation_id=conversation_id,
                 body_text="Changed",
-                actor_person_id=uuid.uuid4(),
+                actor_person_id=actor_id,
                 idempotency_key="send-key-2",
             ),
         )

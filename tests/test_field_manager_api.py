@@ -476,6 +476,13 @@ def test_manager_api(db_session):
     assert approved.json()["status"] == "approved"
     assert approved.json()["erp_sync_status"] == "pending"
 
+    payment = client.post(f"/api/v1/field/manager/expenses/{expense['id']}/pay")
+    assert payment.status_code == 200
+    assert payment.json()["status"] == "approved"
+    assert payment.json()["payment_status"] == "queued"
+    assert payment.json()["payment_command_id"]
+    assert payment.json()["erp_sync_event_id"]
+
     short_reason = client.post(
         f"/api/v1/field/manager/expenses/{expense['id']}/reject",
         json={"reason": "x"},

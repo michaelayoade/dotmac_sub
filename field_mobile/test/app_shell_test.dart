@@ -3,6 +3,8 @@ import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/location/map_coordinates.dart';
 import 'package:dotmac_field/core/location/location_source.dart';
 import 'package:dotmac_field/core/offline/database.dart';
+import 'package:dotmac_field/features/attendance/attendance_models.dart';
+import 'package:dotmac_field/features/attendance/attendance_repository.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
@@ -30,12 +32,75 @@ class _UnauthedController extends AuthController {
   AuthState build() => const Unauthenticated();
 }
 
+AttendanceView _attendance(AttendanceState state) => AttendanceView(
+  state: state,
+  attendanceDate: '2026-09-09',
+  timezone: 'Africa/Lagos',
+  allowedActions: switch (state) {
+    AttendanceState.notCheckedIn => {AttendanceAction.checkIn},
+    AttendanceState.checkedIn => {AttendanceAction.checkOut},
+    AttendanceState.checkedOut || AttendanceState.ineligible => {},
+  },
+);
+
+class _FakeAttendanceRepository implements AttendanceRepositoryContract {
+  _FakeAttendanceRepository([
+    AttendanceState state = AttendanceState.notCheckedIn,
+  ]) : view = _attendance(state);
+
+  AttendanceView view;
+  final List<AttendanceAction> punches = [];
+
+  @override
+  Future<AttendanceView> today() async => view;
+
+  @override
+  Future<AttendanceView> punch(AttendanceAction action) async {
+    punches.add(action);
+    view = _attendance(
+      action == AttendanceAction.checkIn
+          ? AttendanceState.checkedIn
+          : AttendanceState.checkedOut,
+    );
+    return view;
+  }
+}
+
+class _ReadyAttendanceLocation implements AttendanceLocationSource {
+  @override
+  Future<AttendancePosition?> current() async => AttendancePosition(
+    latitude: 9.0765,
+    longitude: 7.3986,
+    accuracyM: 8,
+    observedAt: DateTime.utc(2026, 9, 9, 7, 30),
+  );
+
+  @override
+  Future<bool> isReady() async => true;
+
+  @override
+  Future<void> requestAccess() async {}
+}
+
+class _UnavailableAttendanceLocation extends _ReadyAttendanceLocation {
+  bool requested = false;
+
+  @override
+  Future<bool> isReady() async => false;
+
+  @override
+  Future<void> requestAccess() async => requested = true;
+}
+
 Widget _app({
   bool authenticated = true,
   LocationPingService? locationPingService,
   AuthController Function() controller = _AuthedController.new,
   ManagerProfile? managerProfile,
   List<ManagerJob> managerJobs = const [],
+  Future<JobList> Function()? jobsLoader,
+  AttendanceRepositoryContract? attendanceRepository,
+  AttendanceLocationSource? attendanceLocationSource,
   List<Override> extra = const [],
 }) {
   return ProviderScope(
@@ -46,6 +111,12 @@ Widget _app({
         authControllerProvider.overrideWith(_UnauthedController.new),
       if (authenticated) ...[
         authControllerProvider.overrideWith(controller),
+        attendanceRepositoryProvider.overrideWithValue(
+          attendanceRepository ?? _FakeAttendanceRepository(),
+        ),
+        attendanceLocationSourceProvider.overrideWithValue(
+          attendanceLocationSource ?? _ReadyAttendanceLocation(),
+        ),
         ...extra,
         managerProfileProvider.overrideWith((ref) async => managerProfile),
         managerSummaryProvider.overrideWith(
@@ -71,7 +142,8 @@ Widget _app({
           ),
         ),
         jobsListProvider.overrideWith(
-          (ref) async => const JobList(<JobSummary>[]),
+          (ref) =>
+              jobsLoader?.call() ?? Future.value(const JobList(<JobSummary>[])),
         ),
         todayJobsProvider.overrideWith(
           (ref) async => const JobList(<JobSummary>[]),
@@ -126,6 +198,19 @@ void main() {
     await tester.tap(find.text('Schedule'));
     await tester.pumpAndSettle();
     expect(find.text('Schedule'), findsWidgets);
+  });
+
+  testWidgets('jobs failure does not crash the application shell', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(jobsLoader: () => Future.error(StateError('jobs unavailable'))),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Hello, Chidi'), findsOneWidget);
   });
 
   testWidgets('vendor shell shows work-order tabs and vendor-scoped map', (
@@ -242,8 +327,11 @@ void main() {
     expect(find.text('Team location'), findsNothing);
   });
 
-  testWidgets('start shift enables mobile location sharing', (tester) async {
+  testWidgets('check in unlocks Shift and enables mobile location sharing', (
+    tester,
+  ) async {
     final calls = <({bool enabled, ShiftState shift})>[];
+    final attendance = _FakeAttendanceRepository();
     final locationService = LocationPingService(
       location: FakeLocation(null),
       poster: (_) async => true,
@@ -253,10 +341,28 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(_app(locationPingService: locationService));
+    await tester.pumpWidget(
+      _app(
+        locationPingService: locationService,
+        attendanceRepository: attendance,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Location sharing'), findsOneWidget);
+    expect(find.text('Check In'), findsOneWidget);
+    expect(find.text('Check Out'), findsOneWidget);
+    expect(find.text('Break'), findsNothing);
+    expect(find.text('Off'), findsNothing);
+
+    await tester.tap(find.text('Shift'));
+    await tester.pumpAndSettle();
+    expect(calls, isEmpty);
+
+    await tester.tap(find.text('Check In'));
+    await tester.pumpAndSettle();
+    expect(attendance.punches, [AttendanceAction.checkIn]);
+
     await tester.tap(find.text('Shift'));
     await tester.pumpAndSettle();
 
@@ -268,18 +374,73 @@ void main() {
   testWidgets('restores server location sharing when the app starts', (
     tester,
   ) async {
+    final attendance = _FakeAttendanceRepository(AttendanceState.checkedIn);
     final locationService = LocationPingService(
       location: FakeLocation(null),
       poster: (_) async => true,
       sharingReader: () async => const LocationSharingSnapshot(
         enabled: true,
-        shift: ShiftState.onBreak,
+        shift: ShiftState.onShift,
       ),
     );
 
-    await tester.pumpWidget(_app(locationPingService: locationService));
+    await tester.pumpWidget(
+      _app(
+        locationPingService: locationService,
+        attendanceRepository: attendance,
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(locationService.shift, ShiftState.onBreak);
+    expect(locationService.shift, ShiftState.onShift);
+  });
+
+  testWidgets('reminds the engineer to enable location once on app open', (
+    tester,
+  ) async {
+    final location = _UnavailableAttendanceLocation();
+
+    await tester.pumpWidget(_app(attendanceLocationSource: location));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enable location'), findsNWidgets(2));
+    expect(
+      find.text(
+        'Location must be turned on and allowed before you can check in or start Shift.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Enable location'));
+    await tester.pumpAndSettle();
+    expect(location.requested, isTrue);
+  });
+
+  testWidgets('confirmed checkout stops location sharing', (tester) async {
+    final calls = <({bool enabled, ShiftState shift})>[];
+    final attendance = _FakeAttendanceRepository(AttendanceState.checkedIn);
+    final locationService = LocationPingService(
+      location: FakeLocation(null),
+      poster: (_) async => true,
+      sharingUpdater: ({required enabled, required shift}) async {
+        calls.add((enabled: enabled, shift: shift));
+        return true;
+      },
+    )..setShift(ShiftState.onShift);
+
+    await tester.pumpWidget(
+      _app(
+        locationPingService: locationService,
+        attendanceRepository: attendance,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Check Out'));
+    await tester.pumpAndSettle();
+
+    expect(attendance.punches, [AttendanceAction.checkOut]);
+    expect(locationService.shift, ShiftState.offShift);
+    expect(calls.single.enabled, isFalse);
+    expect(calls.single.shift, ShiftState.offShift);
   });
 }

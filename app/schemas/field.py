@@ -152,12 +152,14 @@ class FieldNoteCreate(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
     is_internal: bool = True
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    client_ref: UUID | None = None
 
 
 class FieldNoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    client_ref: UUID | None = None
     body: str
     is_internal: bool
     author_person_id: UUID | None = None
@@ -528,6 +530,9 @@ class FieldExpenseRequestRead(BaseModel):
     expense_claim_status: str | None = None
     erp_sync_status: str | None = None
     erp_sync_error: str | None = None
+    payment_status: str | None = None
+    payment_intent_id: str | None = None
+    payment_error: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None
@@ -546,6 +551,22 @@ class FieldExpenseApprovalRead(BaseModel):
     erp_sync_status: str
     erp_sync_event_id: UUID | None = None
     erp_sync_error: str | None = None
+
+
+class FieldExpenseRejectionRead(BaseModel):
+    id: UUID
+    status: Literal["rejected"]
+    rejected_at: datetime
+    rejection_reason: str
+    erp_sync_event_id: UUID
+
+
+class FieldExpensePaymentRead(BaseModel):
+    id: UUID
+    status: Literal["approved"]
+    payment_status: Literal["queued"]
+    payment_command_id: UUID
+    erp_sync_event_id: UUID
 
 
 class FieldJobHistoryItem(BaseModel):

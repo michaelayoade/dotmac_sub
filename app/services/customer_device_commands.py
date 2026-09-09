@@ -85,16 +85,28 @@ def _assigned_ont(
         raise CustomerDeviceCommandError(
             "subscription_inactive", "Only active services support device commands"
         )
-    assignment = (
+    assignments = (
         db.query(OntAssignment)
         .filter(
             OntAssignment.subscription_id == subscription.id,
             OntAssignment.subscriber_id == subscriber_id,
             OntAssignment.active.is_(True),
         )
-        .one_or_none()
+        .order_by(OntAssignment.id.asc())
+        .limit(2)
+        .all()
     )
-    if assignment is None or assignment.ont_unit is None:
+    if not assignments:
+        raise CustomerDeviceCommandError(
+            "device_not_assigned", "No active device is linked to this service"
+        )
+    if len(assignments) > 1:
+        raise CustomerDeviceCommandError(
+            "device_assignment_ambiguous",
+            "Multiple active devices are linked to this service; contact support",
+        )
+    assignment = assignments[0]
+    if assignment.ont_unit is None:
         raise CustomerDeviceCommandError(
             "device_not_assigned", "No active device is linked to this service"
         )

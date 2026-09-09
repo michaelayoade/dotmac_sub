@@ -335,6 +335,27 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
+## OLT Operational Health Contract
+
+- Audience and task: NOC staff compare OLTs in the inventory table and inspect
+  one OLT without receiving contradictory operational answers.
+- Authority: `network.device_state` owns the binary result and verifier-reason
+  classification. The table and detail view consume that owner; templates do
+  not infer health from stored booleans.
+- First viewport: administrative lifecycle remains separate from the shared
+  Working/Not working badge. Native OLT poll, ping, and SNMP evidence show
+  Passed, Failed, Expired/Not current, Not checked, or Disabled with an
+  observation timestamp where available.
+- State semantics: a fresh successful native OLT poll is positive operational
+  evidence. A linked monitoring row is fallback evidence only while active and
+  current; historical successful probes on an inactive or stale row never
+  certify present operation. Evidence freshness states explain the binary
+  result and are not additional device states.
+- Responsive behavior: evidence badges wrap without horizontal scrolling;
+  labels and text communicate meaning independently of color, and timestamps
+  remain available in badge tooltips.
+
+
 ## Personal Staff Notification Bell Contract
 
 - Audience and task: authenticated staff need to see pending personal work and
@@ -470,6 +491,13 @@ implementation.
   the queue head and an eligible agent with capacity. A rejection must explain
   that an older conversation or capacity limit prevents the action; the UI
   must not imply that assignment succeeded.
+- After AI control has ended, the first eligible human reply to an unassigned
+  conversation atomically claims it for that agent and sends in one owner
+  transaction. The claim obeys the same team membership, presence, capacity,
+  and FIFO rules as explicit self-assignment. A simultaneous or later reply by
+  another agent sends nothing and returns the conflict message **This
+  conversation is currently assigned to [agent].** The composer presents that
+  message without implying that its draft was sent.
 - Admin → System → Settings → Comms exposes **Default active Inbox
   conversations per agent** with range 1–100 and default 10. Per-agent backend
   overrides are not presented as though they are editable when no Admin writer
@@ -551,7 +579,10 @@ implementation.
   with confirmation and expected-session evidence.
 - UI gating is presentation only. Every mutation rechecks ownership at its
   backend owner and returns the stable AI-owned conflict; a normal reply never
-  becomes implicit takeover.
+  becomes implicit takeover. Reply auto-claim runs only after the AI-owned check
+  succeeds and rechecks AI authority under the same conversation lock used for
+  the human claim. AI handoff or explicit takeover must end AI control and
+  cancel pending AI output before a reply can create human ownership.
 
 ## ONT Configure Page Contract
 
@@ -613,3 +644,36 @@ implementation.
 - Responsive behavior: line items are stacked cards at every width, controls
   retain labels and text errors, totals name their currency, and add/remove and
   submit actions remain accessible without relying on colour.
+
+## Field Work-Order Note Contract
+
+- Audience and task: an assigned technician records an internal staff note or
+  an external customer-history note and follows that exact note through mobile
+  delivery.
+- Authority: `operations.field_notes` owns note creation, assignment checks,
+  attachment links, retry identity, and the committed output.
+  `operations.work_orders` owns work-order and assignment facts. The mobile
+  outbox is a durable delivery projection only.
+- Mutation: the app creates one stable `client_ref` before enqueue and reuses it
+  for every retry. Identical retries return the original note; reuse with
+  changed content fails closed.
+- States: **Note saved** means the API accepted the note. **Queued for sync**
+  means the durable local request is pending. **Sync failed** means a permanent
+  rejection or exhausted retry is retained for review. These states are never
+  collapsed into a generic success message.
+- Refresh behavior: server notes and non-sent local note requests merge by
+  `client_ref`; refreshing or reopening a job cannot silently remove queued or
+  failed evidence.
+- Responsive behavior: visibility and delivery labels accompany the note text,
+  do not rely on colour alone, and remain readable on the mobile first viewport.
+- Staff web projection: after API acceptance, the same canonical note appears on
+  the work-order detail page and, when authoritative native links exist, on its
+  project-task and originating-ticket pages. Related-context entries name and
+  link their work order. They are not copied into task or ticket comment stores.
+- Staff privacy: internal and external-history labels remain visible on every
+  staff projection. Customer publication is out of scope; neither field-note
+  visibility value alone authorizes portal display. Attachment downloads require
+  the same exact work-order read scope as the detail page.
+- Freshness: staff pages read committed rows on every request. Device-local
+  queued or failed notes do not appear until delivery succeeds; no UI may imply
+  otherwise.

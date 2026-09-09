@@ -49,6 +49,7 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
     InboxSavedFilter,
+    InboxTeamSource,
 )
 from app.schemas.sales import (
     LeadCapturePartyCreate,
@@ -132,6 +133,25 @@ class ConversationBusyError(InboxCommandError):
         super().__init__(
             "Another conversation update is completing. Please retry.",
             suffix="conversation_busy",
+        )
+
+
+class ConversationAssignedToAnotherAgentError(InboxCommandError):
+    def __init__(
+        self,
+        *,
+        conversation_id: UUID,
+        assigned_person_id: UUID,
+        assigned_agent_name: str,
+    ) -> None:
+        super().__init__(
+            f"This conversation is currently assigned to {assigned_agent_name}.",
+            suffix="assigned_to_other",
+            details={
+                "conversation_id": str(conversation_id),
+                "assigned_person_id": str(assigned_person_id),
+                "assigned_agent_name": assigned_agent_name,
+            },
         )
 
 
@@ -628,6 +648,7 @@ def _reply_replay(
     db: Session,
     *,
     conversation: InboxConversation,
+    actor_person_id: UUID,
     idempotency_key: str,
     body_text: str,
     reply_to_message_id: UUID | None,
@@ -649,6 +670,7 @@ def _reply_replay(
     )
     if previous is None:
         return None
+    previous_actor_id = str((previous.metadata_ or {}).get("sent_by_person_id") or "")
     previous_body = str((previous.metadata_ or {}).get("body_text") or "").strip()
     previous_reply = (previous.metadata_ or {}).get("reply_to")
     previous_reply_id = (
@@ -675,7 +697,8 @@ def _reply_replay(
         else ()
     )
     if (
-        previous_body
+        previous_actor_id != str(actor_person_id)
+        or previous_body
         and previous_body != body_text
         or previous_reply_id != requested_reply_id
         or previous_cc != cc_addresses
@@ -694,6 +717,65 @@ def _reply_replay(
         notification_id=previous.notification_id,
         replayed=True,
     )
+
+
+def _assigned_agent_name(db: Session, person_id: UUID) -> str:
+    agent = db.get(SystemUser, person_id)
+    if agent is None:
+        return "another agent"
+    return (
+        str(agent.display_name or "").strip()
+        or f"{agent.first_name} {agent.last_name}".strip()
+        or "another agent"
+    )
+
+
+def _claim_conversation_for_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    actor_person_id: UUID,
+) -> team_inbox_assignment.InboxAssignmentResult:
+    service_team_id = conversation.primary_service_team_id or coerce_uuid(
+        team_inbox_routing.default_service_team_id(db)
+    )
+    if service_team_id is None:
+        raise InboxCommandRejected(
+            "Assign this conversation to a service team before replying.",
+            conversation_id=conversation.id,
+        )
+    claim = team_inbox_assignment.assign_conversation_to_agent(
+        db,
+        conversation=conversation,
+        service_team_id=service_team_id,
+        person_id=actor_person_id,
+        assigned_by_person_id=actor_person_id,
+        reason="Claimed by first human reply.",
+        source=InboxTeamSource.manual.value,
+        source_id=f"reply-auto-claim:{conversation.id}:{actor_person_id}",
+        existing_assignment_policy=(
+            team_inbox_assignment.InboxExistingAssignmentPolicy.preserve_existing
+        ),
+        conversation_lock_nowait=True,
+    )
+    if claim.kind == "assigned_to_other":
+        assigned_person_id = coerce_uuid(claim.assigned_person_id)
+        if assigned_person_id is None:
+            raise InboxCommandRejected(
+                claim.reason or "Conversation is already assigned.",
+                conversation_id=conversation.id,
+            )
+        raise ConversationAssignedToAnotherAgentError(
+            conversation_id=conversation.id,
+            assigned_person_id=assigned_person_id,
+            assigned_agent_name=_assigned_agent_name(db, assigned_person_id),
+        )
+    if claim.kind != "assigned":
+        raise InboxCommandRejected(
+            claim.reason or "This conversation cannot be claimed for reply.",
+            conversation_id=conversation.id,
+        )
+    return claim
 
 
 def reply(
@@ -727,22 +809,16 @@ def reply(
                 scheduled_for = scheduled_for.replace(tzinfo=UTC)
             if scheduled_for <= datetime.now(UTC):
                 raise InboxCommandError("Choose a send time in the future.")
+        actor_person_id = coerce_uuid(command.actor_person_id)
+        if actor_person_id is None:
+            raise InboxCommandRejected(
+                "An authenticated agent is required to reply.",
+                conversation_id=conversation.id,
+            )
         clean_idempotency_key = str(command.idempotency_key or "").strip()
         reply_to_uuid = command.reply_to_message_id
         if len(clean_idempotency_key) > 200:
             raise InboxCommandError("Reply idempotency key is too long.")
-        replay = _reply_replay(
-            db,
-            conversation=conversation,
-            idempotency_key=clean_idempotency_key,
-            body_text=clean_body,
-            reply_to_message_id=reply_to_uuid,
-            cc_addresses=clean_cc,
-            bcc_addresses=clean_bcc,
-            attachment_ids=submitted_attachment_ids,
-        )
-        if replay is not None:
-            return replay
         template = None
         clean_template_id = (
             str(command.template_id).strip()
@@ -791,9 +867,15 @@ def reply(
         if not clean_body and not submitted_attachment_ids:
             raise InboxCommandError("Reply body is required.")
 
-        # The provider/template preparation above may perform external I/O. Do
-        # not hold the canonical conversation row while it runs. Reacquire the
-        # authoritative row only for the bounded database write phase, and
+        # The provider/template preparation above may perform external I/O.
+        # Claim only after it completes so the normal team -> agent ->
+        # conversation lock order covers both assignment and send without a
+        # long-held row lock. Active AI ownership is rechecked by the routing
+        # owner under that lock and can never be displaced by this claim.
+        _claim_conversation_for_reply(
+            db, conversation=conversation, actor_person_id=actor_person_id
+        )
+        # Reacquire the authoritative row for the bounded database write phase and
         # fail fast so contention becomes an explicit retry instead of a
         # ten-second PostgreSQL lock timeout and HTTP 500.
         conversation = _active_conversation(
@@ -810,6 +892,7 @@ def reply(
         replay = _reply_replay(
             db,
             conversation=conversation,
+            actor_person_id=actor_person_id,
             idempotency_key=clean_idempotency_key,
             body_text=clean_body,
             reply_to_message_id=reply_to_uuid,

@@ -441,6 +441,8 @@ DOMAIN = DomainSOT(
                     "tests/test_operational_evidence_followup.py",
                     "tests/test_web_network_noc.py",
                     "tests/test_integrations_observability.py",
+                    "tests/test_web_control_plane.py",
+                    "tests/architecture/test_integration_platform_boundary.py",
                 ),
             ),
         ),
@@ -1884,7 +1886,8 @@ DOMAIN = DomainSOT(
             owns=("Admin workflow guidance projection",),
             notes=(
                 "One read-only, versioned-in-code projection supplies staff workflow "
-                "explanations. It never decides action eligibility or writes state."
+                "explanations through explicit prefix or segment-template route "
+                "selectors. It never decides action eligibility or writes state."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1899,14 +1902,14 @@ DOMAIN = DomainSOT(
                         name="Admin workflow guidance registry",
                         owner="ui.admin_workflow_guidance",
                         kind=AuthorityKind.CONTROL_INPUT,
-                        source="Typed WORKFLOW_GUIDANCE entries in app.services.admin_workflow_guidance.",
+                        source="Typed WORKFLOW_GUIDANCE content and route selectors in app.services.admin_workflow_guidance.",
                     ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.NOT_APPLICABLE,
                     boundary="Immutable in-process guidance projection performs no persistence or external delivery.",
                     locking="Immutable module content requires no lock.",
-                    idempotency="The same path and query produce the same guidance projection.",
+                    idempotency="The same path and query produce the same most-specific guidance projection.",
                     retries="No side effect is performed; callers may safely retry reads.",
                 ),
                 errors=ErrorContract(

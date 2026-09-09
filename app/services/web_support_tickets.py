@@ -54,6 +54,12 @@ from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.field.note_commands import (
+    ListStaffFieldWorkOrderNotes,
+    OriginTicketFieldNoteScope,
+    StaffFieldNoteAccess,
+    list_staff_field_work_order_notes,
+)
 from app.services.file_storage import file_uploads
 from app.services.list_query import (
     ListDefinition,
@@ -1788,6 +1794,8 @@ def build_ticket_detail_context(
     ticket_lookup: str,
     actor_id: str | None = None,
     can_read_material_requests: bool = False,
+    can_read_field_notes: bool = False,
+    field_note_access: StaffFieldNoteAccess | None = None,
     can_assign_ticket: bool = True,
 ) -> dict:
     from uuid import uuid4
@@ -1804,6 +1812,17 @@ def build_ticket_detail_context(
         else None
     )
     linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
+    field_note_page = (
+        list_staff_field_work_order_notes(
+            db,
+            ListStaffFieldWorkOrderNotes(
+                scope=OriginTicketFieldNoteScope(origin_ticket_id=ticket.id),
+                access=field_note_access,
+            ),
+        )
+        if can_read_field_notes and field_note_access is not None
+        else None
+    )
     if can_read_material_requests:
         from app.services.field.material_requests import (
             MaterialRequestScope,
@@ -1928,6 +1947,9 @@ def build_ticket_detail_context(
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
         "linked_work_orders": linked_work_orders,
+        "show_field_notes": can_read_field_notes,
+        "field_notes": field_note_page.items if field_note_page else (),
+        "field_note_total": field_note_page.total if field_note_page else 0,
         "material_requests": material_requests,
         "material_request_create_url": (
             f"/admin/operations/material-requests/new?ticket_id={ticket.id}"
