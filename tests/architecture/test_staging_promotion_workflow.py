@@ -69,6 +69,102 @@ def test_pull_requests_into_main_run_the_required_ci_gates() -> None:
     assert "branches: [main]" in version_impact
 
 
+def _extract_declared_active_statuses(workflow: str) -> set[str]:
+    # Accepts both the array-literal form (`const activeStatuses = [...]`,
+    # the fixed shape, which the queries are derived FROM) and the
+    # `new Set([...])` form (the pre-fix shape, kept parseable here on
+    # purpose so the comparison below fails on "declared != queried" rather
+    # than merely on "workflow shape changed").
+    match = re.search(
+        r"const activeStatuses = (?:new Set\()?\[(.*?)\]\)?;", workflow, re.DOTALL
+    )
+    assert match, (
+        "release-freeze-gate.yml must declare activeStatuses as a list of statuses"
+    )
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def _extract_queried_statuses(workflow: str) -> set[str]:
+    """The statuses this workflow actually asks the GitHub API for.
+
+    If every query is built by mapping over `activeStatuses` and passing the
+    loop variable straight through (`status,` shorthand, no literal), the
+    queried set IS the declared set by construction -- that structural
+    derivation is the fix, and no per-call status can silently diverge from
+    the declared list again. Anything else -- a literal `status: "..."` on
+    each call, the shape of the original bug -- is read back from those
+    literals instead, so a future hardcoded, diverging query is still caught.
+    """
+
+    derived = re.search(r"activeStatuses\.map\(", workflow) and re.search(
+        r"listWorkflowRunsForRepo\(\{[^}]*?\n\s*status,\s*\n", workflow, re.DOTALL
+    )
+    if derived:
+        return _extract_declared_active_statuses(workflow)
+
+    calls = re.findall(r"listWorkflowRunsForRepo\(\{(.*?)\}\)", workflow, re.DOTALL)
+    literal_statuses: set[str] = set()
+    for call in calls:
+        found = re.search(r'status:\s*"([^"]+)"', call)
+        if found:
+            literal_statuses.add(found.group(1))
+    return literal_statuses
+
+
+def test_release_freeze_gate_queries_every_status_it_declares_as_active() -> None:
+    """A status declared but never queried is a dead literal, not a guard.
+
+    `waiting` -- the status a production-gated run holds for its ENTIRE
+    lifetime while parked on a manual environment approval -- was exactly
+    such a dead literal: declared in `activeStatuses`, but the code only ever
+    fetched `in_progress` and `queued` from the API, so the gate was blind to
+    every approval-gated run without ever showing a failing assertion here.
+    """
+
+    workflow = _read(".github/workflows/release-freeze-gate.yml")
+    declared = _extract_declared_active_statuses(workflow)
+    queried = _extract_queried_statuses(workflow)
+
+    assert declared, "expected at least one declared active status"
+    assert declared == queried, (
+        f"declared active statuses {sorted(declared)} do not match the "
+        f"statuses actually queried from the GitHub API {sorted(queried)} -- "
+        "a status present in one set but not the other is either dead "
+        "configuration or an unmonitored blind spot"
+    )
+
+
+def test_release_freeze_gate_guarded_names_match_the_real_workflow_names() -> None:
+    """A rename of a guarded workflow must not silently un-guard it."""
+
+    workflow = _read(".github/workflows/release-freeze-gate.yml")
+    guarded_match = re.search(
+        r"const guarded = new Set\(\[(.*?)\]\);", workflow, re.DOTALL
+    )
+    assert guarded_match, (
+        "release-freeze-gate.yml must declare guarded as a Set literal"
+    )
+    guarded_names = set(re.findall(r'"([^"]+)"', guarded_match.group(1)))
+
+    real_names: set[str] = set()
+    for path in (
+        ".github/workflows/release-candidate.yml",
+        ".github/workflows/staging-deploy.yml",
+        ".github/workflows/release-promotion.yml",
+        ".github/workflows/production-deploy.yml",
+    ):
+        content = _read(path)
+        name_match = re.search(r"^name:\s*(.+)$", content, re.MULTILINE)
+        assert name_match, f"{path} has no top-level name:"
+        real_names.add(name_match.group(1).strip())
+
+    assert guarded_names == real_names, (
+        f"release-freeze-gate.yml guards {sorted(guarded_names)} but the real "
+        f"release-chain workflow files are named {sorted(real_names)} -- a "
+        "rename here silently un-guards a release-chain workflow"
+    )
+
+
 def test_release_freeze_gate_blocks_main_merges_during_deployment() -> None:
     workflow = _read(".github/workflows/release-freeze-gate.yml")
     runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
@@ -88,6 +184,8 @@ def test_release_freeze_gate_blocks_main_merges_during_deployment() -> None:
         assert guarded in workflow
         assert guarded in runbook
     assert "Release freeze is active" in workflow
+    assert "approve, reject, or cancel the parked run" in workflow
+    assert "queued, running, or awaiting approval" in runbook
     assert "gh pr" not in workflow
     assert "pulls" not in workflow
     assert "Open pull requests" not in workflow
