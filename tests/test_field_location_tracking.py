@@ -411,13 +411,22 @@ def test_unknown_status_is_rejected(db_session):
     assert exc.value.status_code == 422
 
 
-def test_location_api_routes(db_session):
+def test_location_api_routes(db_session, monkeypatch):
     user = _user(db_session)
     _profile(db_session, user)
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[require_user_auth] = lambda: _auth(user)
+    attendance = type(
+        "CheckedInAttendance",
+        (),
+        {"require_checked_in_for_shift": lambda *_args, **_kwargs: None},
+    )
+    monkeypatch.setattr(
+        "app.api.field.locations.WorkforceAttendanceService",
+        lambda _db: attendance(),
+    )
     client = TestClient(app)
 
     sharing = client.put(
@@ -470,3 +479,34 @@ def test_location_api_returns_typed_job_tag_rejection(db_session):
             "detail": "Tagged work order was not found",
         }
     ]
+
+
+def test_location_api_refuses_shift_without_erp_check_in(db_session, monkeypatch):
+    user = _user(db_session)
+    _profile(db_session, user)
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(user)
+
+    class NotCheckedInAttendance:
+        def require_checked_in_for_shift(self, *_args, **_kwargs):
+            from app.services.workforce_attendance import WorkforceAttendanceError
+
+            raise WorkforceAttendanceError(
+                "check_in_required",
+                "Check in before enabling location sharing.",
+            )
+
+    monkeypatch.setattr(
+        "app.api.field.locations.WorkforceAttendanceService",
+        lambda _db: NotCheckedInAttendance(),
+    )
+
+    response = TestClient(app).put(
+        "/api/v1/field/locations/sharing",
+        json={"enabled": True, "status": "on_shift"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "check_in_required"
