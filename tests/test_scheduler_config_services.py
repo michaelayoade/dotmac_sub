@@ -1161,8 +1161,25 @@ class TestIntervalToBeatSchedule:
     def test_multiday_interval_stays_timedelta(self):
         import uuid
 
-        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 7 * 86400)
+        task_id = uuid.uuid4()
+        result = scheduler_config._interval_to_beat_schedule(task_id, 7 * 86400)
         assert result == timedelta(days=7)
+
+    def test_multiday_interval_warning_is_emitted_once_per_task(self, caplog):
+        import logging
+        import uuid
+
+        task_id = uuid.uuid4()
+        caplog.set_level(logging.WARNING, logger=scheduler_config.__name__)
+
+        scheduler_config._interval_to_beat_schedule(task_id, 7 * 86400)
+        scheduler_config._interval_to_beat_schedule(task_id, 7 * 86400)
+
+        assert [
+            record.message
+            for record in caplog.records
+            if record.message == "scheduled_task_multiday_interval_restart_relative"
+        ] == ["scheduled_task_multiday_interval_restart_relative"]
 
 
 class TestEntryExpires:

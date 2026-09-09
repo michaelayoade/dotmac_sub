@@ -2,6 +2,7 @@ import logging
 import os
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from celery.schedules import crontab
 
@@ -36,6 +37,8 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.apply_acs_config",
     "app.tasks.ont_commissioning.reconcile_intents",
 }
+
+_WARNED_MULTIDAY_INTERVALS: set[tuple[str, int]] = set()
 
 
 def _scheduler_setting_enabled(db, domain: SettingDomain, key: str) -> bool:
@@ -275,7 +278,9 @@ def _entry_expires_seconds(interval_seconds: int) -> int:
     return interval_seconds
 
 
-def _interval_to_beat_schedule(task_id, interval_seconds: int):
+def _interval_to_beat_schedule(
+    task_id: UUID | str, interval_seconds: int
+) -> crontab | timedelta:
     """Beat schedule object for an interval task.
 
     Celery beat measures `timedelta` intervals from its own (non-persisted)
@@ -303,10 +308,13 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
         step_hours = interval_seconds // 3600
         return crontab(minute=anchor % 60, hour=f"*/{step_hours}")
     if interval_seconds >= 2 * 86400:
-        logger.warning(
-            "scheduled_task_multiday_interval_restart_relative",
-            extra={"task_id": str(task_id), "interval_seconds": interval_seconds},
-        )
+        warning_key = (str(task_id), interval_seconds)
+        if warning_key not in _WARNED_MULTIDAY_INTERVALS:
+            _WARNED_MULTIDAY_INTERVALS.add(warning_key)
+            logger.warning(
+                "scheduled_task_multiday_interval_restart_relative",
+                extra={"task_id": str(task_id), "interval_seconds": interval_seconds},
+            )
     return timedelta(seconds=interval_seconds)
 
 
