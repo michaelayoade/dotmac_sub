@@ -23,6 +23,10 @@ class EventType(enum.Enum):
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
 
+    # Authentication-session security events
+    authentication_session_rotated = "authentication_session.rotated"
+    authentication_session_refresh_refused = "authentication_session.refresh_refused"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"

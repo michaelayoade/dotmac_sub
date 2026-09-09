@@ -1071,16 +1071,18 @@ async def web_auth_refresh_middleware(request: Request, call_next):
                 from app.services import auth_flow as auth_flow_service
                 from app.services.auth_flow import AuthFlow
 
-                refresh_token = AuthFlow.resolve_refresh_token(request, None, db)
+                refresh_token = AuthFlow.resolve_refresh_token(request, None, None)
                 if refresh_token:
                     result = auth_flow_service.auth_flow.refresh(
-                        db, refresh_token, request
+                        db=db,
+                        refresh_token=refresh_token,
+                        request=request,
                     )
                     session_token = auth_flow_service.issue_web_session_token(
-                        db, str(result.get("access_token", ""))
+                        db, result.access_token
                     )
                     _rewrite_cookie_header(request, "session_token", session_token)
-                    refreshed = (session_token, result.get("refresh_token"))
+                    refreshed = (session_token, result.refresh_token)
         except Exception:
             logger.debug("Web auth pre-route refresh failed", exc_info=True)
         finally:

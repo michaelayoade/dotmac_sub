@@ -478,12 +478,16 @@ def vendor_refresh(
     request: Request, db: Session, next_url: str | None = None
 ) -> Response:
     target = _safe_vendor_next(next_url)
-    refresh_token = AuthFlow.resolve_refresh_token(request, None, db)
+    refresh_token = AuthFlow.resolve_refresh_token(request, None, None)
     if not refresh_token:
         return RedirectResponse(url=_vendor_login_url(target), status_code=303)
     try:
-        raw_result = auth_flow_service.auth_flow.refresh(db, refresh_token, request)
-        result: Mapping[str, object] = raw_result
+        raw_result = auth_flow_service.auth_flow.refresh(
+            db=db,
+            refresh_token=refresh_token,
+            request=request,
+        )
+        result: Mapping[str, object] = raw_result.model_dump()
         tokens = _issued_tokens(result)
         _require_access_token_vendor(db, tokens.access_token)
     except Exception as exc:
