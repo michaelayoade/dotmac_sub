@@ -3249,9 +3249,11 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "Conversation snapshot followed by a late NOWAIT row lock "
-                            "for idempotency replay, collaboration records, labels, "
-                            "comments, and message writes."
+                            "Conversation snapshot followed, for replies, by the "
+                            "routing owner's canonical team-agent-conversation lock "
+                            "order and a late NOWAIT row lock for actor-bound "
+                            "idempotency replay; collaboration records, labels, "
+                            "comments, and message writes use their bounded locks."
                         ),
                     ),
                     AuthorityInput(
@@ -3264,7 +3266,11 @@ DOMAIN = DomainSOT(
                         name="routing transition decision",
                         owner="communications.team_inbox_routing",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Assignment, escalation, and lifecycle eligibility.",
+                        source=(
+                            "Assignment, escalation, and lifecycle eligibility, "
+                            "including preserve-existing-owner reply auto-claim with "
+                            "team membership, presence, capacity, and FIFO checks."
+                        ),
                     ),
                     AuthorityInput(
                         name="outbound intent outcome",
@@ -3309,6 +3315,7 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_commands.conversation_busy",
+                    "communications.team_inbox_commands.assigned_to_other",
                     "communications.team_inbox_commands.ai_owned",
                     "communications.team_inbox_commands.takeover_conflict",
                     "communications.team_inbox_commands.takeover_permission_denied",

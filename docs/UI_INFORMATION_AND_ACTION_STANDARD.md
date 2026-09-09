@@ -470,6 +470,13 @@ implementation.
   the queue head and an eligible agent with capacity. A rejection must explain
   that an older conversation or capacity limit prevents the action; the UI
   must not imply that assignment succeeded.
+- After AI control has ended, the first eligible human reply to an unassigned
+  conversation atomically claims it for that agent and sends in one owner
+  transaction. The claim obeys the same team membership, presence, capacity,
+  and FIFO rules as explicit self-assignment. A simultaneous or later reply by
+  another agent sends nothing and returns the conflict message **This
+  conversation is currently assigned to [agent].** The composer presents that
+  message without implying that its draft was sent.
 - Admin → System → Settings → Comms exposes **Default active Inbox
   conversations per agent** with range 1–100 and default 10. Per-agent backend
   overrides are not presented as though they are editable when no Admin writer
@@ -551,7 +558,10 @@ implementation.
   with confirmation and expected-session evidence.
 - UI gating is presentation only. Every mutation rechecks ownership at its
   backend owner and returns the stable AI-owned conflict; a normal reply never
-  becomes implicit takeover.
+  becomes implicit takeover. Reply auto-claim runs only after the AI-owned check
+  succeeds and rechecks AI authority under the same conversation lock used for
+  the human claim. AI handoff or explicit takeover must end AI control and
+  cancel pending AI output before a reply can create human ownership.
 
 ## ONT Configure Page Contract
 

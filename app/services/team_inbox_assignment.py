@@ -111,6 +111,11 @@ class InboxAssignmentProvenance(StrEnum):
     ai_intake_handoff = "ai_intake_handoff"
 
 
+class InboxExistingAssignmentPolicy(StrEnum):
+    replace = "replace"
+    preserve = "preserve"
+
+
 @dataclass(frozen=True)
 class AgentSignedInPresenceCommand:
     system_user_id: UUID
@@ -830,13 +835,16 @@ def _active_assignment(
 
 
 def _lock_active_conversation(
-    db: Session, conversation: InboxConversation
+    db: Session,
+    conversation: InboxConversation,
+    *,
+    nowait: bool = False,
 ) -> InboxConversation | None:
     return (
         db.query(InboxConversation)
         .filter(InboxConversation.id == conversation.id)
         .filter(InboxConversation.is_active.is_(True))
-        .with_for_update()
+        .with_for_update(nowait=nowait)
         .one_or_none()
     )
 
@@ -1078,6 +1086,10 @@ def assign_conversation_to_agent(
     decision_mode: InboxRoutingDecisionMode = InboxRoutingDecisionMode.manual,
     decision_evidence: InboxAgentCandidate | None = None,
     provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
+    existing_assignment_policy: InboxExistingAssignmentPolicy = (
+        InboxExistingAssignmentPolicy.replace
+    ),
+    conversation_lock_nowait: bool = False,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
     person_uuid = _coerce_uuid(person_id)
@@ -1129,7 +1141,11 @@ def assign_conversation_to_agent(
             reason="person_id must reference an active staff user",
         )
 
-    locked_conversation = _lock_active_conversation(db, conversation)
+    locked_conversation = _lock_active_conversation(
+        db,
+        conversation,
+        nowait=conversation_lock_nowait,
+    )
     if locked_conversation is None:
         return InboxAssignmentResult(
             kind="conversation_not_found",
@@ -1167,6 +1183,18 @@ def assign_conversation_to_agent(
             service_team_id=str(team_uuid),
             assigned_person_id=str(person_uuid),
             reason="already_assigned",
+        )
+
+    if (
+        previous_assignment is not None
+        and existing_assignment_policy is InboxExistingAssignmentPolicy.preserve
+        and previous_assignment.person_id != person_uuid
+    ):
+        return InboxAssignmentResult(
+            kind="assigned_to_other",
+            service_team_id=str(previous_assignment.service_team_id),
+            assigned_person_id=str(previous_assignment.person_id),
+            reason="Conversation is already assigned to another agent.",
         )
 
     queued_entry = _queue_entry(db, conversation.id)

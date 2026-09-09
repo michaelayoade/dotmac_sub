@@ -12,10 +12,12 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
     InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
@@ -37,6 +39,7 @@ from app.services import (
 )
 from app.services.domain_settings import notification_settings
 from app.tasks import notifications as notification_tasks
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _smtp_sender(db_session, key: str, *, from_email: str) -> None:
@@ -71,6 +74,35 @@ def _team(db_session, name: str, team_type: str) -> ServiceTeam:
     db_session.add(team)
     db_session.flush()
     return team
+
+
+def _eligible_reply_actor(db_session, conversation: InboxConversation):
+    team = (
+        db_session.get(ServiceTeam, conversation.primary_service_team_id)
+        if conversation.primary_service_team_id is not None
+        else None
+    )
+    if team is None:
+        team = _team(
+            db_session,
+            f"Reply Team {uuid4().hex[:10]}",
+            ServiceTeamType.support.value,
+        )
+        conversation.primary_service_team_id = team.id
+    user, person = add_bound_staff_user(db_session)
+    db_session.add_all(
+        [
+            ServiceTeamMember(team_id=team.id, person_id=person.id),
+            InboxAgentPresence(
+                person_id=user.id,
+                status=InboxAgentPresenceStatus.online.value,
+                manual_override_status=InboxAgentPresenceStatus.online.value,
+                last_seen_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+    return user.id
 
 
 def _conversation(db_session, team: ServiceTeam) -> InboxConversation:
@@ -779,6 +811,7 @@ def test_direct_whatsapp_template_reply_uses_approved_template_validation(
     monkeypatch,
 ):
     conversation = _whatsapp_conversation(db_session)
+    actor_id = _eligible_reply_actor(db_session, conversation)
 
     from app.services.integrations import whatsapp_capability
 
@@ -800,7 +833,7 @@ def test_direct_whatsapp_template_reply_uses_approved_template_validation(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation.id,
             body_text="",
-            actor_person_id=uuid4(),
+            actor_person_id=actor_id,
             whatsapp_template_name="service_update",
             whatsapp_template_language="en",
             whatsapp_template_components=(),
@@ -1188,6 +1221,7 @@ def test_facebook_targeted_comment_reply_dispatches_exact_page_and_comment(
         account_key="page_id",
         account_id="page-123",
     )
+    actor_id = _eligible_reply_actor(db_session, conversation)
     target = (
         db_session.query(InboxMessage)
         .filter(InboxMessage.direction == InboxMessageDirection.inbound.value)
@@ -1226,7 +1260,7 @@ def test_facebook_targeted_comment_reply_dispatches_exact_page_and_comment(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation.id,
             body_text="Replying publicly.",
-            actor_person_id=uuid4(),
+            actor_person_id=actor_id,
             reply_to_message_id=target.id,
             idempotency_key="facebook-public-comment-reply",
         ),
@@ -1262,6 +1296,7 @@ def test_instagram_targeted_comment_reply_dispatches_exact_account_and_comment(
         account_key="instagram_account_id",
         account_id="ig-123",
     )
+    actor_id = _eligible_reply_actor(db_session, conversation)
     target = (
         db_session.query(InboxMessage)
         .filter(InboxMessage.direction == InboxMessageDirection.inbound.value)
@@ -1302,7 +1337,7 @@ def test_instagram_targeted_comment_reply_dispatches_exact_account_and_comment(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation.id,
             body_text="Instagram public reply.",
-            actor_person_id=uuid4(),
+            actor_person_id=actor_id,
             reply_to_message_id=target.id,
             idempotency_key="instagram-public-comment-reply",
         ),

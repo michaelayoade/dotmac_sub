@@ -316,19 +316,29 @@ contacting the provider.
 
 An operator reply command accepts one typed `ReplyCommand`, including a typed
 email copy-recipient value object for optional CC and BCC addresses. It performs pure and
-provider-template preparation before acquiring the conversation row, then takes
-a late PostgreSQL `NOWAIT` lock for the bounded database-only write phase. Under
-that lock it rechecks active state and the stable per-conversation idempotency
-key, including normalized copy recipients in the replay fingerprint, then records
-the communication intent, durable notification/outbox row,
-Inbox outbound-attempt projection, attachments, and macro consequence in one
-owner transaction. Exact key retries replay the existing message; changed input
-under the same key fails closed. SQLSTATE `55P03` rolls back completely and maps
-to the retryable `communications.team_inbox_commands.conversation_busy` domain
-error, never to an HTTP 500. Dispatch occurs after commit through the canonical
+provider-template preparation before acquiring assignment locks. The command
+then asks `communications.team_inbox_routing` to atomically preserve or create
+human ownership using the canonical team, agent-capacity, conversation, and
+active-assignment lock order. Active AI ownership is rechecked under that lock
+and fails closed; reply auto-claim is never an implicit AI takeover. An
+unassigned conversation is claimed only by an eligible active team member with
+capacity and, when queued, only at the FIFO head. An existing assignment to the
+same agent is retained. An assignment to a different agent returns
+`communications.team_inbox_commands.assigned_to_other` with that agent's display
+name and sends nothing.
+
+The bounded database-only write phase uses a PostgreSQL `NOWAIT` conversation
+lock and rechecks active state. Its stable per-conversation idempotency key is
+bound to the replying agent and includes normalized copy recipients in the
+replay fingerprint. The transaction records the assignment, communication
+intent, durable notification/outbox row, Inbox outbound-attempt projection,
+attachments, and macro consequence together. Exact key retries by the owning
+agent replay the existing message; changed input or a different agent under the
+same key fails closed. SQLSTATE `55P03` rolls back completely and maps to the
+retryable `communications.team_inbox_commands.conversation_busy` domain error,
+never to an HTTP 500. Dispatch occurs after commit through the canonical
 notification delivery point. SMTP, WhatsApp, and social integrations translate
 the intent and later return normalized receipt observations; they cannot change
-conversation or ticket lifecycle state.
 
 Before any queued AI Intake intent contacts a provider, the delivery worker
 rechecks that the referenced AI session still exists, is incomplete, belongs to
