@@ -38,6 +38,9 @@ Receipt bytes use the existing private attachment storage owner. Metadata is
 staged flush-only inside the expense command transaction. A deterministic
 per-line receipt client reference makes a repeated claim submission safe. The
 existing general field receipt endpoint remains assigned-technician scoped.
+Staff uploader identity is recorded on `FieldAttachment`; the legacy
+subscriber-only `StoredFile.uploaded_by` field remains empty for these staff
+uploads.
 
 ## State and delivery semantics
 
