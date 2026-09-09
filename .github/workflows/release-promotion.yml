@@ -216,10 +216,15 @@ jobs:
             exit 1
           }
           mkdir -p "$RUNNER_TEMP/production-authorization"
+          # candidate_build_run_id is the run whose release-candidate-evidence
+          # artifact was just downloaded above -- i.e. the run that wrote it.
+          # That is the document's evidence_run_id, never its build_run_id,
+          # which may legitimately name an earlier resumed build whose image
+          # this evidence document was re-derived from.
           python -m scripts.release_candidate_evidence authorize-production \
             --candidate "$RUNNER_TEMP/candidate/candidate.json" \
             --staging "${acceptance_files[0]}" \
-            --expected-build-run-id "${{ inputs.candidate_build_run_id }}" \
+            --expected-evidence-run-id "${{ inputs.candidate_build_run_id }}" \
             --expected-staging-deployment-id "${{ inputs.staging_deployment_run_id }}" \
             --authorization-run-id "$AUTHORIZATION_RUN_ID" \
             --authorization-main-revision "$AUTHORIZATION_MAIN_SHA" \
