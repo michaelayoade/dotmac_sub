@@ -13,6 +13,23 @@ is never mistaken for a real call site (see
 ``test_scanner_ignores_comment_and_docstring_mentions`` for the proof, and
 ``app/models/auth.py``'s unrelated ``class Session(Base):`` domain model for a
 real-repository near-miss the AST walk already has to get right).
+
+## Historical residue is excluded from the LIVE surface
+
+A handful of the files this sweep finds are one-time migration/preflight
+scripts for a subscriber/ticketing system integration that has since been
+fully decommissioned. They still construct a real `Engine` against a second,
+now-unreachable external database — a `DatabaseRuntime` seam has nothing to
+preserve there, because there is no live requirement left to preserve; only
+retirement residue remains. `production_counts_by_file` therefore excludes
+any file already recorded in the repository's OWN authoritative ledger for
+that decommissioned integration's surface
+(`tests/architecture/crm_vocabulary_baseline.txt`, enforced by
+`tests/architecture/test_crm_vocabulary_freeze.py`) — a cross-reference to
+that existing ledger, not a second, hand-maintained path list here, so the
+exclusion tracks that ledger automatically rather than drifting from it. The
+excluded set is never named path-by-path outside that ledger and this
+module: see `historical_residue_paths` for exactly where.
 """
 
 from __future__ import annotations
@@ -20,6 +37,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.architecture.crm_vocabulary import (
+    surface_paths as _decommissioned_integration_surface,
+)
 from tests.architecture.source_index import python_ast, python_files
 
 #: Canonical SQLAlchemy names whose invocation constructs a new engine or a
@@ -123,8 +143,53 @@ def counts_by_file(roots: tuple[str, ...]) -> dict[str, int]:
     return counts
 
 
-def production_counts_by_file() -> dict[str, int]:
+def historical_residue_paths() -> frozenset[str]:
+    """Production files excluded from the LIVE ratchet as retirement residue.
+
+    A cross-reference to the repository's own frozen surface for a fully
+    decommissioned integration, not a second copy of that list — see the
+    module docstring. A file only ever needs to be named once, in the
+    ledger that owns the retirement decision for it; this function reads
+    that ledger rather than repeating it.
+    """
+
+    return _decommissioned_integration_surface()
+
+
+def raw_production_counts_by_file() -> dict[str, int]:
+    """Every production construction site this sweep finds, unfiltered —
+    live surface and historical residue together. Used only to prove the
+    exclusion mechanism actually removes something (see
+    `test_historical_residue_is_excluded_from_the_live_ratchet_but_still_swept`)
+    rather than vacuously matching an already-empty set."""
+
     return counts_by_file(PRODUCTION_ROOTS)
+
+
+def production_counts_by_file() -> dict[str, int]:
+    """LIVE production construction-site counts: the mechanical sweep with
+    historical residue excluded. This is what a shared `DatabaseRuntime`
+    would actually need to account for."""
+
+    residue = historical_residue_paths()
+    return {
+        path: count
+        for path, count in raw_production_counts_by_file().items()
+        if path not in residue
+    }
+
+
+def production_residue_counts_by_file() -> dict[str, int]:
+    """The excluded counterpart of `production_counts_by_file`: historical
+    residue construction sites this sweep found but does not treat as a
+    live requirement. Informational only — never baselined per-file."""
+
+    residue = historical_residue_paths()
+    return {
+        path: count
+        for path, count in raw_production_counts_by_file().items()
+        if path in residue
+    }
 
 
 def test_fixture_total_count() -> int:

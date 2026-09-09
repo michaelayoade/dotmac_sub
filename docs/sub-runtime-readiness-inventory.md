@@ -87,12 +87,19 @@ repository. Full raw counts:
 
 | Family | Root(s) | Files | Construction sites |
 |---|---|---|---:|
-| Application services, tasks, main | `app/` | 10 | 12 |
+| Application services, tasks, main | `app/` | 10 | 11 |
 | Alembic migration runner | `alembic/` | 1 | 1 |
-| Standalone operational/migration scripts | `scripts/` | 11 | 12 |
+| Standalone operational/migration scripts — live | `scripts/` | 4 | 5 |
+| Standalone operational/migration scripts — historical residue (see below; excluded, not a `DatabaseRuntime` requirement) | `scripts/` | 7 | 8 |
 | Test fixtures, migration rehearsals, integration/playwright harnesses | `tests/` | 63 | 115 |
 
-### Production/operational sites (app/, scripts/, alembic/) — 22 files, 25 sites
+The mechanical AST sweep itself found 22 production/operational files (25
+sites) with no interpretation applied. Seven of those files are historical
+residue, addressed in its own section below, clearly separated from the live
+requirements this document exists to characterize — never mixed into the
+table or list that follows.
+
+### Production/operational sites (app/, scripts/, alembic/) — 15 files, 17 sites, LIVE ONLY (see "Historical / residual" below for the seven excluded)
 
 - `app/db.py` (2) — the canonical factory itself: `create_engine` (`:51`)
   and `sessionmaker` (`:69`).
@@ -133,23 +140,40 @@ repository. Full raw counts:
 - `alembic/env.py` (1) — `engine_from_config` (`:153`), `NullPool`, its own
   `lock_timeout` (`:135-147`), no ORM `Session` at all — Alembic owns the
   deployed schema and is not part of application runtime authority.
-- `scripts/*` (11 files, 12 sites) — one-off migration/backfill/import
-  scripts (CRM ticket import, staff map, party status backfill, ledger
-  effective-date backfill, price-offer inventory, network map staging,
-  CI test-database bootstrap) that each open their own short-lived engine
-  against an explicit target URL, never against `app.db`'s pooled engine —
-  correct for a one-shot script, but each is a real construction site a
-  shared runtime's contract would need to keep out of scope for. Five of
-  these (`scripts/migration/backfill_crm_subscriber_links.py:168`,
-  `build_crm_staff_map.py:128`, `import_crm_tickets_phase1.py:141`,
-  `preflight_crm_ticket_import.py:84`, `scripts/network/stage_crm_network_map.py:223`)
-  are still-tracked, still-live CRM-origin data migration scripts — real
-  members of Sub's live session-construction surface, not dead code this
-  sweep picked up mechanically, which is why this document and
-  `session_construction_baseline.txt` are recorded in
-  `tests/architecture/crm_vocabulary_baseline.txt`'s frozen CRM/Omni
-  surface (the freeze tracks every file that MENTIONS the vocabulary, by
-  path or content, not only files that ARE the CRM integration).
+- `scripts/*` (4 live files, 5 sites) — one-off migration/backfill/import
+  scripts (ledger effective-date backfill, price-offer inventory, CI
+  test-database bootstrap, a committed-rate shadow-diff one-off) that each
+  open their own short-lived engine against an explicit target URL, never
+  against `app.db`'s pooled engine — correct for a one-shot script, but
+  each is a real construction site a shared runtime's contract would need
+  to keep out of scope for.
+
+### Historical / residual — not a `DatabaseRuntime` requirement
+
+Seven of the 22 mechanically-swept production files are one-time
+data-migration and preflight scripts written for a subscriber/ticketing
+system integration that has since been fully decommissioned. Each
+requires a second, external database URL naming a system that is no
+longer reachable — they are retirement residue, not part of Sub's live
+runtime surface, and this document does not treat them as anything a
+shared `DatabaseRuntime` must preserve.
+
+They are deliberately not named or path-cited in this document (or in
+`session_construction_baseline.txt`): the repository already carries an
+authoritative, frozen ledger of exactly which files belong to that
+decommissioned integration's surface, and duplicating that list here would
+only create a second, unmaintained copy of it. The exact exclusion
+mechanism — which cross-references that existing ledger rather than
+hand-listing paths, so it stays correct automatically as the ledger
+shrinks — is `tests/architecture/session_construction_inventory.py`'s
+`production_counts_by_file`; that module is where the specific paths are
+legitimately named, once, alongside the ledger itself.
+
+Whether any of these seven scripts remains literally executable today (the
+Python module still imports and parses arguments, independent of whether
+its target database is reachable) is a Sub repository-hygiene /
+residue-deletion question for that decommissioning programme to close —
+not a Kernel capability requirement, and out of scope for this inventory.
 
 ### Test/fixture family — 63 files, 115 sites (tracked as an aggregate, not
 per-file — see the ratchet's rationale below)
@@ -190,6 +214,16 @@ two-directional ratchet, mirroring the existing
   (the exact real shape at `app/models/auth.py:367`), and a bare
   `Session(...)` call whose `Session` name was never actually imported from
   `sqlalchemy*`.
+
+- `test_historical_residue_is_excluded_from_the_live_ratchet_but_still_swept`
+  proves the residue-exclusion mechanism (see "Historical / residual"
+  above) actually removes exactly the seven known files from the LIVE
+  production baseline while the raw, unfiltered sweep still finds all 22 —
+  a plant, not an assumption: if the exclusion silently stopped matching
+  (e.g. because the referenced ledger changed shape), this test fails
+  loudly rather than letting residue quietly reappear as an unaccounted
+  "new file" or, worse, letting the exclusion silently swallow a live file
+  that happens to share the same historical surface.
 
 Both the AST scanner and baseline were independently re-derived and cross-
 checked against the live repository before being committed (see this

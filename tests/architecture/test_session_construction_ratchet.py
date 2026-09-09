@@ -24,7 +24,10 @@ from tests.architecture.session_construction_inventory import (
     TEST_ROOTS,
     construction_sites,
     counts_by_file,
+    historical_residue_paths,
     production_counts_by_file,
+    production_residue_counts_by_file,
+    raw_production_counts_by_file,
     test_fixture_total_count,
 )
 
@@ -115,6 +118,57 @@ def test_test_fixture_engine_family_is_swept() -> None:
     # `tests/` is exactly what TEST_ROOTS names — this pins the family this
     # test sweeps, so a future rename doesn't quietly stop scanning it.
     assert TEST_ROOTS == ("tests",)
+
+
+def test_historical_residue_is_excluded_from_the_live_ratchet_but_still_swept() -> None:
+    """Sensitivity proof (plant + near-miss, on the real repository): the
+    LIVE production baseline excludes historical residue from a fully
+    decommissioned integration, but the exclusion is not vacuous — the raw,
+    unfiltered sweep still finds every one of those files, and a genuinely
+    live file with real construction sites is never swept up by mistake.
+
+    This is the residue-exclusion mechanism's own sensitivity proof: if the
+    ledger it defers to changed shape and the exclusion silently stopped
+    matching anything, `residue` below would be empty and this test would
+    catch it immediately, rather than letting retirement residue quietly
+    reappear as an unaccounted "new file" in the live ratchet.
+    """
+
+    residue = historical_residue_paths()
+    raw = raw_production_counts_by_file()
+    live = production_counts_by_file()
+    residue_counts = production_residue_counts_by_file()
+
+    # Plant: at least one production construction site is real residue, so
+    # the exclusion has something to do — it is not exercising an empty set.
+    residue_sites_found = {path for path in raw if path in residue}
+    assert residue_sites_found, (
+        "No production construction site currently matches the decommissioned "
+        "integration's frozen surface. If that surface has genuinely shrunk "
+        "to zero for production code, this assertion should be updated "
+        "deliberately — but an empty set here means the exclusion mechanism "
+        "cannot be proven to do anything."
+    )
+
+    # The residue set must be excluded from the LIVE view...
+    assert not (residue_sites_found & set(live)), (
+        f"These historical-residue files leaked into the LIVE production "
+        f"baseline view: {sorted(residue_sites_found & set(live))}"
+    )
+    # ...but still accounted for, separately, in the residue view.
+    assert residue_sites_found <= set(residue_counts)
+
+    # Near-miss: a real, currently-live file with its own construction site
+    # (unrelated to the decommissioned integration) must NOT be swept into
+    # the residue exclusion by accident.
+    assert "app/db.py" in live
+    assert "app/db.py" not in residue_counts
+    assert "app/db.py" not in residue
+
+    # raw == live ∪ residue, with no overlap — the partition is exhaustive.
+    assert set(raw) == set(live) | set(residue_counts)
+    assert not (set(live) & set(residue_counts))
+    assert sum(raw.values()) == sum(live.values()) + sum(residue_counts.values())
 
 
 def _sites_in(source: str) -> list[tuple[int, str]]:

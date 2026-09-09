@@ -366,7 +366,7 @@ alembic/versions_archive/k2l3m4n5o6p7_add_crm_social_comment_replies.py
 alembic/versions_archive/l1m2n3o4p5q6_add_inbound_message_dedupe_index.py
 alembic/versions_archive/p0q1r2s3t4u5_add_integration_connector_model.py
 #
-# --- docs: 108 files ---
+# --- docs: 107 files ---
 docs/ACCOUNT_CREDIT_DEPOSITS.md
 docs/CHAT_LIVE_SETUP.md
 docs/CODING_STANDARD.md
@@ -473,7 +473,6 @@ docs/runbooks/SUPPORT_TICKET_PORTAL_VISIBILITY_RECONCILIATION.md
 docs/runbooks/TEAM_INBOX_SUBSCRIBER_LINK_REPAIR.md
 docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md
 docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md
-docs/sub-runtime-readiness-inventory.md
 docs/testing/EDGE_CASE_MATRIX.md
 #
 # --- scripts: 29 files ---
@@ -519,7 +518,7 @@ tests/architecture/isp_cohort1_write_sites_baseline.txt
 tests/architecture/isp_cohort1_writer_files_baseline.txt
 tests/architecture/openapi_contract_surface.json
 tests/architecture/service_http_exception_baseline.txt
-tests/architecture/session_construction_baseline.txt
+tests/architecture/session_construction_inventory.py
 tests/architecture/sot_writer_baseline.txt
 tests/architecture/subscriber_metadata_writers_baseline.txt
 tests/architecture/test_ci_pipeline.py
