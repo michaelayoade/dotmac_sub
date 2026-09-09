@@ -87,8 +87,12 @@ not guess bindings for existing errors or events.
 Operator lock order is `OntUnit -> active OntAssignment -> configuration head
 -> active WAN intent -> credential inputs -> operation/dispatch`. Operator
 admission rechecks the authenticated scope, exact active assignment and
-subscription, PON identity, authorization/commissioning readiness, submitted
-section, and effective config pack before mutation.
+resolvable subscription identity, PON identity, authorization/commissioning
+readiness, submitted section, and effective config pack before mutation.
+Operator configuration is desired-state staging, not service delivery, so it
+deliberately does not gate on subscription lifecycle status; delivery
+authorization is a separate concern owned by RADIUS access-state and PPP
+delivery-authorization checks.
 
 Customer WiFi admission accepts only SSID and optional password fields. It
 proves the exact active subscriber/subscription assignment inside the owner,
