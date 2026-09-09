@@ -84,16 +84,17 @@ freeze is intentionally narrow: feature branch pushes, pull request creation,
 and pull request updates continue, but no pull request should merge into `main`
 while `Build release candidate once`, `Deploy main to staging`,
 `Promote staged digest for production`, or `Deploy authorized digest to
-production` is queued or running.
+production` is queued, running, or awaiting approval.
 
 This freeze carries more weight on a single trunk than it did with a `dev` hop:
 `main` is now both the branch people merge into and the branch a candidate is
 selected from, so an unfrozen merge moves the release base directly. The
 `Release Freeze Gate` workflow is the required pull-request check that enforces
 this boundary on `main`. It reads active GitHub Actions runs and fails
-only when one of those release-control workflows is queued or in progress. It
-does not inspect open pull requests and does not reinterpret the selected
-candidate; the candidate SHA and OCI digest remain the deployment authority.
+only when one of those release-control workflows is queued, in progress, or
+awaiting approval. It does not inspect open pull requests and does not
+reinterpret the selected candidate; the candidate SHA and OCI digest remain
+the deployment authority.
 
 ### One-time workflow bootstrap
 
