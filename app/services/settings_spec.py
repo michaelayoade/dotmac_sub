@@ -5593,6 +5593,13 @@ SETTINGS_SPECS.extend(
         ),
         SettingSpec(
             domain=SettingDomain.scheduler,
+            key="payment_inbox_reclaim_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
             key="long_task_soft_time_limit_seconds",
             env_var="CELERY_LONG_TASK_SOFT_TIME_LIMIT",
             value_type=SettingValueType.integer,
