@@ -14,6 +14,7 @@ class LocationPingPayload {
     this.workOrderId,
     this.accuracyM,
     this.capturedAtIsClockDerived = false,
+    this.clientObservationId,
   });
 
   final double latitude;
@@ -34,6 +35,16 @@ class LocationPingPayload {
   /// does not persist across an app restart via the encrypted queue either.
   final bool capturedAtIsClockDerived;
 
+  /// A UUID minted once, at capture time, identifying this specific fix
+  /// attempt — matches the server's `client_observation_id` on
+  /// `LocationPingInput` (`app/schemas/field.py`) exactly, wire key and
+  /// nullability both: a ping already queued before this field existed
+  /// decodes with null, which the server treats as "dedup doesn't run for
+  /// this ping" rather than an error. Persisted through the encrypted queue
+  /// so a retry after an ambiguous network failure replays the same id
+  /// instead of minting a new one and risking a duplicate.
+  final String? clientObservationId;
+
   Map<String, dynamic> toJson() => {
     'latitude': latitude,
     'longitude': longitude,
@@ -41,6 +52,7 @@ class LocationPingPayload {
     'captured_at': capturedAt.toUtc().toIso8601String(),
     'status': shift.apiValue,
     'crm_work_order_id': ?workOrderId,
+    'client_observation_id': ?clientObservationId,
   };
 
   factory LocationPingPayload.fromJson(Map<String, dynamic> json) {
@@ -61,6 +73,7 @@ class LocationPingPayload {
       shift: shift,
       workOrderId: json['crm_work_order_id']?.toString(),
       accuracyM: (json['accuracy_m'] as num?)?.toDouble(),
+      clientObservationId: json['client_observation_id']?.toString(),
     );
   }
 }

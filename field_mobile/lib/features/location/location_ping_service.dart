@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/location/location_ping_store.dart';
 import '../../core/location/location_source.dart';
@@ -53,9 +54,11 @@ class LocationPingService {
     this.sharingReader,
     LocationPingStore? store,
     DateTime Function()? clock,
+    String Function()? idGenerator,
     this.maxBuffer = 200,
   }) : store = store ?? MemoryLocationPingStore(),
-       _clock = clock ?? (() => DateTime.now().toUtc());
+       _clock = clock ?? (() => DateTime.now().toUtc()),
+       _idGenerator = idGenerator ?? (() => const Uuid().v4());
 
   final LocationSource location;
   final PingPoster poster;
@@ -63,6 +66,9 @@ class LocationPingService {
   final SharingReader? sharingReader;
   final LocationPingStore store;
   final DateTime Function() _clock;
+  // Injected so tests can assert on a known id; production always mints a
+  // real v4 UUID, once per fix, at capture time — never at send time.
+  final String Function() _idGenerator;
   final int maxBuffer;
 
   final List<LocationPingPayload> _buffer = [];
@@ -143,6 +149,11 @@ class LocationPingService {
         capturedAtIsClockDerived: fixTimestamp == null,
         shift: _shift,
         workOrderId: workOrderId,
+        // Minted once, right here, at capture/append time — never
+        // regenerated on a later retry. A network failure after the server
+        // actually wrote the row must replay, not duplicate, on the next
+        // flush() of this same buffered ping.
+        clientObservationId: _idGenerator(),
       ),
     );
     if (_buffer.length > maxBuffer) {
