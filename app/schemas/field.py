@@ -666,6 +666,11 @@ class LocationPingInput(BaseModel):
     crm_work_order_id: str | None = Field(default=None, max_length=64)
     source: str = Field(default="mobile", max_length=32)
     status: str | None = Field(default=None, max_length=20)
+    # Optional: a stable id the client mints once per ping attempt so a retry
+    # after an ambiguous network failure replays instead of duplicating.
+    # Omitted by app builds that predate this field; dedup then simply
+    # doesn't run for that ping, matching today's behavior.
+    client_observation_id: UUID | None = None
 
 
 class LocationPingBatch(BaseModel):
@@ -695,6 +700,10 @@ class LocationIngestResponse(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
     presence: FieldPresenceRead
     transitions: list[dict[str, Any]] = Field(default_factory=list)
+    # Observability only: a replayed row is already counted in `accepted`
+    # above (never as an error), so an old client's `accepted + len(errors)
+    # == total_sent` check is unaffected whether or not it reads this field.
+    replays: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class VoiceExtractRequest(BaseModel):
