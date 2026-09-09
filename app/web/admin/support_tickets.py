@@ -39,6 +39,7 @@ from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.list_query import ListQuery
 from app.services.object_storage import ObjectNotFoundError
+from app.web.admin.field_note_access import resolve_staff_field_note_access
 from app.web.request_parsing import parse_json_body
 
 router = APIRouter(prefix="/support/tickets", tags=["web-admin-support-tickets"])
@@ -521,6 +522,10 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             ticket_lookup=ticket_lookup,
             actor_id=_actor_id(request),
             can_read_material_requests=can(request, "operations:material_request:read"),
+            can_read_field_notes=can(request, "operations:dispatch:read"),
+            field_note_access=resolve_staff_field_note_access(
+                db, getattr(request.state, "auth", None)
+            ),
             can_assign_ticket=True,
         )
     )
@@ -748,6 +753,10 @@ def ticket_add_comment(
                 can_read_material_requests=can(
                     request, "operations:material_request:read"
                 ),
+                can_read_field_notes=can(request, "operations:dispatch:read"),
+                field_note_access=resolve_staff_field_note_access(
+                    db, getattr(request.state, "auth", None)
+                ),
                 can_assign_ticket=True,
             )
         )
@@ -852,6 +861,10 @@ def ticket_link(
             support_web_service.build_ticket_detail_context(
                 db,
                 ticket_lookup=str(ticket_id),
+                can_read_field_notes=can(request, "operations:dispatch:read"),
+                field_note_access=resolve_staff_field_note_access(
+                    db, getattr(request.state, "auth", None)
+                ),
                 can_assign_ticket=True,
             )
         )
@@ -890,6 +903,10 @@ def ticket_merge(
             support_web_service.build_ticket_detail_context(
                 db,
                 ticket_lookup=str(ticket_id),
+                can_read_field_notes=can(request, "operations:dispatch:read"),
+                field_note_access=resolve_staff_field_note_access(
+                    db, getattr(request.state, "auth", None)
+                ),
                 can_assign_ticket=True,
             )
         )

@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, detail_header, card, status_badge, status_presentation_badge %}
+{% from "components/field_notes.html" import field_note_list %}
 {% block title %}{{ work_order.public_id }} - Work Order{% endblock %}
 {% macro dt_value(value) %}{% if value %}{{ value.strftime('%Y-%m-%dT%H:%M') }}{% endif %}{% endmacro %}
 {% block content %}
@@ -20,6 +21,10 @@
 </dl>
 {% if work_order.address %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Site</p><p class="mt-1">{{ work_order.address }}</p></div>{% endif %}
 {% if work_order.description %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Description</p><p class="mt-1 whitespace-pre-wrap text-sm">{{ work_order.description }}</p></div>{% endif %}
+{% endcall %}
+{% call card('Work order notes', color='amber') %}
+<p class="mb-4 text-sm text-slate-500">Delivered notes recorded by the assigned technician in the field app.</p>
+{{ field_note_list(field_notes, total=field_note_total) }}
 {% endcall %}
 {% call card('Linked context', color='emerald') %}<div class="grid gap-3 sm:grid-cols-2">
 {% if origin_ticket %}<a href="/admin/support/tickets/{{ origin_ticket.id }}" class="rounded-xl border border-amber-200 p-4 hover:bg-amber-50"><span class="block text-xs font-semibold uppercase text-amber-700">Ticket</span><strong>{{ origin_ticket.number or origin_ticket.id }}</strong><span class="mt-1 block text-sm text-slate-500">{{ origin_ticket.title }}</span></a>{% endif %}

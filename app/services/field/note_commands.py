@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import false, func, or_, select
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.dispatch import TechnicianProfile
 from app.models.field_attachment import FieldAttachment
 from app.models.field_note import FieldWorkOrderNote
+from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.domain_errors import DomainError
@@ -78,8 +80,98 @@ class FieldNoteCreationOutcome:
     replayed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class WorkOrderFieldNoteScope:
+    work_order_public_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTaskFieldNoteScope:
+    project_task_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class OriginTicketFieldNoteScope:
+    origin_ticket_id: UUID
+
+
+StaffFieldNoteScope = (
+    WorkOrderFieldNoteScope | ProjectTaskFieldNoteScope | OriginTicketFieldNoteScope
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StaffFieldNoteAccess:
+    global_access: bool = False
+    reseller_ids: tuple[UUID, ...] = ()
+    regions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ListStaffFieldWorkOrderNotes:
+    scope: StaffFieldNoteScope
+    access: StaffFieldNoteAccess
+    limit: int = 200
+    offset: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class StaffFieldNoteAttachmentView:
+    id: UUID
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    kind: str
+    download_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class StaffFieldWorkOrderNoteView:
+    id: UUID
+    client_ref: UUID | None
+    work_order_id: UUID
+    work_order_public_id: str
+    work_order_title: str
+    project_task_id: UUID | None
+    origin_ticket_id: UUID | None
+    body: str
+    is_internal: bool
+    author_person_id: UUID
+    author_system_user_id: UUID | None
+    author_name: str
+    created_at: datetime
+    attachments: tuple[StaffFieldNoteAttachmentView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StaffFieldNoteListOutcome:
+    items: tuple[StaffFieldWorkOrderNoteView, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class GetStaffFieldNoteAttachment:
+    work_order_public_id: str
+    attachment_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class StaffFieldNoteAttachmentAccess:
+    attachment_id: UUID
+    stored_file_id: UUID
+    file_name: str
+    mime_type: str
+    size_bytes: int
+
+
 class FieldNoteCommandError(DomainError):
     """Stable, transport-neutral rejection from the field-note owner."""
+
+
+class FieldNoteQueryError(DomainError):
+    """Stable rejection from the staff field-note read boundary."""
 
 
 _CREATE_NOTE = OwnerCommandDefinition(
@@ -91,6 +183,12 @@ _CREATE_NOTE = OwnerCommandDefinition(
 
 def _error(suffix: str, message: str, **details: object) -> FieldNoteCommandError:
     return FieldNoteCommandError(
+        code=f"{OWNER}.{suffix}", message=message, details=details
+    )
+
+
+def _query_error(suffix: str, message: str, **details: object) -> FieldNoteQueryError:
+    return FieldNoteQueryError(
         code=f"{OWNER}.{suffix}", message=message, details=details
     )
 
@@ -337,10 +435,164 @@ def create_field_work_order_note(
     )
 
 
+def _staff_note_scope_predicate(scope: StaffFieldNoteScope) -> ColumnElement[bool]:
+    if isinstance(scope, WorkOrderFieldNoteScope):
+        public_id = scope.work_order_public_id.strip()
+        if not public_id:
+            raise _query_error("invalid_request", "Work-order identity is required.")
+        return WorkOrder.public_id == public_id
+    if isinstance(scope, ProjectTaskFieldNoteScope):
+        return WorkOrder.project_task_id == scope.project_task_id
+    if isinstance(scope, OriginTicketFieldNoteScope):
+        return WorkOrder.origin_ticket_id == scope.origin_ticket_id
+    raise _query_error("invalid_request", "A supported field-note scope is required.")
+
+
+def _staff_note_access_predicate(
+    access: StaffFieldNoteAccess,
+) -> ColumnElement[bool] | None:
+    if access.global_access:
+        return None
+    predicates: list[ColumnElement[bool]] = []
+    if access.reseller_ids:
+        predicates.append(Subscriber.reseller_id.in_(access.reseller_ids))
+    normalized_regions = tuple(
+        dict.fromkeys(region.strip() for region in access.regions if region.strip())
+    )
+    if normalized_regions:
+        predicates.append(Subscriber.region.in_(normalized_regions))
+    if not predicates:
+        return false()
+    return or_(*predicates)
+
+
+def _staff_attachment_view(
+    attachment: FieldAttachment,
+    *,
+    work_order_public_id: str,
+) -> StaffFieldNoteAttachmentView:
+    return StaffFieldNoteAttachmentView(
+        id=attachment.id,
+        file_name=attachment.file_name,
+        mime_type=attachment.mime_type,
+        size_bytes=attachment.size_bytes,
+        kind=attachment.kind,
+        download_path=(
+            f"/admin/dispatch/work-orders/{work_order_public_id}/notes/attachments/"
+            f"{attachment.id}"
+        ),
+    )
+
+
+def _staff_note_view(
+    note: FieldWorkOrderNote, work_order: WorkOrder
+) -> StaffFieldWorkOrderNoteView:
+    attachments = tuple(
+        _staff_attachment_view(attachment, work_order_public_id=work_order.public_id)
+        for attachment in sorted(
+            (item for item in note.attachments_ if item.is_active),
+            key=lambda item: (item.created_at, item.id),
+        )
+    )
+    return StaffFieldWorkOrderNoteView(
+        id=note.id,
+        client_ref=note.client_ref,
+        work_order_id=work_order.id,
+        work_order_public_id=work_order.public_id,
+        work_order_title=work_order.title,
+        project_task_id=work_order.project_task_id,
+        origin_ticket_id=work_order.origin_ticket_id,
+        body=note.body,
+        is_internal=note.is_internal,
+        author_person_id=note.author_person_id,
+        author_system_user_id=note.author_system_user_id,
+        author_name=note.author_name or str(note.author_person_id),
+        created_at=note.created_at,
+        attachments=attachments,
+    )
+
+
+def list_staff_field_work_order_notes(
+    db: Session, query: ListStaffFieldWorkOrderNotes
+) -> StaffFieldNoteListOutcome:
+    """Read canonical field notes for one authorized staff UI context."""
+
+    if query.limit < 1 or query.limit > 200:
+        raise _query_error("invalid_request", "Note limit must be between 1 and 200.")
+    if query.offset < 0:
+        raise _query_error("invalid_request", "Note offset cannot be negative.")
+    predicates = [_staff_note_scope_predicate(query.scope)]
+    access_predicate = _staff_note_access_predicate(query.access)
+    if access_predicate is not None:
+        predicates.append(access_predicate)
+    count = db.execute(
+        select(func.count(FieldWorkOrderNote.id))
+        .select_from(FieldWorkOrderNote)
+        .join(WorkOrder, WorkOrder.id == FieldWorkOrderNote.work_order_mirror_id)
+        .join(Subscriber, Subscriber.id == WorkOrder.subscriber_id)
+        .where(*predicates)
+    ).scalar_one()
+    rows = db.execute(
+        select(FieldWorkOrderNote, WorkOrder)
+        .join(WorkOrder, WorkOrder.id == FieldWorkOrderNote.work_order_mirror_id)
+        .join(Subscriber, Subscriber.id == WorkOrder.subscriber_id)
+        .options(selectinload(FieldWorkOrderNote.attachments_))
+        .where(*predicates)
+        .order_by(FieldWorkOrderNote.created_at.desc(), FieldWorkOrderNote.id.desc())
+        .offset(query.offset)
+        .limit(query.limit)
+    ).all()
+    return StaffFieldNoteListOutcome(
+        items=tuple(_staff_note_view(note, work_order) for note, work_order in rows),
+        total=int(count),
+        limit=query.limit,
+        offset=query.offset,
+    )
+
+
+def get_staff_field_note_attachment(
+    db: Session, query: GetStaffFieldNoteAttachment
+) -> StaffFieldNoteAttachmentAccess:
+    """Resolve an active attachment that belongs to a canonical field note."""
+
+    attachment = db.execute(
+        select(FieldAttachment)
+        .join(FieldWorkOrderNote, FieldWorkOrderNote.id == FieldAttachment.note_id)
+        .join(WorkOrder, WorkOrder.id == FieldWorkOrderNote.work_order_mirror_id)
+        .where(
+            FieldAttachment.id == query.attachment_id,
+            FieldAttachment.is_active.is_(True),
+            WorkOrder.public_id == query.work_order_public_id,
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise _query_error("attachment_not_found", "Attachment not found.")
+    return StaffFieldNoteAttachmentAccess(
+        attachment_id=attachment.id,
+        stored_file_id=attachment.stored_file_id,
+        file_name=attachment.file_name,
+        mime_type=attachment.mime_type,
+        size_bytes=attachment.size_bytes,
+    )
+
+
 __all__ = [
     "CreateFieldWorkOrderNote",
     "FieldNoteAttachmentOutcome",
     "FieldNoteCommandError",
     "FieldNoteCreationOutcome",
+    "FieldNoteQueryError",
+    "GetStaffFieldNoteAttachment",
+    "ListStaffFieldWorkOrderNotes",
+    "OriginTicketFieldNoteScope",
+    "ProjectTaskFieldNoteScope",
+    "StaffFieldNoteAttachmentAccess",
+    "StaffFieldNoteAttachmentView",
+    "StaffFieldNoteAccess",
+    "StaffFieldNoteListOutcome",
+    "StaffFieldWorkOrderNoteView",
+    "WorkOrderFieldNoteScope",
     "create_field_work_order_note",
+    "get_staff_field_note_attachment",
+    "list_staff_field_work_order_notes",
 ]
