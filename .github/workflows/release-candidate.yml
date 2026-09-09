@@ -143,6 +143,17 @@ jobs:
           while true; do
             if manifest_json="$(docker buildx imagetools inspect "$candidate_ref" --format '{{json .Manifest}}' 2>"$RUNNER_TEMP/inspect-tag.err")"; then
               digest="$(jq -r '.digest' <<<"$manifest_json")"
+              # A malformed value here (truncated output, a wrong field, a
+              # tool-version format change) must not silently reach the next
+              # step's `docker pull`, which would misreport it as
+              # "readable=false" (unreadable provenance) rather than naming
+              # the real problem -- a digest is not a secret, so the value is
+              # named in full. Mirrors the exact digest shape this workflow
+              # already requires in "Verify published digest" below.
+              if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+                echo "Candidate tag inspection returned a value that is not a valid OCI digest: $digest" >&2
+                exit 1
+              fi
               echo "present=true" >> "$GITHUB_OUTPUT"
               echo "digest=$digest" >> "$GITHUB_OUTPUT"
               exit 0
