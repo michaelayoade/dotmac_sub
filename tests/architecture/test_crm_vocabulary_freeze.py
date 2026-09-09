@@ -26,6 +26,7 @@ from pathlib import Path
 from tests.architecture.crm_vocabulary import (
     CRM_TERMS,
     LANES,
+    _is_characterization_only,
     mentions_crm,
     surface_by_lane,
     surface_paths,
@@ -160,6 +161,100 @@ def test_the_freeze_covers_every_entry_point_family() -> None:
         assert Path(lane).is_dir(), f"frozen lane {lane} no longer exists"
     assert Path("app/tasks").is_dir(), "the task/worker family moved out of app/"
     assert CRM_TERMS == frozenset({"crm", "omni"})
+
+
+# ── dependency vs. mention: how the literal is consumed ─────────────────────
+
+
+def _characterization_only(source: str) -> bool:
+    import textwrap
+
+    return _is_characterization_only(
+        Path("scratch_test_module.py"), textwrap.dedent(source)
+    )
+
+
+def test_a_real_import_of_a_crm_module_still_counts_as_a_dependency() -> None:
+    """Sensitivity proof (plant): a genuine `import`/`from ... import` of a
+    CRM-named module is a real dependency and must never be exempted —
+    regardless of whether the imported module happens to already be a
+    frozen surface member. This is the case the exemption must NOT touch."""
+
+    planted = """
+        from app.services.crm_client import CRMClient
+
+        def make_client():
+            return CRMClient()
+    """
+    assert not _characterization_only(planted)
+
+
+def test_a_dynamic_import_of_a_crm_module_still_counts_as_a_dependency() -> None:
+    """Sensitivity proof (plant): a runtime import operation is exactly as
+    real a dependency as a static import statement."""
+
+    planted = """
+        import importlib
+
+        def load():
+            return importlib.import_module("app.services.crm_client")
+    """
+    assert not _characterization_only(planted)
+
+
+def test_the_identical_name_as_a_path_argument_does_not_count() -> None:
+    """Sensitivity proof (near-miss, same string as the plant above): the
+    IDENTICAL module name, consumed only to locate a file to read rather
+    than to import it, is characterization data — same string, opposite
+    outcome, decided entirely by how it is consumed."""
+
+    near_miss = """
+        from pathlib import Path
+
+        TARGET_FILE = Path("app/services/crm_client.py")
+
+        def describe():
+            return TARGET_FILE.read_text()
+    """
+    assert _characterization_only(near_miss)
+
+
+def test_a_crm_name_inside_a_dict_or_list_still_counts_as_a_dependency() -> None:
+    """Sensitivity proof (near-miss): a container literal is not, on its
+    own, proof of inert data — the real shape at
+    `app/services/infrastructure_health.py`, which keys a live health-check
+    dispatch off a `"crm"` string in a plain dict. A blanket "any
+    list/tuple/set/dict is a mention" rule would have silently exempted
+    this genuine dependency, so it must NOT be exempted."""
+
+    planted_dict = """
+        HEALTH_CHECK_OWNERS = {"crm": "celery-worker"}
+
+        def owner_for(service):
+            return HEALTH_CHECK_OWNERS[service]
+    """
+    assert not _characterization_only(planted_dict)
+
+    planted_list = """
+        MONITORED_SERVICES = ["crm", "billing"]
+    """
+    assert not _characterization_only(planted_list)
+
+
+def test_a_prose_or_identifier_mention_still_counts_as_a_dependency() -> None:
+    """Sensitivity proof (near-miss): the exemption is narrow to ONE
+    recognized data shape (`Path("literal")`). A bare identifier, an
+    f-string, a docstring sentence, or a plain assignment are all
+    unclassified and keep counting — the conservative default this
+    exemption only ever subtracts from, never adds a blanket allowance to."""
+
+    bare_identifier = 'CRM_DATABASE_URL = "postgresql://example/crm"'
+    assert not _characterization_only(bare_identifier)
+
+    docstring_prose = '''
+        """This module talks to the CRM."""
+    '''
+    assert not _characterization_only(docstring_prose)
 
 
 def test_the_freeze_is_not_measuring_an_empty_set() -> None:

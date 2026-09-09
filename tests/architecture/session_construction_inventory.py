@@ -22,24 +22,22 @@ fully decommissioned. They still construct a real `Engine` against a second,
 now-unreachable external database — a `DatabaseRuntime` seam has nothing to
 preserve there, because there is no live requirement left to preserve; only
 retirement residue remains. `production_counts_by_file` therefore excludes
-any file already recorded in the repository's OWN authoritative ledger for
-that decommissioned integration's surface
-(`tests/architecture/crm_vocabulary_baseline.txt`, enforced by
-`tests/architecture/test_crm_vocabulary_freeze.py`) — a cross-reference to
-that existing ledger, not a second, hand-maintained path list here, so the
-exclusion tracks that ledger automatically rather than drifting from it. The
-excluded set is never named path-by-path outside that ledger and this
-module: see `historical_residue_paths` for exactly where.
+any file already recorded in the repository's OWN authoritative, separately
+governed ledger for that decommissioned integration's surface. That ledger is
+consumed here as DATA — read as a text file and parsed into a plain set, the
+same way this module reads its own baseline below — never imported as a
+Python module: this function's job is to EXCLUDE that surface, not depend on
+it, and a characterization input is not a dependency. The excluded set is
+never named path-by-path outside that ledger and this module: see
+`historical_residue_paths` for exactly where.
 """
 
 from __future__ import annotations
 
 import ast
+from functools import cache
 from pathlib import Path
 
-from tests.architecture.crm_vocabulary import (
-    surface_paths as _decommissioned_integration_surface,
-)
 from tests.architecture.source_index import python_ast, python_files
 
 #: Canonical SQLAlchemy names whose invocation constructs a new engine or a
@@ -143,17 +141,35 @@ def counts_by_file(roots: tuple[str, ...]) -> dict[str, int]:
     return counts
 
 
+#: The repository's own frozen surface for the decommissioned integration
+#: named in the module docstring — read here as a plain data file (a set of
+#: paths), never imported as a Python module. A file only ever needs to be
+#: named once, in the ledger that owns the retirement decision for it; this
+#: constant locates that ledger rather than repeating its contents.
+_DECOMMISSIONED_SURFACE_LEDGER = Path("tests/architecture/crm_vocabulary_baseline.txt")
+
+
+@cache
 def historical_residue_paths() -> frozenset[str]:
     """Production files excluded from the LIVE ratchet as retirement residue.
 
-    A cross-reference to the repository's own frozen surface for a fully
-    decommissioned integration, not a second copy of that list — see the
-    module docstring. A file only ever needs to be named once, in the
-    ledger that owns the retirement decision for it; this function reads
-    that ledger rather than repeating it.
+    Reads `_DECOMMISSIONED_SURFACE_LEDGER` as plain text and takes every
+    non-comment line as a member path — the same "one path per line, `#`
+    comments ignored" shape every other baseline in this directory uses, not
+    a new format. Returns an empty set rather than raising if the ledger is
+    ever absent: a missing ledger should not crash this ratchet, only widen
+    it back to the raw, unfiltered sweep.
     """
 
-    return _decommissioned_integration_surface()
+    if not _DECOMMISSIONED_SURFACE_LEDGER.is_file():
+        return frozenset()
+    return frozenset(
+        line.strip()
+        for line in _DECOMMISSIONED_SURFACE_LEDGER.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
 
 
 def raw_production_counts_by_file() -> dict[str, int]:

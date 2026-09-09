@@ -506,7 +506,7 @@ scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py
 scripts/seed/seed_rbac.py
 #
-# --- tests: 252 files ---
+# --- tests: 251 files ---
 tests/architecture/adapter_keyword_service_call_baseline.txt
 tests/architecture/adapter_transaction_baseline.txt
 tests/architecture/connector_manifest_pins.json
@@ -518,7 +518,6 @@ tests/architecture/isp_cohort1_write_sites_baseline.txt
 tests/architecture/isp_cohort1_writer_files_baseline.txt
 tests/architecture/openapi_contract_surface.json
 tests/architecture/service_http_exception_baseline.txt
-tests/architecture/session_construction_inventory.py
 tests/architecture/sot_writer_baseline.txt
 tests/architecture/subscriber_metadata_writers_baseline.txt
 tests/architecture/test_ci_pipeline.py

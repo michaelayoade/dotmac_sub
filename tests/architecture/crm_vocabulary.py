@@ -35,10 +35,44 @@ Tests that assert a CRM/Omni alias is *refused* are members too — for example
 the ERP contract tests pinning the retired `omni_id`. They reference the
 vocabulary, and deleting one silently is exactly what the falling direction of
 this ratchet exists to catch.
+
+## How a literal is CONSUMED decides dependency vs. mention, for code
+
+A file can legitimately need to NAME the vocabulary as DATA rather than as a
+dependency — locating an existing baseline/ledger file to read, for example.
+That does not execute anything; the string sits inert, used to find a file,
+not imported. A REAL dependency looks different in the AST: a static
+`import x.crm_y` / `from x.crm_y import z` statement, or a string handed to a
+runtime import operation (`importlib.import_module(...)`, `__import__(...)`)
+— both cause code to load and run.
+
+`_is_characterization_only` draws exactly that line, for `.py` files: a
+vocabulary-bearing line inside a real or dynamic import is ALWAYS a
+dependency, full stop, regardless of what it names — importing a
+well-established, long-frozen module is still importing it, and this
+exemption never overrides that. A vocabulary-bearing line whose string
+literal is the SOLE argument to `Path(...)` — locating a data file to read,
+not a module to import — is data, not code, and does not by itself make the
+file a new dependency. Anything else, DELIBERATELY INCLUDING a string
+sitting in a list/tuple/set/dict, keeps counting exactly as before: a
+container literal is not, on its own, proof of inert data —
+`app/services/infrastructure_health.py` keys a real health-check dispatch
+off a `"crm"` string in a plain dict, so a blanket "any container is a
+mention" rule would have silently exempted a genuine, live dependency. This
+exemption only ever SUBTRACTS membership for the one specifically
+recognized, unambiguously-inert data shape (`Path("literal")`), never grants
+a general "it's just a mention" allowance for container literals at large.
+The deciding question is how the literal is consumed, not whether it looks
+like a module or file path — the same name can be a dependency in one file
+and a mention in another (see the paired plants in
+`test_crm_vocabulary_freeze.py`:
+`test_a_real_import_of_a_crm_module_still_counts_as_a_dependency` and
+`test_the_identical_name_as_a_path_argument_does_not_count`).
 """
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from functools import cache
@@ -109,6 +143,103 @@ def _reads_as_text(path: Path) -> str | None:
     return raw.decode("utf-8", errors="ignore")
 
 
+_DYNAMIC_IMPORT_CALLEES: frozenset[str] = frozenset({"import_module", "__import__"})
+
+
+def _dependency_lines(tree: ast.Module) -> frozenset[int]:
+    """Lines where a vocabulary-bearing literal is genuinely CONSUMED as
+    code: a real `import`/`from ... import` statement (always, regardless
+    of what module it names — this is what makes the exemption below
+    non-overridable by a real import), or a string literal passed to a
+    runtime import operation (`importlib.import_module(...)`,
+    `__import__(...)`)."""
+
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            end = getattr(node, "end_lineno", None) or node.lineno
+            lines.update(range(node.lineno, end + 1))
+        elif isinstance(node, ast.Import) and node.names:
+            end = getattr(node, "end_lineno", None) or node.lineno
+            lines.update(range(node.lineno, end + 1))
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name in _DYNAMIC_IMPORT_CALLEES:
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        lines.add(arg.lineno)
+    return frozenset(lines)
+
+
+def _characterization_data_lines(tree: ast.Module) -> frozenset[int]:
+    """Lines where a vocabulary-bearing string literal is CONSUMED as the
+    sole argument to `Path(...)` — locating a data file to read, not a
+    module to import, not application logic acting on the name.
+
+    Deliberately narrower than "any list/tuple/set/dict literal": a
+    registry list or a name->value dict can be exactly as live a dependency
+    as an import — `app/services/infrastructure_health.py` keys a real
+    health-check dispatch off a `"crm"` string in a plain dict, which is
+    unambiguously still a dependency and must keep counting. A bare
+    `Path("literal/path.txt")` construction has no such reading: it can
+    only ever locate a file for ordinary I/O, which is what makes it safe
+    to treat as characterization input rather than a general "container
+    literal" exemption.
+    """
+
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Path"
+            and len(node.args) == 1
+        ):
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            lines.add(arg.lineno)
+    return frozenset(lines)
+
+
+def _is_characterization_only(path: Path, text: str) -> bool:
+    """Whether every vocabulary-bearing line in a `.py` file is DATA
+    consumption, never a real or dynamic import.
+
+    True means this file adds no new coupling to the frozen surface: it
+    only names the vocabulary inside a recognized data shape (see
+    `_characterization_data_lines`). False — the default, unconditional
+    posture — means at least one occurrence is a real dependency
+    (`_dependency_lines`) or an unrecognized shape (a bare identifier, an
+    f-string, prose, a plain assignment), and the file is a genuine surface
+    member exactly as before this exemption existed. A dependency line
+    always wins over a data-shaped line on the same file: this exemption
+    only ever subtracts membership for a specifically recognized data
+    shape, never adds a blanket allowance. Only `.py` files can qualify —
+    a `.md`/`.txt`/`.json` file has no AST to classify.
+    """
+
+    if path.suffix != ".py":
+        return False
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError:
+        return False
+    dependency_lines = _dependency_lines(tree)
+    data_lines = _characterization_data_lines(tree)
+    saw_any = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if not mentions_crm(line):
+            continue
+        saw_any = True
+        if lineno in dependency_lines:
+            return False
+        if lineno not in data_lines:
+            return False
+    return saw_any
+
+
 @cache
 def surface_by_lane() -> dict[str, frozenset[str]]:
     """Files carrying the CRM/Omni vocabulary, grouped by entry-point family."""
@@ -122,8 +253,11 @@ def surface_by_lane() -> dict[str, frozenset[str]]:
             found[lane].add(tracked)
             continue
         text = _reads_as_text(Path(tracked))
-        if text is not None and any(mentions_crm(line) for line in text.splitlines()):
-            found[lane].add(tracked)
+        if text is None or not any(mentions_crm(line) for line in text.splitlines()):
+            continue
+        if _is_characterization_only(Path(tracked), text):
+            continue
+        found[lane].add(tracked)
     return {lane: frozenset(paths) for lane, paths in found.items()}
 
 
