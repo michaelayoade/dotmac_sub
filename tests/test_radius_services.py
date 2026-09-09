@@ -861,9 +861,7 @@ def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
     assert remaining == [("10.0.0.2",)]
 
 
-def test_external_sync_nas_skips_and_warns_for_device_with_no_secret(
-    tmp_path, caplog
-):
+def test_external_sync_nas_skips_and_warns_for_device_with_no_secret(tmp_path, caplog):
     db_path = tmp_path / "radius-nas-no-secret.db"
     conn = sqlite3.connect(db_path)
     try:
@@ -898,8 +896,7 @@ def test_external_sync_nas_skips_and_warns_for_device_with_no_secret(
 
     # New behavior: the skip is no longer silent — it names the device.
     assert any(
-        "no-secret-router" in record.getMessage()
-        and "10.50.0.1" in record.getMessage()
+        "no-secret-router" in record.getMessage() and "10.50.0.1" in record.getMessage()
         for record in caplog.records
     )
 

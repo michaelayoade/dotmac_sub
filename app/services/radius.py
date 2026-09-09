@@ -1178,8 +1178,7 @@ def _external_sync_nas(
                 continue
             if not device.shared_secret:
                 logger.warning(
-                    "Skipping RADIUS NAS sync for %s (%s): no shared secret "
-                    "configured",
+                    "Skipping RADIUS NAS sync for %s (%s): no shared secret configured",
                     device.name,
                     client_ip,
                 )
