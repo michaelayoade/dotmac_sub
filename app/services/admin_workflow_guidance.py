@@ -192,6 +192,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "olt-operational-health",
+        "Network and access",
+        "Interpret OLT operational health",
+        "NOC, network operations",
+        "Compare OLT status in the inventory and investigate the same evidence on an OLT detail page.",
+        ("/admin/network/olts",),
+        "Start with the Working or Not working badge; administrative Active or Inactive is a separate inventory lifecycle.",
+        "On the detail page, compare the native OLT poll, Ping, and SNMP evidence and open each timestamp tooltip when recency matters.",
+        "Treat Expired or Not current evidence as historical, not as proof that the OLT is currently reachable.",
+        "Use Refresh Telemetry or the explicit test actions when current verification is required, then reload the inventory comparison.",
+        notes=(
+            "A fresh successful native OLT poll can confirm operation even when an older ping or linked monitoring record is stale.",
+            "A linked monitoring record contributes fallback evidence only while that record is active and its polling observation is current.",
+        ),
+    ),
+    _guide(
         "ont-wifi-pppoe-actions",
         "Network and access",
         "Push WiFi, PPPoE, and resync changes to an ONT",

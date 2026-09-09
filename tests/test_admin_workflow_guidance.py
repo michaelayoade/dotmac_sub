@@ -141,3 +141,16 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
     assert "creates and pays one invoice" in content
     assert "complete prepaid charge is unavailable" in content
     assert "billing date is not moved" in content
+
+
+def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:
+    guide = guidance_for_path("/admin/network/olts/olt-id")
+
+    assert guide is not None
+    assert guide.id == "olt-operational-health"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "working or not working" in content
+    assert "administrative active or inactive" in content
+    assert "fresh successful native olt poll" in content
+    assert "linked monitoring record" in content
+    assert "active" in content and "current" in content
