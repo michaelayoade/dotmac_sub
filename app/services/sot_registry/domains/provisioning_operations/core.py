@@ -533,16 +533,22 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="operations.field_notes",
         module="app.services.field.note_commands",
-        owns=("native field work-order note creation",),
+        owns=(
+            "native field work-order note creation",
+            "authorized staff field-note related-context projection",
+        ),
         depends_on=(
             "auth.permission_gate",
             "events.owner_outputs",
+            "operations.work_order_commands",
             "operations.work_orders",
         ),
         notes=(
             "The typed owner creates technician-scoped native notes and stages "
             "their durable output. A stable mobile client reference is the "
-            "idempotency key; the field API and offline outbox are adapters."
+            "idempotency key; the field API and offline outbox are adapters. "
+            "Authorized staff pages compose the same canonical rows through "
+            "native work-order, project-task, and origin-ticket bindings."
         ),
         contract=ServiceContract(
             concerns=(
@@ -555,6 +561,15 @@ SERVICES: tuple[SOTService, ...] = (
                         "field-note client request identity",
                     ),
                     canonical_writer="operations.field_notes",
+                ),
+                ConcernContract(
+                    name="authorized staff field-note related-context projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical field work-order note state",
+                        "native work-order relationship bindings",
+                        "staff field-note authorization evidence",
+                    ),
                 ),
             ),
             authoritative_inputs=(
@@ -583,6 +598,32 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "Stable client_ref plus the normalized work-order, body, "
                         "visibility, and attachment fingerprint"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical field work-order note state",
+                    owner="operations.field_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "FieldWorkOrderNote rows and their active field attachment links"
+                    ),
+                ),
+                AuthorityInput(
+                    name="native work-order relationship bindings",
+                    owner="operations.work_order_commands",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "WorkOrder public identity, project_task_id, and "
+                        "origin_ticket_id foreign keys"
+                    ),
+                ),
+                AuthorityInput(
+                    name="staff field-note authorization evidence",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Exact admin work-order scope and operations:dispatch:read "
+                        "permission evaluated by the web adapter"
                     ),
                 ),
             ),
@@ -615,12 +656,13 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.field_notes.work_order_not_found",
                     *owner_command_boundary_error_codes("operations.field_notes"),
                 ),
-                mapping_owner="field work-order note API adapter",
+                mapping_owner="field work-order note API and admin web adapters",
                 retryable_codes=(),
                 fail_closed_on=(
                     "unknown or inactive technician identity",
                     "unassigned or inaccessible work order",
                     "foreign, missing, or already-linked attachment",
+                    "missing or unrelated staff work-order read scope",
                     "client-reference fingerprint conflict",
                 ),
             ),
@@ -661,6 +703,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_field_notes.py",
+                "tests/test_field_note_staff_projection.py",
                 "tests/architecture/test_field_note_delivery_contract.py",
                 "tests/integration/test_field_note_delivery_migration.py",
                 "field_mobile/test/execution_test.dart",

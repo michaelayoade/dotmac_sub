@@ -55,6 +55,28 @@ Repository refreshes merge non-sent note outbox rows with server notes and
 deduplicate them by `client_ref`. A queued or failed note therefore stays
 visible instead of being overwritten by a server refresh.
 
+## Staff web projections
+
+Successfully delivered notes remain authoritative `FieldWorkOrderNote` rows.
+The staff work-order page reads those rows by the work order's native public
+identity. A project-task page reads them only through
+`WorkOrder.project_task_id`; a ticket page reads them only through
+`WorkOrder.origin_ticket_id`. The latter remains the sole native ticket-to-work
+relationship, so a task's ticket link never becomes an inferred fallback.
+
+These are read-time projections, not copied `ProjectTaskComment` or
+`TicketComment` rows. Existing notes therefore appear without a backfill, and
+the task/ticket comment owners retain their own editing, mention, notification,
+and customer-publication semantics. Related-context entries identify their
+originating work order and cannot be edited through task or ticket comment
+commands.
+
+Only staff adapters with exact work-order read access may render the projection
+or stream an active note attachment. Internal and external-history labels are
+always explicit. Neither label publishes a note to a customer portal. Queued or
+failed mobile outbox entries are device-local and cannot appear in staff web
+views until the API accepts them.
+
 ## Migration and release order
 
 Revision `590_field_note_delivery_idempotency` additively adds nullable

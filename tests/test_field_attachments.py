@@ -21,7 +21,11 @@ from app.services.auth_dependencies import require_user_auth
 from app.services.field import attachments as attachments_module
 from app.services.field.attachments import field_attachments
 from app.services.field.jobs import field_jobs
-from app.services.field.notes import field_notes
+from app.services.field.note_commands import (
+    CreateFieldWorkOrderNote,
+    create_field_work_order_note,
+)
+from app.services.owner_commands import CommandContext
 
 
 @dataclass
@@ -238,17 +242,30 @@ def test_note_can_link_same_job_attachment(db_session, fake_uploads):
         crm_work_order_id="wo-note-photo",
     )
 
-    note = field_notes.create(
+    request_id = uuid4()
+    note = create_field_work_order_note(
         db_session,
-        _auth(user),
-        "wo-note-photo",
-        body="See photo",
-        attachment_ids=[str(attachment["id"])],
+        CreateFieldWorkOrderNote(
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:work_order_notes:write",
+                reason="test_field_note_attachment_link",
+                command_id=request_id,
+                correlation_id=request_id,
+                idempotency_key=str(request_id),
+            ),
+            requester_system_user_id=user.id,
+            work_order_public_id="wo-note-photo",
+            request_id=request_id,
+            body="See photo",
+            is_internal=True,
+            attachment_ids=(attachment["id"],),
+        ),
     )
 
-    assert note["attachments"][0]["id"] == attachment["id"]
+    assert note.attachments[0].id == attachment["id"]
     stored = db_session.get(FieldAttachment, attachment["id"])
-    assert stored.note_id == note["id"]
+    assert stored.note_id == note.id
 
 
 def test_attachment_hidden_job_404(db_session, fake_uploads):

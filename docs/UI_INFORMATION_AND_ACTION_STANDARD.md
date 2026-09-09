@@ -635,3 +635,14 @@ implementation.
   failed evidence.
 - Responsive behavior: visibility and delivery labels accompany the note text,
   do not rely on colour alone, and remain readable on the mobile first viewport.
+- Staff web projection: after API acceptance, the same canonical note appears on
+  the work-order detail page and, when authoritative native links exist, on its
+  project-task and originating-ticket pages. Related-context entries name and
+  link their work order. They are not copied into task or ticket comment stores.
+- Staff privacy: internal and external-history labels remain visible on every
+  staff projection. Customer publication is out of scope; neither field-note
+  visibility value alone authorizes portal display. Attachment downloads require
+  the same exact work-order read scope as the detail page.
+- Freshness: staff pages read committed rows on every request. Device-local
+  queued or failed notes do not appear until delivery succeeds; no UI may imply
+  otherwise.

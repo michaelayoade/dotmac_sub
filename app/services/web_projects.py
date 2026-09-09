@@ -74,6 +74,12 @@ from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
+from app.services.field.note_commands import (
+    ListStaffFieldWorkOrderNotes,
+    ProjectTaskFieldNoteScope,
+    StaffFieldNoteAccess,
+    list_staff_field_work_order_notes,
+)
 from app.services.file_storage import file_uploads
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
 from app.services.ui_contracts import Action
@@ -1825,6 +1831,7 @@ def build_task_detail_context(
     task: ProjectTask,
     can_read_work_orders: bool = False,
     can_read_material_requests: bool = False,
+    field_note_access: StaffFieldNoteAccess | None = None,
 ) -> dict:
     project = projects_service.projects.get(db, str(task.project_id))
     comments = projects_service.project_task_comments.list(
@@ -1860,6 +1867,17 @@ def build_task_detail_context(
         ).items
     else:
         material_requests = ()
+    field_note_page = (
+        list_staff_field_work_order_notes(
+            db,
+            ListStaffFieldWorkOrderNotes(
+                scope=ProjectTaskFieldNoteScope(project_task_id=task.id),
+                access=field_note_access,
+            ),
+        )
+        if can_read_work_orders and field_note_access is not None
+        else None
+    )
     return {
         "task": task,
         "task_url": task_url(task),
@@ -1873,6 +1891,8 @@ def build_task_detail_context(
             if can_read_work_orders
             else ()
         ),
+        "field_notes": field_note_page.items if field_note_page else (),
+        "field_note_total": field_note_page.total if field_note_page else 0,
         "material_requests": material_requests,
         "material_request_create_url": (
             "/admin/operations/material-requests/new?"
