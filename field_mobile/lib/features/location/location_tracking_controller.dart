@@ -227,9 +227,7 @@ class _LocationSharingControlsState
             ref.read(fieldShiftProvider.notifier).state = ShiftState.offShift;
             ref.read(locationPingServiceProvider).setShift(ShiftState.offShift);
             final stopped = await _setShift(ShiftState.offShift);
-            message = stopped
-                ? 'Checked out. Location sharing is off.'
-                : 'Checked out. Tracking stopped on this device; server sync will retry.';
+            message = stopped ? 'Checked out. Location sharing is off.' : 'Checked out. Tracking stopped on this device; server sync will retry.';
           }
           break;
       }
@@ -241,9 +239,8 @@ class _LocationSharingControlsState
     if (!mounted) return;
     setState(() => _updating = false);
     if (message != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
 

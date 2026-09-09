@@ -161,7 +161,9 @@ def _route_requires_auth(path: str) -> bool:
     raise AssertionError(f"Route not found: {path}")
 
 
-def test_login_allows_immediate_same_browser_refresh_replay(db_session, person, monkeypatch):
+def test_login_allows_immediate_same_browser_refresh_replay(
+    db_session, person, monkeypatch
+):
     credential = UserCredential(
         person_id=person.id,
         provider=AuthProvider.local,
