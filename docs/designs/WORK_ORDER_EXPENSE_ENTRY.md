@@ -64,9 +64,12 @@ fails closed while any staff-created rows without technician links exist.
 
 The server requires purpose, claim date, a three-letter currency, and one to 50
 positive-amount lines. Each line requires an active ERP category and a
-description of at most 500 characters. Category receipt and maximum rules are
-enforced again by the command owner. Browser calculations and required markers
-are assistance only.
+description of at most 500 characters. A receipt URL and receipt upload are
+individually optional alternatives; when the selected ERP category requires
+receipt evidence, either one satisfies that rule. The browser never marks the
+file input itself as required. Category receipt and maximum rules are enforced
+again by the command owner. Browser calculations and required markers are
+assistance only.
 
 Text values and the stable claim client reference survive validation errors.
 Browsers cannot repopulate file inputs, so a selected receipt is cleared and an
