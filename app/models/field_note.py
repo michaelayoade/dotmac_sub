@@ -20,6 +20,12 @@ class FieldWorkOrderNote(Base):
             "created_at",
         ),
         Index("ix_field_work_order_notes_author_technician", "author_technician_id"),
+        Index(
+            "uq_field_work_order_notes_author_client_ref",
+            "author_system_user_id",
+            "client_ref",
+            unique=True,
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -39,6 +45,7 @@ class FieldWorkOrderNote(Base):
     author_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")
     )
+    client_ref: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     author_name: Mapped[str | None] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

@@ -531,6 +531,144 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="operations.field_notes",
+        module="app.services.field.note_commands",
+        owns=("native field work-order note creation",),
+        depends_on=(
+            "auth.permission_gate",
+            "events.owner_outputs",
+            "operations.work_orders",
+        ),
+        notes=(
+            "The typed owner creates technician-scoped native notes and stages "
+            "their durable output. A stable mobile client reference is the "
+            "idempotency key; the field API and offline outbox are adapters."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="native field work-order note creation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "authenticated technician identity",
+                        "assigned work-order state",
+                        "field-note client request identity",
+                    ),
+                    canonical_writer="operations.field_notes",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated technician identity",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Authenticated SystemUser resolved to one active "
+                        "TechnicianProfile"
+                    ),
+                ),
+                AuthorityInput(
+                    name="assigned work-order state",
+                    owner="operations.work_orders",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Active WorkOrder and current technician or vendor "
+                        "assignment scope"
+                    ),
+                ),
+                AuthorityInput(
+                    name="field-note client request identity",
+                    owner="operations.field_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Stable client_ref plus the normalized work-order, body, "
+                        "visibility, and attachment fingerprint"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The note, attachment links, provenance fingerprint, and "
+                    "owner output commit in one owner-managed transaction."
+                ),
+                locking=(
+                    "Lock the authenticated SystemUser before replay lookup, then "
+                    "lock the assigned WorkOrder before note creation."
+                ),
+                idempotency=(
+                    "The unique author_system_user_id/client_ref pair replays only "
+                    "when the normalized command fingerprint is identical."
+                ),
+                retries=(
+                    "Equivalent offline retries return the original note; a reused "
+                    "key with changed inputs fails closed as a conflict."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "operations.field_notes.attachment_forbidden",
+                    "operations.field_notes.attachment_not_found",
+                    "operations.field_notes.idempotency_conflict",
+                    "operations.field_notes.invalid_request",
+                    "operations.field_notes.requester_not_found",
+                    "operations.field_notes.work_order_not_found",
+                    *owner_command_boundary_error_codes("operations.field_notes"),
+                ),
+                mapping_owner="field work-order note API adapter",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "unknown or inactive technician identity",
+                    "unassigned or inaccessible work order",
+                    "foreign, missing, or already-linked attachment",
+                    "client-reference fingerprint conflict",
+                ),
+            ),
+            events=EventContract(
+                event_types=("field_work_order_note.created",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is additive and excludes the private note body; it "
+                    "carries stable note, work-order, actor, and command evidence."
+                ),
+                replay=(
+                    "The canonical note row, attachment links, and command "
+                    "fingerprint rebuild the creation output."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="app.services.field.notes.FieldNotes.create",
+                new_owner="operations.field_notes",
+                verification=(
+                    "Owner-command, exact replay, conflict, mobile queued/failed "
+                    "projection, and predecessor-to-head migration tests pass."
+                ),
+                cutover_gate=(
+                    "Revision 590 is applied before a mobile build that sends "
+                    "field-note client references is released."
+                ),
+                fallback_retirement=(
+                    "The adapter-generated reference remains only for older mobile "
+                    "clients and can be made required after their support window."
+                ),
+            ),
+            steward="field operations",
+            design_refs=(
+                "docs/designs/FIELD_WORK_ORDER_NOTES.md",
+                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+            ),
+            test_refs=(
+                "tests/test_field_notes.py",
+                "tests/architecture/test_field_note_delivery_contract.py",
+                "tests/integration/test_field_note_delivery_migration.py",
+                "field_mobile/test/execution_test.dart",
+                "field_mobile/test/jobs_screens_test.dart",
+            ),
+        ),
+    ),
+    SOTService(
         name="operations.field_completion",
         module="app.services.field.transitions",
         owns=(

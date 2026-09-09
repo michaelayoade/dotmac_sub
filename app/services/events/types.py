@@ -22,6 +22,7 @@ class EventType(enum.Enum):
 
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
+    field_work_order_note_created = "field_work_order_note.created"
 
     # Subscriber events
     subscriber_created = "subscriber.created"
