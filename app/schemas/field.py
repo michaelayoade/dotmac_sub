@@ -152,12 +152,14 @@ class FieldNoteCreate(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
     is_internal: bool = True
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    client_ref: UUID | None = None
 
 
 class FieldNoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    client_ref: UUID | None = None
     body: str
     is_internal: bool
     author_person_id: UUID | None = None
