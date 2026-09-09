@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -277,6 +278,44 @@ def test_form_enforces_zero_lines_category_maximum_and_required_receipt():
     }
 
 
+def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
+    prepared = expense_web.validate_work_order_expense_form(
+        _valid_form(), category_rules=_rules(receipt=False)
+    )
+
+    assert prepared.lines[0].receipt_url is None
+    assert prepared.lines[0].receipt_upload is None
+
+    form = _valid_form()
+    line = form.lines[0]
+    with_url = expense_web.WorkOrderExpenseFormInput(
+        request_id=form.request_id,
+        purpose=form.purpose,
+        expense_date=form.expense_date,
+        currency=form.currency,
+        notes=form.notes,
+        lines=(
+            expense_web.ExpenseLineFormInput(
+                key=line.key,
+                category_code=line.category_code,
+                description=line.description,
+                amount=line.amount,
+                expense_date=line.expense_date,
+                vendor_name=line.vendor_name,
+                receipt_url="https://example.com/receipt.pdf",
+                notes=line.notes,
+            ),
+        ),
+    )
+
+    prepared_with_url = expense_web.validate_work_order_expense_form(
+        with_url, category_rules=_rules(receipt=True)
+    )
+
+    assert prepared_with_url.lines[0].receipt_url == ("https://example.com/receipt.pdf")
+    assert prepared_with_url.lines[0].receipt_upload is None
+
+
 def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     class _RejectUploads:
         @staticmethod
@@ -475,3 +514,38 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert source.count(">New Expense Claim<") >= 2
     assert 'aria-describedby="expense-creation-unavailable"' in source
     assert 'id="expense-creation-unavailable"' in source
+    assert (
+        'Title <span class="text-rose-600" aria-hidden="true">*</span><input' in source
+    )
+    assert (
+        'Technician <span class="text-rose-600" aria-hidden="true">*</span><select'
+        in source
+    )
+    assert "receipt.required" not in expense_form
+    assert 'name="receipt_file_{{ line.key }}"' in expense_form
+    assert 'name="receipt_file_{{ line.key }}" required' not in expense_form
+    assert 'name="receipt_url_{{ line.key }}" required' not in expense_form
+    assert (
+        "When a receipt is required, provide either a receipt URL or an uploaded file."
+        in expense_form
+    )
+
+    required_names = {
+        match.group(1)
+        for tag in re.findall(
+            r"<(?:input|select|textarea)\b[^>]*\brequired\b[^>]*>",
+            expense_form,
+        )
+        if (match := re.search(r'name="([^"]+)"', tag))
+    }
+    assert required_names == {
+        "purpose",
+        "expense_date",
+        "currency",
+        "category_code_{{ line.key }}",
+        "amount_{{ line.key }}",
+        "description_{{ line.key }}",
+        "category_code___KEY__",
+        "amount___KEY__",
+        "description___KEY__",
+    }
