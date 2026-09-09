@@ -67,6 +67,7 @@ def _map_payment_webhook_error(error: DomainError) -> _ErrorMapping:
         "topup_intent_mismatch",
         "deposit_rejected",
         "provider_event_rejected",
+        "dispute_resolution_unrecognized",
     }:
         return _ErrorMapping(
             http_status=400 if suffix == "payload_invalid" else 409,
