@@ -571,7 +571,7 @@ void main() {
     expect(thread.messages.single.body, 'I am at home');
   });
 
-  testWidgets('job detail renders notes returned with alternate body key', (
+  testWidgets('job detail renders typed notes with author metadata', (
     tester,
   ) async {
     final detail = JobDetail(
@@ -598,7 +598,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Stored note returned as text'), findsOneWidget);
-    expect(find.text('Adaeze Okafor'), findsOneWidget);
+    expect(find.textContaining('Adaeze Okafor'), findsOneWidget);
   });
 
   testWidgets('job detail keeps queued note state visible', (tester) async {
