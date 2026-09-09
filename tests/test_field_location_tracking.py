@@ -512,12 +512,19 @@ def test_batch_row_flush_conflict_is_isolated_to_its_own_row(db_session, monkeyp
     db_session.add(presence)
     db_session.commit()
 
+    # execute_owner_savepoint's db.begin_nested() itself triggers one real,
+    # no-op flush() call while taking its transaction snapshot, in addition
+    # to _ingest_ping's own explicit flush() that actually writes the row —
+    # two real flush() invocations per successful ping, not one. Row index 1
+    # (the second ping) is targeted by failing its OWN row-writing flush,
+    # which is the 4th real invocation: (snapshot, write) for ping 0, then
+    # (snapshot, write) for ping 1.
     call_count = {"value": 0}
     original_flush = db_session.flush
 
     def _flaky_flush(*args, **kwargs):
         call_count["value"] += 1
-        if call_count["value"] == 2:
+        if call_count["value"] == 4:
             raise IntegrityError("INSERT", {}, Exception("duplicate ping identity"))
         return original_flush(*args, **kwargs)
 
@@ -557,12 +564,16 @@ def test_batch_row_conflict_over_http_is_a_normal_200(db_session, monkeypatch):
     db_session.add(presence)
     db_session.commit()
 
+    # See test_batch_row_flush_conflict_is_isolated_to_its_own_row: two real
+    # flush() calls happen per successful ping (execute_owner_savepoint's
+    # begin_nested() snapshot, then _ingest_ping's own row-writing flush).
+    # Failing row index 0's own write is the 2nd real invocation.
     call_count = {"value": 0}
     original_flush = db_session.flush
 
     def _flaky_flush(*args, **kwargs):
         call_count["value"] += 1
-        if call_count["value"] == 1:
+        if call_count["value"] == 2:
             raise IntegrityError("INSERT", {}, Exception("duplicate ping identity"))
         return original_flush(*args, **kwargs)
 
