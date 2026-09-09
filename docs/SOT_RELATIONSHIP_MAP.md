@@ -3531,6 +3531,12 @@ invoice generation does not silently invoke another financial workflow.
 
 ## UI Semantic Presentation
 
+`ui.admin_workflow_guidance` selects contextual help through explicit section
+prefixes or exact segment-aware route templates. Exact templates outrank broad
+prefixes, and unrelated child pages receive no fallback guidance. The shared
+Admin renderer presents that projection through one circular help control and
+centered accessible modal; it does not copy or reinterpret the content.
+
 1. Account, subscription, invoice, payment, outage-incident, support-ticket, and
    work-order lifecycle owners remain authoritative for raw values and
    transitions. `network.device_state` remains authoritative for the derived
