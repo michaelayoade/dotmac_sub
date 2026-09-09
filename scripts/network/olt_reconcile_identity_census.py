@@ -94,6 +94,23 @@ def _fsp(board: str | None, port: str | None) -> str:
     return fsp if _FSP_RE.fullmatch(fsp) else ""
 
 
+def _int_or_none(value: object) -> int | None:
+    """Exactly ``adapters._int_or_none`` — coerce a raw config value to
+    ``int``, tolerating ``None``/empty/non-numeric strings. The adapter runs
+    this BEFORE ``desired.wan_gem_index or 1`` in the planner; skipping this
+    step and doing ``values.get("wan_gem_index") or 1`` directly on the raw
+    value computes gem 0 for a stored ``"0"`` string (truthy, unlike the
+    int ``0``) instead of production's 1, and raises uncaught on a
+    non-numeric string instead of degrading to 1 the way the adapter does.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
 def _sp_int(sp: object, *names: str) -> int | None:
     if not isinstance(sp, dict):
         return None
@@ -117,23 +134,35 @@ def _observed_mismatch_at_index(
     ont_id: int | None,
     fsp: str,
 ) -> bool:
-    """Whether a persisted observation shows a DIFFERENT identity at ``index``.
+    """Whether a persisted observation shows drift at the desired ``index``.
 
-    Mirrors ``reconcile.planner._service_port_matches`` exactly — including
-    treating a NULL observed vlan_id/gem_index as a mismatch against a real
-    desired value, not as "no evidence, skip". The planner's own comparison
-    is a plain ``!=``: ``None != 201`` is ``True``, so a persisted port with
-    unpopulated vlan_id/gem_index at the desired index is unrepairable drift
-    in production, not a clean row — undercounting it here would report this
-    census clean for ONTs that fail to converge. Not imported directly from
-    ``reconcile.planner`` so this script keeps working independent of that
-    module's internals; kept in exact sync by design intent, not by import.
+    Mirrors ``reconcile.planner._plan_service_ports``'s per-port loop, not
+    just ``_service_port_matches`` in isolation — the planner never even
+    calls ``_service_port_matches`` when the desired vlan is unset for an
+    allocated index; it routes straight to ``mismatched_at_index`` (see
+    ``planner.py``'s mgmt/wan branches: ``if desired.mgmt_vlan is not None
+    and _service_port_matches(...): continue`` / ``mismatched_at_index["mgmt"]
+    = sp``). So an ALLOCATED index with a persisted port already sitting
+    there, but no desired vlan to compare it against, is unrepairable drift
+    in production — NOT a clean row, and NOT skippable the way "no index at
+    all" is. Below that point, a real desired vlan/gem is compared with a
+    plain ``!=``: ``None != 201`` is ``True``, so a persisted port with
+    unpopulated vlan_id/gem_index is also drift, never "no evidence, skip".
+    Not imported directly from ``reconcile.planner`` so this script keeps
+    working independent of that module's internals; kept in sync by design
+    intent, not by import — re-diff against ``planner.py`` on future changes.
     """
-    if index is None or vlan is None or not observed_ports:
+    if index is None or not observed_ports:
         return False
     for sp in observed_ports:
         if _sp_int(sp, "index") != index:
             continue
+        if vlan is None:
+            # A port already occupies this allocated index, but the desired
+            # vlan itself is unresolved — the planner records this directly
+            # as unrepairable drift without ever reaching a value
+            # comparison. Not "no evidence to compare", not clean.
+            return True
         observed_vlan = _sp_int(sp, "vlan_id", "vlan")
         observed_gem = _sp_int(sp, "gem_index", "gem")
         if observed_vlan != vlan or observed_gem != gem_index:
@@ -188,9 +217,18 @@ def collect(db: Session) -> list[Row]:
         wan_index = values.get("wan_service_port_index")
         mgmt_vlan = values.get("mgmt_vlan")
         wan_vlan = values.get("wan_vlan")
-        wan_gem_index = values.get("wan_gem_index") or 1
+        wan_gem_index = _int_or_none(values.get("wan_gem_index")) or 1
 
-        if mgmt_index is None or wan_index is None:
+        # Coerced the same way ``adapters.desired_from_ont_unit`` coerces
+        # every one of these fields — a non-numeric stored value must count
+        # as unresolved here too, not as "set" because the raw string was
+        # truthy.
+        mgmt_index_int = _int_or_none(mgmt_index)
+        wan_index_int = _int_or_none(wan_index)
+        mgmt_vlan_int = _int_or_none(mgmt_vlan)
+        wan_vlan_int = _int_or_none(wan_vlan)
+
+        if mgmt_index_int is None or wan_index_int is None:
             row.issues.append("null_service_port_index")
 
         observation = observations.get(row.ont_unit_id)
@@ -199,22 +237,6 @@ def collect(db: Session) -> list[Row]:
             if observation is not None and observation.olt_service_ports is not None
             else None
         )
-        try:
-            mgmt_index_int = int(mgmt_index) if mgmt_index is not None else None
-        except (TypeError, ValueError):
-            mgmt_index_int = None
-        try:
-            wan_index_int = int(wan_index) if wan_index is not None else None
-        except (TypeError, ValueError):
-            wan_index_int = None
-        try:
-            mgmt_vlan_int = int(mgmt_vlan) if mgmt_vlan is not None else None
-        except (TypeError, ValueError):
-            mgmt_vlan_int = None
-        try:
-            wan_vlan_int = int(wan_vlan) if wan_vlan is not None else None
-        except (TypeError, ValueError):
-            wan_vlan_int = None
 
         fsp = _fsp(ont.board, ont.port)
         ont_id = parse_ont_id_on_olt(ont.external_id)
@@ -229,7 +251,7 @@ def collect(db: Session) -> list[Row]:
             observed_ports,
             index=wan_index_int,
             vlan=wan_vlan_int,
-            gem_index=int(wan_gem_index),
+            gem_index=wan_gem_index,
             ont_id=ont_id,
             fsp=fsp,
         ):
