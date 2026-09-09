@@ -11,6 +11,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import DispatchQueueStatus, WorkOrderAssignmentQueue
@@ -22,10 +23,36 @@ from app.models.field_location import (
 from app.models.work_order import WorkOrder
 from app.services.field.jobs import _profile_from_principal
 from app.services.field.work_order_status import FIELD_OPEN_WORK_ORDER_STATUSES
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+    execute_owner_savepoint,
+)
 
 MAX_BATCH_PINGS = 200
 MAX_FUTURE_CLOCK_SKEW = timedelta(minutes=5)
 logger = logging.getLogger(__name__)
+
+_OWNER = "operations.field_location_ingest"
+_INGEST_CONCERN = "field-location ping ingest"
+_SHARING_CONCERN = "field-location sharing preference"
+_RECORD_PING_DEFINITION = OwnerCommandDefinition(
+    owner=_OWNER, concern=_INGEST_CONCERN, name="record_ping"
+)
+_RECORD_BATCH_DEFINITION = OwnerCommandDefinition(
+    owner=_OWNER, concern=_INGEST_CONCERN, name="record_batch"
+)
+_SET_SHARING_DEFINITION = OwnerCommandDefinition(
+    owner=_OWNER, concern=_SHARING_CONCERN, name="set_sharing"
+)
+
+
+def _command_context(principal: dict[str, Any], *, reason: str) -> CommandContext:
+    actor = str(
+        principal.get("principal_id") or principal.get("person_id") or "unknown"
+    )
+    return CommandContext.system(actor=actor, scope=_OWNER, reason=reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,25 +182,31 @@ class FieldLocationTracking:
         enabled: bool,
         status: str | None = None,
     ) -> FieldTechPresence:
-        presence = FieldLocationTracking.get_or_create_presence(db, principal)
-        presence.location_sharing_enabled = bool(enabled)
-        next_status = _validate_status(status)
-        if next_status is not None:
-            presence.status = next_status
-        elif not enabled:
-            presence.status = "off_shift"
-        presence.last_seen_at = _now()
-        db.commit()
-        db.refresh(presence)
-        return presence
+        def _operation() -> FieldTechPresence:
+            presence = FieldLocationTracking.get_or_create_presence(db, principal)
+            presence.location_sharing_enabled = bool(enabled)
+            next_status = _validate_status(status)
+            if next_status is not None:
+                presence.status = next_status
+            elif not enabled:
+                presence.status = "off_shift"
+            presence.last_seen_at = _now()
+            db.flush()
+            return presence
+
+        return execute_owner_command(
+            db,
+            definition=_SET_SHARING_DEFINITION,
+            context=_command_context(principal, reason="set_sharing"),
+            operation=_operation,
+        )
 
     @staticmethod
-    def record_ping(
+    def _ingest_ping(
         db: Session,
         principal: dict[str, Any],
         *,
         command: LocationPingCommand,
-        commit: bool = True,
     ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
         presence = FieldLocationTracking.get_or_create_presence(db, principal)
         FieldLocationTracking._validate_work_order_tag(
@@ -218,13 +251,36 @@ class FieldLocationTracking:
             )
             presence.last_location_at = captured
 
-        if commit:
-            db.commit()
-            db.refresh(ping)
-            db.refresh(presence)
-        else:
-            db.flush()
+        # The flush surfaces a row-level integrity conflict (for example, a
+        # future duplicate-submission identity constraint) inside this one
+        # ping's boundary instead of at the eventual owner-command commit,
+        # where it would be indistinguishable from every other row in a batch.
+        db.flush()
         return ping, presence
+
+    @staticmethod
+    def record_ping(
+        db: Session,
+        principal: dict[str, Any],
+        *,
+        command: LocationPingCommand,
+        commit: bool = True,
+    ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
+        def _operation() -> tuple[FieldTechLocationPing, FieldTechPresence]:
+            return FieldLocationTracking._ingest_ping(db, principal, command=command)
+
+        if not commit:
+            # Called from inside record_batch's already-open owner command and
+            # per-row savepoint; the batch owns the transaction boundary, so
+            # this call is a plain participant, not its own owner command.
+            return _operation()
+
+        return execute_owner_command(
+            db,
+            definition=_RECORD_PING_DEFINITION,
+            context=_command_context(principal, reason="record_ping"),
+            operation=_operation,
+        )
 
     @staticmethod
     def record_batch(
@@ -235,42 +291,82 @@ class FieldLocationTracking:
         if len(pings) > MAX_BATCH_PINGS:
             raise HTTPException(status_code=422, detail="Batch exceeds 200 pings")
 
-        accepted = 0
-        errors: list[LocationIngestIssue] = []
-        last_presence: FieldTechPresence | None = None
-        for index, command in enumerate(pings):
-            try:
-                _, last_presence = FieldLocationTracking.record_ping(
-                    db,
-                    principal,
-                    command=command,
-                    commit=False,
-                )
-                accepted += 1
-            except LocationPingRejected as exc:
-                errors.append(
-                    LocationIngestIssue(index=index, code=exc.code, detail=exc.detail)
-                )
-            except HTTPException as exc:
-                errors.append(
-                    LocationIngestIssue(
-                        index=index, code="invalid_ping", detail=str(exc.detail)
-                    )
-                )
-            except (TypeError, ValueError) as exc:
-                errors.append(
-                    LocationIngestIssue(
-                        index=index, code="invalid_ping", detail=str(exc)
-                    )
-                )
+        def _operation() -> tuple[
+            int, list[LocationIngestIssue], FieldTechPresence | None
+        ]:
+            accepted = 0
+            errors: list[LocationIngestIssue] = []
+            last_presence: FieldTechPresence | None = None
+            for index, command in enumerate(pings):
 
-        db.commit()
+                def _ingest_row(
+                    command: LocationPingCommand = command,
+                ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
+                    return FieldLocationTracking.record_ping(
+                        db,
+                        principal,
+                        command=command,
+                        commit=False,
+                    )
+
+                try:
+                    _, last_presence = execute_owner_savepoint(db, _ingest_row)
+                    accepted += 1
+                except LocationPingRejected as exc:
+                    errors.append(
+                        LocationIngestIssue(
+                            index=index, code=exc.code, detail=exc.detail
+                        )
+                    )
+                except HTTPException as exc:
+                    errors.append(
+                        LocationIngestIssue(
+                            index=index, code="invalid_ping", detail=str(exc.detail)
+                        )
+                    )
+                except (TypeError, ValueError) as exc:
+                    errors.append(
+                        LocationIngestIssue(
+                            index=index, code="invalid_ping", detail=str(exc)
+                        )
+                    )
+                except (IntegrityError, DBAPIError):
+                    # A per-row savepoint isolates this failure: the flush
+                    # inside the savepoint has already been rolled back by
+                    # execute_owner_savepoint, so every other row in the
+                    # batch, and the batch's own commit, are unaffected.
+                    errors.append(
+                        LocationIngestIssue(
+                            index=index,
+                            code="ping_conflict",
+                            detail="Ping conflicted with an existing record",
+                        )
+                    )
+            return accepted, errors, last_presence
+
+        accepted, errors, last_presence = execute_owner_command(
+            db,
+            definition=_RECORD_BATCH_DEFINITION,
+            context=_command_context(principal, reason="record_batch"),
+            operation=_operation,
+        )
         presence = (
             last_presence
             if last_presence is not None
             else FieldLocationTracking.get_or_create_presence(db, principal)
         )
-        db.refresh(presence)
+
+        # Geofence auto-status is a deliberately separate follow-up operation,
+        # not a participant of the owner command above. field_transitions.apply
+        # (called by geofence.evaluate) commits its own root transaction, and
+        # composing that inside the ingest owner command would both violate
+        # "one owner command commits one transaction" and trip the owner
+        # command boundary guard (apply()'s own commit call would raise,
+        # because only the active owner command may complete its own
+        # transaction).
+        # Running it here, once the ingest command has already committed,
+        # keeps ping ingest and geofence auto-start as two independently
+        # failing operations: a geofence failure never unwinds ingested pings.
         transitions: list[LocationTransition] = []
         if presence.last_latitude is not None and presence.last_longitude is not None:
             try:
@@ -291,7 +387,6 @@ class FieldLocationTracking:
                 ]
             except Exception:
                 logger.exception("geofence_evaluate_failed")
-            db.refresh(presence)
         return LocationBatchOutcome(
             accepted=accepted,
             errors=tuple(errors),

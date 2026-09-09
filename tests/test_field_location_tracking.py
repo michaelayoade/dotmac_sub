@@ -6,22 +6,25 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.field_job_event import FieldJobEvent
-from app.models.field_location import FieldTechLocationPing
+from app.models.field_location import FieldTechLocationPing, FieldTechPresence
 from app.models.subscriber import Subscriber, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.location_tracking import (
     LocationPingCommand,
     field_location_tracking,
 )
+from app.services.owner_commands import owner_command_active
 
 
 def _user(db_session) -> SystemUser:
@@ -110,6 +113,7 @@ def _field_setting(db_session, key: str, value: str) -> None:
 
 def test_record_batch_persists_pings_and_updates_presence(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     profile = _profile(db_session, user)
     subscriber = _subscriber(db_session)
     row = _work_order(db_session, subscriber, crm_work_order_id="wo-live")
@@ -121,10 +125,11 @@ def test_record_batch_persists_pings_and_updates_presence(db_session):
         )
     )
     now = datetime.now(UTC)
+    db_session.commit()
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [
             LocationPingCommand(
                 latitude=9.071,
@@ -159,6 +164,7 @@ def test_stale_ping_does_not_roll_presence_backwards(db_session):
     _profile(db_session, user)
     now = datetime.now(UTC)
     auth = _auth(user)
+    db_session.commit()
 
     field_location_tracking.record_ping(
         db_session,
@@ -182,11 +188,13 @@ def test_stale_ping_does_not_roll_presence_backwards(db_session):
 
 def test_location_batch_collects_per_ping_errors(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
+    db_session.commit()
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [
             LocationPingCommand(latitude=9.071, longitude=7.451),
             LocationPingCommand(latitude=9.072, longitude=7.452, status="teleporting"),
@@ -200,19 +208,21 @@ def test_location_batch_collects_per_ping_errors(db_session):
 
 def test_location_ping_rejects_unassigned_work_order_tag(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     row = _work_order(db_session, subscriber, crm_work_order_id="wo-unassigned")
+    row_public_id = row.public_id
     db_session.commit()
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row.public_id,
+                crm_work_order_id=row_public_id,
             )
         ],
     )
@@ -224,6 +234,7 @@ def test_location_ping_rejects_unassigned_work_order_tag(db_session):
 
 def test_location_ping_rejects_terminal_work_order_tag(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     profile = _profile(db_session, user)
     subscriber = _subscriber(db_session)
     row = _work_order(
@@ -232,6 +243,7 @@ def test_location_ping_rejects_terminal_work_order_tag(db_session):
         crm_work_order_id="wo-completed",
         status="completed",
     )
+    row_public_id = row.public_id
     db_session.add(
         WorkOrderAssignmentQueue(
             work_order_mirror_id=row.id,
@@ -243,12 +255,12 @@ def test_location_ping_rejects_terminal_work_order_tag(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row.public_id,
+                crm_work_order_id=row_public_id,
             )
         ],
     )
@@ -260,11 +272,13 @@ def test_location_ping_rejects_terminal_work_order_tag(db_session):
 
 def test_location_ping_rejects_timestamp_beyond_clock_skew(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
+    db_session.commit()
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [
             LocationPingCommand(
                 latitude=9.071,
@@ -281,11 +295,13 @@ def test_location_ping_rejects_timestamp_beyond_clock_skew(db_session):
 
 def test_location_ping_rejects_technician_after_reassignment(db_session):
     old_user = _user(db_session)
+    old_auth = _auth(old_user)
     old_profile = _profile(db_session, old_user)
     new_user = _user(db_session)
     new_profile = _profile(db_session, new_user, crm_person_id="crm-new-tech")
     subscriber = _subscriber(db_session)
     row = _work_order(db_session, subscriber, crm_work_order_id="wo-reassigned")
+    row_public_id = row.public_id
     db_session.add(
         WorkOrderAssignmentQueue(
             work_order_mirror_id=row.id,
@@ -307,12 +323,12 @@ def test_location_ping_rejects_technician_after_reassignment(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(old_user),
+        old_auth,
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row.public_id,
+                crm_work_order_id=row_public_id,
             )
         ],
     )
@@ -324,6 +340,7 @@ def test_location_ping_rejects_technician_after_reassignment(db_session):
 
 def test_geofence_is_disabled_by_default(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     row = _work_order(db_session, subscriber, crm_work_order_id="wo-geofence-off")
@@ -331,7 +348,7 @@ def test_geofence_is_disabled_by_default(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [LocationPingCommand(latitude=9.071, longitude=7.451)],
     )
 
@@ -343,6 +360,7 @@ def test_geofence_is_disabled_by_default(db_session):
 
 def test_geofence_auto_starts_arrived_job_once(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     row = _work_order(db_session, subscriber, crm_work_order_id="wo-geofence-on")
@@ -351,7 +369,7 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [LocationPingCommand(latitude=9.0711, longitude=7.4511)],
     )
 
@@ -367,9 +385,13 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
     assert row.metadata_["native_field_source"] == "sub"
     assert row.metadata_["native_field_activity"]["transition"]["event"] == "start"
 
+    # record_batch is an owner command and needs a transaction-free session
+    # at entry; the reads above (db_session.refresh/query) left an implicit
+    # read transaction open on this shared session.
+    db_session_adapter.release_read_transaction(db_session)
     replay = field_location_tracking.record_batch(
         db_session,
-        _auth(user),
+        auth,
         [LocationPingCommand(latitude=9.0711, longitude=7.4511)],
     )
     assert replay.transitions == ()
@@ -378,32 +400,37 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
 
 def test_set_sharing_updates_presence_status(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
+    db_session.commit()
 
     presence = field_location_tracking.set_sharing(
         db_session,
-        _auth(user),
+        auth,
         enabled=True,
         status="on_shift",
     )
     assert presence.location_sharing_enabled is True
     assert presence.status == "on_shift"
 
-    presence = field_location_tracking.set_sharing(
-        db_session, _auth(user), enabled=False
-    )
+    # set_sharing is an owner command; reading the attributes above already
+    # reopened an implicit read transaction on this shared session.
+    db_session_adapter.release_read_transaction(db_session)
+    presence = field_location_tracking.set_sharing(db_session, auth, enabled=False)
     assert presence.location_sharing_enabled is False
     assert presence.status == "off_shift"
 
 
 def test_unknown_status_is_rejected(db_session):
     user = _user(db_session)
+    auth = _auth(user)
     _profile(db_session, user)
+    db_session.commit()
 
     with pytest.raises(HTTPException) as exc:
         field_location_tracking.set_sharing(
             db_session,
-            _auth(user),
+            auth,
             enabled=True,
             status="teleporting",
         )
@@ -470,3 +497,148 @@ def test_location_api_returns_typed_job_tag_rejection(db_session):
             "detail": "Tagged work order was not found",
         }
     ]
+
+
+def test_batch_row_flush_conflict_is_isolated_to_its_own_row(db_session, monkeypatch):
+    """A row that fails at flush (e.g. a future duplicate-identity
+    constraint) is rejected on its own; it neither poisons the rows around
+    it nor leaves the session unusable for the rest of the batch.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    profile = _profile(db_session, user)
+    presence = FieldTechPresence(technician_id=profile.id, person_id=profile.person_id)
+    db_session.add(presence)
+    db_session.commit()
+
+    # execute_owner_savepoint's db.begin_nested() itself triggers one real,
+    # no-op flush() call while taking its transaction snapshot, in addition
+    # to _ingest_ping's own explicit flush() that actually writes the row —
+    # two real flush() invocations per successful ping, not one. Row index 1
+    # (the second ping) is targeted by failing its OWN row-writing flush,
+    # which is the 4th real invocation: (snapshot, write) for ping 0, then
+    # (snapshot, write) for ping 1.
+    call_count = {"value": 0}
+    original_flush = db_session.flush
+
+    def _flaky_flush(*args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 4:
+            raise IntegrityError("INSERT", {}, Exception("duplicate ping identity"))
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "flush", _flaky_flush)
+
+    result = field_location_tracking.record_batch(
+        db_session,
+        auth,
+        [
+            LocationPingCommand(latitude=9.071, longitude=7.451),
+            LocationPingCommand(latitude=9.072, longitude=7.452),
+            LocationPingCommand(latitude=9.073, longitude=7.453),
+        ],
+    )
+
+    assert result.accepted == 2
+    assert len(result.errors) == 1
+    assert result.errors[0].index == 1
+    assert result.errors[0].code == "ping_conflict"
+
+    # The session is usable afterwards: a plain query proves the connection
+    # was not left in an aborted-transaction state by the isolated failure.
+    remaining_latitudes = {
+        round(row.latitude, 3) for row in db_session.query(FieldTechLocationPing).all()
+    }
+    assert remaining_latitudes == {9.071, 9.073}
+
+
+def test_batch_row_conflict_over_http_is_a_normal_200(db_session, monkeypatch):
+    """The same row-level flush conflict, exercised through the HTTP route,
+    is a normal 200 response with a per-row error, never a 500.
+    """
+
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    presence = FieldTechPresence(technician_id=profile.id, person_id=profile.person_id)
+    db_session.add(presence)
+    db_session.commit()
+
+    # See test_batch_row_flush_conflict_is_isolated_to_its_own_row: two real
+    # flush() calls happen per successful ping (execute_owner_savepoint's
+    # begin_nested() snapshot, then _ingest_ping's own row-writing flush).
+    # Failing row index 0's own write is the 2nd real invocation.
+    call_count = {"value": 0}
+    original_flush = db_session.flush
+
+    def _flaky_flush(*args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 2:
+            raise IntegrityError("INSERT", {}, Exception("duplicate ping identity"))
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "flush", _flaky_flush)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(user)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/field/locations",
+        json={
+            "pings": [
+                {"latitude": 9.071, "longitude": 7.451},
+                {"latitude": 9.072, "longitude": 7.452},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] == 1
+    assert body["errors"] == [
+        {
+            "index": 0,
+            "code": "ping_conflict",
+            "detail": "Ping conflicted with an existing record",
+        }
+    ]
+
+
+def test_geofence_runs_after_the_ingest_owner_command_commits(db_session, monkeypatch):
+    """Geofence auto-status is a genuinely separate follow-up operation: it
+    must observe no active owner command, because field_transitions.apply
+    commits its own root transaction and would trip the owner-command
+    boundary guard ("only the active owner command may complete its own
+    transaction") if it ran as a participant inside record_batch's owner
+    command instead.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    _profile(db_session, user)
+    _field_setting(db_session, "geofence_auto_status_enabled", "true")
+    db_session.commit()
+
+    from app.services.field import geofence as geofence_module
+
+    observed: dict[str, object] = {}
+    original_evaluate = geofence_module.evaluate
+
+    def _spy_evaluate(db, principal, latitude, longitude):
+        observed["owner_command_active"] = owner_command_active(
+            db, owner="operations.field_location_ingest"
+        )
+        return original_evaluate(db, principal, latitude, longitude)
+
+    monkeypatch.setattr(geofence_module, "evaluate", _spy_evaluate)
+
+    field_location_tracking.record_batch(
+        db_session,
+        auth,
+        [LocationPingCommand(latitude=9.071, longitude=7.451)],
+    )
+
+    assert observed["owner_command_active"] is False
