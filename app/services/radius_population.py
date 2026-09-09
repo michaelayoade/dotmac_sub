@@ -656,6 +656,7 @@ def populate(
         "blocked_users_written": 0,
         "captive_ineligible_optins": 0,
         "skipped_ambiguous_ipv4_ledger": 0,
+        "captive_downgraded_to_reject": 0,
     }
 
     enc_key = get_encryption_key()

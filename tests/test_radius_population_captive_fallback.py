@@ -204,9 +204,13 @@ def test_captive_with_undecryptable_credential_downgrades_to_reject(
             subscription_id=subscription.id,
             username=login,
             is_active=True,
-            # Not a value `decrypt_credential_with_key` can ever open --
-            # simulates a corrupted secret / mismatched encryption key.
-            secret_hash="not-a-real-fernet-token",
+            # `decrypt_credential_with_key` treats any value WITHOUT an
+            # `enc:`/`plain:` prefix as legacy plaintext and returns it
+            # verbatim (no exception raised) -- so this must carry the
+            # `enc:` prefix to actually be routed into the Fernet-decrypt
+            # path and fail there, simulating a corrupted secret /
+            # mismatched encryption key.
+            secret_hash="enc:not-a-real-fernet-token",
         )
     )
     db_session.commit()
