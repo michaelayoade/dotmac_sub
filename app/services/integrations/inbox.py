@@ -23,6 +23,21 @@ from app.services.integrations.installations import quarantine_installation
 DEFAULT_LEASE_DURATION = timedelta(minutes=2)
 
 
+def _as_aware_utc(value: datetime) -> datetime:
+    """Normalize a possibly-naive datetime to UTC-aware.
+
+    SQLite (the unit-test lane's engine) does not preserve tzinfo across a
+    round trip through a `DateTime(timezone=True)` column, so a value just
+    loaded from the ORM can come back naive even though it was always written
+    as UTC. Comparing that directly against a fresh `datetime.now(UTC)` raises
+    `TypeError: can't compare offset-naive and offset-aware datetimes` — this
+    is the same normalization used throughout the codebase (e.g.
+    `account_lifecycle.py`, `auth_flow.py`) for the identical reason.
+    """
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 class InboxError(ValueError):
     """Raised when an inbound receipt violates identity or lifecycle rules."""
 
@@ -233,9 +248,9 @@ def claim_for_processing(
         # fact without attempting a second consequence.
         return False
     if receipt.state == "processing":
-        live_lease = (
-            receipt.lease_expires_at is not None and receipt.lease_expires_at > now
-        )
+        live_lease = receipt.lease_expires_at is not None and _as_aware_utc(
+            receipt.lease_expires_at
+        ) > now
         if live_lease:
             # A genuinely live claim. Refuse — this is not a reclaim.
             return False
@@ -305,9 +320,11 @@ def complete_consequence(
 
     return execute_command(
         db,
-        lambda: mark_processed(
-            receipt, consequence=consequence, claimed_attempt=claimed_attempt
-        ).consequence_json,
+        lambda: (
+            mark_processed(
+                receipt, consequence=consequence, claimed_attempt=claimed_attempt
+            ).consequence_json
+        ),
     )
 
 
@@ -379,7 +396,8 @@ def replay_receipt(
     now = now or datetime.now(UTC)
     receipt = get_receipt(db, receipt_id=receipt_id)
     is_expired_processing = receipt.state == "processing" and (
-        receipt.lease_expires_at is None or receipt.lease_expires_at <= now
+        receipt.lease_expires_at is None
+        or _as_aware_utc(receipt.lease_expires_at) <= now
     )
     if receipt.state not in {"retryable", "dead_letter"} and not is_expired_processing:
         raise InboxError("integration inbox receipt is not replayable")

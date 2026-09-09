@@ -118,6 +118,14 @@ def _post_paystack(db, body: bytes):
     return process_paystack_webhook(db=db, body=body, signature=signature)
 
 
+def _aware(value):
+    """SQLite drops tzinfo on a `DateTime(timezone=True)` round trip."""
+
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _claim_receipt(db, *, binding_id, provider_event_id, event_type, payload, now=None):
     receipt, should_process = integration_inbox.receive_and_claim_verified(
         db,
@@ -148,7 +156,8 @@ def test_an_expired_claim_is_reclaimable_on_the_providers_retry(db_session):
     )
     assert should_process is True
     assert receipt.attempt_count == 1
-    assert receipt.lease_expires_at == now + integration_inbox.DEFAULT_LEASE_DURATION
+    expected_first_lease = now + integration_inbox.DEFAULT_LEASE_DURATION
+    assert _aware(receipt.lease_expires_at) == expected_first_lease
 
     # The provider retries after the lease has expired (the original claimant
     # never called mark_processed/mark_failed).
@@ -165,7 +174,7 @@ def test_an_expired_claim_is_reclaimable_on_the_providers_retry(db_session):
     assert should_process_again is True
     assert reclaimed.attempt_count == 2
     expected_lease = later + integration_inbox.DEFAULT_LEASE_DURATION
-    assert reclaimed.lease_expires_at == expected_lease
+    assert _aware(reclaimed.lease_expires_at) == expected_lease
 
 
 def test_a_live_claim_is_not_reclaimed(db_session):
