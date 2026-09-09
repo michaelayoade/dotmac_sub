@@ -166,7 +166,7 @@ def tickets_list(
     state["support_ticket_bulk_action_contract"] = (
         support_ticket_bulk_actions_service.build_support_ticket_bulk_action_contract(
             db,
-            auth=getattr(request.state, "auth", None) or {},
+            auth=getattr(getattr(request, "state", None), "auth", None) or {},
             tickets=state["tickets"],
         )
     )
@@ -524,7 +524,7 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             can_read_material_requests=can(request, "operations:material_request:read"),
             can_read_field_notes=can(request, "operations:dispatch:read"),
             field_note_access=resolve_staff_field_note_access(
-                db, getattr(request.state, "auth", None)
+                db, getattr(getattr(request, "state", None), "auth", None)
             ),
             can_assign_ticket=True,
         )
@@ -611,7 +611,7 @@ def issue_ticket_work_order(
             in {"1", "true", "yes", "on"},
         )
         actor_id = UUID(str(_actor_id(request)))
-        auth = getattr(request.state, "auth", None) or {}
+        auth = getattr(getattr(request, "state", None), "auth", None) or {}
         result = ticket_work_order_handoff.issue_work_order(
             db,
             ticket_work_order_handoff.TicketWorkOrderIssueCommand(
@@ -630,7 +630,7 @@ def issue_ticket_work_order(
                     reason=payload.reason,
                     idempotency_key=idempotency_key,
                 ),
-                request_id=getattr(request.state, "request_id", None),
+                request_id=getattr(getattr(request, "state", None), "request_id", None),
             ),
         )
     except (
@@ -755,7 +755,7 @@ def ticket_add_comment(
                 ),
                 can_read_field_notes=can(request, "operations:dispatch:read"),
                 field_note_access=resolve_staff_field_note_access(
-                    db, getattr(request.state, "auth", None)
+                    db, getattr(getattr(request, "state", None), "auth", None)
                 ),
                 can_assign_ticket=True,
             )
@@ -863,7 +863,7 @@ def ticket_link(
                 ticket_lookup=str(ticket_id),
                 can_read_field_notes=can(request, "operations:dispatch:read"),
                 field_note_access=resolve_staff_field_note_access(
-                    db, getattr(request.state, "auth", None)
+                    db, getattr(getattr(request, "state", None), "auth", None)
                 ),
                 can_assign_ticket=True,
             )
@@ -905,7 +905,7 @@ def ticket_merge(
                 ticket_lookup=str(ticket_id),
                 can_read_field_notes=can(request, "operations:dispatch:read"),
                 field_note_access=resolve_staff_field_note_access(
-                    db, getattr(request.state, "auth", None)
+                    db, getattr(getattr(request, "state", None), "auth", None)
                 ),
                 can_assign_ticket=True,
             )
