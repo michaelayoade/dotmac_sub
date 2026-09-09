@@ -81,6 +81,49 @@ def test_desired_carries_identity_from_ont_unit(db_session, ont, olt):
     assert desired.olt_ont_id == 11
 
 
+def test_unresolved_external_id_leaves_olt_ont_id_none(db_session, olt):
+    """An unparseable ``external_id`` must resolve to ``None`` (genuinely
+    unknown), never to the legitimate real ONT-ID ``0`` — Astra Bug 1's
+    ``... or 0`` idiom collapsed the two. ``None`` fails the reader's
+    identity-binding check closed rather than authorizing at ONT-ID 0."""
+    ont = OntUnit(
+        serial_number="HWTCUNPARSEABLE",
+        olt_device_id=olt.id,
+        board="0/1",
+        port="4",
+        external_id="not-a-number!",
+        is_active=True,
+        desired_config={},
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.olt_ont_id is None
+
+
+def test_a_real_ont_id_of_zero_stays_zero(db_session, olt):
+    """The paired negative: a real, parseable ``external_id`` of ``0`` is a
+    legitimate ONT-ID and must reconcile exactly like any other — it must
+    never be treated as "unknown"."""
+    ont = OntUnit(
+        serial_number="HWTCZEROID",
+        olt_device_id=olt.id,
+        board="0/1",
+        port="5",
+        external_id="0",
+        is_active=True,
+        desired_config={},
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.olt_ont_id == 0
+
+
 def test_desired_inherits_acs_assignment_and_interval_from_olt(db_session, ont, olt):
     server = Tr069AcsServer(
         name="Inherited ACS",

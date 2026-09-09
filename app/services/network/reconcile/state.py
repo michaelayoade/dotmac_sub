@@ -187,7 +187,14 @@ class OntDesiredState:
     # OLT binding
     olt_id: str
     fsp: str
-    olt_ont_id: int
+    # ``None`` means "unknown" — genuinely unresolved, e.g. an unparseable
+    # ``external_id``. ``0`` is a legitimate real Huawei ONT-ID, so it must
+    # never stand in for "unknown" (see ``adapters.desired_from_ont_unit`` and
+    # the OLT_IDENTITY_UNRESOLVED wait reason in ``planner.py``). A reader
+    # that finds this ONT's serial registered somewhere on the OLT but cannot
+    # confirm it sits at this exact ``fsp``/``olt_ont_id`` reports
+    # OLT_IDENTITY_MISMATCH instead of substituting the coordinates it found.
+    olt_ont_id: int | None
     line_profile_id: int
     service_profile_id: int
     description: str
@@ -310,6 +317,25 @@ class OltObservedFields:
     # Each service-port entry: {index, vlan, gem, state}. Tuple to keep frozen.
     olt_service_ports: tuple[dict[str, Any], ...]
     olt_tr069_profile_id: int | None = None
+    # Whether this pass's reader could prove the observation it collected is
+    # really of the STORED (``desired.fsp``/``desired.olt_ont_id``) target:
+    #
+    # * ``"bound"``      — either no registration was found by serial (a
+    #   fresh, never-authorized ONT — nothing to mismatch), or one was found
+    #   and its fsp+onu_id match the stored target exactly. Every OLT field
+    #   above is a genuine observation of the ONT the desired state names.
+    # * ``"mismatch"``   — a registration WAS found by serial, but at a
+    #   different fsp/onu_id than the stored target. The reader refuses to
+    #   read/write against either the stored (unproven) or the found
+    #   (unrequested) coordinates; every OLT field above is a placeholder.
+    # * ``"unresolved"`` — the stored target itself is incomplete
+    #   (``olt_ont_id is None`` or ``fsp`` is empty), so there is nothing to
+    #   compare a found registration against.
+    #
+    # The planner never emits an OLT action while this is anything but
+    # ``"bound"`` — see ``ReconcileFailureReason.OLT_IDENTITY_MISMATCH`` /
+    # ``OLT_IDENTITY_UNRESOLVED``.
+    olt_identity_status: Literal["bound", "mismatch", "unresolved"] = "bound"
 
 
 @dataclass(frozen=True)
@@ -495,6 +521,15 @@ class ReconcileFailureReason:
     ONT_OFFLINE = "ont_offline"
     ONT_NOT_INFORMING = "ont_not_informing"
     ACS_IDENTITY_UNRESOLVED = "acs_identity_unresolved"
+    # The desired state names no physical target at all (``olt_ont_id`` is
+    # ``None`` or ``fsp`` is empty) — there is nothing to authorize or modify
+    # until an owner supplies a real f/s/p + ONT-ID.
+    OLT_IDENTITY_UNRESOLVED = "olt_identity_unresolved"
+    # The OLT reports this ONT's serial registered at a DIFFERENT fsp/onu_id
+    # than the stored desired-state target. Writing against either the stored
+    # (unproven) or the found (unrequested) coordinates risks reconfiguring
+    # the wrong physical port — refuse both and surface it for repair.
+    OLT_IDENTITY_MISMATCH = "olt_identity_mismatch"
     SERVICE_PORT_INDEX_UNALLOCATED = "service_port_index_unallocated"
     BLOCKED_OUT_OF_SYNC = "blocked_out_of_sync"
     INVALID_CHANGE = "invalid_change"

@@ -174,6 +174,135 @@ def test_olt_reader_returns_clean_absent_when_ont_not_registered(monkeypatch):
     assert result.observed.olt_match_state is None
 
 
+def test_serial_found_on_a_different_port_is_not_an_observation(monkeypatch):
+    """The registration found by serial sits at a DIFFERENT fsp/onu_id than
+    the desired-state target — Astra Bug 1. The reader must not read/write
+    against either the stored (unproven) or the found (unrequested)
+    coordinates; ``get_ont_status``/``get_ont_info_detail`` must never be
+    called with either pair.
+    """
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: calls.append(("status", fsp, ont_id)) or (
+            False,
+            "should not be called",
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: calls.append(("detail", fsp, ont_id)) or (
+            False,
+            "should not be called",
+            None,
+        ),
+    )
+    # Desired target is fsp=0/1/3, olt_ont_id=11; registration found at a
+    # different port entirely.
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/2/7", onu_id=44),
+    )
+    result = read_olt_state(adapter, _desired())
+
+    assert result.success is True
+    assert result.observed is not None
+    assert result.observed.olt_present is True
+    assert result.observed.olt_identity_status == "mismatch"
+    # No per-ONT query was ever attempted against either coordinate pair.
+    assert calls == []
+    # No detail was populated either — the observation carries nothing that
+    # could be mistaken for the stored target's real state.
+    assert result.observed.olt_description is None
+    assert result.observed.olt_mgmt_ip is None
+
+
+def test_unresolved_target_with_a_found_registration_is_not_an_observation(
+    monkeypatch,
+):
+    """The desired state has no fsp/olt_ont_id target at all (unparseable
+    ``external_id``), yet the OLT has this serial registered somewhere. There
+    is nothing to compare the registration against, so this is "unresolved",
+    not a silent pass-through to whatever the registration reports."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/2/7", onu_id=44),
+    )
+    result = read_olt_state(adapter, _desired(olt_ont_id=None))
+
+    assert result.success is True
+    assert result.observed is not None
+    assert result.observed.olt_present is True
+    assert result.observed.olt_identity_status == "unresolved"
+
+
+def test_matching_fsp_and_onu_id_is_bound_and_reads_normally(monkeypatch):
+    """The registration found by serial matches the stored target exactly —
+    the paired positive to the mismatch test above. Confirms the identity
+    check itself doesn't false-positive on a genuinely correct binding."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
+    )
+    result = read_olt_state(adapter, _desired())
+
+    assert result.success is True
+    assert result.observed.olt_identity_status == "bound"
+    assert result.observed.olt_present is True
+    assert result.observed.olt_run_state == "online"
+
+
+def test_unknown_ont_id_never_becomes_zero(monkeypatch):
+    """A real ONT-ID of 0 is legitimate on Huawei OLTs and must reconcile
+    exactly like any other ONT-ID — it must never be confused with "unknown".
+    Paired negative for the ``or 0`` regression: 0 stays 0, and the reader
+    treats it as bound when the registration agrees."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=0),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
+    )
+    result = read_olt_state(adapter, _desired(olt_ont_id=0))
+
+    assert result.success is True
+    assert result.observed.olt_identity_status == "bound"
+    assert result.observed.olt_present is True
+
+
 def test_olt_reader_returns_failure_when_olt_command_errored(monkeypatch):
     adapter = _StubAdapter(
         find_success=False,

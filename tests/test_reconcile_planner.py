@@ -1068,6 +1068,59 @@ def test_unindexed_matching_management_service_port_is_preserved():
     assert [a.service_port_index for a in delete_actions] == [99]
 
 
+def test_unresolved_identity_emits_no_olt_action():
+    """The desired state has no confirmed physical target (reader reported
+    ``olt_identity_status="unresolved"``, e.g. an unparseable external_id or
+    a registration found with nothing to compare it against). No OLT action
+    of any kind may be emitted — not authorize, not modify, not service-port
+    create/delete — until an owner supplies a real fsp/olt_ont_id.
+    """
+    desired = _desired(olt_ont_id=None)
+    olt = _olt_observed(olt_present=True, olt_identity_status="unresolved")
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    olt_actions = [a for a in plan.actions if getattr(a, "surface", None) == "olt"]
+    assert olt_actions == []
+    assert plan.olt_wait_reason == ReconcileFailureReason.OLT_IDENTITY_UNRESOLVED
+    assert any(d.field == "olt_identity" and not d.repairable for d in plan.drifts)
+
+
+def test_identity_mismatch_emits_no_olt_action():
+    """The paired case: the OLT reports this serial registered at a
+    DIFFERENT fsp/onu_id than the stored target (reader reported
+    ``olt_identity_status="mismatch"``). Same refusal — no OLT action against
+    either the stored or the found coordinates."""
+    desired = _desired()
+    olt = _olt_observed(olt_present=True, olt_identity_status="mismatch")
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    olt_actions = [a for a in plan.actions if getattr(a, "surface", None) == "olt"]
+    assert olt_actions == []
+    assert plan.olt_wait_reason == ReconcileFailureReason.OLT_IDENTITY_MISMATCH
+    assert any(d.field == "olt_identity" and not d.repairable for d in plan.drifts)
+
+
+def test_bound_identity_still_plans_olt_actions_normally():
+    """Non-vacuity guard for the identity gate: a ``"bound"`` identity (the
+    default) must not be caught by the new gate — a fresh, never-authorized
+    ONT still gets its ``OltAuthorize``."""
+    desired = _desired()
+    olt = _olt_observed(olt_present=False, olt_identity_status="bound")
+
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+
+    assert OltAuthorize in _types(plan)
+    assert plan.olt_wait_reason is None
+
+
 def test_unallocated_service_port_indices_refuse_full_delete_sweep():
     """Both indices ``None`` with no unindexed match must not delete every
     observed port.

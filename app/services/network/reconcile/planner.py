@@ -312,7 +312,18 @@ def compute_plan(
     tr069_profile_only_change = _is_tr069_profile_only_change(mode, proposed_fields)
     olt_wait_reason: str | None = None
 
-    if tr069_profile_only_change:
+    # Physical identity is a hard precondition for every OLT action (Astra
+    # Bug 1): an unresolved or mismatched fsp/olt_ont_id target means no
+    # coordinate pair is safe to authorize or modify against. This gate runs
+    # BEFORE the mode branches below and, when it fires, skips all of them —
+    # ``wifi_only_change``/``remote_only_change`` never touch the OLT side
+    # regardless, so they are the only ones exempt.
+    olt_identity_gate = _olt_identity_gate(observed)
+    if olt_identity_gate is not None and not (wifi_only_change or remote_only_change):
+        drifts.append(_olt_identity_drift(desired, observed))
+        olt_wait_reason = olt_identity_gate
+        omci_wan_planned = False
+    elif tr069_profile_only_change:
         _plan_tr069_profile_only(desired, observed, actions, drifts)
         omci_wan_planned = False
     elif wifi_only_change or remote_only_change:
@@ -339,7 +350,21 @@ def compute_plan(
         )
 
     olt_wait_detail = ""
-    if olt_wait_reason is not None:
+    if olt_wait_reason == ReconcileFailureReason.OLT_IDENTITY_UNRESOLVED:
+        olt_wait_detail = (
+            f"ONT {desired.serial_number}: desired state has no fsp/"
+            "olt_ont_id target (or the OLT registration found by serial "
+            "could not be checked against one); refusing every OLT action "
+            "until an owner assigns a real physical target."
+        )
+    elif olt_wait_reason == ReconcileFailureReason.OLT_IDENTITY_MISMATCH:
+        olt_wait_detail = (
+            f"ONT {desired.serial_number}: the OLT reports this serial "
+            f"registered somewhere other than the desired fsp={desired.fsp!r} "
+            f"olt_ont_id={desired.olt_ont_id!r} target; refusing every OLT "
+            "action rather than writing to either coordinate pair."
+        )
+    elif olt_wait_reason is not None:
         olt_wait_detail = (
             f"ONT {desired.serial_number}: one or more OLT service-port "
             "indices (mgmt and/or WAN) are unallocated while "
@@ -363,6 +388,38 @@ def compute_plan(
 # ── OLT-side planning ───────────────────────────────────────────────────────
 
 
+def _olt_identity_gate(observed: OntObservedState) -> str | None:
+    """Whether this pass's OLT read confirmed the STORED target's identity.
+
+    Returns ``None`` when bound (safe to plan OLT actions against
+    ``desired.fsp``/``desired.olt_ont_id``), else the
+    ``ReconcileFailureReason`` naming why every OLT action is withheld this
+    pass. Reads ``observed.olt.olt_identity_status`` — set by
+    ``readers.olt_reader`` after checking a found registration's fsp+onu_id
+    against the desired target (or noting there was no target to check).
+    """
+    status = observed.olt.olt_identity_status
+    if status == "bound":
+        return None
+    if status == "mismatch":
+        return ReconcileFailureReason.OLT_IDENTITY_MISMATCH
+    return ReconcileFailureReason.OLT_IDENTITY_UNRESOLVED
+
+
+def _olt_identity_drift(desired: OntDesiredState, observed: OntObservedState) -> Drift:
+    """Unrepairable drift recorded when the identity gate withholds every
+    OLT action. Keeps ``plan.drifts`` honest about the withheld state instead
+    of reporting a clean plan for a device whose physical target could not
+    be confirmed."""
+    return Drift(
+        field="olt_identity",
+        surface="olt",
+        desired=(desired.fsp, desired.olt_ont_id),
+        observed=observed.olt.olt_identity_status,
+        repairable=False,
+    )
+
+
 def _plan_tr069_profile_only(
     desired: OntDesiredState,
     observed: OntObservedState,
@@ -370,6 +427,11 @@ def _plan_tr069_profile_only(
     drifts: list[Drift],
 ) -> None:
     """Plan only the requested OLT TR-069 profile binding."""
+    if desired.olt_ont_id is None:
+        # ``compute_plan`` never reaches this function while the identity
+        # gate is open; this guard exists only to narrow the type for mypy
+        # and as a second line of defense.
+        return
     if not is_deliverable("tr069_profile_id", desired.tr069_profile_id):
         return
     if observed.olt.olt_tr069_profile_id == desired.tr069_profile_id:
@@ -407,6 +469,11 @@ def _plan_olt_side(
     OLT-side action in this function still plans normally even when it
     fires.
     """
+    if desired.olt_ont_id is None:
+        # ``compute_plan`` never reaches this function while the identity
+        # gate is open; this guard exists only to narrow the type for mypy
+        # and as a second line of defense.
+        return None
     olt_obs = observed.olt
 
     # 1. Authorize if absent.
@@ -622,6 +689,11 @@ def _plan_service_ports(
     entry, so ``plan.drifts`` reflects the withheld state instead of
     looking clean.
     """
+    if desired.olt_ont_id is None:
+        # ``compute_plan`` never reaches this function while the identity
+        # gate is open; this guard exists only to narrow the type for mypy
+        # and as a second line of defense.
+        return None
 
     def _sp_int(sp: dict, *names: str) -> int | None:
         for name in names:
@@ -789,6 +861,11 @@ def _plan_wan_service_port(
     actions: list[Action],
 ) -> None:
     """Create a missing WAN port without treating other ports as disposable."""
+    if desired.olt_ont_id is None:
+        # ``compute_plan`` never reaches this function while the identity
+        # gate is open; this guard exists only to narrow the type for mypy
+        # and as a second line of defense.
+        return
     observed_indices = {
         sp.get("index") for sp in observed.olt.olt_service_ports if isinstance(sp, dict)
     }
@@ -821,6 +898,11 @@ def _plan_olt_omci_wan(
     """Emit the three-command OMCI WAN sequence when ``wan_config_profile_id``
     is set. Returns ``True`` if OMCI owns WAN PPP — used downstream to decide
     whether TR-069 WAN actions should also fire."""
+    if desired.olt_ont_id is None:
+        # ``compute_plan`` never reaches this function while the identity
+        # gate is open; this guard exists only to narrow the type for mypy
+        # and as a second line of defense.
+        return False
     if (
         desired.wan_mode != "pppoe"
         or desired.wan_pppoe_provisioning_method == "tr069"
@@ -862,6 +944,12 @@ def _plan_olt_omci_wan(
 
 
 def _append_reset_if_needed(desired: OntDesiredState, actions: list[Action]) -> None:
+    if desired.olt_ont_id is None:
+        # No OLT action could have been planned without a resolved identity
+        # (every action-emitting function guards the same way), so there is
+        # nothing here that could ``requires_reset``. Guard exists only to
+        # narrow the type for mypy.
+        return
     if any(getattr(a, "requires_reset", False) for a in actions):
         actions.append(OltReset(fsp=desired.fsp, ont_id=desired.olt_ont_id))
 

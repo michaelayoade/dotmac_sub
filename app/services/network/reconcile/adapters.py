@@ -108,7 +108,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     )
 
     fsp = _fsp_from_ont(ont)
-    olt_ont_id = parse_ont_id_on_olt(ont.external_id) or 0
+    # ``None`` means genuinely unknown/unparseable — NOT the same as the real
+    # ONT-ID 0, which Huawei OLTs assign in normal operation. Collapsing the
+    # two with ``or 0`` (the historical bug) let an unresolved identity
+    # silently target a live ONT-ID-0 registration. The reader/planner treat
+    # ``None`` as OLT_IDENTITY_UNRESOLVED and emit no OLT action at all.
+    olt_ont_id = parse_ont_id_on_olt(ont.external_id)
     # The effective-config helper exposes two related fields: ``wan_mode`` is
     # the IP-mode (``pppoe``/``bridge``/``static_ip``/...) and ``onu_mode`` is
     # the ONU operating mode (``routing``/``bridging``). Either being "bridge"
@@ -134,7 +139,7 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         serial_number=ont.serial_number,
         olt_id=str(ont.olt_device_id) if ont.olt_device_id else "",
         fsp=fsp,
-        olt_ont_id=int(olt_ont_id),
+        olt_ont_id=olt_ont_id,
         line_profile_id=int(values.get("authorization_line_profile_id") or 0),
         service_profile_id=int(values.get("authorization_service_profile_id") or 0),
         # DEFAULT: description isn't computed by effective_ont_config; the
