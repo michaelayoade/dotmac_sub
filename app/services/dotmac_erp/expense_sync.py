@@ -38,6 +38,7 @@ from app.models.field_erp_sync import (
     FieldErpSyncEvent,
     FieldErpSyncFlow,
     FieldErpSyncStatus,
+    flow_owned_by_sub,
 )
 from app.models.field_expense import FieldExpenseRequest
 from app.services.dotmac_erp import outbox
@@ -402,7 +403,7 @@ def _poll_unlinked_expense_claims(
     *,
     client: DotMacERPClient | ErpCapabilityClient,
     limit: int,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, list[str]]:
     """Poll ``sent``/``accepted`` outbox rows whose request never got a reference.
 
     A ``sent`` row was never eligible for the reference-gated query below (it
@@ -410,15 +411,32 @@ def _poll_unlinked_expense_claims(
     ``accepted`` row can also land here if the same-transaction write-back
     failed after delivery. Keyed on Sub's own request id, same as the linked
     poll below — see ``client.get_expense_claim_status``'s docstring.
+
+    OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front, since
+    ownership is a per-flow switch, not per-row. A status poll is a real ERP
+    API call about a row that may belong to a flow ownership has since moved
+    back to CRM — skipped, not polled, when not owned. Skipped rows are
+    counted separately from ``processed``/``updated`` so the caller's own
+    sweep numbers stay honest.
     """
     processed = 0
     updated = 0
+    skipped_not_owned = 0
     errors: list[str] = []
+    owned = flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim)
     for row in outbox.unlinked_delivered_events(
         db, flow=FieldErpSyncFlow.expense_claim, limit=limit
     ):
         request = db.get(FieldExpenseRequest, row.entity_id)
         if request is None or request.expense_claim_reference:
+            continue
+        if not owned:
+            skipped_not_owned += 1
+            logger.info(
+                "expense_sync: skipping unlinked status poll for %s — sub does "
+                "not own flow 'expense_claim' (sync_flow_ownership)",
+                row.id,
+            )
             continue
         processed += 1
         try:
@@ -436,7 +454,7 @@ def _poll_unlinked_expense_claims(
         db.commit()
         if request.expense_claim_reference:
             updated += 1
-    return processed, updated, errors
+    return processed, updated, skipped_not_owned, errors
 
 
 def refresh_expense_claim_statuses(
@@ -486,12 +504,17 @@ def refresh_expense_claim_statuses(
 
     processed = 0
     updated = 0
+    skipped_not_owned = 0
     try:
-        unlinked_processed, unlinked_updated, unlinked_errors = (
-            _poll_unlinked_expense_claims(db, client=owned_client, limit=limit)
-        )
+        (
+            unlinked_processed,
+            unlinked_updated,
+            unlinked_skipped_not_owned,
+            unlinked_errors,
+        ) = _poll_unlinked_expense_claims(db, client=owned_client, limit=limit)
         processed += unlinked_processed
         updated += unlinked_updated
+        skipped_not_owned += unlinked_skipped_not_owned
         errors.extend(unlinked_errors)
 
         for request in pending:
@@ -518,6 +541,7 @@ def refresh_expense_claim_statuses(
 
     result["processed"] = processed
     result["updated"] = updated
+    result["skipped_not_owned"] = skipped_not_owned
     return result
 
 
@@ -539,18 +563,26 @@ def repair_expense_claim_writebacks(db: Session, *, limit: int = 100) -> dict:
     beat schedule — see the task registry / scheduler config, unchanged by
     this change): ``docs/runbooks/EXPENSE_CLAIM_ERP_CUTOVER.md`` prohibits
     backfilling ERP delivery for expenses that were approved before a flow's
-    cutover to Sub. This repair cannot reach such a row: a row can only exist
-    in ``field_erp_sync_events`` with status ``sent``/``accepted`` if
-    ``outbox.deliver_pending`` actually posted it, and that call refuses to
-    deliver any flow ``sync_flow_ownership`` does not already have set to
-    ``sub`` (see ``flow_owned_by_sub``). So every candidate row here is,
-    by construction, a POST-cutover delivery — never a historical row the
-    runbook's "no backfill" prohibition is about. Wiring the scheduler call
-    itself is still left to Michael's explicit confirmation rather than
-    resolved here, since the runbook's prohibition is a data-safety rule this
-    change does not own.
+    cutover to Sub. A row can only exist in ``field_erp_sync_events`` with
+    status ``sent``/``accepted`` if ``outbox.deliver_pending`` actually posted
+    it while sub owned the flow at THAT time — so no candidate row here is a
+    pre-cutover historical row the runbook's "no backfill" prohibition is
+    about. But ownership is not a one-way gate: it can move back to CRM after
+    delivery (the cutover/shadow-phase model this codebase uses), and this is
+    a repair a schedule could leave running indefinitely — so it does NOT
+    infer current ownership from a row's past delivery. See the OWNERSHIP
+    GUARD note below. Wiring the scheduler call itself is still left to
+    Michael's explicit confirmation rather than resolved here, since the
+    runbook's prohibition is a data-safety rule this change does not own.
+
+    OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front (ownership
+    is a per-flow switch, not per-row). Re-applying a stored response is a
+    state mutation implying ERP involvement — skipped, not repaired, for
+    every row when sub does not currently own this flow, and counted under
+    ``skipped_not_owned`` so this sweep's own numbers stay honest.
     """
     limit = max(1, min(int(limit or 100), 500))
+    owned = flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim)
     rows = (
         db.query(FieldErpSyncEvent)
         .filter(FieldErpSyncEvent.flow == FieldErpSyncFlow.expense_claim.value)
@@ -566,12 +598,26 @@ def repair_expense_claim_writebacks(db: Session, *, limit: int = 100) -> dict:
     )
 
     errors: list[str] = []
-    result: dict[str, object] = {"processed": 0, "repaired": 0, "errors": errors}
+    result: dict[str, object] = {
+        "processed": 0,
+        "repaired": 0,
+        "skipped_not_owned": 0,
+        "errors": errors,
+    }
     if not rows:
         return result
 
     processed = 0
     repaired = 0
+    skipped_not_owned = 0
+    if not owned:
+        logger.info(
+            "expense_sync: skipping write-back repair — sub does not own flow "
+            "'expense_claim' (sync_flow_ownership)"
+        )
+        result["skipped_not_owned"] = len(rows)
+        return result
+
     for row in rows:
         erp_id = _extract_claim_id(row.erp_response)
         if not erp_id:
@@ -590,6 +636,7 @@ def repair_expense_claim_writebacks(db: Session, *, limit: int = 100) -> dict:
 
     result["processed"] = processed
     result["repaired"] = repaired
+    result["skipped_not_owned"] = skipped_not_owned
     return result
 
 

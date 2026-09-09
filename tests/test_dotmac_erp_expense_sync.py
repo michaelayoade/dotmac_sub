@@ -651,6 +651,90 @@ def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
     assert rows[0].status == FieldErpSyncStatus.accepted.value
 
 
+def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_session):
+    """Michael's finding, applied to expense claims: ownership can move back
+    to CRM after a row was delivered while sub owned the flow — the repair
+    must re-check ownership on every run, not assume the past delivery still
+    means current ownership. No write-back and no ERP call may happen when
+    the flow is currently CRM-owned; the row must be counted under
+    ``skipped_not_owned``, not ``repaired``.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    client = _FakeERPClient(
+        post_outcomes=[{"claim_id": "ERP-CLAIM-REPAIR", "status": "approved"}]
+    )
+    outbox.deliver_pending(db_session, client=client)
+    db_session.refresh(request)
+    assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
+
+    # Simulate a DROPPED write-back, same as the repaired-case test above.
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+
+    # Ownership moves back to CRM before the scheduled repair runs again.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    result = expense_sync.repair_expense_claim_writebacks(db_session)
+
+    db_session.refresh(request)
+    assert result["repaired"] == 0
+    assert result["processed"] == 0
+    assert result["skipped_not_owned"] == 1
+    # No re-apply happened: the request's own reference is still missing.
+    assert request.expense_claim_reference is None
+    assert request.expense_claim_status is None
+
+
+def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_expense_flow(
+    db_session,
+):
+    """The poll-drain path (``_poll_unlinked_expense_claims``, reached via
+    ``refresh_expense_claim_statuses``) makes a real ERP call
+    (``get_expense_claim_status``). It must be skipped for a currently
+    CRM-owned flow, even though the row was delivered while sub owned it.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    assert request.expense_claim_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+    # Ownership moves back to CRM before the poll runs.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    client = _FakeERPClient(
+        status_outcomes=[{"claim_id": "SHOULD-NOT-HAPPEN", "status": "approved"}]
+    )
+    result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
+
+    assert client.status_calls == []
+    assert result["skipped_not_owned"] == 1
+    db_session.refresh(request)
+    assert request.expense_claim_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+
 def test_repair_never_writes_back_a_rejected_rows_response(db_session):
     """A rejected/dead row's stored response must never be applied as if ERP
     had accepted it — repair is restricted to accepted/sent rows only."""
@@ -704,7 +788,14 @@ def test_refresh_skips_unsynced_and_terminal_requests(db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_diagnostics_reports_a_stale_unlinked_sent_row(db_session):
+def test_diagnostics_reports_raw_count_and_oldest_age_with_no_threshold_flag(
+    db_session,
+):
+    """The surface is informational only: count + oldest age, no "stale"/alert
+    framing, regardless of how old the row is (Michael's design decision:
+    "Do not treat it as an alert/SLA. Show count and oldest age as
+    informational data until each flow has an explicitly owned threshold.").
+    """
     from datetime import timedelta
 
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
@@ -715,19 +806,21 @@ def test_diagnostics_reports_a_stale_unlinked_sent_row(db_session):
     db_session.refresh(request)
     row = _outbox_rows(db_session, request)[0]
     assert row.status == FieldErpSyncStatus.sent.value
-    # Backdate as if this row has been sitting unlinked for two days.
+    # Backdate well past any plausible threshold — must still be reported
+    # plainly, not filtered or flagged.
     row.created_at = datetime.now(UTC) - timedelta(hours=48)
     db_session.commit()
 
-    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+    report = outbox.delivered_unlinked_diagnostics(db_session)
 
     flow_report = report[FieldErpSyncFlow.expense_claim.value]
     assert flow_report["count"] == 1
-    assert flow_report["max_age_hours"] >= 24
-    assert flow_report["stale"] is True
+    assert flow_report["oldest_age_hours"] >= 24
+    assert "stale" not in flow_report
+    assert "stale_after_hours" not in flow_report
 
 
-def test_diagnostics_excludes_a_fresh_unlinked_row(db_session):
+def test_diagnostics_reports_a_fresh_unlinked_row_without_filtering_it(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
@@ -736,14 +829,13 @@ def test_diagnostics_excludes_a_fresh_unlinked_row(db_session):
     db_session.refresh(request)
     row = _outbox_rows(db_session, request)[0]
     assert row.status == FieldErpSyncStatus.sent.value
-    # Freshly delivered — must not read as stale under the default threshold.
 
-    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+    report = outbox.delivered_unlinked_diagnostics(db_session)
 
     flow_report = report[FieldErpSyncFlow.expense_claim.value]
     assert flow_report["count"] == 1
-    assert flow_report["max_age_hours"] < 24
-    assert flow_report["stale"] is False
+    assert flow_report["oldest_age_hours"] < 24
+    assert "stale" not in flow_report
 
 
 def test_diagnostics_excludes_a_row_whose_writeback_actually_landed(db_session):
@@ -758,8 +850,7 @@ def test_diagnostics_excludes_a_row_whose_writeback_actually_landed(db_session):
     db_session.refresh(request)
     assert request.expense_claim_reference == "ERP-LINKED-OK"
 
-    report = outbox.delivered_unlinked_diagnostics(db_session, stale_after_hours=24)
+    report = outbox.delivered_unlinked_diagnostics(db_session)
 
     flow_report = report[FieldErpSyncFlow.expense_claim.value]
     assert flow_report["count"] == 0
-    assert flow_report["stale"] is False

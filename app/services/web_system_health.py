@@ -74,22 +74,23 @@ def _build_erp_delivered_unlinked(db) -> dict[str, object]:
     the count and oldest age visible on the same deploy/health surface as
     ``erp_sync_ownership`` instead of only inside the outbox table.
 
-    ``stale_after_hours=24`` is one uniform default, not a tuned per-flow SLA
-    — confirm/adjust per flow (PO/PI are accounts-payable, expense is
-    payroll-adjacent) before treating ``stale`` as an alerting contract.
+    INFORMATIONAL ONLY — not an alert or an SLA. This surface reports the raw
+    per-flow count and oldest age; it does not flag, highlight, or compare
+    against any threshold. Purchase-order/invoice write-backs affect
+    accounts-payable and expense-claim write-backs are payroll-adjacent, so a
+    shared numeric cutoff would be an invented, unowned SLA. Treat this as
+    data for a human to read until a later, separately reviewed change gives
+    each flow its own explicitly owned threshold.
     """
     try:
         from app.services.dotmac_erp.outbox import delivered_unlinked_diagnostics
 
-        flows = delivered_unlinked_diagnostics(db, stale_after_hours=24)
+        flows = delivered_unlinked_diagnostics(db)
     except Exception as exc:
         logger.debug("ERP delivered-unlinked surface unavailable", exc_info=True)
         return {"status": "unknown", "flows": {}, "error": str(exc)[:200]}
 
-    return {
-        "status": "stale" if any(f["stale"] for f in flows.values()) else "ok",
-        "flows": flows,
-    }
+    return {"flows": flows}
 
 
 def _build_erp_sync_ownership(db) -> dict[str, object]:

@@ -249,6 +249,175 @@ def test_repair_still_enqueues_a_genuinely_new_invoice(db_session):
     assert invoice.payables_submission_error is None
 
 
+# ---------------------------------------------------------------------------
+# Ownership guard — a CRM-owned flow must cause no ERP call and no attachment
+# upload, even for an invoice a repair sweep would otherwise act on.
+# ---------------------------------------------------------------------------
+
+
+class _AttachmentSpyERPClient(_FakeERPClient):
+    """Extends the fake client with an upload spy for the attachment path."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.upload_calls: list[tuple] = []
+
+    def upload_purchase_invoice_attachment(
+        self, reference, payload, *, idempotency_key
+    ):
+        self.upload_calls.append((reference, payload, idempotency_key))
+        return {"ok": True}
+
+
+class _NullContextClient:
+    """Minimal context-manager wrapper mirroring ``capability_client``'s usage."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def __enter__(self):
+        return self._client
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def test_repair_makes_no_erp_call_for_a_crm_owned_flow(db_session, monkeypatch):
+    """Michael's finding: a scheduled repair must re-check ownership on every
+    run, not just at write-time of the original event. A CRM-owned flow must
+    see NO ERP call — including the attachment-upload consequence — and the
+    row must be counted under ``skipped_not_owned``, not as a success.
+    """
+    from app.models.stored_file import StoredFile
+
+    # Flow is explicitly CRM-owned (not seeded to sub at all).
+    _seed_ownership(db_session)
+    invoice = _approved_invoice(db_session)
+    # Already linked to ERP — this is the exact branch that calls
+    # upload_attachment (a real ERP call) inside the repair sweep.
+    invoice.payables_document_reference = "ERP-PINV-ALREADY-LINKED"
+    invoice.payables_system = purchase_invoice_sync.PROVIDER
+    db_session.commit()
+
+    attachment = StoredFile(
+        entity_type="vendor_purchase_invoice",
+        entity_id=str(invoice.id),
+        original_filename="invoice.pdf",
+        storage_key_or_relative_path=f"attachments/{uuid4().hex}",
+        file_size=4,
+        content_type="application/pdf",
+        storage_provider="s3",
+    )
+    db_session.add(attachment)
+    db_session.flush()
+    invoice.attachment_stored_file_id = attachment.id
+    db_session.commit()
+
+    monkeypatch.setattr(
+        purchase_invoice_sync.file_uploads,
+        "stream_file",
+        lambda _attachment: type("S", (), {"chunks": iter([b"data"])})(),
+    )
+    spy_client = _AttachmentSpyERPClient()
+    monkeypatch.setattr(
+        purchase_invoice_sync,
+        "capability_client",
+        lambda db: _NullContextClient(spy_client),
+    )
+
+    result = purchase_invoice_sync.repair_purchase_invoice_sync(db_session)
+
+    assert result["attachments"] == 0
+    assert result["enqueued"] == 0
+    assert result["unlinked"] == 0
+    assert result["skipped_not_owned"] == 1
+    assert spy_client.upload_calls == []
+    db_session.refresh(invoice)
+    assert invoice.payables_attachment_submitted_at is None
+
+
+def test_repair_does_not_reapply_a_stored_response_for_a_crm_owned_flow(db_session):
+    """The 'delivered row with a usable stored response' branch re-applies
+    ``apply_erp_response`` — a state mutation implying ERP involvement. It
+    must also be skipped for a currently CRM-owned flow, even though the
+    outbox row was, by construction, delivered while sub owned the flow.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_invoice.value})
+    invoice = _approved_invoice(db_session)
+    purchase_invoice_sync.enqueue_purchase_invoice(db_session, invoice)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[{"purchase_invoice_id": "ERP-PINV-9", "status": "created"}]
+        ),
+    )
+    db_session.refresh(invoice)
+    assert invoice.payables_document_reference == "ERP-PINV-9"
+
+    # Simulate a DROPPED write-back.
+    invoice.payables_document_reference = None
+    invoice.payables_submission_error = "stale evidence from a prior failure"
+    db_session.commit()
+
+    # Ownership moves back to CRM before the scheduled repair runs again.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_invoice.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    result = purchase_invoice_sync.repair_purchase_invoice_sync(db_session)
+
+    db_session.refresh(invoice)
+    assert result["enqueued"] == 0
+    assert result["unlinked"] == 0
+    assert result["skipped_not_owned"] == 1
+    # No re-apply happened: the invoice stays exactly as it was left.
+    assert invoice.payables_document_reference is None
+    assert invoice.payables_submission_error == "stale evidence from a prior failure"
+
+
+def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_flow(db_session):
+    """The poll-drain path (``_poll_unlinked_purchase_invoices``, reached via
+    ``refresh_purchase_invoice_statuses``) makes a real ERP call
+    (``get_purchase_invoice_status``). It must also be skipped for a
+    currently CRM-owned flow.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_invoice.value})
+    invoice = _approved_invoice(db_session)
+    purchase_invoice_sync.enqueue_purchase_invoice(db_session, invoice)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(invoice)
+    assert invoice.payables_document_reference is None
+    row = _outbox_rows(db_session, invoice)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+    # Ownership moves back to CRM before the poll runs.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_invoice.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    client = _FakeERPClient(
+        status_outcomes=[{"purchase_invoice_id": "SHOULD-NOT-HAPPEN"}]
+    )
+    result = purchase_invoice_sync.refresh_purchase_invoice_statuses(
+        db_session, client=client
+    )
+
+    assert client.status_calls == []
+    assert result["skipped_not_owned"] == 1
+    db_session.refresh(invoice)
+    assert invoice.payables_document_reference is None
+    row = _outbox_rows(db_session, invoice)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+
 def test_enqueue_does_not_clear_submission_error_on_a_no_op_return(db_session):
     """``enqueue_purchase_invoice`` returning the EXISTING row (idempotent
     no-op) must not clear ``payables_submission_error`` — only a genuinely
