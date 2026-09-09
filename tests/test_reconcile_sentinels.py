@@ -99,19 +99,56 @@ def _composer_defaults() -> set[str]:
     return found
 
 
-def _adapter_coercions() -> set[str]:
-    """``values.get("k") or <literal>`` and ``_bool_or_default(values.get("k"))``."""
+def _adapter_coercions(tree: ast.AST | None = None) -> set[str]:
+    """``values.get("k") or <literal>`` and ``_bool_or_default(values.get("k"))``,
+    plus the general ``<any call> or <literal>`` idiom assigned to a local
+    name — the shape that collapsed a genuinely unknown OLT-ID into the real
+    sentinel value 0 (``olt_ont_id = parse_ont_id_on_olt(x) or 0``, the Astra
+    Bug 1 regression this widening exists to catch). ``tree`` defaults to
+    ``desired_from_ont_unit``'s own AST; tests pass a synthetic tree to prove
+    the detector's sensitivity without needing to reintroduce the bug.
+    """
     found: set[str] = set()
-    for node in ast.walk(_tree(reconcile_adapters.desired_from_ont_unit)):
-        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
-            key = _values_get_key(node.values[0])
-            if key is not None:
-                found.add(key)
+    if tree is None:
+        tree = _tree(reconcile_adapters.desired_from_ont_unit)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == "_bool_or_default" and node.args:
                 key = _values_get_key(node.args[0])
                 if key is not None:
                     found.add(key)
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.BoolOp)
+            and isinstance(node.value.op, ast.Or)
+        ):
+            boolop = node.value
+            key = _values_get_key(boolop.values[0])
+            if key is not None:
+                found.add(key)
+                continue
+            last = boolop.values[-1]
+            if (
+                isinstance(boolop.values[0], ast.Call)
+                and isinstance(last, ast.Constant)
+                and last.value is not None
+            ):
+                # A generic ``<call(...)> or <literal>`` idiom, not a
+                # ``values.get()`` lookup. The assignment target names the
+                # field it feeds — that's the only handle available, since
+                # the call itself carries no key the way ``values.get("k")``
+                # does. A trailing ``None`` is excluded: normalising an empty
+                # value back to "unknown" is the correct behaviour, matching
+                # the composer/planner audits' convention.
+                found.add(node.targets[0].id)
+        elif isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            # Non-assignment ``values.get(...) or <literal>`` — e.g. inline
+            # in a return/call — still counted by key.
+            key = _values_get_key(node.values[0])
+            if key is not None:
+                found.add(key)
     return found
 
 
@@ -186,6 +223,49 @@ def test_every_default_on_the_desired_state_path_is_registered(layer, discover):
     )
 
 
+def test_a_reintroduced_or_zero_identity_coercion_is_named_by_the_audit():
+    """Sensitivity proof for the ``_adapter_coercions`` widening: plant the
+    EXACT idiom the Astra Bug 1 fix removed
+    (``olt_ont_id = parse_ont_id_on_olt(x) or 0``) in a synthetic function and
+    confirm the detector names ``olt_ont_id`` — the field the assignment
+    target identifies. This is what would fail the build if the ``or 0``
+    idiom were ever reintroduced into ``desired_from_ont_unit`` for a field
+    the registry doesn't already carry a coercion-shaped entry for.
+    """
+    tree = ast.parse(
+        "def f(ont):\n"
+        "    olt_ont_id = parse_ont_id_on_olt(ont.external_id) or 0\n"
+        "    return olt_ont_id\n"
+    )
+    assert _adapter_coercions(tree) == {"olt_ont_id"}
+
+
+def test_a_call_result_normalised_to_none_is_not_flagged_as_a_coercion():
+    """Near-miss for the same widening: ``<call(...)> or None`` normalises an
+    empty result back to "unknown" — the CORRECT behaviour (the fix this
+    audit protects), not a sentinel substitution. It must not be flagged,
+    or every current, correct use of that idiom would fail the build."""
+    tree = ast.parse(
+        "def f(ont):\n"
+        "    resolved = something(ont.external_id) or None\n"
+        "    return resolved\n"
+    )
+    assert _adapter_coercions(tree) == set()
+
+
+def test_a_bare_call_with_no_or_fallback_is_not_flagged():
+    """Second near-miss: a plain assignment with no ``or`` fallback at all
+    (the FIXED shape of the ``olt_ont_id`` line today) must not be flagged —
+    confirms the detector fires on the idiom, not on every assignment from a
+    function call."""
+    tree = ast.parse(
+        "def f(ont):\n"
+        "    olt_ont_id = parse_ont_id_on_olt(ont.external_id)\n"
+        "    return olt_ont_id\n"
+    )
+    assert _adapter_coercions(tree) == set()
+
+
 def test_layer_annotation_matches_where_the_default_dominates():
     """A composer-dominated rule must measure against config paths.
 
@@ -222,6 +302,8 @@ def test_inadmissible_entries_are_the_customer_visible_ones():
         "tr069_profile_id",
         "wan_pppoe_wcd_index",
         "wan_vlan",
+        "olt_ont_id",
+        "fsp",
     }
 
 
