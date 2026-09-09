@@ -335,6 +335,27 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
+## OLT Operational Health Contract
+
+- Audience and task: NOC staff compare OLTs in the inventory table and inspect
+  one OLT without receiving contradictory operational answers.
+- Authority: `network.device_state` owns the binary result and verifier-reason
+  classification. The table and detail view consume that owner; templates do
+  not infer health from stored booleans.
+- First viewport: administrative lifecycle remains separate from the shared
+  Working/Not working badge. Native OLT poll, ping, and SNMP evidence show
+  Passed, Failed, Expired/Not current, Not checked, or Disabled with an
+  observation timestamp where available.
+- State semantics: a fresh successful native OLT poll is positive operational
+  evidence. A linked monitoring row is fallback evidence only while active and
+  current; historical successful probes on an inactive or stale row never
+  certify present operation. Evidence freshness states explain the binary
+  result and are not additional device states.
+- Responsive behavior: evidence badges wrap without horizontal scrolling;
+  labels and text communicate meaning independently of color, and timestamps
+  remain available in badge tooltips.
+
+
 ## Personal Staff Notification Bell Contract
 
 - Audience and task: authenticated staff need to see pending personal work and

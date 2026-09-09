@@ -196,3 +196,16 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     assert "{{ workflow_guide.purpose }}" in layout
     assert "{% for step in workflow_guide.steps %}" in layout
     assert "billingHelpOpen" not in billing
+
+
+def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:
+    guide = guidance_for_path("/admin/network/olts/olt-id")
+
+    assert guide is not None
+    assert guide.id == "olt-operational-health"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "working or not working" in content
+    assert "administrative active or inactive" in content
+    assert "fresh successful native olt poll" in content
+    assert "linked monitoring record" in content
+    assert "active" in content and "current" in content
