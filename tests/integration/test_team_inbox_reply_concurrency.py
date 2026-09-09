@@ -24,8 +24,12 @@ from app.services import team_inbox_commands, team_inbox_outbound
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 
+def _session_factory(engine):
+    return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
 def test_locked_conversation_fails_fast_and_same_key_retries_once(engine, monkeypatch):
-    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session_factory = _session_factory(engine)
     with session_factory() as setup:
         team = ServiceTeam(
             name=f"Reply Concurrency {uuid4().hex[:8]}",
@@ -126,7 +130,11 @@ def test_locked_conversation_fails_fast_and_same_key_retries_once(engine, monkey
             .count()
             == 1
         )
-        assignment = check.query(InboxConversationAssignment).one()
+        assignment = (
+            check.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.conversation_id == conversation_id)
+            .one()
+        )
         assert assignment.conversation_id == conversation_id
         assert assignment.person_id == agent_id
         assert assignment.is_active is True
@@ -135,7 +143,7 @@ def test_locked_conversation_fails_fast_and_same_key_retries_once(engine, monkey
 def test_two_agents_replying_simultaneously_only_one_claims_and_sends(
     engine, monkeypatch
 ):
-    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session_factory = _session_factory(engine)
     with session_factory() as setup:
         team = ServiceTeam(
             name=f"Reply Race {uuid4().hex[:8]}",
@@ -223,6 +231,15 @@ def test_two_agents_replying_simultaneously_only_one_claims_and_sends(
     assert sorted(kind for kind, _agent_id in outcomes) == ["conflict", "sent"]
     winner_id = next(agent_id for kind, agent_id in outcomes if kind == "sent")
     with session_factory() as check:
-        assignment = check.query(InboxConversationAssignment).one()
+        assignment = (
+            check.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.conversation_id == conversation_id)
+            .one()
+        )
         assert assignment.person_id == winner_id
-        assert check.query(InboxMessage).count() == 1
+        assert (
+            check.query(InboxMessage)
+            .filter(InboxMessage.conversation_id == conversation_id)
+            .count()
+            == 1
+        )

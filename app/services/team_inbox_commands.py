@@ -754,7 +754,7 @@ def _claim_conversation_for_reply(
         source=InboxTeamSource.manual.value,
         source_id=f"reply-auto-claim:{conversation.id}:{actor_person_id}",
         existing_assignment_policy=(
-            team_inbox_assignment.InboxExistingAssignmentPolicy.preserve
+            team_inbox_assignment.InboxExistingAssignmentPolicy.preserve_existing
         ),
         conversation_lock_nowait=True,
     )
@@ -791,12 +791,6 @@ def reply(
             mutation=ai_conversation_ownership.HumanConversationMutation.reply,
             for_update=False,
         )
-        actor_person_id = coerce_uuid(command.actor_person_id)
-        if actor_person_id is None:
-            raise InboxCommandRejected(
-                "An authenticated agent is required to reply.",
-                conversation_id=conversation.id,
-            )
         clean_body = command.body_text.strip()
         submitted_attachment_ids = tuple(
             str(item).strip() for item in command.attachment_ids if str(item).strip()
@@ -815,6 +809,12 @@ def reply(
                 scheduled_for = scheduled_for.replace(tzinfo=UTC)
             if scheduled_for <= datetime.now(UTC):
                 raise InboxCommandError("Choose a send time in the future.")
+        actor_person_id = coerce_uuid(command.actor_person_id)
+        if actor_person_id is None:
+            raise InboxCommandRejected(
+                "An authenticated agent is required to reply.",
+                conversation_id=conversation.id,
+            )
         clean_idempotency_key = str(command.idempotency_key or "").strip()
         reply_to_uuid = command.reply_to_message_id
         if len(clean_idempotency_key) > 200:

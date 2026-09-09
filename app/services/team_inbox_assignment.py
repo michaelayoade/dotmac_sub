@@ -112,8 +112,8 @@ class InboxAssignmentProvenance(StrEnum):
 
 
 class InboxExistingAssignmentPolicy(StrEnum):
-    replace = "replace"
-    preserve = "preserve"
+    replace_existing = "replace"
+    preserve_existing = "preserve"
 
 
 @dataclass(frozen=True)
@@ -1087,7 +1087,7 @@ def assign_conversation_to_agent(
     decision_evidence: InboxAgentCandidate | None = None,
     provenance: InboxAssignmentProvenance = InboxAssignmentProvenance.human_or_generic,
     existing_assignment_policy: InboxExistingAssignmentPolicy = (
-        InboxExistingAssignmentPolicy.replace
+        InboxExistingAssignmentPolicy.replace_existing
     ),
     conversation_lock_nowait: bool = False,
 ) -> InboxAssignmentResult:
@@ -1187,7 +1187,8 @@ def assign_conversation_to_agent(
 
     if (
         previous_assignment is not None
-        and existing_assignment_policy is InboxExistingAssignmentPolicy.preserve
+        and existing_assignment_policy
+        is InboxExistingAssignmentPolicy.preserve_existing
         and previous_assignment.person_id != person_uuid
     ):
         return InboxAssignmentResult(
