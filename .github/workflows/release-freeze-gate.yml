@@ -14,13 +14,14 @@ name: Release Freeze Gate
 # after the check already reported green. A PR that showed green here can still
 # merge while a promotion run sits in its production approval wait. True
 # merge-time enforcement of this gate would require a real merge queue, which
-# this repository cannot currently safely enable: `ci.yml`
-# (`Build release candidate once` upstream), `version-impact.yml`, and
-# `version-bump-pr.yml` are `pull_request:`-only required contexts today and
-# would deadlock `main` if a queue were turned on while they still gate merges
-# that way -- see docs/runbooks/STAGING_PROMOTION.md's Release Freeze section
-# for the operator-facing consequence and the fix that actually protects
-# production when this gap is hit.
+# this repository cannot currently safely enable: `version-impact.yml`
+# (`Check version impact label`) and `e2e-gate.yml` (`E2E Gate`) are
+# `pull_request:`-only required contexts today and would deadlock `main` if a
+# queue were turned on while they still gate merges that way. (`ci.yml` and
+# `engineering-standards.yml` already carry `merge_group:` support and are
+# NOT the blocker.) See docs/runbooks/STAGING_PROMOTION.md's Release Freeze
+# section for the operator-facing consequence and the fix that actually
+# protects production when this gap is hit.
 on:
   pull_request:
     branches: [main]
