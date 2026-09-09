@@ -486,6 +486,12 @@ class ReconcileFailureReason:
     # Preflight / reachability — no writes attempted
     OLT_UNREACHABLE = "olt_unreachable"
     ACS_UNREACHABLE = "acs_unreachable"
+    # The OLT replied, but the reply could not be trusted as an observation
+    # (rejected command, parameter error, unparseable body). Distinct from
+    # ``OLT_UNREACHABLE`` (couldn't contact the device at all) only in the
+    # operator-facing message; both refuse before planning rather than
+    # substituting a confident "absent" for an unknown state.
+    OLT_OBSERVATION_UNAVAILABLE = "olt_observation_unavailable"
     ONT_OFFLINE = "ont_offline"
     ONT_NOT_INFORMING = "ont_not_informing"
     ACS_IDENTITY_UNRESOLVED = "acs_identity_unresolved"

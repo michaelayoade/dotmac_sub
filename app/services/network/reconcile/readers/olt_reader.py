@@ -81,8 +81,7 @@ def read_olt_state(
     olt = getattr(adapter, "olt", None) or getattr(adapter, "_olt", None)
     if olt is None:
         return ReadResult(
-            success=False,
-            unreachable=False,
+            status="unavailable",
             observed=None,
             error="OLT adapter has no .olt attribute",
         )
@@ -91,18 +90,11 @@ def read_olt_state(
     # regardless of whether we already know the ONT-ID.
     find = adapter.find_ont_by_serial(desired.serial_number)
     if not find.success:
-        if _looks_unreachable(find.message):
-            return ReadResult(
-                success=False,
-                unreachable=True,
-                observed=None,
-                error=find.message,
-            )
         return ReadResult(
-            success=False,
-            unreachable=False,
+            status="unavailable",
             observed=None,
             error=find.message,
+            transport_unreachable=_looks_unreachable(find.message),
         )
 
     registration = (find.data or {}).get("registration") if find.data else None
@@ -110,8 +102,7 @@ def read_olt_state(
         # OLT confirms the ONT is not registered. That's a clean read with
         # ``olt_present=False`` — the planner will plan to add it.
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="absent",
             observed=_absent_fields(),
             error=None,
         )
@@ -122,17 +113,16 @@ def read_olt_state(
     if not ok:
         if _looks_unreachable(msg):
             return ReadResult(
-                success=False,
-                unreachable=True,
+                status="unavailable",
                 observed=None,
                 error=msg,
+                transport_unreachable=True,
             )
         # Treat as present-but-status-unknown rather than a hard failure: the
         # planner can still reason about presence even when run-state is dark.
         logger.debug("olt_reader_status_unavailable", extra={"message": msg})
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="present",
             observed=_present_with_unknown_state(),
             error=None,
         )
@@ -146,10 +136,10 @@ def read_olt_state(
     )
     if not detail_ok and _looks_unreachable(detail_msg):
         return ReadResult(
-            success=False,
-            unreachable=True,
+            status="unavailable",
             observed=None,
             error=detail_msg,
+            transport_unreachable=True,
         )
     detail = detail or {}
     tr069_profile_id = _int_or_none(detail.get("tr069_profile_id"))
@@ -179,8 +169,7 @@ def read_olt_state(
     olt_service_ports = _read_service_ports(olt, desired.fsp, desired.olt_ont_id)
 
     return ReadResult(
-        success=True,
-        unreachable=False,
+        status="present",
         observed=OltObservedFields(
             olt_present=True,
             # ``_normalise_state`` narrows the string to the allowed set or

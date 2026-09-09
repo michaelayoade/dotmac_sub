@@ -510,7 +510,13 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             acs_observed_wan_ppp_locations=((1, 1),),
         ),
     )
-    upsert_ont_observation(db_session, ont.id, observed)
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        observed,
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
 
     row = db_session.get(OntObservation, _only_obs_id(db_session, ont.id))
@@ -582,7 +588,13 @@ def _minimal_observed(*, ssid: str = "KURSI") -> OntObservedState:
 
 
 def test_upsert_creates_a_row_on_first_call(db_session, ont):
-    upsert_ont_observation(db_session, ont.id, _minimal_observed())
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
     obs = (
         db_session.query(OntObservation)
@@ -593,9 +605,21 @@ def test_upsert_creates_a_row_on_first_call(db_session, ont):
 
 
 def test_upsert_updates_existing_row_on_subsequent_call(db_session, ont):
-    upsert_ont_observation(db_session, ont.id, _minimal_observed(ssid="OLD"))
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(ssid="OLD"),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
-    upsert_ont_observation(db_session, ont.id, _minimal_observed(ssid="NEW"))
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(ssid="NEW"),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
 
     rows = (
@@ -609,7 +633,13 @@ def test_upsert_updates_existing_row_on_subsequent_call(db_session, ont):
 
 def test_upsert_accepts_string_ont_unit_id(db_session, ont):
     """The reconcile loop may pass str(ont.id); the adapter coerces."""
-    upsert_ont_observation(db_session, str(ont.id), _minimal_observed())
+    upsert_ont_observation(
+        db_session,
+        str(ont.id),
+        _minimal_observed(),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
     obs = (
         db_session.query(OntObservation)
@@ -620,7 +650,13 @@ def test_upsert_accepts_string_ont_unit_id(db_session, ont):
 
 
 def test_observation_cascade_deletes_with_ont_unit(db_session, ont):
-    upsert_ont_observation(db_session, ont.id, _minimal_observed())
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
     db_session.commit()
     ont_id = ont.id
 

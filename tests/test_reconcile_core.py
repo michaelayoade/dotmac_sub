@@ -212,8 +212,7 @@ def stub_ont_status(monkeypatch, ont):
 
     def _fake_olt_read(adapter, desired, *, deadline=None):
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="present",
             observed=OltObservedFields(
                 olt_present=True,
                 olt_match_state="match",
@@ -815,10 +814,10 @@ def test_olt_unreachable_fast_fails_before_writes(
 
     def _fake_olt_unreachable(adapter, desired, *, deadline=None):
         return ReadResult(
-            success=False,
-            unreachable=True,
+            status="unavailable",
             observed=None,
             error="Connection failed: timed out",
+            transport_unreachable=True,
         )
 
     monkeypatch.setattr(
@@ -866,6 +865,112 @@ def test_acs_unreachable_fast_fails_before_writes(
     assert result.success is False
     assert result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
     assert "Bad Gateway" in result.failure.message
+
+
+def _fake_unusable_olt_read(adapter, desired, *, deadline=None):
+    """A reachable-but-unparseable/rejected OLT reply: ``status="unavailable"``
+    WITHOUT ``transport_unreachable`` (no connection/timeout fragment)."""
+    from app.services.network.reconcile.readers import ReadResult
+
+    return ReadResult(
+        status="unavailable",
+        observed=None,
+        error="OLT rejected the command: Failure: insufficient privilege",
+    )
+
+
+def test_unusable_olt_reply_does_not_authorize(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """A reachable OLT that rejects/garbles the reply must not be treated as
+    "device absent" — that false absence is exactly what drove a live
+    ``OltAuthorize`` + IPHOST rewrite + forced WiFi/PSK push against a device
+    that was never actually observed (Astra Bug 3). ``mode="bootstrap"``
+    forces the PSK push on any authorization, so this is a direct regression
+    test for the overwrite: assert neither it nor the OLT authorize fires.
+    """
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_unusable_olt_read,
+    )
+    olt = _StubOltAdapter()
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
+    assert "insufficient privilege" in result.failure.message
+    # The false-absence substitution previously authorized the ONT and pushed
+    # every bootstrap default (IPHOST, WiFi/PSK) against unproven state.
+    assert "authorize_ont" not in olt.calls
+    assert "configure_iphost" not in olt.calls
+    assert acs.spv_calls == []
+
+
+def test_failed_read_preserves_the_previous_observation(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """An unavailable OLT read must not overwrite the last genuine OLT
+    observation with a fabricated absence — only ``olt_read_status`` (and not
+    ``olt_observed_at``) may move.
+    """
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    first = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    assert first.success is True
+
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    previous_observed_at = row.olt_observed_at
+    assert previous_observed_at is not None
+    assert row.olt_read_status == "present"
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_unusable_olt_read,
+    )
+    second = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert second.success is False
+    assert second.failure.reason == ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
+
+    db_session.expire_all()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # The previous evidence survives untouched...
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    assert row.olt_observed_at == previous_observed_at
+    # ...but the freshness signal is honest about the failed attempt.
+    assert row.olt_read_status == "unavailable"
 
 
 def test_apply_failure_marks_ont_out_of_sync(
@@ -1082,7 +1187,7 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
             ),
         )
         return ReadResult(
-            success=True, unreachable=False, observed=observed, error=None
+            status="present", observed=observed, error=None
         )
 
     monkeypatch.setattr(
@@ -1142,8 +1247,7 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
             # Pre-apply: drift on description forces at least one action so
             # the verify path is exercised (no actions ⇒ verify short-circuit).
             return ReadResult(
-                success=True,
-                unreachable=False,
+                status="present",
                 observed=OltObservedFields(
                     olt_present=True,
                     olt_match_state="match",
@@ -1176,10 +1280,10 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
             )
         # Verify read: SSH connection dropped
         return ReadResult(
-            success=False,
-            unreachable=True,
+            status="unavailable",
             observed=None,
             error="Connection failed: timed out",
+            transport_unreachable=True,
         )
 
     monkeypatch.setattr(
@@ -1253,8 +1357,7 @@ def test_tr069_profile_change_is_olt_only_and_persists_after_readback(
         reads += 1
         observed_profile = 2 if reads == 1 else desired.tr069_profile_id
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="present",
             observed=OltObservedFields(
                 olt_present=True,
                 olt_match_state="match",
