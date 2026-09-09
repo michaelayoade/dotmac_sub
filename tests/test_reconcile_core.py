@@ -212,8 +212,7 @@ def stub_ont_status(monkeypatch, ont):
 
     def _fake_olt_read(adapter, desired, *, deadline=None):
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="present",
             observed=OltObservedFields(
                 olt_present=True,
                 olt_match_state="match",
@@ -230,14 +229,14 @@ def stub_ont_status(monkeypatch, ont):
                 olt_service_ports=(
                     {
                         "index": desired.mgmt_service_port_index,
-                        "vlan": desired.mgmt_vlan,
-                        "gem": 2,
+                        "vlan_id": desired.mgmt_vlan,
+                        "gem_index": 2,
                         "state": "up",
                     },
                     {
                         "index": desired.wan_service_port_index,
-                        "vlan": desired.wan_vlan,
-                        "gem": desired.wan_gem_index,
+                        "vlan_id": desired.wan_vlan,
+                        "gem_index": desired.wan_gem_index,
                         "state": "up",
                     },
                 ),
@@ -815,10 +814,10 @@ def test_olt_unreachable_fast_fails_before_writes(
 
     def _fake_olt_unreachable(adapter, desired, *, deadline=None):
         return ReadResult(
-            success=False,
-            unreachable=True,
+            status="unavailable",
             observed=None,
             error="Connection failed: timed out",
+            transport_unreachable=True,
         )
 
     monkeypatch.setattr(
@@ -868,6 +867,186 @@ def test_acs_unreachable_fast_fails_before_writes(
     assert "Bad Gateway" in result.failure.message
 
 
+def _fake_unusable_olt_read(adapter, desired, *, deadline=None):
+    """A reachable-but-unparseable/rejected OLT reply: ``status="unavailable"``
+    WITHOUT ``transport_unreachable`` (no connection/timeout fragment)."""
+    from app.services.network.reconcile.readers import ReadResult
+
+    return ReadResult(
+        status="unavailable",
+        observed=None,
+        error="OLT rejected the command: Failure: insufficient privilege",
+    )
+
+
+def test_unusable_olt_reply_does_not_authorize(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """A reachable OLT that rejects/garbles the reply must not be treated as
+    "device absent" — that false absence is exactly what drove a live
+    ``OltAuthorize`` + IPHOST rewrite + forced WiFi/PSK push against a device
+    that was never actually observed (Astra Bug 3). ``mode="bootstrap"``
+    forces the PSK push on any authorization, so this is a direct regression
+    test for the overwrite: assert neither it nor the OLT authorize fires.
+    """
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_unusable_olt_read,
+    )
+    olt = _StubOltAdapter()
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
+    assert "insufficient privilege" in result.failure.message
+    # The false-absence substitution previously authorized the ONT and pushed
+    # every bootstrap default (IPHOST, WiFi/PSK) against unproven state.
+    assert "authorize_ont" not in olt.calls
+    assert "configure_iphost" not in olt.calls
+    assert acs.spv_calls == []
+
+
+def test_failed_read_preserves_the_previous_observation(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """An unavailable OLT read must not overwrite the last genuine OLT
+    observation with a fabricated absence — only ``olt_read_status`` (and not
+    ``olt_observed_at``) may move.
+    """
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    first = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    assert first.success is True
+
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    previous_observed_at = row.olt_observed_at
+    assert previous_observed_at is not None
+    assert row.olt_read_status == "present"
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_unusable_olt_read,
+    )
+    second = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert second.success is False
+    assert second.failure.reason == ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
+
+    db_session.expire_all()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # The previous evidence survives untouched...
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    assert row.olt_observed_at == previous_observed_at
+    # ...but the freshness signal is honest about the failed attempt.
+    assert row.olt_read_status == "unavailable"
+
+
+def test_identity_mismatch_preserves_the_previous_observation(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """An OLT identity mismatch (the serial is registered somewhere other
+    than the desired fsp/olt_ont_id target) must not overwrite the last
+    genuine OLT observation either — same evidence-preservation contract as
+    a transport failure or an unparseable reply, since the reader now
+    reports it as ``status="unavailable"`` (not "present" with nulled
+    fields, which would flow straight through ``_surfaces_observed`` as a
+    trustworthy read and null the row while stamping a fresh
+    ``olt_observed_at``).
+    """
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_identity_mismatch_read(adapter, desired, *, deadline=None):
+        return ReadResult(
+            status="unavailable",
+            observed=None,
+            error="registered at a different fsp/onu_id than desired",
+            identity_status="mismatch",
+        )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    first = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    assert first.success is True
+
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    previous_observed_at = row.olt_observed_at
+    assert previous_observed_at is not None
+    assert row.olt_read_status == "present"
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_identity_mismatch_read,
+    )
+    second = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert second.success is False
+    assert second.failure.reason == ReconcileFailureReason.OLT_IDENTITY_MISMATCH
+
+    db_session.expire_all()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # The previous evidence — mgmt IP, presence, everything — survives an
+    # identity-mismatch pass exactly as it survives a transport failure.
+    assert row.olt_present is True
+    assert row.olt_mgmt_ip == "172.16.210.20"
+    assert row.olt_observed_at == previous_observed_at
+    assert row.olt_read_status == "unavailable"
+
+
 def test_apply_failure_marks_ont_out_of_sync(
     db_session, ont, stub_desired, stub_ont_status
 ):
@@ -897,6 +1076,104 @@ def test_apply_failure_marks_ont_out_of_sync(
     ).one()
     assert status[0] == OntSyncStatus.out_of_sync.value
     assert "ACS exploded" in (status[1] or "")
+
+
+def test_bootstrap_reconcile_still_converges(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Non-vacuity guard: bootstrap mode always re-plans the WiFi/PSK push
+    regardless of drift (``_should_push_wifi_password`` returns True
+    unconditionally for ``mode=="bootstrap"``, on both the pre-apply AND the
+    post-apply verify plan). The Astra Bug 2 verification-debt tracking added
+    for service-port creates must not turn every ordinary, already-synced
+    bootstrap pass into a false ``VERIFICATION_MISMATCH``."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert result.failure is None
+    assert result.sync_status == "synced"
+
+
+def test_a_create_that_silently_no_ops_fails_verification(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """A service-port CREATE the OLT silently no-ops (the write is accepted,
+    but the port never actually appears) must not report convergence. The
+    post-apply verify read still shows the port missing; the SAME create
+    re-plans with its verification-debt Drift instead of a driftless
+    (falsely converged) plan — Astra Bug 2.
+
+    Uses the MANAGEMENT slot deliberately: PPP delivery authorization would
+    withhold a WAN-slot create against this bare fixture ONT (no active
+    subscription), which would test the authorization gate instead of the
+    verification-debt behaviour this test targets.
+    """
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_olt_read_missing_mgmt_port(adapter, target, *, deadline=None):
+        # The WAN port is present and matches; the mgmt port (index 23)
+        # never appears, before OR after the "create" write.
+        return ReadResult(
+            status="present",
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=None,
+                olt_rx_dbm=None,
+                olt_tx_dbm=None,
+                olt_temperature_c=None,
+                olt_description=target.description,
+                olt_mgmt_ip=target.mgmt_ip,
+                olt_mgmt_vlan=target.mgmt_vlan,
+                olt_line_profile_id=target.line_profile_id,
+                olt_service_profile_id=target.service_profile_id,
+                olt_service_ports=(
+                    {
+                        "index": target.wan_service_port_index,
+                        "vlan_id": target.wan_vlan,
+                        "gem_index": target.wan_gem_index,
+                        "ont_id": target.olt_ont_id,
+                        "fsp": target.fsp,
+                        "state": "up",
+                    },
+                ),
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_olt_read_missing_mgmt_port,
+    )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert "create_service_port" in olt.calls  # the write WAS attempted
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.VERIFICATION_MISMATCH
+    assert any(
+        "olt_service_ports" in f"{d.surface}:{d.field}" for d in result.drift_after
+    )
 
 
 # ── Status persistence ─────────────────────────────────────────────────────
@@ -1069,21 +1346,19 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
             olt_service_ports=(
                 {
                     "index": desired.mgmt_service_port_index,
-                    "vlan": desired.mgmt_vlan,
-                    "gem": 2,
+                    "vlan_id": desired.mgmt_vlan,
+                    "gem_index": 2,
                     "state": "up",
                 },
                 {
                     "index": desired.wan_service_port_index,
-                    "vlan": desired.wan_vlan,
-                    "gem": desired.wan_gem_index,
+                    "vlan_id": desired.wan_vlan,
+                    "gem_index": desired.wan_gem_index,
                     "state": "up",
                 },
             ),
         )
-        return ReadResult(
-            success=True, unreachable=False, observed=observed, error=None
-        )
+        return ReadResult(status="present", observed=observed, error=None)
 
     monkeypatch.setattr(
         "app.services.network.reconcile.core.read_olt_state", _drifty_olt_read
@@ -1142,8 +1417,7 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
             # Pre-apply: drift on description forces at least one action so
             # the verify path is exercised (no actions ⇒ verify short-circuit).
             return ReadResult(
-                success=True,
-                unreachable=False,
+                status="present",
                 observed=OltObservedFields(
                     olt_present=True,
                     olt_match_state="match",
@@ -1160,14 +1434,14 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
                     olt_service_ports=(
                         {
                             "index": desired.mgmt_service_port_index,
-                            "vlan": desired.mgmt_vlan,
-                            "gem": 2,
+                            "vlan_id": desired.mgmt_vlan,
+                            "gem_index": 2,
                             "state": "up",
                         },
                         {
                             "index": desired.wan_service_port_index,
-                            "vlan": desired.wan_vlan,
-                            "gem": desired.wan_gem_index,
+                            "vlan_id": desired.wan_vlan,
+                            "gem_index": desired.wan_gem_index,
                             "state": "up",
                         },
                     ),
@@ -1176,10 +1450,10 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
             )
         # Verify read: SSH connection dropped
         return ReadResult(
-            success=False,
-            unreachable=True,
+            status="unavailable",
             observed=None,
             error="Connection failed: timed out",
+            transport_unreachable=True,
         )
 
     monkeypatch.setattr(
@@ -1253,8 +1527,7 @@ def test_tr069_profile_change_is_olt_only_and_persists_after_readback(
         reads += 1
         observed_profile = 2 if reads == 1 else desired.tr069_profile_id
         return ReadResult(
-            success=True,
-            unreachable=False,
+            status="present",
             observed=OltObservedFields(
                 olt_present=True,
                 olt_match_state="match",

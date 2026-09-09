@@ -1503,6 +1503,54 @@ def test_olt_modify_service_profile_refuses_an_unset_profile():
     assert not olt.calls
 
 
+def test_an_unresolved_olt_ont_id_is_refused_before_device_contact():
+    """Defence in depth behind the planner's own identity gate: a legacy
+    caller that builds an ``OltModifyDescription`` directly, bypassing
+    ``compute_plan`` entirely, must not reach the adapter with
+    ``ont_id=None`` — the sentinel a genuinely unresolved identity collapses
+    to (Astra Bug 1). Uses ``OltModifyDescription`` specifically because it
+    carries no OTHER guarded field, isolating this exact guard from the
+    profile-id guards already covered above.
+    """
+    olt = _StubOltAdapter()
+    result = apply_plan(
+        _plan(OltModifyDescription(fsp="0/1/3", ont_id=None, description="desc")),
+        _ctx(olt_adapter=olt),
+    )
+    assert result.success is False
+    assert result.halted_by.reason == ReconcileFailureReason.INVALID_CHANGE
+    assert "olt_ont_id" in result.halted_by.message
+    assert not olt.calls
+
+
+def test_an_unresolved_fsp_is_refused_before_device_contact():
+    """Same guard, the other identity coordinate: an empty ``fsp`` (what
+    ``adapters._fsp_from_ont`` returns for a missing board/port) must not
+    reach the adapter either."""
+    olt = _StubOltAdapter()
+    result = apply_plan(
+        _plan(OltModifyDescription(fsp="", ont_id=11, description="desc")),
+        _ctx(olt_adapter=olt),
+    )
+    assert result.success is False
+    assert result.halted_by.reason == ReconcileFailureReason.INVALID_CHANGE
+    assert "fsp" in result.halted_by.message
+    assert not olt.calls
+
+
+def test_a_resolved_identity_still_reaches_the_adapter():
+    """Non-vacuity guard for the two tests above: a real fsp/ont_id pair must
+    not be caught by the new guard — confirms it fires on the sentinel, not
+    on every ``OltModifyDescription``."""
+    olt = _StubOltAdapter()
+    result = apply_plan(
+        _plan(OltModifyDescription(fsp="0/1/3", ont_id=11, description="desc")),
+        _ctx(olt_adapter=olt),
+    )
+    assert result.success is True
+    assert olt.calls[0][0] == "set_ont_description"
+
+
 def test_acs_add_object_refuses_missing_wcd_evidence_before_contact():
     acs = _StubAcsClient()
     result = apply_plan(
