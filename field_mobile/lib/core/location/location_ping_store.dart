@@ -12,6 +12,8 @@ class LocationPingPayload {
     required this.capturedAt,
     required this.shift,
     this.workOrderId,
+    this.accuracyM,
+    this.capturedAtIsClockDerived = false,
   });
 
   final double latitude;
@@ -20,9 +22,22 @@ class LocationPingPayload {
   final ShiftState shift;
   final String? workOrderId;
 
+  /// Horizontal accuracy of the fix, in metres — matches the server's
+  /// `accuracy_m` (see `LocationPingInput` in `app/schemas/field.py`). Null
+  /// when the source fix carried none.
+  final double? accuracyM;
+
+  /// True when [capturedAt] came from the app clock at buffer-append time
+  /// rather than the GPS fix's own timestamp — the explicit fallback path
+  /// for a fix whose source genuinely had no capture time. Local-only
+  /// diagnostic; deliberately never sent to the server (see [toJson]), so it
+  /// does not persist across an app restart via the encrypted queue either.
+  final bool capturedAtIsClockDerived;
+
   Map<String, dynamic> toJson() => {
     'latitude': latitude,
     'longitude': longitude,
+    'accuracy_m': ?accuracyM,
     'captured_at': capturedAt.toUtc().toIso8601String(),
     'status': shift.apiValue,
     'crm_work_order_id': ?workOrderId,
@@ -45,6 +60,7 @@ class LocationPingPayload {
       capturedAt: capturedAt.toUtc(),
       shift: shift,
       workOrderId: json['crm_work_order_id']?.toString(),
+      accuracyM: (json['accuracy_m'] as num?)?.toDouble(),
     );
   }
 }

@@ -68,7 +68,7 @@ class LocationPingService {
   final List<LocationPingPayload> _buffer = [];
   bool _bufferRestored = false;
   ShiftState _shift = ShiftState.offShift;
-  StreamSubscription<GeoPoint>? _backgroundSub;
+  StreamSubscription<LocationFix>? _backgroundSub;
   String? _activeWorkOrderId;
 
   ShiftState get shift => _shift;
@@ -126,12 +126,21 @@ class LocationPingService {
     await _appendFix(point, workOrderId: workOrderId);
   }
 
-  Future<void> _appendFix(GeoPoint point, {String? workOrderId}) async {
+  Future<void> _appendFix(LocationFix point, {String? workOrderId}) async {
+    // The fix's own capture time is authoritative for freshness — a fix
+    // buffered late (offline, backgrounded) must not be reported as "now".
+    // _clock() is only a fallback for the rare source that genuinely has no
+    // capture time to offer, and that fallback is recorded on the payload
+    // rather than left indistinguishable from a real GPS timestamp.
+    final fixTimestamp = point.timestamp;
+    final capturedAt = fixTimestamp ?? _clock();
     _buffer.add(
       LocationPingPayload(
         latitude: point.latitude,
         longitude: point.longitude,
-        capturedAt: _clock(),
+        accuracyM: point.accuracy,
+        capturedAt: capturedAt,
+        capturedAtIsClockDerived: fixTimestamp == null,
         shift: _shift,
         workOrderId: workOrderId,
       ),
