@@ -96,7 +96,12 @@ class _LocationTrackingHostState extends ConsumerState<LocationTrackingHost>
   @override
   Widget build(BuildContext context) {
     final shift = ref.watch(fieldShiftProvider);
-    final workOrderId = _activeWorkOrderId(ref.watch(jobsListProvider).value);
+    final jobs = ref.watch(jobsListProvider);
+    final workOrderId = jobs.when(
+      data: _activeWorkOrderId,
+      loading: () => _lastWorkOrderId,
+      error: (_, _) => _lastWorkOrderId,
+    );
     if (shift != _lastShift || workOrderId != _lastWorkOrderId) {
       final shiftChanged = shift != _lastShift;
       _lastShift = shift;

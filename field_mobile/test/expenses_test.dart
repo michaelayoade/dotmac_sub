@@ -9,6 +9,7 @@ import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
+import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -509,6 +510,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     Map<String, dynamic>? posted;
+    var managerExpenseLoads = 0;
     adapter.on('POST', '/api/v1/field/expense-requests/submit', (options) {
       posted = (options.data as Map).cast<String, dynamic>();
       return (
@@ -555,11 +557,21 @@ void main() {
               ),
             ],
           ),
+          managerExpensesProvider.overrideWith((ref) async {
+            managerExpenseLoads += 1;
+            return const [];
+          }),
         ],
-        child: MaterialApp.router(routerConfig: router),
+        child: Consumer(
+          builder: (context, ref, _) {
+            ref.watch(managerExpensesProvider);
+            return MaterialApp.router(routerConfig: router);
+          },
+        ),
       ),
     );
     await tester.pumpAndSettle();
+    expect(managerExpenseLoads, 1);
 
     expect(find.text('New expense request'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
@@ -614,6 +626,7 @@ void main() {
       },
     ]);
     expect(find.text('Expenses list'), findsOneWidget);
+    expect(managerExpenseLoads, 2);
 
     // Let the confirmation SnackBar timer expire.
     await tester.pump(const Duration(seconds: 5));
