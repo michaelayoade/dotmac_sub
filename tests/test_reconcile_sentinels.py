@@ -266,6 +266,80 @@ def test_a_bare_call_with_no_or_fallback_is_not_flagged():
     assert _adapter_coercions(tree) == set()
 
 
+def test_the_registry_entry_would_silently_whitelist_a_reversion():
+    """Documents a real limitation, doesn't paper over it: registering
+    ``olt_ont_id`` in ``RULES`` (done alongside this fix) means the GENERIC
+    three-layer audit (``discover() - _registered_identifiers()``) stays
+    green even if the ``or 0`` idiom is reintroduced, because the field is
+    already a known identifier — the set difference is empty regardless of
+    whether the coercion the identifier names is actually gone.
+
+    This is exactly why ``test_olt_ont_id_assignment_never_falls_back_to_a_literal``
+    below exists as a SEPARATE, registry-independent check: it inspects the
+    actual assignment statement directly and cannot be defeated by any
+    registry entry. Both facts are asserted here so the limitation is a
+    documented, tested property of this test suite rather than a gap nobody
+    noticed.
+    """
+    reverted_tree = ast.parse(
+        "def f(ont):\n"
+        "    olt_ont_id = parse_ont_id_on_olt(ont.external_id) or 0\n"
+        "    return olt_ont_id\n"
+    )
+    discovered = _adapter_coercions(reverted_tree)
+    assert discovered == {"olt_ont_id"}, "the detector itself still fires"
+
+    # ... but the generic registry-comparison check the audit actually runs
+    # is defeated: ``olt_ont_id`` is already a registered identifier, so the
+    # set difference against a reverted tree is empty and the generic
+    # audit test would report nothing wrong.
+    assert discovered - _registered_identifiers() == set()
+
+
+def test_olt_ont_id_assignment_never_falls_back_to_a_literal():
+    """Narrower, registry-independent guard for the exact Astra Bug 1 line —
+    the check that actually catches a reversion, per the limitation
+    documented in ``test_the_registry_entry_would_silently_whitelist_a_reversion``
+    above. Inspects ``desired_from_ont_unit``'s real assignment statement
+    directly; consults no registry and so cannot be defeated by one.
+    """
+    tree = _tree(reconcile_adapters.desired_from_ont_unit)
+    assign = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "olt_ont_id"
+    )
+    assert not isinstance(assign.value, ast.BoolOp), (
+        "olt_ont_id must be assigned directly from parse_ont_id_on_olt(...) "
+        "with no `or <literal>` fallback (Astra Bug 1): reintroducing `or 0` "
+        "collapses a genuinely unknown ONT-ID into the real, legitimate "
+        "ONT-ID 0."
+    )
+
+
+def test_fsp_assignment_never_falls_back_to_a_literal():
+    """Same guard for ``fsp`` — the other identity coordinate registered
+    alongside ``olt_ont_id``. ``_fsp_from_ont`` already returns ``""`` for an
+    unresolvable board/port, so there is no legitimate reason for an
+    ``or``-fallback on this assignment either."""
+    tree = _tree(reconcile_adapters.desired_from_ont_unit)
+    assign = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "fsp"
+    )
+    assert not isinstance(assign.value, ast.BoolOp), (
+        "fsp must be assigned directly from _fsp_from_ont(ont) with no "
+        "`or <literal>` fallback."
+    )
+
+
 def test_layer_annotation_matches_where_the_default_dominates():
     """A composer-dominated rule must measure against config paths.
 
