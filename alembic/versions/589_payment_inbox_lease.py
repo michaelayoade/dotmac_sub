@@ -59,12 +59,12 @@ def upgrade() -> None:
     if _has_index("integration_inbox", _INDEX):
         return
     if bind.dialect.name == "postgresql":
-        # `integration_inbox` serves all 8 webhook domains (payments, CRM,
-        # leads, ERP material, integrator settlement, ...). A plain CREATE
-        # INDEX takes a ShareLock that blocks writes to the whole table --
-        # including live payment webhook ingestion -- for the build's
-        # duration. CONCURRENTLY avoids that; matches
-        # `581_inbox_delivery_status_index` and
+        # `integration_inbox` serves all 8 inbound webhook domains (payments,
+        # customer-relationship contacts, leads, ERP material, integrator
+        # settlement, ...). A plain CREATE INDEX takes a ShareLock that
+        # blocks writes to the whole table -- including live payment webhook
+        # ingestion -- for the build's duration. CONCURRENTLY avoids that;
+        # matches `581_inbox_delivery_status_index` and
         # `563_topup_reconcile_attempt_leases`.
         with op.get_context().autocommit_block():
             op.execute("SET lock_timeout = '5s'")
