@@ -576,6 +576,84 @@ class TestBuildBeatSchedule:
             for entry in schedule.values()
         )
 
+    def test_registers_purchase_order_writeback_repair_gated_with_outbox(
+        self,
+        db_session,
+        monkeypatch,
+    ):
+        """The PO write-back repair sweep is scheduled like its invoice sibling.
+
+        Mirrors ``dotmac_erp_purchase_invoice_repair``: gated by the same
+        ``erp_outbox_enabled`` capability and the same
+        ``dotmac_erp_outbox_interval_seconds``-derived interval (floor 60s) --
+        this is the scheduler wiring for the previously-unreachable runbook
+        recovery step.
+        """
+        monkeypatch.setattr(db_session, "close", lambda: None)
+        with (
+            patch.object(scheduler_config, "SessionLocal", return_value=db_session),
+            patch(
+                "app.services.integrations.erp_capability.capability_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ),
+        ):
+            scheduler_config.build_beat_schedule()
+
+        po_row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "dotmac_erp_purchase_order_repair")
+            .one()
+        )
+        invoice_row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "dotmac_erp_purchase_invoice_repair")
+            .one()
+        )
+        assert po_row.task_name == (
+            "app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks"
+        )
+        assert po_row.enabled is True
+        assert po_row.interval_seconds >= 60
+        assert po_row.interval_seconds == invoice_row.interval_seconds
+
+    def test_purchase_order_writeback_repair_absent_when_outbox_disabled(
+        self,
+        db_session,
+        monkeypatch,
+    ):
+        """No pre-existing row + capability off -> no schedule entry at all."""
+        monkeypatch.setattr(db_session, "close", lambda: None)
+        with (
+            patch.object(scheduler_config, "SessionLocal", return_value=db_session),
+            patch(
+                "app.services.integrations.erp_capability.capability_enabled",
+                return_value=False,
+            ),
+            patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ),
+        ):
+            schedule = scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "dotmac_erp_purchase_order_repair")
+            .one_or_none()
+        )
+        assert row is None
+        assert not any(
+            entry["task"]
+            == "app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks"
+            for entry in schedule.values()
+        )
+
     def test_retires_parallel_radius_refresh_schedule(self, db_session, monkeypatch):
         refresh_task = "app.tasks.radius_population.refresh_radius_from_subs"
         stale_row = ScheduledTask(

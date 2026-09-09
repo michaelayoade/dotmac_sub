@@ -384,3 +384,31 @@ def test_repair_is_noop_when_writeback_already_present(db_session):
     db_session.refresh(install)
     assert result["repaired"] == 0
     assert install.procurement_order_reference == "PO-ERP-7"
+
+
+def test_repair_never_writes_back_a_rejected_or_dead_row(db_session):
+    """A rejected/dead outbox row must never be repaired as if ERP had accepted it.
+
+    Before the status filter fix, ``repair_purchase_order_writebacks`` scanned
+    every ``purchase_order`` row carrying ANY ``erp_response`` -- including
+    terminal ``rejected``/``dead`` rows. A row that carries an id-shaped payload
+    despite being terminally rejected must be left alone: writing it back would
+    mark ``procurement_delivery_status="accepted"`` on an install ERP actually
+    refused.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_order.value})
+    install = _approved_install(db_session)
+    row = purchase_order_sync.enqueue_purchase_order(db_session, install)
+
+    # Simulate a terminal rejection whose stored response still carries an
+    # id-shaped payload (e.g. ERP echoed a would-be id alongside the rejection).
+    row.status = FieldErpSyncStatus.rejected.value
+    row.erp_response = {"purchase_order_id": "PO-SHOULD-NOT-APPLY"}
+    db_session.commit()
+
+    result = purchase_order_sync.repair_purchase_order_writebacks(db_session)
+
+    db_session.refresh(install)
+    assert result["repaired"] == 0
+    assert install.procurement_order_reference is None
+    assert install.procurement_delivery_status != "accepted"

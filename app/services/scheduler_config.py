@@ -2245,6 +2245,19 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(dotmac_erp_outbox_interval, 60),
         )
 
+        # Purchase-order write-back repair: ERP already accepted the PO (2xx),
+        # but sub's own write of the ERP id onto the installation project may
+        # have been lost. Re-applies from the delivered outbox row's stored
+        # erp_response -- no ERP call, no re-emit. Same gate + interval floor
+        # as the purchase-invoice repair sweep above.
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_order_repair",
+            task_name="app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks",
+            enabled=erp_outbox_enabled,
+            interval_seconds=max(dotmac_erp_outbox_interval, 60),
+        )
+
         # ERP remains authoritative for AP settlement. Poll its dedicated
         # source-invoice read contract and project timestamped observations for
         # the vendor portal; never infer payment from the creation response.

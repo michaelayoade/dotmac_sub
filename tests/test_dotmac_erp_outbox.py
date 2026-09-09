@@ -601,6 +601,47 @@ def test_outbox_task_registered_with_celery():
     )
 
 
+def test_repair_purchase_order_writebacks_registered_with_celery():
+    """The PO write-back repair function must be reachable in production.
+
+    Before this task, ``repair_purchase_order_writebacks`` existed and was
+    already directly unit-tested, but had no Celery task, no scheduler entry,
+    and no reliability contract -- the documented runbook recovery step
+    (PURCHASE_ORDER_ERP_CUTOVER.md: "run the existing PO response repair") had
+    no invocation path in production.
+    """
+    import app.tasks  # noqa: F401
+    from app.celery_app import celery_app
+
+    assert (
+        "app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks"
+        in celery_app.tasks
+    )
+
+
+def test_repair_purchase_order_writebacks_has_reliability_contract():
+    from app.services.task_reliability import (
+        TASK_RELIABILITY_CONTRACTS,
+        Idempotency,
+        RetryPolicy,
+    )
+
+    contract = TASK_RELIABILITY_CONTRACTS[
+        "app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks"
+    ]
+    invoice_contract = TASK_RELIABILITY_CONTRACTS[
+        "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync"
+    ]
+    assert contract.domain == "integration"
+    # Same shape as the sibling purchase-invoice repair sweep: a beat-rerun
+    # sweep over an idempotent, no-ERP-call repair.
+    assert contract.retry_policy == invoice_contract.retry_policy
+    assert contract.idempotency == invoice_contract.idempotency
+    assert contract.failure_visibility == invoice_contract.failure_visibility
+    assert contract.retry_policy is RetryPolicy.BEAT_RERUN
+    assert contract.idempotency is Idempotency.IDEMPOTENT
+
+
 # ---------------------------------------------------------------------------
 # Migration 249 — revision chain + single head
 # ---------------------------------------------------------------------------
