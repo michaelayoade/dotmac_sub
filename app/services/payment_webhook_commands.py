@@ -177,6 +177,12 @@ class ProcessClaimedPaymentWebhookCommand:
 
     receipt_id: UUID
     provider: PaymentWebhookProvider
+    # attempt_count the caller observed at claim time. Threaded through to
+    # `mark_processed` so a claimant whose lease was reclaimed by someone
+    # else while it was still running cannot complete this receipt out from
+    # under the new owner — see `inbox.InboxLeaseLost`. `None` skips the
+    # fence (legacy/other callers); the payments adapter always supplies it.
+    claimed_attempt: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1400,7 +1406,11 @@ def _process_claimed_payment_webhook(
         provider_event_id=event.id,
         payment_id=event.payment_id,
     )
-    integration_inbox.mark_processed(receipt, consequence=result.consequence())
+    integration_inbox.mark_processed(
+        receipt,
+        consequence=result.consequence(),
+        claimed_attempt=command.claimed_attempt,
+    )
     db.flush()
     return result
 

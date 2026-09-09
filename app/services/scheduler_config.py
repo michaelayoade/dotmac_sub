@@ -1993,6 +1993,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=event_stale_cleanup_interval,
         )
 
+        # Integration inbox lease reclaim - moves receipts a dead claimant
+        # left stuck in 'processing' to 'retryable' so they surface for
+        # redelivery or manual replay instead of leaking forever.
+        payment_inbox_reclaim_interval = resolve_integer(
+            session,
+            SettingDomain.scheduler,
+            "payment_inbox_reclaim_interval_seconds",
+        )
+        payment_inbox_reclaim_interval = max(
+            payment_inbox_reclaim_interval, 60
+        )  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="payment_inbox_reclaim_runner",
+            task_name="app.tasks.integration_inbox.reclaim_stale_claims",
+            enabled=True,
+            interval_seconds=payment_inbox_reclaim_interval,
+        )
+
         stale_infra_check_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.scheduler,

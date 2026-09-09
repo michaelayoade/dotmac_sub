@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.integration_platform import (
@@ -17,6 +17,26 @@ from app.models.integration_platform import (
 from app.services.integrations.delivery import payload_digest
 from app.services.integrations.installations import quarantine_installation
 
+# Matches IntegrationDelivery's outbound lease (app/services/integrations/
+# delivery.py) so a claim on either half of this subsystem expires on the
+# same cadence.
+DEFAULT_LEASE_DURATION = timedelta(minutes=2)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    """Normalize a possibly-naive datetime to UTC-aware.
+
+    SQLite (the unit-test lane's engine) does not preserve tzinfo across a
+    round trip through a `DateTime(timezone=True)` column, so a value just
+    loaded from the ORM can come back naive even though it was always written
+    as UTC. Comparing that directly against a fresh `datetime.now(UTC)` raises
+    `TypeError: can't compare offset-naive and offset-aware datetimes` — this
+    is the same normalization used throughout the codebase (e.g.
+    `account_lifecycle.py`, `auth_flow.py`) for the identical reason.
+    """
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
 
 class InboxError(ValueError):
     """Raised when an inbound receipt violates identity or lifecycle rules."""
@@ -24,6 +44,19 @@ class InboxError(ValueError):
 
 class ProviderEventIdentityCollision(InboxError):
     """A provider reused one event identity for different payload bytes."""
+
+
+class InboxLeaseLost(InboxError):
+    """A claimant tries to complete a receipt reclaimed out from under it.
+
+    The lease clock is a heuristic (it can expire early under a slow-but-alive
+    worker, or a clock skew). This is the actual safety mechanism: a claimant
+    threads the `attempt_count` it observed at claim time through to
+    completion, and completion refuses to apply if the row has moved on to a
+    newer attempt (someone else reclaimed it). The caller's transaction is
+    still open at that point, so raising here rolls back any consequence the
+    stale claimant was about to commit.
+    """
 
 
 CommandResultT = TypeVar("CommandResultT")
@@ -45,7 +78,16 @@ def execute_command(
 
 
 def get_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
-    receipt = db.get(IntegrationInbox, receipt_id)
+    # FOR UPDATE: callers use this to read-then-mutate lifecycle state
+    # (replay_receipt's lease check, fail_claimed_consequence's completion).
+    # A plain `db.get` would let a concurrent claimant's read-then-write race
+    # this one under READ COMMITTED — see the identical reasoning on
+    # `receive_verified`'s own-row lookup below.
+    receipt = db.scalars(
+        select(IntegrationInbox)
+        .where(IntegrationInbox.id == receipt_id)
+        .with_for_update()
+    ).one_or_none()
     if receipt is None:
         raise InboxError("integration inbox receipt not found")
     return receipt
@@ -117,12 +159,22 @@ def receive_verified(
     if not normalized_event_id:
         raise InboxError("provider event id is required")
     digest = payload_digest(payload)
+    # FOR UPDATE: the binding lock above only serializes callers that are
+    # BOTH still inside this function. A claimant that already committed its
+    # claim and moved on to processing the receipt (a separate, later
+    # transaction, holding a row lock on the IntegrationInbox row via
+    # `get_receipt`/`lock_for_update`, but no binding lock) is not blocked by
+    # the binding lock at all. Locking this row too makes a concurrent
+    # redelivery's reclaim attempt block on that claimant's own row lock
+    # instead of racing it with a non-locking read — the same protection the
+    # sweeper already gets from `with_for_update(skip_locked=True)`.
     existing = (
         db.query(IntegrationInbox)
         .filter(
             IntegrationInbox.capability_binding_id == binding.id,
             IntegrationInbox.provider_event_id == normalized_event_id,
         )
+        .with_for_update()
         .one_or_none()
     )
     if existing is not None:
@@ -162,6 +214,8 @@ def receive_and_claim_verified(
     event_type: str,
     payload: dict[str, Any],
     headers: dict[str, str] | None = None,
+    now: datetime | None = None,
+    lease_duration: timedelta = DEFAULT_LEASE_DURATION,
 ) -> tuple[IntegrationInbox, bool]:
     """Persist a verified fact before any domain consequence runs."""
 
@@ -174,7 +228,9 @@ def receive_and_claim_verified(
             payload=payload,
             headers=headers,
         )
-        should_process = claim_for_processing(receipt)
+        should_process = claim_for_processing(
+            receipt, now=now, lease_duration=lease_duration
+        )
     except ProviderEventIdentityCollision:
         # Quarantine is the authoritative security consequence of an identity
         # collision and must survive the fail-closed rejection.
@@ -187,30 +243,71 @@ def receive_and_claim_verified(
     return receipt, should_process
 
 
-def claim_for_processing(receipt: IntegrationInbox) -> bool:
-    if receipt.state in {"processing", "processed", "dead_letter"}:
+def claim_for_processing(
+    receipt: IntegrationInbox,
+    *,
+    now: datetime | None = None,
+    lease_duration: timedelta = DEFAULT_LEASE_DURATION,
+) -> bool:
+    """Claim `receipt` for processing, reclaiming an expired lease if needed.
+
+    Callers reach this only after acquiring the capability-binding lock AND
+    a `FOR UPDATE` lock on this exact row in `receive_verified`. The binding
+    lock alone is not enough: a claimant that already committed its claim and
+    moved on to processing the receipt holds no binding lock while it works,
+    only a row lock (taken separately via `get_receipt`/`lock_for_update` in
+    `process_claimed_payment_webhook`) — the row-level lock here is what
+    makes a concurrent reclaim block on that in-flight claimant instead of
+    reading a stale snapshot and clobbering its eventual commit. Even so, a
+    lease can still expire out from under a claimant that is genuinely still
+    working (a live worker between transactions, not merely slow inside one);
+    the `attempt_count` fence in `mark_processed`/`mark_failed` is the backstop
+    for that case.
+    """
+
+    now = now or datetime.now(UTC)
+    if receipt.state in {"processed", "dead_letter"}:
         # Provider redelivery is not an authorized replay. A terminal receipt
         # remains terminal and the webhook acknowledges the already-recorded
         # fact without attempting a second consequence.
         return False
-    if (
+    if receipt.state == "processing":
+        live_lease = (
+            receipt.lease_expires_at is not None
+            and _as_aware_utc(receipt.lease_expires_at) > now
+        )
+        if live_lease:
+            # A genuinely live claim. Refuse — this is not a reclaim.
+            return False
+        # Lease is missing or expired: the original claimant is presumed dead.
+        # Fall through to the shared claim/reclaim mutation below.
+    elif (
         receipt.state == "retryable"
         and receipt.error_code == "crm_customer_name_rejected"
     ):
         return False
     receipt.state = "processing"
     receipt.attempt_count += 1
+    receipt.lease_expires_at = now + lease_duration
     receipt.error_code = None
     receipt.error_detail = None
     return True
 
 
 def mark_processed(
-    receipt: IntegrationInbox, *, consequence: dict[str, Any]
+    receipt: IntegrationInbox,
+    *,
+    consequence: dict[str, Any],
+    claimed_attempt: int | None = None,
 ) -> IntegrationInbox:
+    if claimed_attempt is not None and receipt.attempt_count != claimed_attempt:
+        raise InboxLeaseLost(
+            "integration inbox receipt was reclaimed before completion"
+        )
     receipt.state = "processed"
     receipt.consequence_json = consequence
     receipt.processed_at = datetime.now(UTC)
+    receipt.lease_expires_at = None
     receipt.error_code = None
     receipt.error_detail = None
     return receipt
@@ -222,9 +319,15 @@ def mark_failed(
     error_code: str,
     error_detail: str | None = None,
     max_attempts: int = 10,
+    claimed_attempt: int | None = None,
 ) -> IntegrationInbox:
+    if claimed_attempt is not None and receipt.attempt_count != claimed_attempt:
+        raise InboxLeaseLost(
+            "integration inbox receipt was reclaimed before completion"
+        )
     receipt.error_code = error_code[:120]
     receipt.error_detail = (error_detail or "")[:2000] or None
+    receipt.lease_expires_at = None
     receipt.state = (
         "dead_letter" if receipt.attempt_count >= max(1, max_attempts) else "retryable"
     )
@@ -236,12 +339,17 @@ def complete_consequence(
     *,
     receipt: IntegrationInbox,
     consequence: dict[str, Any],
+    claimed_attempt: int | None = None,
 ) -> dict[str, Any]:
     """Commit one domain consequence with its canonical inbox evidence."""
 
     return execute_command(
         db,
-        lambda: mark_processed(receipt, consequence=consequence).consequence_json,
+        lambda: (
+            mark_processed(
+                receipt, consequence=consequence, claimed_attempt=claimed_attempt
+            ).consequence_json
+        ),
     )
 
 
@@ -253,6 +361,7 @@ def fail_consequence(
     error_detail: str | None = None,
     consequence: dict[str, Any] | None = None,
     max_attempts: int = 10,
+    claimed_attempt: int | None = None,
 ) -> None:
     """Discard partial consequence writes, then record retry evidence."""
 
@@ -266,6 +375,7 @@ def fail_consequence(
             error_code=error_code,
             error_detail=error_detail,
             max_attempts=max_attempts,
+            claimed_attempt=claimed_attempt,
         )
         if consequence is not None:
             current.consequence_json = consequence
@@ -280,6 +390,7 @@ def fail_claimed_consequence(
     error_code: str,
     error_detail: str | None = None,
     max_attempts: int = 10,
+    claimed_attempt: int | None = None,
 ) -> None:
     """Record failure after a separate consequence owner already rolled back."""
 
@@ -290,17 +401,72 @@ def fail_claimed_consequence(
             error_code=error_code,
             error_detail=error_detail,
             max_attempts=max_attempts,
+            claimed_attempt=claimed_attempt,
         )
 
     execute_command(db, operation)
 
 
-def replay_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
+def replay_receipt(
+    db: Session, *, receipt_id: UUID, now: datetime | None = None
+) -> IntegrationInbox:
+    """Manually return a stuck receipt to `verified` for reprocessing.
+
+    A live `processing` claim always refuses — this escape hatch must never
+    race a genuinely running worker. A `processing` claim whose lease has
+    already expired is treated the same as `retryable`/`dead_letter`: nothing
+    is currently working it.
+    """
+
+    now = now or datetime.now(UTC)
     receipt = get_receipt(db, receipt_id=receipt_id)
-    if receipt.state not in {"retryable", "dead_letter"}:
+    is_expired_processing = receipt.state == "processing" and (
+        receipt.lease_expires_at is None
+        or _as_aware_utc(receipt.lease_expires_at) <= now
+    )
+    if receipt.state not in {"retryable", "dead_letter"} and not is_expired_processing:
         raise InboxError("integration inbox receipt is not replayable")
     receipt.state = "verified"
+    receipt.lease_expires_at = None
     receipt.error_code = None
     receipt.error_detail = None
     db.flush()
     return receipt
+
+
+def reclaim_stale_claims(
+    db: Session, *, now: datetime | None = None, grace: timedelta = timedelta(minutes=1)
+) -> int:
+    """Move every `processing` receipt whose lease expired more than `grace`
+    ago to `retryable` for a fresh delivery attempt or manual replay.
+
+    Deliberately lands on `retryable`, not `verified`: silently requeuing a
+    receipt that a live provider will redeliver anyway risks looping forever
+    on a poison payload. `retryable` still surfaces it, but only a real
+    redelivery (inline reclaim) or an operator replay puts it back to work.
+    """
+
+    now = now or datetime.now(UTC)
+    cutoff = now - grace
+    stale = (
+        db.query(IntegrationInbox)
+        .filter(IntegrationInbox.state == "processing")
+        .filter(
+            or_(
+                IntegrationInbox.lease_expires_at.is_(None),
+                IntegrationInbox.lease_expires_at < cutoff,
+            )
+        )
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+    for receipt in stale:
+        receipt.state = "retryable"
+        receipt.lease_expires_at = None
+        receipt.error_code = "inbox_claim_lease_expired"
+        receipt.error_detail = (
+            "Processing claim lease expired without a completion; moved to "
+            "retryable for redelivery or manual replay."
+        )
+    db.flush()
+    return len(stale)

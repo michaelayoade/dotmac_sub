@@ -77,6 +77,9 @@ from app.tasks.integration_delivery import (
     deliver_integration_event,
     deliver_meta_lead_conversion,
 )
+from app.tasks.integration_inbox import (
+    reclaim_stale_claims as reclaim_stale_integration_inbox_claims,
+)
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -254,6 +257,7 @@ __all__ = [
     "run_integration_job",
     "deliver_integration_event",
     "deliver_meta_lead_conversion",
+    "reclaim_stale_integration_inbox_claims",
     "process_due_campaigns",
     "process_due_campaign_steps",
     "send_campaign_batch",

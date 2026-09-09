@@ -39,7 +39,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: runtime readiness. This total is still two-directional so a wholesale
 #: change in how tests touch the database (e.g. every fixture switching to a
 #: new async pattern) cannot pass unnoticed either.
-TEST_FIXTURE_BASELINE_TOTAL = 115
+#: +2 from tests/integration/test_integration_inbox_concurrency.py: two new
+#: two-session Postgres concurrency tests for the payment-inbox lease
+#: (reclaim-vs-reclaim and reclaim-vs-completion), each with its own
+#: `sessionmaker`, mirroring the file's existing test fixture pattern.
+TEST_FIXTURE_BASELINE_TOTAL = 117
 
 
 def _baseline() -> dict[str, int]:

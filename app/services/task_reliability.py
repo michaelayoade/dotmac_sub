@@ -362,6 +362,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Durable delivery state, stable Meta event ID, bounded retry, and "
         "dead-letter evidence.",
     ),
+    "app.tasks.integration_inbox.reclaim_stale_claims": _c(
+        "integrations",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Beat-rerun sweep, modeled on events.mark_stale_processing_events. "
+        "Moves an expired-lease 'processing' receipt to 'retryable'; a "
+        "receipt already moved no longer matches the sweep's own filter, so "
+        "a repeat run is a no-op for it. The receipt's state/error_code is "
+        "the visible domain status.",
+    ),
     "app.tasks.invoice_pdf.generate_invoice_pdf_export": _c(
         "billing", MANUAL, IDEMP, STATUS
     ),
