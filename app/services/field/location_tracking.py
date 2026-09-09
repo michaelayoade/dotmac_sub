@@ -64,6 +64,7 @@ class LocationPingCommand:
     crm_work_order_id: str | None = None
     source: str = "mobile"
     status: str | None = None
+    client_observation_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,11 +82,25 @@ class LocationTransition:
 
 
 @dataclass(frozen=True, slots=True)
+class LocationReplayInfo:
+    """Observability record for a duplicate-submission ping.
+
+    Always counted inside ``LocationBatchOutcome.accepted`` — never as an
+    error — so an already-shipped client's ``accepted + len(errors) ==
+    total_sent`` invariant holds whether or not it reads this field.
+    """
+
+    index: int
+    ping_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class LocationBatchOutcome:
     accepted: int
     errors: tuple[LocationIngestIssue, ...]
     presence: FieldTechPresence
     transitions: tuple[LocationTransition, ...]
+    replays: tuple[LocationReplayInfo, ...] = ()
 
 
 class LocationPingRejected(Exception):
@@ -202,13 +217,67 @@ class FieldLocationTracking:
         )
 
     @staticmethod
+    def _find_existing_ping(
+        db: Session,
+        *,
+        technician_id: UUID,
+        client_observation_id: UUID,
+    ) -> FieldTechLocationPing | None:
+        return db.scalar(
+            select(FieldTechLocationPing).where(
+                FieldTechLocationPing.technician_id == technician_id,
+                FieldTechLocationPing.client_observation_id == client_observation_id,
+            )
+        )
+
+    @staticmethod
+    def _replay_for(
+        db: Session,
+        principal: dict[str, Any],
+        client_observation_id: UUID | None,
+    ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool] | None:
+        """Re-read an already-persisted ping after a race-lost insert.
+
+        Mirrors field_transitions.apply's IntegrityError recovery shape: the
+        losing writer's own insert never lands, so it re-reads the winner's
+        row under the same (technician_id, client_observation_id) key and
+        returns it as a replay instead of surfacing the conflict.
+        """
+
+        if client_observation_id is None:
+            return None
+        profile = _profile_from_principal(db, principal)
+        existing = FieldLocationTracking._find_existing_ping(
+            db,
+            technician_id=profile.id,
+            client_observation_id=client_observation_id,
+        )
+        if existing is None:
+            return None
+        presence = FieldLocationTracking.get_or_create_presence(db, principal)
+        return existing, presence, True
+
+    @staticmethod
     def _ingest_ping(
         db: Session,
         principal: dict[str, Any],
         *,
         command: LocationPingCommand,
-    ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
+    ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
         presence = FieldLocationTracking.get_or_create_presence(db, principal)
+        if command.client_observation_id is not None:
+            # A replay is returned unconditionally, before any of today's
+            # validation runs: it is the recorded outcome of an already-
+            # accepted ping, not a new decision, so a work-order reassignment
+            # or other state change since the original accept must not turn
+            # a legitimate retry into a fresh rejection.
+            existing = FieldLocationTracking._find_existing_ping(
+                db,
+                technician_id=presence.technician_id,
+                client_observation_id=command.client_observation_id,
+            )
+            if existing is not None:
+                return existing, presence, True
         FieldLocationTracking._validate_work_order_tag(
             db,
             technician_id=presence.technician_id,
@@ -234,6 +303,7 @@ class FieldLocationTracking:
             captured_at=captured,
             received_at=now,
             source=command.source or "mobile",
+            client_observation_id=command.client_observation_id,
         )
         db.add(ping)
 
@@ -251,12 +321,13 @@ class FieldLocationTracking:
             )
             presence.last_location_at = captured
 
-        # The flush surfaces a row-level integrity conflict (for example, a
-        # future duplicate-submission identity constraint) inside this one
-        # ping's boundary instead of at the eventual owner-command commit,
-        # where it would be indistinguishable from every other row in a batch.
+        # The flush surfaces a row-level integrity conflict (a duplicate
+        # (technician_id, client_observation_id), or a concurrent writer
+        # racing this same key) inside this one ping's boundary instead of
+        # at the eventual owner-command commit, where it would be
+        # indistinguishable from every other row in a batch.
         db.flush()
-        return ping, presence
+        return ping, presence, False
 
     @staticmethod
     def record_ping(
@@ -265,22 +336,39 @@ class FieldLocationTracking:
         *,
         command: LocationPingCommand,
         commit: bool = True,
-    ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
-        def _operation() -> tuple[FieldTechLocationPing, FieldTechPresence]:
+    ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
+        def _operation() -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
             return FieldLocationTracking._ingest_ping(db, principal, command=command)
 
         if not commit:
             # Called from inside record_batch's already-open owner command and
-            # per-row savepoint; the batch owns the transaction boundary, so
+            # per-row savepoint; the batch owns the transaction boundary and
+            # its own IntegrityError recovery (see record_batch below), so
             # this call is a plain participant, not its own owner command.
             return _operation()
 
-        return execute_owner_command(
-            db,
-            definition=_RECORD_PING_DEFINITION,
-            context=_command_context(principal, reason="record_ping"),
-            operation=_operation,
-        )
+        try:
+            return execute_owner_command(
+                db,
+                definition=_RECORD_PING_DEFINITION,
+                context=_command_context(principal, reason="record_ping"),
+                operation=_operation,
+            )
+        except (IntegrityError, DBAPIError):
+            # execute_owner_command has already rolled back the whole
+            # command transaction by the time this exception reaches here,
+            # leaving the session transaction-free — exactly the state
+            # field_transitions.apply's own db.rollback() produces before its
+            # re-read. A genuine concurrent double-submit of the same
+            # (technician_id, client_observation_id) loses this race; the
+            # loser recovers by re-reading the winner's row as a replay
+            # instead of surfacing the conflict.
+            replay = FieldLocationTracking._replay_for(
+                db, principal, command.client_observation_id
+            )
+            if replay is None:
+                raise
+            return replay
 
     @staticmethod
     def record_batch(
@@ -292,16 +380,20 @@ class FieldLocationTracking:
             raise HTTPException(status_code=422, detail="Batch exceeds 200 pings")
 
         def _operation() -> tuple[
-            int, list[LocationIngestIssue], FieldTechPresence | None
+            int,
+            list[LocationIngestIssue],
+            FieldTechPresence | None,
+            list[LocationReplayInfo],
         ]:
             accepted = 0
             errors: list[LocationIngestIssue] = []
+            replays: list[LocationReplayInfo] = []
             last_presence: FieldTechPresence | None = None
             for index, command in enumerate(pings):
 
                 def _ingest_row(
                     command: LocationPingCommand = command,
-                ) -> tuple[FieldTechLocationPing, FieldTechPresence]:
+                ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
                     return FieldLocationTracking.record_ping(
                         db,
                         principal,
@@ -310,8 +402,12 @@ class FieldLocationTracking:
                     )
 
                 try:
-                    _, last_presence = execute_owner_savepoint(db, _ingest_row)
+                    ping, last_presence, replayed = execute_owner_savepoint(
+                        db, _ingest_row
+                    )
                     accepted += 1
+                    if replayed:
+                        replays.append(LocationReplayInfo(index=index, ping_id=ping.id))
                 except LocationPingRejected as exc:
                     errors.append(
                         LocationIngestIssue(
@@ -334,17 +430,31 @@ class FieldLocationTracking:
                     # A per-row savepoint isolates this failure: the flush
                     # inside the savepoint has already been rolled back by
                     # execute_owner_savepoint, so every other row in the
-                    # batch, and the batch's own commit, are unaffected.
-                    errors.append(
-                        LocationIngestIssue(
-                            index=index,
-                            code="ping_conflict",
-                            detail="Ping conflicted with an existing record",
-                        )
+                    # batch, and the batch's own commit, are unaffected. If
+                    # this row carried a client_observation_id, the conflict
+                    # is a duplicate-submission race rather than a genuine
+                    # error: re-read the winner's row (still visible — only
+                    # the savepoint rolled back, not the batch transaction)
+                    # and count it as an accepted replay, exactly like a
+                    # non-racing duplicate already would be.
+                    replay = FieldLocationTracking._replay_for(
+                        db, principal, command.client_observation_id
                     )
-            return accepted, errors, last_presence
+                    if replay is not None:
+                        ping, last_presence, _ = replay
+                        accepted += 1
+                        replays.append(LocationReplayInfo(index=index, ping_id=ping.id))
+                    else:
+                        errors.append(
+                            LocationIngestIssue(
+                                index=index,
+                                code="ping_conflict",
+                                detail="Ping conflicted with an existing record",
+                            )
+                        )
+            return accepted, errors, last_presence, replays
 
-        accepted, errors, last_presence = execute_owner_command(
+        accepted, errors, last_presence, replays = execute_owner_command(
             db,
             definition=_RECORD_BATCH_DEFINITION,
             context=_command_context(principal, reason="record_batch"),
@@ -392,6 +502,7 @@ class FieldLocationTracking:
             errors=tuple(errors),
             presence=presence,
             transitions=tuple(transitions),
+            replays=tuple(replays),
         )
 
 

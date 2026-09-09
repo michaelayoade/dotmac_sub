@@ -61,6 +61,10 @@ def ingest_locations(
             }
             for transition in outcome.transitions
         ],
+        "replays": [
+            {"index": replay.index, "ping_id": str(replay.ping_id)}
+            for replay in outcome.replays
+        ],
     }
 
 

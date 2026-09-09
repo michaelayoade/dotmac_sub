@@ -21,6 +21,7 @@ from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field.location_tracking import (
+    FieldLocationTracking,
     LocationPingCommand,
     field_location_tracking,
 )
@@ -682,3 +683,234 @@ def test_location_api_refuses_shift_without_erp_check_in(db_session, monkeypatch
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "check_in_required"
+
+
+def test_replayed_ping_persists_once_and_does_not_move_presence(db_session):
+    """A retried record_ping call carrying the same client_observation_id is
+    an idempotent replay: no second row, no second presence update, and the
+    replay resolves to the original row.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    _profile(db_session, user)
+    db_session.commit()
+
+    client_observation_id = uuid4()
+    command = LocationPingCommand(
+        latitude=9.071,
+        longitude=7.451,
+        status="on_shift",
+        client_observation_id=client_observation_id,
+    )
+
+    first_ping, _, first_replayed = field_location_tracking.record_ping(
+        db_session, auth, command=command
+    )
+    assert first_replayed is False
+
+    # A genuine retry: same client_observation_id, but with a coordinate
+    # drift a client's own GPS jitter could plausibly produce between the
+    # original send and its retry.
+    retry_command = LocationPingCommand(
+        latitude=1.0,
+        longitude=1.0,
+        status="on_shift",
+        client_observation_id=client_observation_id,
+    )
+    second_ping, presence, second_replayed = field_location_tracking.record_ping(
+        db_session, auth, command=retry_command
+    )
+
+    assert second_replayed is True
+    assert second_ping.id == first_ping.id
+    assert db_session.query(FieldTechLocationPing).count() == 1
+    # The replay never re-ran presence mutation with the retry's payload.
+    assert presence.last_latitude == 9.071
+    assert presence.last_longitude == 7.451
+
+
+def test_different_technicians_may_share_a_client_observation_id(db_session):
+    """The uniqueness is scoped to (technician_id, client_observation_id),
+    not global — this is the deliberate deviation from FieldJobEvent's bare
+    global-unique client_event_id index. A test that copied that precedent
+    verbatim would fail here because the second technician's ping would
+    collide with the first's.
+    """
+
+    first_user = _user(db_session)
+    first_auth = _auth(first_user)
+    _profile(db_session, first_user, crm_person_id="crm-tech-one")
+
+    second_user = _user(db_session)
+    second_auth = _auth(second_user)
+    _profile(db_session, second_user, crm_person_id="crm-tech-two")
+    db_session.commit()
+
+    shared_client_observation_id = uuid4()
+    first_ping, _, first_replayed = field_location_tracking.record_ping(
+        db_session,
+        first_auth,
+        command=LocationPingCommand(
+            latitude=9.071,
+            longitude=7.451,
+            client_observation_id=shared_client_observation_id,
+        ),
+    )
+    second_ping, _, second_replayed = field_location_tracking.record_ping(
+        db_session,
+        second_auth,
+        command=LocationPingCommand(
+            latitude=8.0,
+            longitude=6.0,
+            client_observation_id=shared_client_observation_id,
+        ),
+    )
+
+    assert first_replayed is False
+    assert second_replayed is False
+    assert first_ping.id != second_ping.id
+    assert db_session.query(FieldTechLocationPing).count() == 2
+
+
+def test_batch_duplicate_counts_as_accepted_not_error(db_session):
+    """A batch mixing a genuinely new ping with one that replays an
+    already-persisted client_observation_id must count the replay inside
+    `accepted`, never as an error, so an already-shipped client's
+    `accepted + len(errors) == total_sent` check still holds.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    _profile(db_session, user)
+    db_session.commit()
+
+    already_sent_id = uuid4()
+    existing_ping, _, _ = field_location_tracking.record_ping(
+        db_session,
+        auth,
+        command=LocationPingCommand(
+            latitude=9.071,
+            longitude=7.451,
+            client_observation_id=already_sent_id,
+        ),
+    )
+
+    result = field_location_tracking.record_batch(
+        db_session,
+        auth,
+        [
+            LocationPingCommand(
+                latitude=9.071,
+                longitude=7.451,
+                client_observation_id=already_sent_id,
+            ),
+            LocationPingCommand(
+                latitude=9.09, longitude=7.49, client_observation_id=uuid4()
+            ),
+        ],
+    )
+
+    total_sent = 2
+    assert result.accepted == 2
+    assert result.errors == ()
+    assert result.accepted + len(result.errors) == total_sent
+    assert len(result.replays) == 1
+    assert result.replays[0].index == 0
+    assert result.replays[0].ping_id == existing_ping.id
+    assert db_session.query(FieldTechLocationPing).count() == 2
+
+
+def test_ping_without_client_observation_id_always_creates_a_new_row(db_session):
+    """Old-client behavior is unchanged: omitting client_observation_id skips
+    dedup entirely, exactly like today, even for two otherwise-identical
+    pings.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    _profile(db_session, user)
+    db_session.commit()
+
+    command = LocationPingCommand(latitude=9.071, longitude=7.451, status="on_shift")
+    first_ping, _, first_replayed = field_location_tracking.record_ping(
+        db_session, auth, command=command
+    )
+    second_ping, _, second_replayed = field_location_tracking.record_ping(
+        db_session, auth, command=command
+    )
+
+    assert first_replayed is False
+    assert second_replayed is False
+    assert first_ping.id != second_ping.id
+    assert db_session.query(FieldTechLocationPing).count() == 2
+
+
+def test_concurrent_insert_race_recovers_via_replay_not_error(db_session, monkeypatch):
+    """Two callers that both pass the dedup pre-check before either has
+    committed (the genuine race PR A's savepoints exist to isolate) must not
+    surface the resulting IntegrityError: the loser re-reads the winner's row
+    and returns it as a replay, mirroring field_transitions.apply's own
+    IntegrityError-recovery shape rather than inventing a new one.
+    """
+
+    user = _user(db_session)
+    auth = _auth(user)
+    _profile(db_session, user)
+    db_session.commit()
+
+    client_observation_id = uuid4()
+
+    winner_ping, _, winner_replayed = field_location_tracking.record_ping(
+        db_session,
+        auth,
+        command=LocationPingCommand(
+            latitude=9.071,
+            longitude=7.451,
+            client_observation_id=client_observation_id,
+        ),
+    )
+    assert winner_replayed is False
+
+    # Only NOW do we stub the pre-check, and only for the loser's own first
+    # lookup: this reproduces "the loser's pre-check runs before the
+    # winner's commit is visible to it", the one moment a same-process test
+    # cannot otherwise force. The stub's second call — made from
+    # `_replay_for`'s post-IntegrityError recovery — is the real
+    # implementation, proving recovery reads the actually-committed winner.
+    calls = {"n": 0}
+    original_find = FieldLocationTracking._find_existing_ping
+
+    def _find_existing_ping_stub(db, *, technician_id, client_observation_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return original_find(
+            db,
+            technician_id=technician_id,
+            client_observation_id=client_observation_id,
+        )
+
+    monkeypatch.setattr(
+        FieldLocationTracking,
+        "_find_existing_ping",
+        staticmethod(_find_existing_ping_stub),
+    )
+
+    # The loser's own pre-check is stubbed to miss the winner's row (call #1
+    # above); its real db.flush() then hits the live composite unique index
+    # for real, and `_replay_for`'s own lookup (call #2, unstubbed) recovers
+    # the winner's row.
+    loser_ping, _, loser_replayed = field_location_tracking.record_ping(
+        db_session,
+        auth,
+        command=LocationPingCommand(
+            latitude=1.0,
+            longitude=1.0,
+            client_observation_id=client_observation_id,
+        ),
+    )
+
+    assert loser_replayed is True
+    assert loser_ping.id == winner_ping.id
+    assert db_session.query(FieldTechLocationPing).count() == 1
