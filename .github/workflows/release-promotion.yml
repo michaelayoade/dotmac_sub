@@ -38,10 +38,25 @@ jobs:
       # The checkout is the AUTHORIZATION identity: protected `main`, whose
       # checked-in workflow and verifier code perform this authorization. It is
       # deliberately NOT the artifact being released.
+      #
+      # Pinned to github.sha, not `ref: main` (found 2026-09-09, confirmed live
+      # in production): this job carries a job-level `environment: production`
+      # approval gate, so every step in it -- including this checkout -- runs
+      # AFTER the human approval, not before. `ref: main` used to re-resolve at
+      # that later point, so a merge landing on main during the approval wait
+      # silently rebound this checkout, and therefore authorization_main_sha
+      # below, to a commit nobody had actually approved. production-deploy.yml
+      # compares against this run's `head_sha`, frozen at dispatch time, so the
+      # two values could diverge -- production-deploy.yml only caught it one
+      # stage later, after this job had already mutated GHCR aliases.
+      # `github.sha` is the exact protected-main commit this run was
+      # dispatched against, so pinning to it keeps this checkout from moving
+      # out from under the approval and matches what production-deploy.yml
+      # independently checks.
       - name: Checkout current protected main
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Resolve authorizing main and the staged release separately
@@ -60,6 +75,16 @@ jobs:
             exit 1
           }
           authorization_main_sha="$(git rev-parse HEAD)"
+
+          # Canary against the pin above ever being silently reverted to
+          # `ref: main`. If GitHub's workflow_dispatch semantics ever meant
+          # github.sha did not match this checkout, this fails loudly and
+          # closed here, before any side effect, rather than confusingly
+          # downstream in production-deploy.yml's verify step.
+          test "$authorization_main_sha" = "$GITHUB_SHA" || {
+            echo "Refusing production authorization: the authorizing checkout ($authorization_main_sha) is not the dispatched commit ($GITHUB_SHA)." >&2
+            exit 1
+          }
 
           # Reachability, not identity. The staged commit must still be on the
           # protected branch -- not reverted, not orphaned, not from a fork --
@@ -200,6 +225,30 @@ jobs:
             --source-revision-is-ancestor \
             --output "$RUNNER_TEMP/production-authorization/authorization.json" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Re-prove staged reachability after the approval window
+        env:
+          STAGED_SHA: ${{ steps.release.outputs.sha }}
+          AUTHORIZATION_MAIN_SHA: ${{ steps.release.outputs.authorization_main_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout above is pinned to the dispatch-time commit, so it
+          # cannot see whatever happened to main during the human approval
+          # wait. Re-fetch live and re-check reachability -- not equality,
+          # same reasoning as the ancestry check above -- immediately before
+          # the first step that mutates GHCR, so a rewrite/force-push that
+          # dropped the staged commit off protected main entirely (branch
+          # protection should already prevent this; this is defense in depth)
+          # is caught before any side effect.
+          git fetch --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          git merge-base --is-ancestor "$STAGED_SHA" "$current_main_sha" || {
+            echo "Refusing production authorization: $STAGED_SHA is no longer an ancestor of main's current tip ($current_main_sha)." >&2
+            exit 1
+          }
+          if [ "$current_main_sha" != "$AUTHORIZATION_MAIN_SHA" ]; then
+            echo "::notice title=main advanced during the approval window::main moved from $AUTHORIZATION_MAIN_SHA (dispatch time) to $current_main_sha while this run waited for production approval; $STAGED_SHA remains reachable from both, so promotion continues."
+          fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3

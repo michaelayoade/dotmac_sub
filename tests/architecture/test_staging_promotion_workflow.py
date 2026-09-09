@@ -438,7 +438,11 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
 
     assert yaml.safe_load(workflow)
     assert "on:\n  workflow_dispatch:" in workflow
-    assert "ref: main" in workflow
+    # The authorizing checkout is pinned to the dispatched commit, not the
+    # moving branch tip -- see test_promotion_pins_the_authorizing_checkout_
+    # to_the_dispatched_commit for the full pin/canary/reachability-reproof
+    # assertions.
+    assert "ref: ${{ github.sha }}" in workflow
     assert 'for (const workflowName of ["CI", "Mobile CI"])' in workflow
     assert "git merge-base --is-ancestor" in workflow
     assert "authorize-production" in workflow
@@ -494,6 +498,78 @@ def test_promotion_separates_the_authorizing_main_from_the_staged_release() -> N
     # Both identities reach the typed document.
     assert "--authorization-main-revision" in workflow
     assert "--source-revision-is-ancestor" in workflow
+
+
+def test_promotion_pins_the_authorizing_checkout_to_the_dispatched_commit() -> None:
+    """A merge landing during the human approval wait must not rebind authorization.
+
+    `authorize-and-promote` carries a job-level `environment: production`
+    approval gate, so every step in the job -- including its checkout -- runs
+    AFTER the human approval, not before. Checking out `ref: main` therefore
+    resolved to whatever main was AFTER the wait, not what was approved. This
+    reproduced live in production on 2026-09-09: a promotion entered its
+    approval wait, a PR merged during the wait, and the resulting
+    authorization document was bound to a commit nobody had approved --
+    caught one stage later by production-deploy.yml's verify step, after GHCR
+    aliases had already been mutated. The fix pins the checkout to
+    `github.sha` (the exact commit dispatched, frozen before the approval
+    wait, matching what production-deploy.yml separately checks), asserts
+    that pin holds as a canary, and re-proves reachability -- not equality --
+    against main's live tip immediately before the first GHCR-mutating step.
+    """
+
+    workflow = _read(".github/workflows/release-promotion.yml")
+
+    # The checkout no longer floats to whatever main is once the approval
+    # gate releases the job. (The YAML `ref:` line, not a comment mentioning
+    # the retired value -- this workflow's own comments cite `ref: main` by
+    # name to explain why it changed.)
+    assert "\n          ref: ${{ github.sha }}\n" in workflow
+    assert "\n          ref: main\n" not in workflow
+
+    # The pin-assertion canary: if github.sha and the checked-out HEAD ever
+    # diverge, fail loudly and closed here, before any side effect.
+    assert 'test "$authorization_main_sha" = "$GITHUB_SHA"' in workflow
+    assert "is not the dispatched commit" in workflow
+
+    # The reachability re-proof step: re-fetches main's live tip AFTER the
+    # approval wait and re-checks ancestry (not equality, so a routine advance
+    # of main during the wait stays informational, not a failure), and it must
+    # run before anything that mutates GHCR.
+    assert "git fetch --no-tags origin main" in workflow
+    assert 'current_main_sha="$(git rev-parse origin/main)"' in workflow
+    assert 'git merge-base --is-ancestor "$STAGED_SHA" "$current_main_sha"' in workflow
+    assert "no longer an ancestor of main's current tip" in workflow
+    assert "::notice title=main advanced during the approval window" in workflow
+
+    reproof_index = workflow.index("Re-prove staged reachability")
+    buildx_index = workflow.index("Set up Buildx")
+    ghcr_login_index = workflow.index("Log in to GHCR")
+    imagetools_index = workflow.index("docker buildx imagetools create")
+    assert reproof_index < buildx_index < ghcr_login_index < imagetools_index
+
+
+def test_production_deploy_binds_to_the_exact_digest_it_was_handed() -> None:
+    """The anti-rollback gate's own authorization read is bound to its inputs.
+
+    Reading TARGET_REVISION from the authorization file without checking it
+    against the digest actually being deployed would let a mismatched
+    authorization/digest pair pass the gate; production-deploy.yml's later
+    call already binds `--expected-image-digest`/`--expected-source-revision`,
+    but the anti-rollback gate's own read did not, until now.
+    """
+
+    adapter = _read("scripts/deploy_production.sh")
+
+    assert "verify-production" in adapter
+    assert '--expected-image-digest "${DIGEST}"' in adapter
+    assert '--expected-authorization-run-id "${AUTHORIZATION_RUN_ID}"' in adapter
+    # Bound before the gate's own verification call, not merely present
+    # somewhere later in the script.
+    gate = adapter.index("# --- Anti-rollback gate")
+    verify_call_index = adapter.index('--expected-image-digest "${DIGEST}"')
+    gate_end = adapter.index("# --- End anti-rollback gate")
+    assert gate < verify_call_index < gate_end
 
 
 def test_production_deploy_does_not_treat_head_sha_as_the_release_revision() -> None:
