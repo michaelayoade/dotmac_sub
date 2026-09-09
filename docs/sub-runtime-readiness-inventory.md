@@ -139,7 +139,17 @@ repository. Full raw counts:
   CI test-database bootstrap) that each open their own short-lived engine
   against an explicit target URL, never against `app.db`'s pooled engine —
   correct for a one-shot script, but each is a real construction site a
-  shared runtime's contract would need to keep out of scope for.
+  shared runtime's contract would need to keep out of scope for. Five of
+  these (`scripts/migration/backfill_crm_subscriber_links.py:168`,
+  `build_crm_staff_map.py:128`, `import_crm_tickets_phase1.py:141`,
+  `preflight_crm_ticket_import.py:84`, `scripts/network/stage_crm_network_map.py:223`)
+  are still-tracked, still-live CRM-origin data migration scripts — real
+  members of Sub's live session-construction surface, not dead code this
+  sweep picked up mechanically, which is why this document and
+  `session_construction_baseline.txt` are recorded in
+  `tests/architecture/crm_vocabulary_baseline.txt`'s frozen CRM/Omni
+  surface (the freeze tracks every file that MENTIONS the vocabulary, by
+  path or content, not only files that ARE the CRM integration).
 
 ### Test/fixture family — 63 files, 115 sites (tracked as an aggregate, not
 per-file — see the ratchet's rationale below)
