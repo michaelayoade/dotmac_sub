@@ -568,7 +568,7 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
     assert materialised is not None
     assert materialised.olt.olt_present is True
     assert materialised.olt.olt_description.startswith("Kolawole_Idiaro_2")
-    assert materialised.olt.olt_service_ports[0]["vlan"] == 203
+    assert materialised.olt.olt_service_ports[0]["vlan_id"] == 203
     assert materialised.acs.acs_observed_ssid == "KURSI"
     assert materialised.acs.acs_observed_wifi_enabled is True
     assert materialised.acs.acs_observed_wifi_channel == 6
