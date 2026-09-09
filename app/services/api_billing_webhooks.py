@@ -82,6 +82,13 @@ def _map_payment_webhook_error(error: DomainError) -> _ErrorMapping:
             inbox_code="payment_settlement_unlinked",
             max_attempts=10,
         )
+    if suffix == "provider_event_unresolved":
+        return _ErrorMapping(
+            http_status=500,
+            response_status="error",
+            inbox_code="payment_provider_event_unresolved",
+            max_attempts=10,
+        )
     return _ErrorMapping(
         http_status=500,
         response_status="error",

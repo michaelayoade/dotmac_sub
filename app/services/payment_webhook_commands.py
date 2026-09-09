@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.models.billing import (
     PaymentProvider,
     PaymentProviderEvent,
+    PaymentProviderEventFinancialEffect,
+    PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
     TopupIntent,
@@ -562,6 +564,30 @@ def _stage_deposit_settlement(
     )
 
 
+def _expected_financial_effect_unresolved(event: PaymentProviderEventResult) -> bool:
+    """A real money-movement was expected but could not be resolved to a payment.
+
+    ``PaymentProviderEventStatus.failed`` with ``error_code == "payment_not_found"``
+    also covers a genuinely benign case: a declined/failed charge notification for
+    which no payment ever existed and none was ever expected (nothing to reverse).
+    Silently accepting that case is correct. Silently accepting an unmatched
+    refund/reversal/dispute-loss observation is not — that hides a real
+    consequence that never landed. Distinguish the two by whether the
+    observation itself claimed a financial effect.
+    """
+
+    if event.status is not PaymentProviderEventStatus.failed:
+        return False
+    if event.error_code != "payment_not_found":
+        return False
+    if event.observed_payment_status in (
+        PaymentStatus.refunded,
+        PaymentStatus.reversed,
+    ):
+        return True
+    return event.financial_effect is not PaymentProviderEventFinancialEffect.none
+
+
 def _stage_provider_event(
     db: Session,
     ingest: PaymentProviderEventCommand,
@@ -1096,6 +1122,14 @@ def _process_claimed_payment_webhook(
             "settlement_unlinked",
             "Successful settlement did not post or link a payment",
             provider_event_id=str(event.id),
+        )
+    if _expected_financial_effect_unresolved(event):
+        raise _error(
+            "provider_event_unresolved",
+            "Provider event indicated a financial effect that could not be "
+            "resolved to a billing consequence",
+            provider_event_id=str(event.id),
+            provider_event_error_code=event.error_code,
         )
     _stage_topup_consequences(
         db,
