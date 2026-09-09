@@ -450,12 +450,35 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
     assert "run.head_repository.full_name !== context.repo.repo" not in workflow
     assert "docker buildx imagetools create" in workflow
     assert "--prefer-index=false" in workflow
-    assert "Version alias not moved" in workflow
-    assert "production authorization remains bound to $IMAGE_DIGEST" in workflow
     assert "production-authorization-${{ steps.release.outputs.sha }}" in workflow
     assert "docker/build-push-action" not in workflow
     assert "docker build " not in workflow
     assert "self-hosted" not in workflow
+
+
+def test_a_disagreeing_version_alias_fails_the_promotion_step() -> None:
+    """A `:X.Y.Z` tag that already points elsewhere than `latest` must hard-fail
+    the alias step, not merely warn — a disagreeing alias is a release-integrity
+    problem, not a cosmetic one (nearby verification loop uses the same
+    `echo ... >&2; exit 1` convention)."""
+
+    workflow = _read(".github/workflows/release-promotion.yml")
+
+    assert "::warning title=Version alias not moved::" not in workflow
+
+    match = re.search(
+        r'if \[ "\$existing_digest" = "\$IMAGE_DIGEST" \]; then\n'
+        r".*?\n"
+        r"            else\n"
+        r"(.*?)"
+        r"\n            fi",
+        workflow,
+        re.DOTALL,
+    )
+    assert match, "release-promotion.yml must guard a mismatched version alias"
+    mismatch_branch = match.group(1)
+    assert "exit 1" in mismatch_branch
+    assert ">&2" in mismatch_branch
 
 
 def test_promotion_separates_the_authorizing_main_from_the_staged_release() -> None:
@@ -672,3 +695,48 @@ def test_hotfixes_have_no_pipeline_shortcut_left() -> None:
     assert "dev-first:override" not in guidance
     for path in RELEASE_CHAIN:
         assert "dev-first" not in _read(path)
+
+
+def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> None:
+    """A `vX.Y.Z` tag is the release-identity oracle (rule 27): its peeled
+    commit must genuinely be the release it names. Re-running on the commit
+    that already carries the tag stays a no-op; an existing tag pointing at
+    ANY other commit must fail the workflow rather than exit 0."""
+
+    workflow = _read(".github/workflows/version-tag.yml")
+
+    assert yaml.safe_load(workflow)
+    assert 'if git rev-parse "$TAG" >/dev/null 2>&1; then' in workflow
+
+    match = re.search(
+        r'if git rev-parse "\$TAG" >/dev/null 2>&1; then\n(.*?)\n          fi',
+        workflow,
+        re.DOTALL,
+    )
+    assert match, "version-tag.yml must guard the already-exists branch"
+    existing_tag_branch = match.group(1)
+
+    # Peeled commit comparison, not just tag existence.
+    assert '$TAG^{commit}' in existing_tag_branch
+    assert "git rev-parse HEAD" in existing_tag_branch
+    assert "existing_commit" in existing_tag_branch
+    assert "current_commit" in existing_tag_branch
+
+    # Matching commit: idempotent no-op.
+    assert 'if [ "$existing_commit" = "$current_commit" ]; then' in existing_tag_branch
+    assert "exit 0" in existing_tag_branch
+
+    # Mismatched commit: hard failure, not a silent exit 0.
+    lines = existing_tag_branch.splitlines()
+    match_block_start = next(
+        i
+        for i, line in enumerate(lines)
+        if '$existing_commit" = "$current_commit"' in line
+    )
+    match_block_end = next(
+        i for i, line in enumerate(lines[match_block_start:], match_block_start)
+        if line.strip() == "fi"
+    )
+    after_match_block = "\n".join(lines[match_block_end + 1 :])
+    assert "exit 1" in after_match_block
+    assert "exit 0" not in after_match_block
