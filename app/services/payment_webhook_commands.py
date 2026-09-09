@@ -172,14 +172,16 @@ class PaymentWebhookReceiptIdentity:
     provider: PaymentWebhookProvider
     provider_event_id: str
     event_type: str
-    # Prior, now-retired identity string(s) the inbox should ALSO recognize as
+    # Prior, now-retired identity string the inbox should ALSO recognize as
     # "already processed" -- but only on an exact `payload_digest` match (see
     # `inbox.receive_verified`). Populated only when a provider's identity
     # CONSTRUCTION changed while it already had live receipts under the old
     # format (Flutterwave's `charge.completed`, moving off the collision-prone
-    # bare `tx_ref`); empty for every identity format that was never live
-    # under a different shape.
-    legacy_provider_event_ids: tuple[str, ...] = ()
+    # bare `tx_ref`); `None` for every identity format that was never live
+    # under a different shape. Exactly one legacy alias, never a collection --
+    # `inbox.receive_verified` treats this as a narrow, bounded migration aid,
+    # not an open-ended alternate identity namespace.
+    legacy_provider_event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,20 +362,24 @@ def identify_verified_payment_webhook(
         # retry). Using it as the receipt identity (the prior format, below,
         # kept only as a legacy alias) made every retry collide with the
         # earlier attempt's receipt and get quarantined as tampering. `data.id`
-        # is Flutterwave's own provider-generated id, already trusted
-        # elsewhere in this codebase as the per-attempt identity (required on
-        # a successful settlement, used as `PaymentProviderEvent.external_id`)
-        # -- ASSUMPTION, unverified against live Flutterwave documentation:
-        # that `data.id` is genuinely unique per attempt (not merely per
-        # `tx_ref`), and that it is present on FAILED `charge.completed`
-        # deliveries too, not only successful ones (existing code only
-        # required/checked it on success). `data.flw_ref` (Flutterwave's other
-        # provider-generated reference, already used elsewhere in this
-        # codebase for refund normalization) is the fallback -- ASSUMPTION,
-        # unverified: that it is likewise attempt-unique. Neither present is a
-        # hard reject, not a silent fall-back to `tx_ref`, which would
-        # silently reintroduce this exact bug.
-        own_id = str(data.get("id") or data.get("flw_ref") or "").strip()
+        # is Flutterwave's own provider-generated per-attempt id, already
+        # trusted elsewhere in this codebase as the per-attempt identity
+        # (required on a successful settlement, used as
+        # `PaymentProviderEvent.external_id`, which is itself unique per
+        # provider -- see `uq_payment_provider_events_external_id`). Confirmed
+        # against Flutterwave's webhook documentation
+        # (https://developer.flutterwave.com/v3.0/docs/webhooks) and checkout
+        # retry behavior
+        # (https://developer.flutterwave.com/v3.0/docs/flutterwave-standard-1):
+        # `data.id` is present on BOTH successful and failed `charge.completed`
+        # deliveries, so it is REQUIRED here, not merely preferred. There is
+        # deliberately no `data.flw_ref` fallback: that fallback was an
+        # unverified assumption in an earlier draft of this fix and has been
+        # removed rather than kept as an unconfirmed escape hatch -- a
+        # payload missing `data.id` is a hard reject, never a silent
+        # downgrade to a different, unverified field, and never a fall-back
+        # to `tx_ref`, which would silently reintroduce this exact bug.
+        own_id = str(data.get("id") or "").strip()
         if not own_id:
             raise _error(
                 "payload_invalid",
@@ -381,12 +387,12 @@ def identify_verified_payment_webhook(
                 provider=provider.value,
             )
         tx_ref = str(data.get("tx_ref") or "").strip()
-        legacy_ids = (f"{provider.value}-{tx_ref}",) if tx_ref else ()
+        legacy_id = f"{provider.value}-{tx_ref}" if tx_ref else None
         return PaymentWebhookReceiptIdentity(
             provider=provider,
             provider_event_id=f"{provider.value}-{event_type}-{own_id}",
             event_type=event_type,
-            legacy_provider_event_ids=legacy_ids,
+            legacy_provider_event_id=legacy_id,
         )
 
     reference_field = "reference"
