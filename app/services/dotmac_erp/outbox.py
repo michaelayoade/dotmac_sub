@@ -372,12 +372,72 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
             )
 
 
+def unlinked_delivered_events(
+    db: Session,
+    *,
+    flow: FieldErpSyncFlow | str,
+    limit: int = 100,
+) -> list[FieldErpSyncEvent]:
+    """Delivered outbox rows for one flow that never reached a status poll.
+
+    A ``sent`` row is, by construction, one whose original POST response
+    carried no terminal id — so a poll gated on "the source entity already has
+    an ERP reference" can never select it (the dead-end this module's
+    docstring warns about). An ``accepted`` row can also belong here: its
+    write-back ran in the same transaction as delivery
+    (``_dispatch_flow_writeback``) but that call is wrapped in a
+    logged-not-raised guard for several flows, so a write-back exception
+    leaves the outbox row terminal while the source entity's reference stays
+    null.
+
+    Returns rows keyed by SUB'S OWN ``entity_id`` — every ``get_*_status``
+    function on the ERP client takes Sub's source id, not an ERP id, so a
+    caller never needs the (possibly still-missing) reference column to ask
+    ERP for status. The outbox stays flow-agnostic: it hands back rows, not
+    an opinion on what a source entity's "reference" field is named — each
+    flow module resolves its own source entity and decides whether the
+    reference is still null before spending a poll call on it.
+    """
+    flow_value = flow.value if isinstance(flow, FieldErpSyncFlow) else str(flow)
+    limit = max(1, min(int(limit or 100), 500))
+    return (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.flow == flow_value)
+        .filter(
+            FieldErpSyncEvent.status.in_(
+                (FieldErpSyncStatus.sent.value, FieldErpSyncStatus.accepted.value)
+            )
+        )
+        .order_by(FieldErpSyncEvent.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+
+def record_polled_outcome(db: Session, row: FieldErpSyncEvent, response: dict) -> str:
+    """Classify a LATER status-poll response through the same path a delivery uses.
+
+    Reuses ``_apply_response`` (the exact classifier ``deliver_pending`` applies
+    to the original POST's 2xx body) so a ``sent`` row drains to
+    ``accepted``/``rejected`` from exactly one place, then reuses
+    ``_dispatch_flow_writeback`` so the source-entity projection is the same
+    code whether it runs right after delivery or later from a poll. Does not
+    commit — the caller owns the transaction boundary. Returns the row's
+    resulting status.
+    """
+    _apply_response(row, response, DeliveryResult())
+    _dispatch_flow_writeback(db, row)
+    return row.status
+
+
 def _apply_response(
     row: FieldErpSyncEvent, response: dict, result: DeliveryResult
 ) -> None:
     """Classify a 2xx ERP response into accepted / rejected / sent."""
     row.erp_response = response if isinstance(response, dict) else {"raw": response}
-    row.sent_at = datetime.now(UTC)
+    # A poll re-classifying an already-``sent`` row must not overwrite the
+    # timestamp of the original delivery with the (later) poll time.
+    row.sent_at = row.sent_at or datetime.now(UTC)
     row.last_error = None
 
     status_signal = _extract_status(response)
@@ -450,3 +510,83 @@ def _has_erp_id(response: dict | None) -> bool:
     if not isinstance(response, dict):
         return False
     return any(response.get(key) for key in _ERP_ID_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# Operator-visible diagnostics — the "nothing alerts" gap this module closes
+# ---------------------------------------------------------------------------
+
+
+def _source_reference_is_null(db: Session, row: FieldErpSyncEvent) -> bool | None:
+    """Return True when ``row``'s source entity still has no ERP reference.
+
+    Lazily resolves the flow-specific source model and its reference column —
+    mirrors the lazy per-flow lookup already used by ``_dispatch_flow_writeback``
+    so the outbox module stays free of feature-module imports at load time.
+    Returns ``None`` (excluded from diagnostics) for an unrecognised flow or a
+    source row that no longer exists.
+    """
+    if row.flow == FieldErpSyncFlow.expense_claim.value:
+        from app.models.field_expense import FieldExpenseRequest
+
+        expense_request = db.get(FieldExpenseRequest, row.entity_id)
+        return (
+            expense_request is not None and not expense_request.expense_claim_reference
+        )
+    if row.flow == FieldErpSyncFlow.material_request.value:
+        from app.models.field_material import FieldMaterialRequest
+
+        material_request = db.get(FieldMaterialRequest, row.entity_id)
+        return material_request is not None and not material_request.support_reference
+    if row.flow == FieldErpSyncFlow.purchase_invoice.value:
+        from app.models.vendor_routes import VendorPurchaseInvoice
+
+        invoice = db.get(VendorPurchaseInvoice, row.entity_id)
+        return invoice is not None and not invoice.payables_document_reference
+    if row.flow == FieldErpSyncFlow.purchase_order.value:
+        from app.models.vendor_routes import InstallationProject
+
+        project = db.get(InstallationProject, row.entity_id)
+        return project is not None and not project.procurement_order_reference
+    return None
+
+
+def delivered_unlinked_diagnostics(
+    db: Session,
+    *,
+    stale_after_hours: float = 24,
+    limit_per_flow: int = 500,
+) -> dict[str, dict[str, object]]:
+    """Per-flow count + max age of delivered outbox rows never linked to their source.
+
+    A row counts here when it is ``sent``/``accepted`` (delivered) AND its
+    source entity's own ERP-reference field is still null — the exact
+    condition ``unlinked_delivered_events`` selects for repair, surfaced here
+    for observability instead of action.
+
+    ``stale_after_hours=24`` is ONE reasonable default applied uniformly
+    across every flow, not a tuned per-flow SLA. Purchase-order/invoice
+    write-backs affect accounts-payable and expense-claim write-backs are
+    payroll-adjacent; these plausibly warrant different thresholds. Confirm
+    or adjust per flow before wiring this into a paging alert.
+    """
+    now = datetime.now(UTC)
+    report: dict[str, dict[str, object]] = {}
+    for flow in FieldErpSyncFlow:
+        rows = unlinked_delivered_events(db, flow=flow, limit=limit_per_flow)
+        ages_hours: list[float] = []
+        for row in rows:
+            if not _source_reference_is_null(db, row):
+                continue
+            created_at = row.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            ages_hours.append((now - created_at).total_seconds() / 3600)
+        max_age = max(ages_hours) if ages_hours else 0.0
+        report[flow.value] = {
+            "count": len(ages_hours),
+            "max_age_hours": round(max_age, 2),
+            "stale_after_hours": stale_after_hours,
+            "stale": max_age >= stale_after_hours,
+        }
+    return report

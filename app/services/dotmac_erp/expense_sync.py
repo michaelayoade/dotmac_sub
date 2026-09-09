@@ -34,7 +34,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
+from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
+    FieldErpSyncFlow,
+    FieldErpSyncStatus,
+)
 from app.models.field_expense import FieldExpenseRequest
 from app.services.dotmac_erp import outbox
 from app.services.dotmac_erp.client import DotMacERPClient
@@ -393,6 +397,48 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _poll_unlinked_expense_claims(
+    db: Session,
+    *,
+    client: DotMacERPClient | ErpCapabilityClient,
+    limit: int,
+) -> tuple[int, int, list[str]]:
+    """Poll ``sent``/``accepted`` outbox rows whose request never got a reference.
+
+    A ``sent`` row was never eligible for the reference-gated query below (it
+    has no reference BY DEFINITION — that's the dead end this closes). An
+    ``accepted`` row can also land here if the same-transaction write-back
+    failed after delivery. Keyed on Sub's own request id, same as the linked
+    poll below — see ``client.get_expense_claim_status``'s docstring.
+    """
+    processed = 0
+    updated = 0
+    errors: list[str] = []
+    for row in outbox.unlinked_delivered_events(
+        db, flow=FieldErpSyncFlow.expense_claim, limit=limit
+    ):
+        request = db.get(FieldExpenseRequest, row.entity_id)
+        if request is None or request.expense_claim_reference:
+            continue
+        processed += 1
+        try:
+            response = client.get_expense_claim_status(str(request.id))
+        except Exception as exc:  # noqa: BLE001 — one bad claim can't stall the batch
+            db.rollback()
+            errors.append(f"{row.id}: {exc}")
+            logger.warning(
+                "expense_sync: unlinked status poll failed for %s: %s", row.id, exc
+            )
+            continue
+        if not response:
+            continue
+        outbox.record_polled_outcome(db, row, response)
+        db.commit()
+        if request.expense_claim_reference:
+            updated += 1
+    return processed, updated, errors
+
+
 def refresh_expense_claim_statuses(
     db: Session,
     *,
@@ -401,12 +447,20 @@ def refresh_expense_claim_statuses(
 ) -> dict:
     """Poll ERP for in-flight expense claims and refresh their mirror fields.
 
-    Selects synced (``expense_claim_reference`` set) requests still awaiting an ERP
-    decision (``submitted`` / ``approved``), polls
-    ``get_expense_claim_status(request.id)`` for each, and applies the response
-    via ``apply_claim_response``. Ports CRM's
-    ``refresh_pending_expense_request_erp_statuses``. Read-only against ERP;
-    idempotent; safe to re-run.
+    Two candidate sets, both keyed by Sub's own request id (never the ERP id):
+
+    1. Already-linked requests (``expense_claim_reference`` set) still awaiting
+       an ERP decision (``submitted`` / ``approved``) — the historical
+       behaviour, ported from CRM's
+       ``refresh_pending_expense_request_erp_statuses``.
+    2. Delivered-but-unlinked outbox rows (``sent``/``accepted`` with no
+       reference yet) — the dead end where a ``sent`` row could never satisfy
+       set 1's ``.isnot(None)`` filter since it never carries a reference by
+       construction. Routed through ``outbox.record_polled_outcome`` so the
+       response is classified and written back through the same path a fresh
+       delivery uses.
+
+    Read-only against ERP; idempotent; safe to re-run.
     """
     limit = max(1, min(int(limit or 100), 200))
     pending = (
@@ -423,8 +477,6 @@ def refresh_expense_claim_statuses(
 
     errors: list[str] = []
     result: dict[str, object] = {"processed": 0, "updated": 0, "errors": errors}
-    if not pending:
-        return result
 
     owned_client = client
     created_client = False
@@ -435,6 +487,13 @@ def refresh_expense_claim_statuses(
     processed = 0
     updated = 0
     try:
+        unlinked_processed, unlinked_updated, unlinked_errors = (
+            _poll_unlinked_expense_claims(db, client=owned_client, limit=limit)
+        )
+        processed += unlinked_processed
+        updated += unlinked_updated
+        errors.extend(unlinked_errors)
+
         for request in pending:
             processed += 1
             try:
@@ -460,6 +519,93 @@ def refresh_expense_claim_statuses(
     result["processed"] = processed
     result["updated"] = updated
     return result
+
+
+def repair_expense_claim_writebacks(db: Session, *, limit: int = 100) -> dict:
+    """Repair a delivered expense-claim write-back that never landed on the request.
+
+    Mirrors ``purchase_order_sync.repair_purchase_order_writebacks``'s shape and
+    rationale: ``outbox._dispatch_flow_writeback`` catches and logs an
+    ``apply_erp_response`` failure so a delivery attempt is never failed by a
+    projection bug, but that can leave a terminal (``accepted``/``sent``)
+    outbox row whose ``FieldExpenseRequest.expense_claim_reference`` never got
+    set. No new ERP call: this re-applies the response ALREADY stored on the
+    delivered row.
+
+    Restricted to ``status IN ('accepted', 'sent')`` so a ``rejected``/``dead``
+    row's response is never written back as if ERP had accepted it.
+
+    SAFE-SCOPE NOTE (this function is intentionally NOT wired into the Celery
+    beat schedule — see the task registry / scheduler config, unchanged by
+    this change): ``docs/runbooks/EXPENSE_CLAIM_ERP_CUTOVER.md`` prohibits
+    backfilling ERP delivery for expenses that were approved before a flow's
+    cutover to Sub. This repair cannot reach such a row: a row can only exist
+    in ``field_erp_sync_events`` with status ``sent``/``accepted`` if
+    ``outbox.deliver_pending`` actually posted it, and that call refuses to
+    deliver any flow ``sync_flow_ownership`` does not already have set to
+    ``sub`` (see ``flow_owned_by_sub``). So every candidate row here is,
+    by construction, a POST-cutover delivery — never a historical row the
+    runbook's "no backfill" prohibition is about. Wiring the scheduler call
+    itself is still left to Michael's explicit confirmation rather than
+    resolved here, since the runbook's prohibition is a data-safety rule this
+    change does not own.
+    """
+    limit = max(1, min(int(limit or 100), 500))
+    rows = (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.flow == FieldErpSyncFlow.expense_claim.value)
+        .filter(
+            FieldErpSyncEvent.status.in_(
+                (FieldErpSyncStatus.accepted.value, FieldErpSyncStatus.sent.value)
+            )
+        )
+        .filter(FieldErpSyncEvent.erp_response.isnot(None))
+        .order_by(FieldErpSyncEvent.updated_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    errors: list[str] = []
+    result: dict[str, object] = {"processed": 0, "repaired": 0, "errors": errors}
+    if not rows:
+        return result
+
+    processed = 0
+    repaired = 0
+    for row in rows:
+        erp_id = _extract_claim_id(row.erp_response)
+        if not erp_id:
+            continue
+        request = db.get(FieldExpenseRequest, row.entity_id)
+        if request is None:
+            errors.append(f"{row.id}: no FieldExpenseRequest {row.entity_id}")
+            continue
+        if request.expense_claim_reference:
+            continue
+        processed += 1
+        apply_claim_response(request, row.erp_response)
+        if request.expense_claim_reference:
+            repaired += 1
+            db.commit()
+
+    result["processed"] = processed
+    result["repaired"] = repaired
+    return result
+
+
+def run_repair_expense_claim_writebacks() -> dict[str, object]:
+    """Own the background session for expense-claim write-back repair.
+
+    Provided so the repair is one call away from being scheduled. NOT
+    registered in ``app/tasks/dotmac_erp_outbox.py`` /
+    ``app/services/task_reliability.py`` / ``app/services/scheduler_config.py``
+    — see ``repair_expense_claim_writebacks``'s docstring for why wiring this
+    into the beat schedule is left as an explicit decision.
+    """
+    from app.db import task_session
+
+    with task_session() as db:
+        return repair_expense_claim_writebacks(db)
 
 
 def run_refresh_expense_claim_statuses() -> dict[str, object]:
