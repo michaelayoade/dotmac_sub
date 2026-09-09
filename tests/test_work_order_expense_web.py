@@ -550,7 +550,9 @@ def test_redisplay_preserves_values_and_explicitly_clears_file_input():
 
 
 def test_work_order_template_owns_context_and_supports_responsive_lines():
-    source = Path("templates/admin/dispatch/work_order_detail.html").read_text()
+    source = Path("templates/admin/dispatch/work_order_detail.html").read_text(
+        encoding="utf-8"
+    )
     expense_form = next(form for form in source.split("</form>") if "/expenses" in form)
 
     assert "components/forms/csrf_input.html" in expense_form
@@ -576,12 +578,12 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert 'name="receipt_file_{{ line.key }}" required' not in expense_form
     assert 'name="receipt_url_{{ line.key }}" required' not in expense_form
     assert "data-receipt-required-marker hidden" in expense_form
-    assert "'(required — choose one)'" in expense_form
-    assert "receiptUrl.setCustomValidity" in expense_form
-    assert "receiptFile.files?.length" in expense_form
+    assert "'(required — choose one)'" in source
+    assert "receiptUrl.setCustomValidity" in source
+    assert "receiptFile.files?.length" in source
     assert (
         "When a receipt is required, provide either a receipt URL or an uploaded file."
-        in expense_form
+        in source
     )
 
     required_names = {
@@ -599,6 +601,20 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
         "category_code_{{ line.key }}",
         "amount_{{ line.key }}",
         "description_{{ line.key }}",
+    }
+
+    line_template = source.split("<template data-expense-line-template>", 1)[1].split(
+        "</template>", 1
+    )[0]
+    template_required_names = {
+        match.group(1)
+        for tag in re.findall(
+            r"<(?:input|select|textarea)\b[^>]*\brequired\b[^>]*>",
+            line_template,
+        )
+        if (match := re.search(r'name="([^"]+)"', tag))
+    }
+    assert template_required_names == {
         "category_code___KEY__",
         "amount___KEY__",
         "description___KEY__",

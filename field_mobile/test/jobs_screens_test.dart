@@ -304,9 +304,8 @@ void main() {
       _wrap(
         const JobDetailScreen(jobId: 'wo-1'),
         overrides: [
-          jobDetailProvider(
-            'wo-1',
-          ).overrideWith((ref) async => _detail(location: location)),
+          jobDetailProvider('wo-1')
+              .overrideWith((ref) async => _detail(location: location)),
           uriLauncherProvider.overrideWithValue((uri) async {
             launched.add(uri);
             return true;

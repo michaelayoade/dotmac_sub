@@ -15,6 +15,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.jobs import field_jobs
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
@@ -102,24 +103,26 @@ def _create_note(
     request_id=None,
 ):
     client_ref = request_id or uuid4()
+    command = CreateFieldWorkOrderNote(
+        context=CommandContext.system(
+            actor=f"user:{user.id}",
+            scope="field:work_order_notes:write",
+            reason="test_field_note_creation",
+            command_id=client_ref,
+            correlation_id=client_ref,
+            idempotency_key=str(client_ref),
+        ),
+        requester_system_user_id=user.id,
+        work_order_public_id=work_order_id,
+        request_id=client_ref,
+        body=body,
+        is_internal=is_internal,
+        attachment_ids=attachment_ids,
+    )
+    db_session_adapter.release_read_transaction(db_session)
     return create_field_work_order_note(
         db_session,
-        CreateFieldWorkOrderNote(
-            context=CommandContext.system(
-                actor=f"user:{user.id}",
-                scope="field:work_order_notes:write",
-                reason="test_field_note_creation",
-                command_id=client_ref,
-                correlation_id=client_ref,
-                idempotency_key=str(client_ref),
-            ),
-            requester_system_user_id=user.id,
-            work_order_public_id=work_order_id,
-            request_id=client_ref,
-            body=body,
-            is_internal=is_internal,
-            attachment_ids=attachment_ids,
-        ),
+        command,
     )
 
 

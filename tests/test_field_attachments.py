@@ -18,6 +18,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field import attachments as attachments_module
 from app.services.field.attachments import field_attachments
 from app.services.field.jobs import field_jobs
@@ -243,24 +244,26 @@ def test_note_can_link_same_job_attachment(db_session, fake_uploads):
     )
 
     request_id = uuid4()
+    command = CreateFieldWorkOrderNote(
+        context=CommandContext.system(
+            actor=f"user:{user.id}",
+            scope="field:work_order_notes:write",
+            reason="test_field_note_attachment_link",
+            command_id=request_id,
+            correlation_id=request_id,
+            idempotency_key=str(request_id),
+        ),
+        requester_system_user_id=user.id,
+        work_order_public_id="wo-note-photo",
+        request_id=request_id,
+        body="See photo",
+        is_internal=True,
+        attachment_ids=(attachment["id"],),
+    )
+    db_session_adapter.release_read_transaction(db_session)
     note = create_field_work_order_note(
         db_session,
-        CreateFieldWorkOrderNote(
-            context=CommandContext.system(
-                actor=f"user:{user.id}",
-                scope="field:work_order_notes:write",
-                reason="test_field_note_attachment_link",
-                command_id=request_id,
-                correlation_id=request_id,
-                idempotency_key=str(request_id),
-            ),
-            requester_system_user_id=user.id,
-            work_order_public_id="wo-note-photo",
-            request_id=request_id,
-            body="See photo",
-            is_internal=True,
-            attachment_ids=(attachment["id"],),
-        ),
+        command,
     )
 
     assert note.attachments[0].id == attachment["id"]

@@ -953,7 +953,7 @@
         initSessionRefresh({
             refreshUrl: "/auth/session/refresh",
             loginUrl: "/auth/login",
-            expiresAt: {{ request.state.auth.access_expires_at|default(0, true) }}
+            expiresAt: {{ (request.state.auth|default({})).get('access_expires_at', 0) }}
         });
     }
 </script>

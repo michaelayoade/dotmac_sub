@@ -47,7 +47,8 @@ def _fixture(db_session):
     technician = TechnicianProfile(
         person_id=user.id,
         system_user_id=user.id,
-        crm_person_id=f"field-note-tech-{uuid4().hex[:8]}",
+        workforce_system="test",
+        workforce_employee_reference=f"field-note-tech-{uuid4().hex[:8]}",
     )
     project = Project(name="Fibre repair", subscriber_id=subscriber.id)
     ticket = Ticket(

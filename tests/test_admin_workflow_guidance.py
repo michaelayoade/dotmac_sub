@@ -50,6 +50,7 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         "/admin/billing/payments/reconciliation": "payment-reconciliation",
         "/admin/support/tickets/ticket-id": "support-tickets",
         "/admin/inbox/manager-ai": "team-inbox",
+        "/admin/network/olts": "olt-operational-health",
     }
     for path, guide_id in expected.items():
         guide = guidance_for_path(path)
@@ -57,7 +58,6 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         assert guide.id == guide_id
 
     for unrelated_path in (
-        "/admin/network/olts",
         "/admin/projects/templates",
         "/admin/projects/tasks",
         "/admin/support/automation",

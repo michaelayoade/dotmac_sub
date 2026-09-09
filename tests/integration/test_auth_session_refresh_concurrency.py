@@ -21,6 +21,7 @@ from app.services.auth_session_refresh import (
     renew_authentication_session,
 )
 from app.services.owner_commands import CommandContext
+from app.services.subscriber import _default_reseller_id
 
 pytestmark = pytest.mark.integration
 
@@ -37,6 +38,7 @@ def test_concurrent_refresh_rotates_once_and_replays_once(engine) -> None:
             first_name="Refresh",
             last_name="Concurrency",
             email=f"refresh-concurrency-{now.timestamp()}@example.test",
+            reseller_id=_default_reseller_id(setup),
         )
         setup.add(subscriber)
         setup.flush()

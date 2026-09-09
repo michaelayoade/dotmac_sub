@@ -63,6 +63,7 @@ from app.services import radius_auth as radius_auth_service
 from app.services.capability_recipient import resolve_capability_recipient
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
@@ -1717,6 +1718,7 @@ class AuthFlow(ListResponseMixin):
             user_agent=request.headers.get("user-agent"),
             device_id=_clean_device_id(request.headers.get("x-device-id")),
         )
+        db_session_adapter.release_read_transaction(db)
         try:
             outcome = auth_session_refresh.renew_authentication_session(
                 db=db,

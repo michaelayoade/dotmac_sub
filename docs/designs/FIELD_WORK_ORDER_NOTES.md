@@ -79,7 +79,7 @@ views until the API accepts them.
 
 ## Migration and release order
 
-Revision `590_field_note_delivery_idempotency` additively adds nullable
+Revision `591_field_note_delivery_idempotency` additively adds nullable
 `client_ref` and its partial unique index. Existing rows need no backfill.
 Deploy the backend migration and API before releasing the mobile build that
 sends note references. The concurrent PostgreSQL index build uses a five-second

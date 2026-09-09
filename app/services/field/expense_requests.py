@@ -33,9 +33,11 @@ from app.services.backoffice import (
     BackofficeDeliveryView,
     BackofficeEnqueueResult,
     BackofficeEnqueueStatus,
+    expense_payment_projection,
     get_expense_claim_deliveries,
     get_expense_decision_delivery,
     get_expense_payment_deliveries,
+    mark_expense_payment_queued,
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
@@ -663,11 +665,6 @@ def initiate_field_expense_payment_command(
                 code="operations.expense_requests.invalid_transition",
                 message="Only approved expense requests can be paid.",
             )
-        from app.services.dotmac_erp.expense_sync import (
-            expense_payment_projection,
-            mark_payment_queued,
-        )
-
         current = expense_payment_projection(request)
         if current.status in {
             "queued",
@@ -705,7 +702,7 @@ def initiate_field_expense_payment_command(
                 code="operations.expense_requests.erp_staging_failed",
                 message="Payment could not be queued for ERP. Please retry.",
             )
-        mark_payment_queued(
+        mark_expense_payment_queued(
             request,
             command_id=command.context.command_id,
             event_id=result.event.id,
@@ -806,8 +803,6 @@ def serialize_expense_request(
     delivery: BackofficeDeliveryView | None = None,
     payment_delivery: BackofficeDeliveryView | None = None,
 ) -> dict:
-    from app.services.dotmac_erp.expense_sync import expense_payment_projection
-
     sync_status = _expense_sync_status(request, delivery)
     payment = expense_payment_projection(request)
     payment_status = payment.status

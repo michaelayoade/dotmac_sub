@@ -63,7 +63,8 @@ def _view(state: AttendanceState) -> AttendanceView:
 def _client(monkeypatch, service: MagicMock, principal: dict[str, object]):
     app = FastAPI()
     app.include_router(router, prefix="/api/v1/field")
-    app.dependency_overrides[get_db] = MagicMock
+    db = MagicMock()
+    app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[require_field_principal] = lambda: principal
     monkeypatch.setattr(
         field_attendance, "WorkforceAttendanceService", lambda _db: service

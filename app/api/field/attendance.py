@@ -20,7 +20,7 @@ from app.schemas.workforce_attendance import (
     FieldAttendanceLocation,
     FieldAttendanceRead,
 )
-from app.services.audit_adapter import record_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event
 from app.services.rate_limiter_adapter import allow_operation
 from app.services.workforce_attendance import (
     AttendanceAction,
@@ -115,7 +115,7 @@ def _audit(
             action=f"attendance_{action.value}",
             entity_type="workforce_attendance_transport",
             entity_id=str(subject),
-            actor_id=str(subject),
+            actor=AuditActor.user(str(subject)),
             metadata={
                 "source": "FIELD_MOBILE",
                 "outcome": outcome,

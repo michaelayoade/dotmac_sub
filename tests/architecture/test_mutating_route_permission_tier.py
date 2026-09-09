@@ -101,6 +101,7 @@ _WRITE_TIER_VERBS = frozenset(
         "manage",
         "membership",
         "mirror",
+        "pay",
         "push_config",
         "redrive",
         "retire",

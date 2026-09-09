@@ -28,6 +28,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services import backoffice
+from app.services.db_session_adapter import db_session_adapter
 from app.services.dotmac_erp import expense_sync, outbox
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -376,20 +377,22 @@ def test_payment_stages_after_approval_with_a_distinct_permission(db_session):
     command_id = uuid4()
     db_session.commit()
 
+    command = InitiateFieldExpensePayment(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=f"user:{manager.id}",
+            scope="operations:expense_request:pay",
+            reason=f"pay_expense_request:{request.id}",
+            idempotency_key=str(command_id),
+        ),
+        expense_request_id=request.id,
+        manager_system_user_id=manager.id,
+    )
+    db_session_adapter.release_read_transaction(db_session)
     outcome = initiate_field_expense_payment_command(
         db_session,
-        command=InitiateFieldExpensePayment(
-            context=CommandContext(
-                command_id=command_id,
-                correlation_id=command_id,
-                actor=f"user:{manager.id}",
-                scope="operations:expense_request:pay",
-                reason=f"pay_expense_request:{request.id}",
-                idempotency_key=str(command_id),
-            ),
-            expense_request_id=request.id,
-            manager_system_user_id=manager.id,
-        ),
+        command=command,
     )
 
     rows = _outbox_rows(db_session, request)
@@ -437,7 +440,7 @@ def test_delivery_accepted_writes_erp_fields_back(db_session):
     assert result.accepted == 2
     assert request.expense_claim_reference == "ERP-CLAIM-1"
     assert request.expense_claim_number == "EXP-0001"
-    assert request.expense_claim_status == "submitted"
+    assert request.expense_claim_status == "approved"
     # ERP transport status cannot rewind the local approval decision.
     assert request.status == "approved"
     assert client.posts[0]["path"] == "/api/v1/sync/sub/expense-claims"

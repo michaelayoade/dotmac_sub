@@ -20,6 +20,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.schemas.dispatch import WorkOrderAssignmentQueueCreate, WorkOrderHeaderCreate
 from app.services import dispatch as dispatch_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
     create_field_work_order_note,
@@ -159,6 +160,7 @@ def test_work_order_lifecycle_native(db_session):
     assert worklog.work_order_mirror_id == row.id
 
     note_request_id = uuid4()
+    db_session_adapter.release_read_transaction(db_session)
     create_field_work_order_note(
         db_session,
         CreateFieldWorkOrderNote(

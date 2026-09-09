@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
@@ -64,6 +64,43 @@ class BackofficeDeliveryView:
     queued_at: datetime | None
     updated_at: datetime | None
     sent_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackofficeExpensePaymentView:
+    """Provider-neutral payment state projected on an expense request."""
+
+    status: str | None
+    intent_id: str | None
+    command_id: str | None
+    error: str | None
+    updated_at: str | None
+
+
+def expense_payment_projection(
+    request: FieldExpenseRequest,
+) -> BackofficeExpensePaymentView:
+    raw = dict((request.metadata_ or {}).get("erp_payment") or {})
+    return BackofficeExpensePaymentView(
+        status=str(raw["status"]) if raw.get("status") else None,
+        intent_id=str(raw["intent_id"]) if raw.get("intent_id") else None,
+        command_id=str(raw["command_id"]) if raw.get("command_id") else None,
+        error=str(raw["error"]) if raw.get("error") else None,
+        updated_at=str(raw["updated_at"]) if raw.get("updated_at") else None,
+    )
+
+
+def mark_expense_payment_queued(
+    request: FieldExpenseRequest, *, command_id: UUID, event_id: UUID
+) -> None:
+    metadata = dict(request.metadata_ or {})
+    metadata["erp_payment"] = {
+        "status": "queued",
+        "command_id": str(command_id),
+        "event_id": str(event_id),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    request.metadata_ = metadata
 
 
 @dataclass(frozen=True, slots=True)

@@ -88,12 +88,9 @@ class TodayScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        filter == 'completed'
-                            ? 'Jobs completed today.'
-                            : 'Today, overdue, and unscheduled jobs ready for action.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.subdued(context),
-                        ),
+                        filter == 'completed' ? 'Jobs completed today.' : 'Today, overdue, and unscheduled jobs ready for action.',
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: AppColors.subdued(context)),
                       ),
                     ],
                   ),
@@ -426,9 +423,8 @@ class _MetricTile extends StatelessWidget {
             Text(
               label,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppColors.subdued(context),
-              ),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: AppColors.subdued(context)),
             ),
           ],
         ),

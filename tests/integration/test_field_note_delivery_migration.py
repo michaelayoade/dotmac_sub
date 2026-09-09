@@ -19,8 +19,8 @@ from app import config as app_config
 from scripts.ci.migrated_test_database import require_migrated_schema
 
 ROOT = Path(__file__).resolve().parents[2]
-PREDECESSOR = "589_payment_inbox_lease"
-CANDIDATE = "590_field_note_delivery_idempotency"
+PREDECESSOR = "590_olt_observation_read_status"
+CANDIDATE = "591_field_note_delivery_idempotency"
 INDEX = "uq_field_work_order_notes_author_client_ref"
 
 
@@ -65,10 +65,19 @@ def predecessor_database(
             )
 
 
-def test_revision_590_adds_retry_identity_then_reaches_head(
+def test_revision_591_adds_retry_identity_then_reaches_head(
     predecessor_database: URL,
 ) -> None:
     _upgrade(PREDECESSOR)
+    # Revision 001 creates a fresh database from current model metadata. Remove
+    # the current-model additions to reconstruct the real deployed predecessor
+    # before rehearsing the incremental upgrade boundary.
+    with psycopg.connect(_render(predecessor_database)) as connection:
+        connection.execute(f"DROP INDEX IF EXISTS {INDEX}")
+        connection.execute(
+            "ALTER TABLE field_work_order_notes DROP COLUMN IF EXISTS client_ref"
+        )
+        connection.commit()
     with psycopg.connect(_render(predecessor_database)) as connection:
         before = connection.execute(
             "SELECT 1 FROM information_schema.columns "

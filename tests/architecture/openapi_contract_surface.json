@@ -4164,6 +4164,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/attendance": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": null,
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/config": {
    "params": [],
    "request": null,
@@ -14540,6 +14551,30 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/attendance/check-in": {
+   "params": [
+    "header:Idempotency-Key!",
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "85c9d1f96f0d",
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/field/attendance/check-out": {
+   "params": [
+    "header:Idempotency-Key!",
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "85c9d1f96f0d",
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/devices": {
    "params": [
     "header:authorization",
@@ -14806,15 +14841,29 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/manager/expenses/{expense_request_id}/pay": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:expense_request_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "323f0738efc1",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/manager/expenses/{expense_request_id}/reject": {
    "params": [
+    "header:X-Request-ID",
     "header:authorization",
     "header:x-api-key",
     "path:expense_request_id!"
    ],
    "request": "f86a8a67f869",
    "responses": {
-    "200": "6cc1ebd3f658",
+    "200": "b8941b7d1868",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19445,6 +19494,8 @@
   "FiberTerminationPointRead": "eef2a7ac34e4",
   "FiberTerminationPointUpdate": "ebdbeb8a047e",
   "FieldAttachmentRead": "12a11823b799",
+  "FieldAttendanceLocation": "26ecb4d149ff",
+  "FieldAttendanceRead": "69b61adafd8e",
   "FieldCableRegistrationCreate": "2fe2e6d32087",
   "FieldCableRegistrationResponse": "7e0dd2969fbb",
   "FieldCompletionRequirements": "3a2d8a58716d",
@@ -19458,10 +19509,12 @@
   "FieldEquipmentReturnRequest": "80e3640552d3",
   "FieldExpenseApprovalRead": "64ecf6941a17",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
+  "FieldExpensePaymentRead": "0b8340a83012",
+  "FieldExpenseRejectionRead": "a51a36ad03c8",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
   "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "838acdc17f32",
+  "FieldExpenseRequestRead": "6125ac8eb73f",
   "FieldExpenseRequestSubmit": "e8a7e3d6ec5a",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",

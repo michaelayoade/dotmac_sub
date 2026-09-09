@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -25,6 +25,8 @@ class FieldWorkOrderNote(Base):
             "author_system_user_id",
             "client_ref",
             unique=True,
+            postgresql_where=text("client_ref IS NOT NULL"),
+            sqlite_where=text("client_ref IS NOT NULL"),
         ),
     )
 

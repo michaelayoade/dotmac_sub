@@ -28,7 +28,6 @@ must move to Sub at cutover before a single claim reaches ERP.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
@@ -55,15 +54,6 @@ class ExpenseErpAction(StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
     INITIATE_PAYMENT = "initiate_payment"
-
-
-@dataclass(frozen=True, slots=True)
-class ExpensePaymentProjection:
-    status: str | None
-    intent_id: str | None
-    command_id: str | None
-    error: str | None
-    updated_at: str | None
 
 
 # The sub-side statuses a claim can still change while ERP owns settlement;
@@ -376,32 +366,6 @@ def _apply_payment_projection(
     current.pop("error", None)
     metadata["erp_payment"] = current
     request.metadata_ = metadata
-
-
-def mark_payment_queued(
-    request: FieldExpenseRequest, *, command_id: UUID, event_id: UUID
-) -> None:
-    metadata = dict(request.metadata_ or {})
-    metadata["erp_payment"] = {
-        "status": "queued",
-        "command_id": str(command_id),
-        "event_id": str(event_id),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    request.metadata_ = metadata
-
-
-def expense_payment_projection(
-    request: FieldExpenseRequest,
-) -> ExpensePaymentProjection:
-    raw = dict((request.metadata_ or {}).get("erp_payment") or {})
-    return ExpensePaymentProjection(
-        status=str(raw["status"]) if raw.get("status") else None,
-        intent_id=str(raw["intent_id"]) if raw.get("intent_id") else None,
-        command_id=str(raw["command_id"]) if raw.get("command_id") else None,
-        error=str(raw["error"]) if raw.get("error") else None,
-        updated_at=str(raw["updated_at"]) if raw.get("updated_at") else None,
-    )
 
 
 def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:

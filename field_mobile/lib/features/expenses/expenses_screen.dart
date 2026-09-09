@@ -47,9 +47,8 @@ class ExpensesScreen extends ConsumerWidget {
                 Expanded(
                   child: Text(
                     'Expense requests',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
                 FilledButton.icon(
@@ -262,9 +261,8 @@ class _ExpenseRequestDetailScreenState
           children: [
             Text(
               data.purpose ?? data.displayNumber,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
             Text(
@@ -778,9 +776,8 @@ class _NewExpenseRequestScreenState
         );
     ref.invalidate(expenseRequestDraftsProvider);
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Draft saved')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Draft saved')));
   }
 
   Future<void> _pickReceipt(ImageSource source) async {
@@ -932,16 +929,14 @@ class _NewExpenseRequestScreenState
         'Could not submit expense request',
       );
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (!mounted) return;
       const message = 'Could not submit expense request';
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1195,9 +1190,8 @@ class _NewExpenseRequestScreenState
               alignment: Alignment.centerRight,
               child: Text(
                 'Total ${_money('NGN', total)}',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
           if (_submitError.isNotEmpty) ...[

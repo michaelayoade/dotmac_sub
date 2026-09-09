@@ -5,8 +5,8 @@ send one stable UUID with every queued note, and the owner command uses the
 unique technician/reference pair to replay retries without creating a second
 note.
 
-Revision ID: 590_field_note_delivery_idempotency
-Revises: 589_payment_inbox_lease
+Revision ID: 591_field_note_delivery_idempotency
+Revises: 590_olt_observation_read_status
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision: str = "590_field_note_delivery_idempotency"
-down_revision: str | None = "589_payment_inbox_lease"
+revision: str = "591_field_note_delivery_idempotency"
+down_revision: str | None = "590_olt_observation_read_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

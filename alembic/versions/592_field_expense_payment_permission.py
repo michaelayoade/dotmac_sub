@@ -1,7 +1,7 @@
 """Provision the separately grantable field expense payment permission.
 
-Revision ID: 590_field_expense_payment_permission
-Revises: 589_payment_inbox_lease
+Revision ID: 592_field_expense_payment_permission
+Revises: 591_field_note_delivery_idempotency
 Create Date: 2026-09-09
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "590_field_expense_payment_permission"
-down_revision: str | None = "589_payment_inbox_lease"
+revision: str = "592_field_expense_payment_permission"
+down_revision: str | None = "591_field_note_delivery_idempotency"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

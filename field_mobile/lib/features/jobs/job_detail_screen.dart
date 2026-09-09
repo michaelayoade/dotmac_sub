@@ -164,9 +164,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           children: [
             Text(
               job.title,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (!detail.customerExperience.isEmpty) ...[
               const SizedBox(height: 8),
@@ -540,9 +539,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           : entry?.status == 'pending'
           ? '${actionLabel(action)} queued for sync'
           : '${actionLabel(action)} recorded';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -619,9 +617,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
         MutationDeliveryState.queued => 'Note queued for sync',
         MutationDeliveryState.failed => 'Note could not sync',
       };
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
       unawaited(_refreshJobDetail(jobId));
     } catch (_) {
       if (!mounted) return;
@@ -629,9 +626,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
         _isSavingNote = false;
         _noteError = 'Could not save note';
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Could not save note')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not save note')));
     }
   }
 
@@ -894,9 +890,8 @@ class _NoteTile extends StatelessWidget {
         ),
         Text(
           meta,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         Text(note.body),
         if (note.deliveryState == JobNoteDeliveryState.failed &&
@@ -904,9 +899,8 @@ class _NoteTile extends StatelessWidget {
             note.deliveryError!.isNotEmpty)
           Text(
             note.deliveryError!,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.error,
-            ),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: Theme.of(context).colorScheme.error),
           ),
       ],
     );
@@ -1360,9 +1354,8 @@ class _CustomerCard extends ConsumerWidget {
                     children: [
                       Text(
                         customer.name ?? 'Customer',
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: Theme.of(context).textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w600),
                       ),
                       if (customer.servicePlan != null)
                         Text(

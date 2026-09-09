@@ -214,7 +214,7 @@ def _author_name(profile: TechnicianProfile, user: SystemUser) -> str:
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    return profile.crm_person_id or str(profile.person_id)
+    return profile.workforce_employee_reference or str(profile.person_id)
 
 
 def _attachment_outcome(
