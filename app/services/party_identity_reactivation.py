@@ -203,7 +203,7 @@ def _reactivate(
     party.merge_reason = None
     db.flush()
     updated_at = _database_utc(party.updated_at)
-    evidence = {
+    evidence: dict[str, object] = {
         "command_id": str(command.context.command_id),
         "previous_status": PartyIdentityStatus.quarantined.value,
         "current_status": PartyIdentityStatus.active.value,
