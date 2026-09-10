@@ -29,6 +29,10 @@ from app.models.vendor_routes import (
 )
 from app.services.dotmac_erp import outbox, purchase_invoice_sync
 
+_NON_SUB_OWNER = next(
+    owner.value for owner in SyncFlowOwner if owner is not SyncFlowOwner.sub
+)
+
 
 def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
     sub_flows = sub_flows or set()
@@ -36,7 +40,7 @@ def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
         owner = (
             SyncFlowOwner.sub.value
             if flow.value in sub_flows
-            else SyncFlowOwner.crm.value
+            else _NON_SUB_OWNER
         )
         db.add(SyncFlowOwnership(flow=flow.value, owner=owner))
     db.flush()
@@ -250,7 +254,7 @@ def test_repair_still_enqueues_a_genuinely_new_invoice(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Ownership guard — a CRM-owned flow must cause no ERP call and no attachment
+# Ownership guard — a non-Sub-owned flow must cause no ERP call and no attachment
 # upload, even for an invoice a repair sweep would otherwise act on.
 # ---------------------------------------------------------------------------
 
@@ -282,15 +286,15 @@ class _NullContextClient:
         return False
 
 
-def test_repair_makes_no_erp_call_for_a_crm_owned_flow(db_session, monkeypatch):
+def test_repair_makes_no_erp_call_for_a_non_sub_owned_flow(db_session, monkeypatch):
     """Michael's finding: a scheduled repair must re-check ownership on every
-    run, not just at write-time of the original event. A CRM-owned flow must
+    run, not just at write-time of the original event. A non-Sub-owned flow must
     see NO ERP call — including the attachment-upload consequence — and the
     row must be counted under ``skipped_not_owned``, not as a success.
     """
     from app.models.stored_file import StoredFile
 
-    # Flow is explicitly CRM-owned (not seeded to sub at all).
+    # Flow is explicitly not Sub-owned.
     _seed_ownership(db_session)
     invoice = _approved_invoice(db_session)
     # Already linked to ERP — this is the exact branch that calls
@@ -336,10 +340,10 @@ def test_repair_makes_no_erp_call_for_a_crm_owned_flow(db_session, monkeypatch):
     assert invoice.payables_attachment_submitted_at is None
 
 
-def test_repair_does_not_reapply_a_stored_response_for_a_crm_owned_flow(db_session):
+def test_repair_does_not_reapply_for_a_non_sub_owned_flow(db_session):
     """The 'delivered row with a usable stored response' branch re-applies
     ``apply_erp_response`` — a state mutation implying ERP involvement. It
-    must also be skipped for a currently CRM-owned flow, even though the
+    must also be skipped for a currently non-Sub-owned flow, even though the
     outbox row was, by construction, delivered while sub owned the flow.
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_invoice.value})
@@ -359,13 +363,13 @@ def test_repair_does_not_reapply_a_stored_response_for_a_crm_owned_flow(db_sessi
     invoice.payables_submission_error = "stale evidence from a prior failure"
     db_session.commit()
 
-    # Ownership moves back to CRM before the scheduled repair runs again.
+    # Ownership moves away from Sub before the scheduled repair runs again.
     ownership_row = (
         db_session.query(SyncFlowOwnership)
         .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_invoice.value)
         .one()
     )
-    ownership_row.owner = SyncFlowOwner.crm.value
+    ownership_row.owner = _NON_SUB_OWNER
     db_session.commit()
 
     result = purchase_invoice_sync.repair_purchase_invoice_sync(db_session)
@@ -379,11 +383,11 @@ def test_repair_does_not_reapply_a_stored_response_for_a_crm_owned_flow(db_sessi
     assert invoice.payables_submission_error == "stale evidence from a prior failure"
 
 
-def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_flow(db_session):
+def test_unlinked_status_poll_skips_a_non_sub_owned_flow(db_session):
     """The poll-drain path (``_poll_unlinked_purchase_invoices``, reached via
     ``refresh_purchase_invoice_statuses``) makes a real ERP call
     (``get_purchase_invoice_status``). It must also be skipped for a
-    currently CRM-owned flow.
+    currently non-Sub-owned flow.
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.purchase_invoice.value})
     invoice = _approved_invoice(db_session)
@@ -394,13 +398,13 @@ def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_flow(db_session)
     row = _outbox_rows(db_session, invoice)[0]
     assert row.status == FieldErpSyncStatus.sent.value
 
-    # Ownership moves back to CRM before the poll runs.
+    # Ownership moves away from Sub before the poll runs.
     ownership_row = (
         db_session.query(SyncFlowOwnership)
         .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.purchase_invoice.value)
         .one()
     )
-    ownership_row.owner = SyncFlowOwner.crm.value
+    ownership_row.owner = _NON_SUB_OWNER
     db_session.commit()
 
     client = _FakeERPClient(

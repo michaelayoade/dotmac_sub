@@ -375,7 +375,7 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
        delivery retry or dead-letter handling owns it, not this repair.
 
     OWNERSHIP GUARD: this is a scheduled sweep left running across cutovers —
-    ``sync_flow_ownership`` can move a flow back to CRM after this repair was
+    ``sync_flow_ownership`` can move a flow away from Sub after this repair was
     first wired, and a stale schedule must not keep acting on a flow it no
     longer owns. Checked ONCE per run (ownership is a per-flow switch, not
     per-row), before either repair consequence below: re-applying a stored
@@ -494,7 +494,7 @@ def _poll_unlinked_purchase_invoices(
 
     OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front. A status
     poll is a real ERP API call about a row that may belong to a flow
-    ownership has since moved back to CRM — never made when not owned. Rows
+    ownership has since moved away from Sub — never made when not owned. Rows
     skipped this way are counted separately so the caller's own numbers stay
     honest about how much was actually polled.
     """

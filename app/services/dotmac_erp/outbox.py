@@ -332,7 +332,16 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
     commit as the delivered outcome, otherwise the idempotent ERP request is
     retried. Legacy flows retain their existing logged best-effort behavior until
     their own ownership slices migrate.
+    Rejected and dead responses are durable failure evidence, never accepted
+    provider links. Only accepted responses and non-terminal ``sent`` responses
+    may reach a flow-specific write-back owner.
     """
+    if row.status not in {
+        FieldErpSyncStatus.accepted.value,
+        FieldErpSyncStatus.sent.value,
+    }:
+        return
+
     if row.flow == FieldErpSyncFlow.expense_claim.value:
         try:
             from app.services.dotmac_erp.expense_sync import apply_erp_response

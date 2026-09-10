@@ -639,16 +639,18 @@ def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
     request.expense_claim_reference = None
     request.expense_claim_status = None
     db_session.commit()
+    row_ids_before = {row.id for row in _outbox_rows(db_session, request)}
 
     result = expense_sync.repair_expense_claim_writebacks(db_session)
 
     db_session.refresh(request)
     assert result["repaired"] == 1
     assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
-    # No re-emit: still exactly one outbox row, still terminal-accepted.
+    # No re-emit: submission and approval retain the same two terminal rows.
     rows = _outbox_rows(db_session, request)
-    assert len(rows) == 1
-    assert rows[0].status == FieldErpSyncStatus.accepted.value
+    assert {row.id for row in rows} == row_ids_before
+    assert len(rows) == 2
+    assert all(row.status == FieldErpSyncStatus.accepted.value for row in rows)
 
 
 def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_session):
@@ -689,7 +691,8 @@ def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_sessi
     db_session.refresh(request)
     assert result["repaired"] == 0
     assert result["processed"] == 0
-    assert result["skipped_not_owned"] == 1
+    # Both the submission and approval responses are deliberately skipped.
+    assert result["skipped_not_owned"] == 2
     # No re-apply happened: the request's own reference is still missing.
     assert request.expense_claim_reference is None
     assert request.expense_claim_status is None

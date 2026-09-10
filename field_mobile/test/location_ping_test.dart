@@ -199,38 +199,44 @@ void main() {
       },
     );
 
-    test('accuracy survives from the fix through to the wire payload', () async {
-      List<LocationPingPayload>? posted;
-      final svc = LocationPingService(
-        location: FakeLocation(
-          _fix(latitude: 6.5, longitude: 3.3, accuracy: 12.5),
-        ),
-        poster: (pings) async {
-          posted = pings;
-          return true;
-        },
-      )..setShift(ShiftState.onShift);
+    test(
+      'accuracy survives from the fix through to the wire payload',
+      () async {
+        List<LocationPingPayload>? posted;
+        final svc = LocationPingService(
+          location: FakeLocation(
+            _fix(latitude: 6.5, longitude: 3.3, accuracy: 12.5),
+          ),
+          poster: (pings) async {
+            posted = pings;
+            return true;
+          },
+        )..setShift(ShiftState.onShift);
 
-      await svc.captureOnce();
-      await svc.flush();
-      expect(posted!.single.accuracyM, 12.5);
-      expect(posted!.single.toJson()['accuracy_m'], 12.5);
-    });
+        await svc.captureOnce();
+        await svc.flush();
+        expect(posted!.single.accuracyM, 12.5);
+        expect(posted!.single.toJson()['accuracy_m'], 12.5);
+      },
+    );
 
-    test('a fix with no accuracy omits accuracy_m from the wire payload', () async {
-      List<LocationPingPayload>? posted;
-      final svc = LocationPingService(
-        location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
-        poster: (pings) async {
-          posted = pings;
-          return true;
-        },
-      )..setShift(ShiftState.onShift);
+    test(
+      'a fix with no accuracy omits accuracy_m from the wire payload',
+      () async {
+        List<LocationPingPayload>? posted;
+        final svc = LocationPingService(
+          location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
+          poster: (pings) async {
+            posted = pings;
+            return true;
+          },
+        )..setShift(ShiftState.onShift);
 
-      await svc.captureOnce();
-      await svc.flush();
-      expect(posted!.single.toJson(), isNot(contains('accuracy_m')));
-    });
+        await svc.captureOnce();
+        await svc.flush();
+        expect(posted!.single.toJson(), isNot(contains('accuracy_m')));
+      },
+    );
 
     test(
       'a fix with no timestamp falls back to the clock and is flagged clock-derived',
@@ -502,87 +508,81 @@ void main() {
       },
     );
 
-    test(
-      'client_observation_id is minted once at capture and stays identical '
-      'across a failed retry and a second flush attempt',
-      () async {
-        final postedIds = <String?>[];
-        var succeed = false;
-        final svc = LocationPingService(
-          location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
-          poster: (pings) async {
-            postedIds.add(pings.single.clientObservationId);
-            return succeed;
-          },
-          store: MemoryLocationPingStore(),
-        )..setShift(ShiftState.onShift);
+    test('client_observation_id is minted once at capture and stays identical '
+        'across a failed retry and a second flush attempt', () async {
+      final postedIds = <String?>[];
+      var succeed = false;
+      final svc = LocationPingService(
+        location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
+        poster: (pings) async {
+          postedIds.add(pings.single.clientObservationId);
+          return succeed;
+        },
+        store: MemoryLocationPingStore(),
+      )..setShift(ShiftState.onShift);
 
-        await svc.captureOnce();
+      await svc.captureOnce();
 
-        // First flush fails (ambiguous network failure); the buffered ping
-        // is retained rather than regenerated.
-        expect(await svc.flush(), isFalse);
-        // Second flush of the SAME buffered ping — the id sent must be
-        // identical, not a freshly minted one.
-        succeed = true;
-        expect(await svc.flush(), isTrue);
+      // First flush fails (ambiguous network failure); the buffered ping
+      // is retained rather than regenerated.
+      expect(await svc.flush(), isFalse);
+      // Second flush of the SAME buffered ping — the id sent must be
+      // identical, not a freshly minted one.
+      succeed = true;
+      expect(await svc.flush(), isTrue);
 
-        expect(postedIds, hasLength(2));
-        expect(postedIds[0], isNotNull);
-        expect(postedIds[0], isNotEmpty);
-        expect(postedIds[1], postedIds[0]);
-      },
-    );
+      expect(postedIds, hasLength(2));
+      expect(postedIds[0], isNotNull);
+      expect(postedIds[0], isNotEmpty);
+      expect(postedIds[1], postedIds[0]);
+    });
 
-    test(
-      "client_observation_id survives a save-to-queue/load-from-queue round "
-      "trip through the encrypted on-disk store — the same id a simulated "
-      "app restart would see",
-      () async {
-        final directory = await Directory.systemTemp.createTemp(
-          'field-location-dedup',
-        );
-        final file = File('${directory.path}/pending.json');
-        final store = FileLocationPingStore(
-          file,
-          cipher: cipher(),
-          scopeKey: scopeKey,
-        );
-        addTearDown(() async {
-          if (await directory.exists()) await directory.delete(recursive: true);
-        });
+    test("client_observation_id survives a save-to-queue/load-from-queue round "
+        "trip through the encrypted on-disk store — the same id a simulated "
+        "app restart would see", () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'field-location-dedup',
+      );
+      final file = File('${directory.path}/pending.json');
+      final store = FileLocationPingStore(
+        file,
+        cipher: cipher(),
+        scopeKey: scopeKey,
+      );
+      addTearDown(() async {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      });
 
-        final first = LocationPingService(
-          location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
-          poster: (_) async => false, // keep it queued on disk
-          store: store,
-        )..setShift(ShiftState.onShift);
-        await first.captureOnce();
-        final mintedId = (await store.load()).single.clientObservationId;
-        expect(mintedId, isNotNull);
-        expect(mintedId, isNotEmpty);
+      final first = LocationPingService(
+        location: FakeLocation(_fix(latitude: 6.5, longitude: 3.3)),
+        poster: (_) async => false, // keep it queued on disk
+        store: store,
+      )..setShift(ShiftState.onShift);
+      await first.captureOnce();
+      final mintedId = (await store.load()).single.clientObservationId;
+      expect(mintedId, isNotNull);
+      expect(mintedId, isNotEmpty);
 
-        // A fresh service instance reading the same encrypted queue (an app
-        // restart) and then two separate flush attempts of that same
-        // restored ping must all see the identical id.
-        final postedIds = <String?>[];
-        var succeed = false;
-        final restarted = LocationPingService(
-          location: FakeLocation(null),
-          poster: (pings) async {
-            postedIds.add(pings.single.clientObservationId);
-            return succeed;
-          },
-          store: store,
-        );
-        expect(await restarted.restoreBufferedPings(), 1);
-        expect(await restarted.flush(), isFalse);
-        succeed = true;
-        expect(await restarted.flush(), isTrue);
+      // A fresh service instance reading the same encrypted queue (an app
+      // restart) and then two separate flush attempts of that same
+      // restored ping must all see the identical id.
+      final postedIds = <String?>[];
+      var succeed = false;
+      final restarted = LocationPingService(
+        location: FakeLocation(null),
+        poster: (pings) async {
+          postedIds.add(pings.single.clientObservationId);
+          return succeed;
+        },
+        store: store,
+      );
+      expect(await restarted.restoreBufferedPings(), 1);
+      expect(await restarted.flush(), isFalse);
+      succeed = true;
+      expect(await restarted.flush(), isTrue);
 
-        expect(postedIds, [mintedId, mintedId]);
-      },
-    );
+      expect(postedIds, [mintedId, mintedId]);
+    });
 
     test('restored buffer retains only the newest configured fixes', () async {
       final store = MemoryLocationPingStore();
