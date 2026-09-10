@@ -734,7 +734,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "network.ont_service_configuration.active_assignment_required",
                     "network.ont_service_configuration.ambiguous_assignment",
                     "network.ont_service_configuration.assignment_incomplete",
-                    "network.ont_service_configuration.subscription_not_active",
+                    "network.ont_service_configuration.subscription_missing",
                     "network.ont_service_configuration.assignment_identity_conflict",
                     "network.ont_service_configuration.pon_not_ready",
                     "network.ont_service_configuration.olt_not_ready",

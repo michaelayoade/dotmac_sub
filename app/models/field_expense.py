@@ -36,6 +36,14 @@ class FieldExpenseRequest(Base):
     __table_args__ = (
         Index("ix_field_expense_requests_mirror", "work_order_mirror_id", "created_at"),
         Index("ix_field_expense_requests_requested_by", "requested_by_technician_id"),
+        Index(
+            "ix_field_expense_requests_requested_by_person",
+            "requested_by_person_id",
+        ),
+        Index(
+            "ix_field_expense_requests_requested_by_system_user",
+            "requested_by_system_user_id",
+        ),
         Index("ix_field_expense_requests_status", "status"),
         Index("ix_field_expense_requests_client_ref", "client_ref", unique=True),
         CheckConstraint(

@@ -2,8 +2,8 @@
 
 This projection deliberately explains the workflow without deciding whether an
 action is allowed.  Routes and domain owners remain authoritative for that.
-The route prefix is an auditable link between a page and its guide; changing an
-Admin workflow requires updating this module in the same pull request.
+The route selector is an auditable link between a page and its guide; changing
+an Admin workflow requires updating this module in the same pull request.
 """
 
 from __future__ import annotations
@@ -23,13 +23,58 @@ class AdminWorkflowGuidance:
     purpose: str
     route_prefixes: tuple[str, ...]
     steps: tuple[str, ...]
+    route_templates: tuple[str, ...] = ()
+    excluded_route_prefixes: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
 
-    def matches_path(self, path: str) -> bool:
-        return any(
-            path == prefix or path.startswith(f"{prefix}/")
+    def match_specificity(self, path: str) -> int | None:
+        """Return selector specificity, preferring exact route templates."""
+        if any(
+            path == excluded or path.startswith(f"{excluded}/")
+            for prefix in self.excluded_route_prefixes
+            if (excluded := prefix.rstrip("/"))
+        ):
+            return None
+        scores = [
+            len(normalized_prefix)
             for prefix in self.route_prefixes
+            if (normalized_prefix := prefix.rstrip("/"))
+            and (path == normalized_prefix or path.startswith(f"{normalized_prefix}/"))
+        ]
+        scores.extend(
+            10_000 + _template_specificity(template)
+            for template in self.route_templates
+            if _matches_route_template(path, template)
         )
+        return max(scores, default=None)
+
+    def matches_path(self, path: str) -> bool:
+        return self.match_specificity(path) is not None
+
+
+def _matches_route_template(path: str, template: str) -> bool:
+    """Match exact path segments, ``{name}`` placeholders, and a final ``**``."""
+    path_parts = tuple(part for part in path.strip("/").split("/") if part)
+    template_parts = tuple(part for part in template.strip("/").split("/") if part)
+    for index, expected in enumerate(template_parts):
+        if expected == "**":
+            return index == len(template_parts) - 1
+        if index >= len(path_parts):
+            return False
+        if expected.startswith("{") and expected.endswith("}"):
+            continue
+        if path_parts[index] != expected:
+            return False
+    return len(path_parts) == len(template_parts)
+
+
+def _template_specificity(template: str) -> int:
+    parts = tuple(part for part in template.strip("/").split("/") if part)
+    literal_parts = sum(
+        part != "**" and not (part.startswith("{") and part.endswith("}"))
+        for part in parts
+    )
+    return literal_parts * 100 + len(parts)
 
 
 def _guide(
@@ -40,10 +85,21 @@ def _guide(
     purpose: str,
     routes: tuple[str, ...],
     *steps: str,
+    route_templates: tuple[str, ...] = (),
+    excluded_route_prefixes: tuple[str, ...] = (),
     notes: tuple[str, ...] = (),
 ) -> AdminWorkflowGuidance:
     return AdminWorkflowGuidance(
-        id, category, title, audience, purpose, routes, steps, notes
+        id=id,
+        category=category,
+        title=title,
+        audience=audience,
+        purpose=purpose,
+        route_prefixes=routes,
+        steps=steps,
+        route_templates=route_templates,
+        excluded_route_prefixes=excluded_route_prefixes,
+        notes=notes,
     )
 
 
@@ -56,13 +112,17 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Navigate the admin workspace",
         "All staff",
         "Find the right place to start customer work.",
-        ("/admin/dashboard",),
+        (),
         "Choose a work area from the sidebar.",
         "Start from Customers for a person or service, and Billing for an invoice, payment, proof, credit, or reconciliation item.",
         "Open the customer detail page for work affecting one customer.",
+        "Confirm the customer and owning record before using an action.",
+        "Read previews, check billing and service effects, enter a clear reason, and verify the visible result.",
+        route_templates=("/admin/dashboard",),
         notes=(
             "Use visible actions on the owning record; do not work from memory.",
             "If a session-expired page appears, use Refresh page so the same Admin page reloads with a fresh token.",
+            "When unsure, stop and escalate with the record link and preview result.",
         ),
     ),
     _guide(
@@ -71,13 +131,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Find a customer",
         "Support, billing, operations",
         "Locate and confirm a customer before acting.",
-        ("/admin/customers",),
+        (),
         "Search by name, phone, email, account number, business name, or known identifier.",
         "Use filters to narrow the list, then open the matching customer.",
         "Confirm contact details, billing account, service address, active service, and recent history.",
         notes=(
             "If records are similar, stop and compare the billing account and subscription before changing anything.",
         ),
+        route_templates=("/admin/customers",),
     ),
     _guide(
         "create-customer",
@@ -85,10 +146,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create a customer",
         "Sales, onboarding, support",
         "Create an individual or business customer ready for service or billing.",
-        ("/admin/customers/new",),
+        (),
         "Choose Individual or Business.",
         "Enter verified identity, contact, address, and service-location information.",
         "Review the profile, then create the billing account or continue to subscription setup when needed.",
+        route_templates=("/admin/customers/new", "/admin/customers/wizard"),
         notes=("Do not use placeholder identity data for a production customer.",),
     ),
     _guide(
@@ -97,27 +159,25 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Understand the customer detail page",
         "All staff",
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
-        ("/admin/customers/",),
+        (),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
+        "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
+        "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
+        "For portal access, confirm the contact details and impersonate only when a valid support reason requires it.",
+        "Use Timeline to review recent events, then open linked records for the detail behind a change.",
         "Open the specific record before performing a state-changing action.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
+            "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
-        ),
-    ),
-    _guide(
-        "customer-portal",
-        "Customer portal",
-        "Manage customer portal access",
-        "Support, onboarding, account managers",
-        "Review portal access or troubleshoot the customer experience safely.",
-        ("/admin/customers/",),
-        "Confirm the customer and the correct contact details.",
-        "Use portal access settings to diagnose access; impersonate only when a valid support reason requires it.",
-        "End an impersonation session when the support work is complete.",
-        notes=(
             "Impersonation is privileged and audited. Never use it to bypass normal approval or billing controls.",
+        ),
+        route_templates=(
+            "/admin/customers/{customer_type}/{customer_id}/**",
+            "/admin/customers/{subscriber_id}/availability",
+            "/admin/customers/{subscriber_id}/subscriptions/{subscription_id}/sla-review",
         ),
     ),
     _guide(
@@ -126,26 +186,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create a new subscription",
         "Sales, provisioning, operations",
         "Add a service to an existing customer.",
-        ("/admin/catalog/subscriptions/new",),
+        (),
         "Confirm the customer and choose the service offer or plan.",
         "Enter required billing, service-location, and provisioning details.",
         "Review before saving, then confirm subscription, billing, and access state.",
         notes=(
             "A subscription is the service record, not an invoice or an access move.",
         ),
-    ),
-    _guide(
-        "change-plan",
-        "Subscriptions",
-        "Change a customer plan",
-        "Billing, support, operations",
-        "Move an existing subscription to another plan.",
-        ("/admin/catalog/subscriptions",),
-        "Open the affected subscription and choose Change Plan.",
-        "Select the target plan, effective timing, and a clear operational reason.",
-        "Read the preview and confirm only when billing and service-access effects match the approved request.",
-        "Reopen the subscription and Billing tab to verify the result.",
-        notes=("Use this for plan replacement, not for moving network access.",),
+        route_templates=("/admin/catalog/subscriptions/new",),
     ),
     _guide(
         "service-access",
@@ -153,10 +201,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Change customer service access",
         "Network operations, provisioning",
         "Move the network access assignment for a subscription.",
-        ("/admin/catalog/subscriptions",),
+        (),
         "Open the affected subscription and choose the service access move action.",
         "Review current access, router, NAS, IP, RADIUS, and session information.",
         "Select the target, provide the required reason, confirm, and verify Network afterwards.",
+        route_templates=("/admin/catalog/subscriptions/{subscription_id}/access/move",),
         notes=("This is not a plan change or billing correction.",),
     ),
     _guide(
@@ -164,13 +213,19 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Subscriptions",
         "Manage subscription lifecycle",
         "Billing, support, operations",
-        "Activate, restore, suspend, disable, cancel, or correct a subscription.",
-        ("/admin/catalog/subscriptions",),
+        "Review or change a subscription without confusing plan, lifecycle, and network-access actions.",
+        (),
         "Open the subscription and choose the lifecycle action that matches the decision.",
         "Enter timing and a clear reason.",
         "Review billing and access consequences before confirming, then reopen the subscription to verify.",
+        "For a plan change, select the target plan and effective timing, then confirm only when the preview matches the approved request.",
+        route_templates=(
+            "/admin/catalog/subscriptions",
+            "/admin/catalog/subscriptions/{subscription_id}/**",
+        ),
         notes=(
             "Do not use a second subscription to hide an accidental activation; use the correction workflow.",
+            "A plan change replaces the plan; it does not move network access.",
         ),
     ),
     _guide(
@@ -179,11 +234,45 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review customer network access",
         "Support, NOC, field operations",
         "Investigate service-access symptoms with customer context.",
-        ("/admin/network",),
+        (),
         "Review service lifecycle, active access, outage indicators, credentials, IP information, router or NAS, and service location.",
         "Open or update a ticket when the issue needs tracked follow-up or field work.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
+        ),
+        route_templates=("/admin/network",),
+    ),
+    _guide(
+        "olt-operational-health",
+        "Network and access",
+        "Interpret OLT operational health",
+        "NOC, network operations",
+        "Compare OLT status in the inventory and investigate the same evidence on an OLT detail page.",
+        ("/admin/network/olts",),
+        "Start with the Working or Not working badge; administrative Active or Inactive is a separate inventory lifecycle.",
+        "On the detail page, compare the native OLT poll, Ping, and SNMP evidence and open each timestamp tooltip when recency matters.",
+        "Treat Expired or Not current evidence as historical, not as proof that the OLT is currently reachable.",
+        "Use Refresh Telemetry or the explicit test actions when current verification is required, then reload the inventory comparison.",
+        notes=(
+            "A fresh successful native OLT poll can confirm operation even when an older ping or linked monitoring record is stale.",
+            "A linked monitoring record contributes fallback evidence only while that record is active and its polling observation is current.",
+        ),
+    ),
+    _guide(
+        "ont-wifi-pppoe-actions",
+        "Network and access",
+        "Push WiFi, PPPoE, and resync changes to an ONT",
+        "NOC, field operations",
+        "Update a customer's WiFi or PPPoE settings on their ONT, or recover a device stuck out of sync after a failed push.",
+        ("/admin/network/onts",),
+        "Confirm the exact ONT by serial number, account, and OLT/port before changing anything.",
+        "Use Set WiFi Password or Set WiFi SSID for a routine change; the value is saved immediately but only pushed to the device at its next check-in unless you force it.",
+        "Use Force-Push WiFi Password when the customer reports the change did not take effect (for example, after a factory reset wiped the device's saved settings) and it needs to apply right away.",
+        "Use Force Resync only after a previous attempt failed and you have checked it is safe to retry — this re-attempts the whole reconcile against the device, not just the one field you changed.",
+        "If the device is on a known-slow OLT shelf, ask for the longer wait-time option so a slow OLT does not cut the change off partway through.",
+        notes=(
+            "Force Resync is refused on purpose when the last attempt left the ONT out of sync — that is a deliberate checkpoint asking you to confirm it is safe before retrying, not a bug.",
+            "A failed push does not necessarily mean nothing happened on the device; check the ONT's actual status before assuming it is still on the old settings.",
         ),
     ),
     _guide(
@@ -192,15 +281,20 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Record a work-order expense",
         "Field operations staff",
         "Create and track your own expense claim against the exact work order.",
-        ("/admin/dispatch/work-orders",),
+        (),
         "Open the exact work order and review its customer and operational context.",
-        "Choose New Expense Claim when you have dispatch write access and ERP categories are available.",
+        (
+            "Choose New Expense Claim from any work order you can open; the form "
+            "becomes available after a technician is assigned and ERP categories "
+            "are available."
+        ),
         "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting.",
         "Return to the work order to track delivery and ERP acceptance separately.",
         notes=(
             "Only your claims appear in this card; approval, reimbursement, and payment remain in ERP.",
             "A submitted claim is not approved, and a sent delivery is not ERP acceptance.",
         ),
+        route_templates=("/admin/dispatch/work-orders/{work_order_id}",),
     ),
     _guide(
         "project-authoring",
@@ -208,7 +302,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create and update projects",
         "Project managers, operations",
         "Create project work against the correct customer account or infrastructure.",
-        ("/admin/projects",),
+        (),
         "Open New Project or edit the project that owns the work.",
         "Search for an active customer by name, account ID, account number, subscriber number, or email, then choose the matching result.",
         "Clear the customer field when the project is intentionally not linked to a customer.",
@@ -224,6 +318,40 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Assigned or published work cannot be retargeted through ordinary project edits. A draft vendor work record cannot lose its last customer, infrastructure, or buildout reference.",
             "Selecting infrastructure does not assign a vendor or approve a quote or payment.",
         ),
+        route_templates=(
+            "/admin/projects",
+            "/admin/projects/new",
+            "/admin/projects/{project_ref}",
+            "/admin/projects/{project_ref}/edit",
+        ),
+        excluded_route_prefixes=(
+            "/admin/projects/customers",
+            "/admin/projects/infrastructure-options",
+            "/admin/projects/tasks",
+            "/admin/projects/templates",
+            "/admin/projects/export.csv",
+        ),
+    ),
+    _guide(
+        "sales-quotes",
+        "Sales",
+        "Create and manage sales Quotes",
+        "Sales and account managers",
+        "Prepare a pricing proposal for a genuine Lead or an existing Customer.",
+        ("/admin/sales/quotes",),
+        "Open New Quote and search at least two characters for exactly one Lead or Customer.",
+        "Choose Lead only when the proposal belongs to an open sales opportunity; choose Customer when the account already exists.",
+        "Confirm the selected result, Project Type, line items, discount, tax, expiry, and optional install location before creating the Quote.",
+        "For an installation estimate awaiting staff review, confirm the customer, pinned installation address, feasibility result, price, deposit, and expiry.",
+        "Choose Approve for payment when the estimate is correct, or reject it with a clear reason. Confirm the page shows Approved and the customer notification has been queued.",
+        "Send the Quote for review, then use acceptance only after the customer agrees to the commercial terms.",
+        notes=(
+            "A Customer-backed Quote uses the selected Subscriber account directly and does not create a Lead or require a Party binding.",
+            "Accepting a Lead-backed Quote converts its reviewed identity and marks that Lead Won; accepting a Customer-backed Quote reuses the existing active Subscriber. Both continue through the same sales-order and implementation workflow.",
+            "Typing text alone does not select a recipient. Choose an exact typeahead result; changing the text clears the previous selection.",
+            "Customers can see an installation estimate while it is under review, but payment remains unavailable.",
+            "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
+        ),
     ),
     _guide(
         "billing-overview",
@@ -231,13 +359,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Understand customer billing",
         "Billing, support, finance",
         "Review the customer’s current financial position before acting.",
-        ("/admin/billing",),
+        (),
         "Open the customer Billing tab or the relevant billing list.",
         "Review invoices, payments, proofs, credits, extensions, balances, and ledger evidence.",
         "Open the specific record that explains the issue before taking action.",
         notes=(
             "Do not use one workflow to imitate another: payments, credits, voids, write-offs, and extensions have different meanings.",
         ),
+        route_templates=("/admin/billing",),
     ),
     _guide(
         "invoice",
@@ -314,7 +443,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Reconcile payments and bank statements",
         "Billing, finance",
         "Match internal payment records with external settlement evidence.",
-        ("/admin/billing/reconciliation",),
+        ("/admin/billing/payments/reconciliation",),
         "Choose the relevant date range and review unmatched batches or duplicates.",
         "Open the related payment, proof, invoice, or account before correcting anything.",
         "Use the specific import, allocation, refund, reversal, or proof-correction workflow.",
@@ -326,7 +455,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Work customer support tickets",
         "Support, operations",
         "Track customer issues with the right account, service, network, and billing context.",
-        ("/admin/support",),
+        ("/admin/support/tickets", "/admin/tickets"),
         "Check existing tickets before creating a new one.",
         "Link the customer and relevant subscription, invoice, payment, proof, or network facts.",
         "Use ordinary ticket editing for status, priority, description, and assignment details.",
@@ -335,6 +464,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
             "Ticket assignment uses the same ticket-update authority as the rest of the edit workflow.",
+        ),
+    ),
+    _guide(
+        "ncc-complaints-report",
+        "Reports",
+        "Export NCC complaints",
+        "Customer experience managers, compliance staff",
+        "Prepare the weekly NCC complaints CSV for Box submission.",
+        ("/admin/reports/ncc-complaints", "/admin/reports/ncc-weekly-runs"),
+        "Use the default completed Monday-Sunday reporting week unless NCC has explicitly named another date range.",
+        "Review Not yet filable before exporting; every row must be filing-ready before submission.",
+        "Download the CSV and confirm the filename follows the required week format, such as 36_2026_COMPLAINTS_DOTMAC.csv.",
+        "Upload exactly one CSV file to the provider folder in Box.",
+        notes=(
+            "Do not submit the validation workbook or any file with multiple sheets.",
+            "Scheduled NCC delivery preserves the same single CSV artifact for the completed reporting week.",
         ),
     ),
     _guide(
@@ -358,40 +503,26 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Support, operations",
         "Review and filter customer conversations without losing route, channel, or assignment context.",
         ("/admin/inbox",),
-        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the queue.",
-        "Use All only when historical conversations should be included; use Active or a specific status for operational work.",
+        "Use All for active human-actionable work, AI Intake for conversations still owned by AI, Queue for durable handoffs waiting for capacity, and History for resolved or older conversations.",
+        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the selected ownership view.",
+        "While AI is handling a conversation or waiting for the customer, review it read-only; normal reply, note, assignment, status, ticket, macro, and bulk actions remain unavailable.",
+        "When authorized human intervention is intentional, choose Take Over Conversation and confirm it before replying; an ordinary reply never takes ownership away from AI.",
+        "After AI hands the conversation to the human queue, the first eligible reply claims it for that agent. If another agent already owns it, the reply is not sent and the Inbox names the current owner.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and long-term inactive-session expiry.",
+        "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
+            "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
+            "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",
+            "Reply auto-claim uses the same active team membership, availability, capacity, and queue-order checks as assignment.",
+            "AI-owned conversations have a separate AI Intake count and do not contribute to normal human workload counts until handoff, queueing, or assignment.",
+            "Take Over stops the active AI session and acquires the conversation through the existing Team Inbox assignment rules; if it fails, refresh and leave AI ownership unchanged.",
             "Awaiting-customer AI sessions remain resumable. Their long-term expiry ends AI ownership without assigning or queueing a human.",
+            "SLA policies define response and resolution targets, working hours, and warning time. Use a unique policy name and check the saved values before relying on them.",
+            "Turning an SLA policy off prevents it being selected for new conversations; existing conversation deadlines continue. Scheduled checks record each warning once, before the response deadline.",
             "In Manager AI, select a Conversation or use Period Review with a period and any channel or status filters, then submit your question with Ask AI.",
             "Read the response under Answer; emphasis and lists are formatted, while HTML-like text remains plain text. Verify AI advice against the source conversations before acting.",
-        ),
-    ),
-    _guide(
-        "customer-timeline",
-        "Customer history",
-        "Use the customer timeline",
-        "All staff",
-        "Understand what happened before changing customer state.",
-        ("/admin/customers/",),
-        "Review recent customer, service, billing, payment, proof, network, and communication events.",
-        "Open linked records for detail, then record required follow-up in the right ticket or operational record.",
-        notes=("Use timeline and ledger evidence together for unexpected changes.",),
-    ),
-    _guide(
-        "staff-safety",
-        "Getting started",
-        "Staff safety rules for customer actions",
-        "All staff",
-        "Avoid accidental service, billing, and access changes.",
-        ("/admin/dashboard",),
-        "Confirm the customer and open the record that owns the action.",
-        "Read previews and check billing, access, ledger, and notification effects.",
-        "Enter clear reasons, verify the visible result, and record customer follow-up when needed.",
-        notes=(
-            "When unsure, stop and escalate with the record link and preview result.",
         ),
     ),
 )
@@ -399,10 +530,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 
 def guidance_for_path(path: str) -> AdminWorkflowGuidance | None:
     """Return the most-specific guide for an Admin page path."""
-    matches = [guide for guide in WORKFLOW_GUIDANCE if guide.matches_path(path)]
-    return max(
-        matches, key=lambda guide: max(map(len, guide.route_prefixes)), default=None
+    matches = (
+        (specificity, guide)
+        for guide in WORKFLOW_GUIDANCE
+        if (specificity := guide.match_specificity(path)) is not None
     )
+    return max(matches, key=lambda match: match[0], default=(0, None))[1]
 
 
 def search_guidance(

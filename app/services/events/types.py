@@ -22,6 +22,11 @@ class EventType(enum.Enum):
 
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
+    field_work_order_note_created = "field_work_order_note.created"
+
+    # Authentication-session security events
+    authentication_session_rotated = "authentication_session.rotated"
+    authentication_session_refresh_refused = "authentication_session.refresh_refused"
 
     # Subscriber events
     subscriber_created = "subscriber.created"
@@ -241,8 +246,13 @@ class EventType(enum.Enum):
     lead_updated = "lead.updated"
     lead_account_converted = "lead.account_converted"
     meta_lead_customer_match_reconciled = "meta_lead.customer_match_reconciled"
+    inbox_sla_policy_changed = "inbox.sla.policy_changed.v1"
+    inbox_sla_clock_changed = "inbox.sla.clock_changed.v1"
     quote_created = "quote.created"
     quote_accepted = "quote.accepted"
+    quote_payment_review_requested = "quote.payment_review_requested"
+    quote_payment_approved = "quote.payment_approved"
+    quote_payment_rejected = "quote.payment_rejected"
     quote_discount_applied = "quote.discount_applied"
     quote_discount_changed = "quote.discount_changed"
     quote_discount_removed = "quote.discount_removed"

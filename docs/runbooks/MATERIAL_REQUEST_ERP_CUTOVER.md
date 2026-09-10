@@ -36,3 +36,14 @@
 Disabling Sub flow ownership stops new sends without deleting records. Manual requests must never be replayed into ERP, and missing callbacks must be reconciled from ERP rather than issued locally.
 
 ERP must support the signed callback and neutral Sub payload. If its current hook only sends unsigned CRM-specific events, ERP requires a separate deployment before activation. Connector installation, secrets, service-user creation, initial import, eligibility decisions, and flow-ownership cutover are production configuration and cannot be captured in this Git branch.
+
+## Requester-history migration evidence
+
+Revision `587_field_request_requester_history` repairs only exact requester
+identity links and creates the Person Party and SystemUser history indexes.
+Before rollout, record the count of active material requests with a null
+`requested_by_system_user_id`. After migration, investigate every remaining
+row: it has no exact technician, legacy SystemUser, or unique Person Party
+binding and must not be guessed. Verify a migrated request appears for its
+requester through `GET /api/v1/field/material-requests`. This repair does not
+send, approve, issue, or replay any material request.

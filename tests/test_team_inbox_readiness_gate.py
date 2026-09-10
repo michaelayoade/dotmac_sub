@@ -644,7 +644,7 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
     row metadata, not the audit log, which is the limitation the gate above
     describes.
 
-    Three actions are audited, for three distinct reasons:
+    Four actions are audited, for four distinct reasons:
 
     - the conversation → ticket handoff, because it crosses an ownership line
       into ``support.ticket_lifecycle``;
@@ -653,15 +653,18 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
     - a transcript export, because it sends an entire customer conversation to
       an arbitrary address on the ordinary ``support:ticket:update``
       permission, which is the widest data-egress path in this module.
+    - explicit human takeover, because it crosses the authoritative control
+      boundary from ``ai.intake`` into Team Inbox assignment ownership.
 
-    A fourth entry here should be a decision, not drift.
+    A fifth entry here should be a decision, not drift.
     """
     commands = Path("app/services/team_inbox_commands.py").read_text()
     handoff = Path("app/services/conversation_ticket_handoff.py").read_text()
 
     assert "stage_audit_event" in handoff
-    assert commands.count("stage_audit_event(") == 2
+    assert commands.count("stage_audit_event(") == 3
     assert 'action="reply_comment"' in commands
+    assert 'action="ai_conversation_human_takeover"' in commands
     assert "TRANSCRIPT_AUDIT_ACTION" in commands
     for command in ("def apply_label(", "def update_status("):
         body = commands.split(command, 1)[1].split("\ndef ", 1)[0]

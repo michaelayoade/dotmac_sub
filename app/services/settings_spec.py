@@ -5181,7 +5181,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Configured RADIUS sync jobs",
     ),
-    # Weekly NCC complaints workbook delivery — default OFF until an operator
+    # Weekly NCC complaints CSV delivery — default OFF until an operator
     # migrates and verifies the CRM recipient configuration. Tuesday is the
     # authoritative default; the owner evaluates local time and timezone.
     SettingSpec(
@@ -5598,6 +5598,13 @@ SETTINGS_SPECS.extend(
             env_var=None,
             value_type=SettingValueType.integer,
             default=600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="payment_inbox_reclaim_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
         ),
         SettingSpec(
             domain=SettingDomain.scheduler,

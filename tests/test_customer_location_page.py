@@ -10,6 +10,7 @@ from app.models.gis import (
     CustomerLocationChangeRequestStatus,
 )
 from app.models.subscriber import Address, AddressType, Subscriber
+from app.schemas.geocoding import ReverseGeocodeQuery
 from app.services import customer_location_requests as location_service
 from app.services import geocoding
 from app.web.customer import location as location_web
@@ -40,6 +41,28 @@ def _customer(subscriber) -> dict:
 
 
 class TestReverseGeocode:
+    def test_typed_coordinate_resolver_returns_provider_neutral_result(
+        self, db_session
+    ):
+        with patch.object(
+            geocoding,
+            "reverse_geocode",
+            return_value={
+                "display_name": "Marina Road, Lagos",
+                "latitude": 6.5244,
+                "longitude": 3.3792,
+                "address": {},
+            },
+        ):
+            result = geocoding.resolve_coordinates(
+                db_session,
+                ReverseGeocodeQuery(latitude=6.5244, longitude=3.3792),
+            )
+
+        assert result is not None
+        assert result.display_name == "Marina Road, Lagos"
+        assert result.latitude == 6.5244
+
     def test_sends_expected_params(self, db_session):
         mock_response = MagicMock()
         mock_response.json.return_value = {

@@ -435,6 +435,12 @@ from app.models.imports import (  # noqa: F401
     PaymentImportBatchReversal,
     PaymentImportBatchReversalItem,
 )
+from app.models.inbox_sla import (  # noqa: F401
+    InboxSlaClock,
+    InboxSlaEvent,
+    InboxSlaPolicy,
+    InboxSlaRule,
+)
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
     IntegrationJobType,

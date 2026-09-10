@@ -1729,7 +1729,9 @@ SERVICES: tuple[SOTService, ...] = (
                 locking=(
                     "No row lock for planning. The execution owner locks and "
                     "re-resolves account, timer, lock, funding, and policy evidence "
-                    "before applying a consequence."
+                    "before applying a consequence. The scheduled sweep uses a "
+                    "non-blocking account lock; a busy account is a retryable "
+                    "deferred observation, never a concurrent consequence."
                 ),
                 idempotency=(
                     "The same account selection, as-of time, and visible canonical "

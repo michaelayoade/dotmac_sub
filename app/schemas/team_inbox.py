@@ -141,5 +141,10 @@ class InboxConversationListItemRead(BaseModel):
     contact_resolution_status: str | None = None
     latest_delivery_status: str | None = None
     active_assigned_person_id: UUID | None = None
+    ai_owned: bool = False
+    control_owner: str = "human"
+    ai_session_id: UUID | None = None
+    ai_session_state: str | None = None
+    waiting_for_customer: bool = False
     needs_response: bool
     team_count: int

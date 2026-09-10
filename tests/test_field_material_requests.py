@@ -432,6 +432,7 @@ def test_atomic_material_submission_prevents_duplicate_retries(db_session):
 
     created = client.post("/api/v1/field/material-requests/submit", json=payload)
     replayed = client.post("/api/v1/field/material-requests/submit", json=payload)
+    listed = client.get("/api/v1/field/material-requests")
     changed = client.post(
         "/api/v1/field/material-requests/submit",
         json={**payload, "priority": "urgent"},
@@ -441,5 +442,7 @@ def test_atomic_material_submission_prevents_duplicate_retries(db_session):
     assert created.json()["status"] == "submitted"
     assert replayed.status_code == 201
     assert replayed.json()["id"] == created.json()["id"]
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [created.json()["id"]]
     assert changed.status_code == 409
     assert db_session.query(FieldMaterialRequest).count() == 1

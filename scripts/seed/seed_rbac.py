@@ -267,6 +267,7 @@ DEFAULT_PERMISSIONS = [
     # Operations - Field Expense Requests
     ("operations:expense_request:read", "View field expense requests"),
     ("operations:expense_request:write", "Approve or reject field expense requests"),
+    ("operations:expense_request:pay", "Initiate approved expense reimbursements"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),
     ("operations:dispatch:read", "View dispatch work orders and maps"),
@@ -321,6 +322,7 @@ DEFAULT_PERMISSIONS = [
     ("crm:quote:read", "View quotes"),
     ("crm:quote:write", "Manage quotes"),
     ("crm:quote:send", "Send quotes to customers"),
+    ("sales:quote:review", "Approve or reject quotes for customer payment"),
     ("crm:sales_order:read", "View sales orders"),
     ("crm:sales_order:write", "Manage sales orders"),
     # Deliberately NOT covered by :write. Deciding not to pursue an order is a
@@ -497,6 +499,7 @@ ROLE_PERMISSIONS = {
         "operations:service_team:retire",
         "operations:expense_request:read",
         "operations:expense_request:write",
+        "operations:expense_request:pay",
         "operations:material_request:read",
         "operations:material_request:write",
         "reports:network:read",

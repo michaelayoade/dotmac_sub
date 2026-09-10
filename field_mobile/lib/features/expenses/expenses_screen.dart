@@ -11,6 +11,7 @@ import '../../app/status_presentation.dart';
 import '../../app/widgets/primary_action_button.dart';
 import '../../core/offline/draft_store.dart';
 import '../execution/execution_controller.dart';
+import '../manager/manager_providers.dart';
 import 'expense_models.dart';
 import 'expenses_providers.dart';
 
@@ -463,6 +464,18 @@ class _ExpenseErpSummary extends StatelessWidget {
             title: const Text('ERP sync'),
             subtitle: Text(_expenseErpSyncLabel(request.erpSyncStatus!)),
           ),
+        if (request.paymentStatus != null)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.payments_outlined),
+            title: const Text('Payment'),
+            subtitle: Text(_expensePaymentLabel(request.paymentStatus!)),
+          ),
+        if (request.paymentError != null)
+          Text(
+            request.paymentError!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
         if ({
               'dead',
               'rejected',
@@ -487,6 +500,17 @@ String _expenseErpSyncLabel(String status) => switch (status) {
   'dead' => 'Failed; needs attention',
   'not_configured' => 'ERP delivery is not configured',
   'not_queued' => 'Not queued; needs attention',
+  _ => status.replaceAll('_', ' '),
+};
+
+String _expensePaymentLabel(String status) => switch (status) {
+  'queued' => 'Queued securely for ERP processing',
+  'pending' => 'Prepared; awaiting transfer initiation',
+  'processing' => 'Transfer is processing',
+  'completed' => 'Transfer completed',
+  'failed' => 'Transfer failed; a manager may retry',
+  'indeterminate' => 'Transfer outcome is unknown; do not retry',
+  'delivery_failed' => 'Payment command could not reach ERP',
   _ => status.replaceAll('_', ' '),
 };
 
@@ -565,6 +589,7 @@ class _VendorField extends StatelessWidget {
     return DropdownButtonFormField<String>(
       key: const Key('expense-vendor'),
       initialValue: selected,
+      isExpanded: true,
       decoration: const InputDecoration(labelText: 'Vendor'),
       items: [
         for (final vendor in values)
@@ -863,7 +888,7 @@ class _NewExpenseRequestScreenState
             ticketId: _ticketId.text,
             items: _items,
           );
-      ref.invalidate(expenseRequestsProvider);
+      _invalidateExpenseProjections(ref);
       try {
         await ref.read(expenseRequestsProvider.future);
       } catch (_) {
@@ -887,7 +912,7 @@ class _NewExpenseRequestScreenState
               clientRef: clientRef,
               payload: payload,
             );
-        ref.invalidate(expenseRequestsProvider);
+        _invalidateExpenseProjections(ref);
         try {
           await ref.read(expenseRequestsProvider.future);
         } catch (_) {
@@ -1001,6 +1026,7 @@ class _NewExpenseRequestScreenState
                 : DropdownButtonFormField<ExpenseCategory>(
                     key: const Key('expense-category'),
                     initialValue: _selectedCategory,
+                    isExpanded: true,
                     decoration: const InputDecoration(labelText: 'Category'),
                     items: [
                       for (final category in items)
@@ -1210,6 +1236,13 @@ class _NewExpenseRequestScreenState
       ),
     );
   }
+}
+
+void _invalidateExpenseProjections(WidgetRef ref) {
+  ref
+    ..invalidate(expenseRequestsProvider)
+    ..invalidate(managerExpensesProvider)
+    ..invalidate(managerSummaryProvider);
 }
 
 String _money(String? currency, double value) =>

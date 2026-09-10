@@ -77,7 +77,9 @@ def stage_expense_receipt_attachment(
             original_filename=command.file_name or "receipt",
             content_type=command.mime_type,
             data=command.content,
-            uploaded_by=str(command.uploaded_by_system_user_id),
+            # StoredFile.uploaded_by is a legacy subscriber-only foreign key.
+            # Staff provenance belongs on the FieldAttachment fields below.
+            uploaded_by=None,
             owner_subscriber_id=None,
         )
     except FileValidationError as exc:

@@ -1,6 +1,6 @@
 # Sales-to-Service Lifecycle Source of Truth
 
-**Status:** Approved and implemented through migration 480
+**Status:** Approved and implemented through migration 584
 **System of record:** Sub
 **Decision owner:** Michael
 
@@ -10,9 +10,9 @@
 signed interaction / staff capture
   -> IntegrationInbox receipt (when external)
   -> Party + immutable Lead origin
-  -> manually authored Lead-backed Quote(s)
+  -> manually authored Lead- or customer-backed Quote(s)
   -> accepted Quote
-  -> exact Lead/Party account conversion + Lead Won
+  -> exact Lead/Party account conversion + Lead Won, or existing Subscriber
   -> SalesOrder + copied Quote lines
   -> Project + InstallationProject + configured ProjectTemplate Tasks
   -> configured WorkOrder(s), each scoped to its ProjectTask
@@ -115,6 +115,16 @@ deposit reference, amount, and provider evidence. An exact verification retry
 replays the same conversion and SalesOrder bookkeeping; changed evidence fails
 closed before SalesOrder money can be overwritten.
 
+Before that deposit path can begin, a self-serve Quote is visible to the
+customer as `Draft — Awaiting staff review`. `sales.quote_payment_review`
+requires an authorized staff user to review the install address, feasibility,
+line items, price, tax, discount, and deposit policy, then approve or reject the
+exact SHA-256 snapshot. Approval records the reviewer, time, and revision. Any
+later commercial change makes that approval stale and every payment endpoint
+fails closed until the revised snapshot is approved. Approval changes the
+customer projection to `Approved — Payment required`; it does not create an
+Invoice, SalesOrder, or Project. Those remain consequences of verified payment.
+
 ## Named owners
 
 | Decision or fact | Owner |
@@ -123,7 +133,9 @@ closed before SalesOrder money can be overwritten.
 | Party-first capture and source replay | `sales.capture` |
 | Atomic admin Person and Lead authoring and maintenance | `sales.lead_authoring` |
 | Immutable origin | `sales.lead_lifecycle` |
-| Atomic Lead-backed New Quote authoring | `sales.quote_authoring` |
+| Atomic Lead- or customer-backed New Quote authoring | `sales.quote_authoring` |
+| Staff approval of the exact Quote snapshot for customer payment | `sales.quote_payment_review` |
+| Customer Quote payment eligibility and payable deposit | `sales.quote_payment_eligibility` |
 | Atomic Quote acceptance and sales conversion | `sales.quote_acceptance` |
 | Flush-only exact Lead/Party account conversion participant | `sales.account_conversion` |
 | Pipeline and Quote | `sales.service` |
@@ -239,19 +251,27 @@ depend on HTTP request/response or exception types.
   POST-Redirect-GET and HTTP 303 on success.
 - Audience and job: staff with `crm:quote:write` create a pricing proposal for
   exactly one eligible Lead or eligible active Customer while retaining the existing optional Install Location.
-- Decision owners: `sales.quote_authoring` owns typed validation, Lead/Party
-  recipient resolution, line-reference validation, Decimal calculations,
+- Decision owners: `sales.quote_authoring` owns typed validation, Lead/Party or
+  active Customer recipient resolution, line-reference validation, Decimal
+  calculations,
   metadata enrichment, Draft/Sent initial status, idempotency, audit, and
   transactional event staging. `sales.quote_acceptance` exclusively owns the
   later Accepted transition and conversion. Tax configuration, Lead lifecycle, account,
   order, Project, Task, WorkOrder, and fulfillment owners retain their named
   decisions.
-- Identity contract: staff select exactly one Lead or Customer. A customer search
-  is server-backed and exposes only active accounts with reviewed active Party
-  bindings. `sales.customer_quote_linkage` locks the submitted Customer and
-  reuses (or creates) its unique system Lead; the Quote remains Lead-backed and
-  also carries the existing Subscriber id. Browser values never establish Party,
-  account, or owner identity; the authenticated SystemUser supplies ownership.
+- Identity contract: staff select exactly one Lead or Customer through bounded,
+  lazy server-backed typeaheads. Lead search exposes eligible active, open,
+  Party-bound Leads. Customer search exposes active Subscriber accounts by
+  related name, account, email, or phone characters and does not require a Party
+  binding. A Lead selection stores `lead_id`; a Customer selection stores
+  `subscriber_id` directly with `lead_id = NULL`. Quote authoring never
+  manufactures a Lead for an existing Customer. Browser values never establish
+  Party, account, or owner identity; the authenticated SystemUser supplies
+  ownership.
+- Legacy compatibility: existing `customer_quote_lead_links` rows and accepted
+  Quotes that already carry both identifiers remain readable historical
+  evidence. No active authoring owner writes that linkage table or creates a
+  synthetic Lead for an existing Customer.
 - First viewport: Quotes breadcrumb, New Quote title and purpose, mutually
   exclusive Lead and Customer pickers (one required),
   Draft-default status, NGN-default currency, required Project Type, and the
@@ -267,15 +287,20 @@ depend on HTTP request/response or exception types.
   optional. Manual Tax Total is accepted only without a configured Tax Rate.
 - Lifecycle contract: new Quotes may be Draft or Sent only. Draft has no
   downstream consequences and Sent sets `sent_at`; Accepted is a separate
-  action invoking the atomic acceptance coordinator. Rejecting or expiring one
+  action invoking the atomic acceptance coordinator. Acceptance converts and
+  marks Won only a genuine Lead-backed Quote; a customer-backed Quote validates
+  and uses its existing active Subscriber directly. Both paths then create the
+  same SalesOrder and implementation scope. Rejecting or expiring one
   of several Quotes does not close the Lead. Exact submission replay returns
   the same Quote, while conflicting reuse fails closed.
 - States and recovery: ordinary validation failures render an accessible error
   banner and preserve all scalar, location, line, and suggestion-identifier
   values. An active Tax Rate with an invalid percentage is excluded from the
   selectable projection, emits structured drift evidence, and renders a
-  partial-data warning instead of preventing Quote authoring. Native browser
-  constraints cover required Lead, currency, and numeric bounds. The submit
+  partial-data warning instead of preventing Quote authoring. Typeaheads expose
+  loading, empty, unavailable, keyboard-navigation, and exact-selection states;
+  stale requests are aborted. Native browser constraints cover the required
+  Lead-or-Customer choice, currency, and numeric bounds. The submit
   control exposes a Submitting state and rejects an in-flight duplicate
   submission.
 - Responsive projection: the form card is centered at `max-w-3xl`; multi-column

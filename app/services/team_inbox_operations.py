@@ -17,18 +17,22 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationLabel,
+    InboxConversationQueueEntry,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxLabel,
     InboxMessage,
     InboxMessageDirection,
     InboxMessageTemplate,
+    InboxQueueEntryStatus,
     InboxReplyMacro,
     InboxSavedFilter,
     InboxTeamRole,
     InboxTeamSource,
 )
 from app.services import (
+    ai_conversation_ownership,
+    inbox_sla,
     team_inbox_assignment,
     team_inbox_filters,
     team_inbox_outbound,
@@ -87,6 +91,31 @@ def route_to_service_team(
     team = db.get(ServiceTeam, service_team_id)
     if team is None or not team.is_active:
         raise InboxOperationError("The target service team is not active.")
+    active_queue_entry = (
+        db.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .filter(
+            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value
+        )
+        .one_or_none()
+    )
+    if (
+        active_queue_entry is not None
+        and active_queue_entry.service_team_id != service_team_id
+    ):
+        outcome = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=service_team_id,
+            reason=f"queue team transfer: {source}",
+            source=InboxTeamSource.routing_rule.value,
+            reason_code="queue_team_transfer",
+        )
+        if outcome.kind != "queued":
+            raise InboxOperationError(
+                outcome.reason or "Could not transfer the queued conversation."
+            )
+        return conversation
     links = db.scalars(
         select(InboxConversationTeam)
         .where(InboxConversationTeam.conversation_id == conversation.id)
@@ -677,6 +706,10 @@ def bulk_update_status(
         )
         updated.append(str(conversation.id))
     db.flush()
+    for conversation_id in updated:
+        conversation = db.get(InboxConversation, coerce_uuid(conversation_id))
+        if conversation is not None:
+            inbox_sla.update_status(db, conversation, clean_status)
     return {"updated": updated, "skipped": skipped, "status": clean_status}
 
 
@@ -973,7 +1006,6 @@ def bulk_escalate(
     auto_assign: bool = True,
     actor_person_id: str | UUID | None = None,
     reason: str | None = None,
-    require_team_membership: bool = True,
 ) -> dict[str, object]:
     updated: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -995,7 +1027,6 @@ def bulk_escalate(
                 person_id=assigned_person_id,
                 assigned_by_person_id=actor_person_id,
                 reason=reason,
-                require_team_membership=require_team_membership,
             )
         elif auto_assign:
             result = team_inbox_assignment.assign_conversation_to_available_agent(
@@ -1094,6 +1125,7 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
         )
         .filter(InboxConversation.is_active.is_(True))
         .filter(InboxConversation.status != "resolved")
+        .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
         .one()
     )
     return InboxQueueMetrics(
@@ -1227,7 +1259,7 @@ def snooze_until_reply(
     conversation: InboxConversation,
     actor_person_id: str | UUID | None = None,
 ) -> InboxConversation:
-    """Snooze a conversation with no wake time — the customer's reply wakes it.
+    """Snooze a conversation with no wake time â€” the customer's reply wakes it.
 
     Stored as a metadata flag rather than a far-future ``snoozed_until``, so the
     queue's snoozed filter still means "asleep" while nothing invents a wake
@@ -1272,7 +1304,7 @@ def wake_due_snoozed_conversations(
     """Settle conversations whose chosen wake time has passed.
 
     Snoozing wrote a durable ``status='snoozed'`` and a ``snoozed_until``, and
-    nothing ever cleared them — so a conversation snoozed until Tuesday was
+    nothing ever cleared them â€” so a conversation snoozed until Tuesday was
     still filed as snoozed the following month, and absent from the Open
     cohort. The workqueue provider already read the wake time as expiry
     (``snoozed_until <= now`` means awake), so the two disagreed about the same
@@ -1459,7 +1491,7 @@ def render_conversation_transcript(
     for message in messages:
         metadata = message.metadata_ or {}
         if metadata.get("delivery_status") == SCHEDULED_DELIVERY_STATUS_FOR_TRANSCRIPT:
-            # Not sent yet — it is not part of what was exchanged.
+            # Not sent yet â€” it is not part of what was exchanged.
             continue
         who = "Us" if message.direction == "outbound" else "Customer"
         when = (message.sent_at or message.created_at).strftime("%Y-%m-%d %H:%M UTC")

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
@@ -64,6 +64,43 @@ class BackofficeDeliveryView:
     queued_at: datetime | None
     updated_at: datetime | None
     sent_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackofficeExpensePaymentView:
+    """Provider-neutral payment state projected on an expense request."""
+
+    status: str | None
+    intent_id: str | None
+    command_id: str | None
+    error: str | None
+    updated_at: str | None
+
+
+def expense_payment_projection(
+    request: FieldExpenseRequest,
+) -> BackofficeExpensePaymentView:
+    raw = dict((request.metadata_ or {}).get("erp_payment") or {})
+    return BackofficeExpensePaymentView(
+        status=str(raw["status"]) if raw.get("status") else None,
+        intent_id=str(raw["intent_id"]) if raw.get("intent_id") else None,
+        command_id=str(raw["command_id"]) if raw.get("command_id") else None,
+        error=str(raw["error"]) if raw.get("error") else None,
+        updated_at=str(raw["updated_at"]) if raw.get("updated_at") else None,
+    )
+
+
+def mark_expense_payment_queued(
+    request: FieldExpenseRequest, *, command_id: UUID, event_id: UUID
+) -> None:
+    metadata = dict(request.metadata_ or {})
+    metadata["erp_payment"] = {
+        "status": "queued",
+        "command_id": str(command_id),
+        "event_id": str(event_id),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    request.metadata_ = metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +237,11 @@ def get_expense_claim_deliveries(
         .order_by(FieldErpSyncEvent.created_at.asc())
         .all()
     )
+    rows = [
+        row
+        for row in rows
+        if str((row.payload or {}).get("_expense_action") or "submit") == "submit"
+    ]
     latest = {row.entity_id: row for row in rows}
     return {
         request_id: BackofficeDeliveryView(
@@ -216,6 +258,94 @@ def get_expense_claim_deliveries(
         for request_id in ids
         for row in (latest.get(request_id),)
     }
+
+
+def get_expense_payment_deliveries(
+    db: Session, request_ids: Collection[UUID]
+) -> dict[UUID, BackofficeDeliveryView]:
+    """Return the latest payment-command delivery for each expense request."""
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        SyncFlowOwner,
+        get_flow_ownership,
+    )
+
+    ids = tuple(dict.fromkeys(request_ids))
+    if not ids:
+        return {}
+    flow = FieldErpSyncFlow.expense_claim.value
+    owner = get_flow_ownership(db)[flow]
+    rows = (
+        db.query(FieldErpSyncEvent)
+        .filter(
+            FieldErpSyncEvent.flow == flow,
+            FieldErpSyncEvent.entity_type == "field_expense_payment",
+            FieldErpSyncEvent.entity_id.in_(ids),
+        )
+        .order_by(FieldErpSyncEvent.created_at.asc())
+        .all()
+    )
+    latest = {row.entity_id: row for row in rows}
+    return {
+        request_id: BackofficeDeliveryView(
+            flow_owner=owner,
+            sub_owns_delivery=owner == SyncFlowOwner.sub.value,
+            event_id=(row.id if row is not None else None),
+            event_status=(row.status if row is not None else None),
+            attempts=(row.attempts if row is not None else 0),
+            last_error=(row.last_error if row is not None else None),
+            queued_at=(row.created_at if row is not None else None),
+            updated_at=(row.updated_at if row is not None else None),
+            sent_at=(row.sent_at if row is not None else None),
+        )
+        for request_id in ids
+        for row in (latest.get(request_id),)
+    }
+
+
+def get_expense_decision_delivery(
+    db: Session, request_id: UUID, action: str
+) -> BackofficeDeliveryView:
+    """Return one expense manager-decision delivery projection."""
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        SyncFlowOwner,
+        get_flow_ownership,
+    )
+
+    flow = FieldErpSyncFlow.expense_claim.value
+    owner = get_flow_ownership(db)[flow]
+    row = (
+        db.query(FieldErpSyncEvent)
+        .filter(
+            FieldErpSyncEvent.flow == flow,
+            FieldErpSyncEvent.entity_type == "field_expense_decision",
+            FieldErpSyncEvent.entity_id == request_id,
+        )
+        .order_by(FieldErpSyncEvent.created_at.desc())
+        .all()
+    )
+    matching = next(
+        (
+            candidate
+            for candidate in row
+            if str((candidate.payload or {}).get("_expense_action")) == action
+        ),
+        None,
+    )
+    return BackofficeDeliveryView(
+        flow_owner=owner,
+        sub_owns_delivery=owner == SyncFlowOwner.sub.value,
+        event_id=matching.id if matching is not None else None,
+        event_status=matching.status if matching is not None else None,
+        attempts=matching.attempts if matching is not None else 0,
+        last_error=matching.last_error if matching is not None else None,
+        queued_at=matching.created_at if matching is not None else None,
+        updated_at=matching.updated_at if matching is not None else None,
+        sent_at=matching.sent_at if matching is not None else None,
+    )
 
 
 def build_gateway(db: Session) -> BackofficeGateway:
@@ -297,11 +427,11 @@ def _enqueue_with_provider(
 def enqueue_expense_claim(
     db: Session, request: FieldExpenseRequest
 ) -> BackofficeEnqueueResult:
-    """Stage an approved claim without requiring the delivery runtime to be online.
+    """Stage a submitted claim without requiring the delivery runtime to be online.
 
     Flow ownership is the single-writer cutover gate. The capability binding is
     resolved later by the delivery worker, so a temporary configuration outage
-    cannot erase an approved expense's durable delivery intent.
+    cannot erase a submitted expense's durable delivery intent.
     """
     if not _flow_owned_by_sub(db, "expense_claim"):
         return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
@@ -315,6 +445,70 @@ def enqueue_expense_claim(
             if event is not None
             else BackofficeEnqueueStatus.NOT_ENQUEUED
         ),
+        provider="dotmac.erp",
+        event=event,
+    )
+
+
+def enqueue_expense_decision(
+    db: Session,
+    request: FieldExpenseRequest,
+    *,
+    action: str,
+    decision_id: UUID,
+    decided_by_email: str,
+    decided_at: datetime,
+    reason: str | None = None,
+) -> BackofficeEnqueueResult:
+    if not _flow_owned_by_sub(db, "expense_claim"):
+        return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
+
+    from app.services.dotmac_erp.expense_sync import (
+        ExpenseErpAction,
+    )
+    from app.services.dotmac_erp.expense_sync import (
+        enqueue_expense_decision as enqueue,
+    )
+
+    event = enqueue(
+        db,
+        request,
+        action=ExpenseErpAction(action),
+        decision_id=decision_id,
+        decided_by_email=decided_by_email,
+        decided_at=decided_at,
+        reason=reason,
+        isolate=False,
+    )
+    return BackofficeEnqueueResult(
+        status=BackofficeEnqueueStatus.ENQUEUED,
+        provider="dotmac.erp",
+        event=event,
+    )
+
+
+def enqueue_expense_payment(
+    db: Session,
+    request: FieldExpenseRequest,
+    *,
+    command_id: UUID,
+    initiated_by_email: str,
+    initiated_at: datetime,
+) -> BackofficeEnqueueResult:
+    if not _flow_owned_by_sub(db, "expense_claim"):
+        return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
+    from app.services.dotmac_erp.expense_sync import enqueue_expense_payment as enqueue
+
+    event = enqueue(
+        db,
+        request,
+        command_id=command_id,
+        initiated_by_email=initiated_by_email,
+        initiated_at=initiated_at,
+        isolate=False,
+    )
+    return BackofficeEnqueueResult(
+        status=BackofficeEnqueueStatus.ENQUEUED,
         provider="dotmac.erp",
         event=event,
     )

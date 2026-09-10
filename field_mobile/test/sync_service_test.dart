@@ -394,6 +394,32 @@ void main() {
     expect(sent?['serial_number'], 'SN-1');
   });
 
+  test('note retries send the stable outbox client reference', () async {
+    Map? sent;
+    adapter.on('POST', '/api/v1/field/jobs/wo-note/notes', (options) {
+      sent = options.data is String ? null : options.data as Map;
+      return (201, {'id': 'note-1'});
+    });
+    await sync.enqueue(
+      kind: 'note',
+      clientRef: 'note-client-ref-1',
+      payload: {
+        'work_order_id': 'wo-note',
+        'body': 'ONT replaced',
+        'is_internal': true,
+        'attachment_ids': <String>[],
+      },
+    );
+
+    await sync.flushOutbox();
+
+    expect(sent?['client_ref'], 'note-client-ref-1');
+    expect(
+      (await sync.deliveryResult('note-client-ref-1')).state,
+      MutationDeliveryState.delivered,
+    );
+  });
+
   test('expense request outbox entry routes to the expense endpoint', () async {
     final payload = {
       'client_ref': 'expense-client-ref-1',

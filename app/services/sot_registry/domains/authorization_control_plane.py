@@ -766,7 +766,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="auth.token_signing",
-            module="app.services.context_signing",
+            module="app.services.auth_token_signing",
             owns=(
                 "configured JWT signing key and algorithm resolution",
                 "cryptographic signing and verification of typed capability envelopes",

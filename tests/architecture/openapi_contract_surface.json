@@ -4164,6 +4164,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/attendance": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": null,
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/config": {
    "params": [],
    "request": null,
@@ -4600,6 +4611,32 @@
    "request": null,
    "responses": {
     "200": "2e9ed0c3b0ec",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/manager/team-map": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:limit",
+    "query:stale_after_seconds"
+   ],
+   "request": null,
+   "responses": {
+    "200": "20f698e43702",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/manager/team-map/{technician_id}/location-detail": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:technician_id!",
+    "query:stale_after_seconds"
+   ],
+   "request": null,
+   "responses": {
+    "200": "d3beb2e54301",
     "422": "a11c9d9b2af8"
    }
   },
@@ -10313,7 +10350,8 @@
     "query:search",
     "query:service_team_id",
     "query:snoozed",
-    "query:status"
+    "query:status",
+    "query:view"
    ],
    "request": null,
    "responses": {
@@ -14526,6 +14564,30 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/attendance/check-in": {
+   "params": [
+    "header:Idempotency-Key!",
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "85c9d1f96f0d",
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/field/attendance/check-out": {
+   "params": [
+    "header:Idempotency-Key!",
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "85c9d1f96f0d",
+   "responses": {
+    "200": "0cce00485958",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/devices": {
    "params": [
     "header:authorization",
@@ -14792,15 +14854,29 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/manager/expenses/{expense_request_id}/pay": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:expense_request_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "323f0738efc1",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/manager/expenses/{expense_request_id}/reject": {
    "params": [
+    "header:X-Request-ID",
     "header:authorization",
     "header:x-api-key",
     "path:expense_request_id!"
    ],
    "request": "f86a8a67f869",
    "responses": {
-    "200": "6cc1ebd3f658",
+    "200": "b8941b7d1868",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19325,7 +19401,7 @@
   "CustomerDefaultsResponse": "c0892eba5f8c",
   "CustomerDeviceCommandKind": "cb81f2ec8d71",
   "CustomerDeviceCommandOutcomeRead": "010e7587a7ae",
-  "CustomerDeviceCommandStatus": "e7911f4fdc39",
+  "CustomerDeviceCommandStatus": "57eb3ad93c5a",
   "CustomerExperienceAcceptRequest": "0e8608e2743a",
   "CustomerExperienceAttentionRequest": "870e7a93b7e7",
   "CustomerExperienceHandoffRead": "53183f1817a1",
@@ -19431,6 +19507,8 @@
   "FiberTerminationPointRead": "eef2a7ac34e4",
   "FiberTerminationPointUpdate": "ebdbeb8a047e",
   "FieldAttachmentRead": "12a11823b799",
+  "FieldAttendanceLocation": "26ecb4d149ff",
+  "FieldAttendanceRead": "69b61adafd8e",
   "FieldCableRegistrationCreate": "2fe2e6d32087",
   "FieldCableRegistrationResponse": "7e0dd2969fbb",
   "FieldCompletionRequirements": "3a2d8a58716d",
@@ -19444,10 +19522,12 @@
   "FieldEquipmentReturnRequest": "80e3640552d3",
   "FieldExpenseApprovalRead": "64ecf6941a17",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
+  "FieldExpensePaymentRead": "0b8340a83012",
+  "FieldExpenseRejectionRead": "a51a36ad03c8",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
   "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "838acdc17f32",
+  "FieldExpenseRequestRead": "6125ac8eb73f",
   "FieldExpenseRequestSubmit": "e8a7e3d6ec5a",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
@@ -19476,6 +19556,9 @@
   "FieldJobSummary": "4e501c02cf74",
   "FieldLinkBudgetComponentRead": "8f2c11d8a0f2",
   "FieldLinkBudgetRead": "0fe4def40cc4",
+  "FieldLiveMapFeed": "048a87551489",
+  "FieldLiveMapPosition": "ae257e574bcc",
+  "FieldLiveMapTechnicianDetail": "bf1e0e8c76ef",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",
@@ -19484,7 +19567,7 @@
   "FieldManagerMaterialRejectRequest": "c88a1edfa686",
   "FieldManagerMeResponse": "2f2d847e8029",
   "FieldManagerSummary": "5b25b71d2a7f",
-  "FieldManagerTechnician": "48d4741f6ce0",
+  "FieldManagerTechnician": "b3a0402ad751",
   "FieldManagerTechniciansResponse": "afee067c1d2e",
   "FieldMapAsset": "ab8c6d0cb70f",
   "FieldMapAssetLocationUpdate": "c28e382f6d84",
@@ -19501,8 +19584,8 @@
   "FieldMaterialRequestSubmit": "0bac3c573aa7",
   "FieldMeResponse": "92ccd05b3f23",
   "FieldMovementRead": "e6afbc3e60fc",
-  "FieldNoteCreate": "38437360dd97",
-  "FieldNoteRead": "8ea021422bdc",
+  "FieldNoteCreate": "87391275d418",
+  "FieldNoteRead": "da3905aff053",
   "FieldOntAttachmentCreate": "08943292b127",
   "FieldOntAttachmentResponse": "0ee79354d07e",
   "FieldOpenTicketItem": "62da6daad4b4",
@@ -19577,7 +19660,7 @@
   "InboxConversationContactLinkRequest": "f407043f0c43",
   "InboxConversationEscalateRequest": "616991a12b83",
   "InboxConversationEscalationRead": "504bf3a61754",
-  "InboxConversationListItemRead": "176802fc04c4",
+  "InboxConversationListItemRead": "b78d5b049ff0",
   "InboxConversationReplyRead": "344672986f33",
   "InboxConversationReplyRequest": "9297fb6a5133",
   "InboxConversationTimelineRead": "8a7a71519592",
@@ -19900,9 +19983,9 @@
   "ListResponse_WorkOrderAssignmentQueueRead_": "09219459d168",
   "ListResponse_WorkOrderHeaderRead_": "31c7a849dee1",
   "ListResponse_WorkqueueItemRead_": "69d754624d9b",
-  "LocationIngestResponse": "8671fb4c8950",
+  "LocationIngestResponse": "7a40e5e95bcc",
   "LocationPingBatch": "37a9a0a02de5",
-  "LocationPingInput": "cbc5ccd3d7b4",
+  "LocationPingInput": "5484be538ca7",
   "LocationSharingUpdate": "c6465626ff15",
   "LoginRequest": "6c0d177cb17d",
   "LoginResponse": "66d2d92d7c0a",
@@ -20218,19 +20301,19 @@
   "QuotaBucketCreate": "6fb66e0ff1f2",
   "QuotaBucketRead": "8f8ae6360d0d",
   "QuotaBucketUpdate": "4f890c55f818",
-  "QuoteCreate": "70ff85da3a68",
-  "QuoteDepositInitiateRequest": "7cd28325a734",
+  "QuoteCreate": "5c102cc6cb47",
+  "QuoteDepositInitiateRequest": "a4218e7a8569",
   "QuoteDepositInitiateResponse": "cbc971929ac9",
   "QuoteDepositVerifyRequest": "b9a599c857d0",
   "QuoteDepositVerifyResponse": "5300be93edda",
   "QuoteDiscountType": "33882226f0db",
   "QuoteFeasibility": "76535422c34b",
-  "QuoteItem": "8c38fba90ef2",
+  "QuoteItem": "d8b460559e46",
   "QuoteLineItem": "b665cdd08dac",
   "QuoteLineItemCreate": "ef183023a2dc",
   "QuoteLineItemRead": "4b18876d8e37",
   "QuoteLineItemUpdate": "0100c6777de1",
-  "QuoteRead": "d5e693a501b9",
+  "QuoteRead": "7ab8c1255ca6",
   "QuoteRequestCreate": "162e1e5d1fd3",
   "QuoteStatus": "62c779ee038e",
   "QuoteUpdate": "d59ce59d151b",

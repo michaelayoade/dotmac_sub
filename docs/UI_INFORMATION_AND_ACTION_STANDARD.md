@@ -239,6 +239,21 @@ domain rules; they must not silently become zero.
 - Return an operation or event identifier for asynchronous actions and show
   progress without claiming an optimistic final state.
 - Audit administrative mutations through the canonical audit/event owner.
+- When a gated action's blockers, evidence, and next steps are worth showing
+  together (not just a single `disabled_reason` string), the owning service
+  hands them to the caller as an `ActionReadiness` verdict
+  (`app/services/action_readiness.py`) rather than inventing a new ad-hoc
+  shape — see `docs/designs/ACTION_READINESS_CONTRACT.md`.
+- A blocker's declared `owner` must be a real, decision-making backend
+  service — never the readiness contract itself and never another
+  pure-vocabulary UI layer.
+- Render an `ActionReadiness` verdict through the shared
+  `action_readiness_panel` macro
+  (`templates/components/actions/action_readiness.html`); do not re-derive
+  its state, tone, or audience-specific message in a template.
+- `ActionForm.gated_by(readiness, …)` is the standard way to turn a readiness
+  verdict into a form's `allowed`/`disabled_reason` — it changes no
+  eligibility decision, only the transport shape reaching the form.
 
 The admin subscription detail page presents an outstanding pending plan-change
 request with its target plan, effective date, execution state, request identity,
@@ -335,6 +350,27 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
+## OLT Operational Health Contract
+
+- Audience and task: NOC staff compare OLTs in the inventory table and inspect
+  one OLT without receiving contradictory operational answers.
+- Authority: `network.device_state` owns the binary result and verifier-reason
+  classification. The table and detail view consume that owner; templates do
+  not infer health from stored booleans.
+- First viewport: administrative lifecycle remains separate from the shared
+  Working/Not working badge. Native OLT poll, ping, and SNMP evidence show
+  Passed, Failed, Expired/Not current, Not checked, or Disabled with an
+  observation timestamp where available.
+- State semantics: a fresh successful native OLT poll is positive operational
+  evidence. A linked monitoring row is fallback evidence only while active and
+  current; historical successful probes on an inactive or stale row never
+  certify present operation. Evidence freshness states explain the binary
+  result and are not additional device states.
+- Responsive behavior: evidence badges wrap without horizontal scrolling;
+  labels and text communicate meaning independently of color, and timestamps
+  remain available in badge tooltips.
+
+
 ## Personal Staff Notification Bell Contract
 
 - Audience and task: authenticated staff need to see pending personal work and
@@ -386,16 +422,23 @@ implementation.
 - Audience and task: an authenticated customer reviews and pays the exact
   deposit for a quotation owned by an authorized subscriber identity.
 - Authority: `app.services.quote_deposits` resolves quotation eligibility and
-  the server-owned deposit amount; `financial.payment_routing` resolves
+  the server-owned deposit amount; `sales.quote_payment_review` owns the staff
+  decision for the exact commercial snapshot; `financial.payment_routing` resolves
   Paystack availability; established invoice, intent, payment-verification, and
   Quote-acceptance owners retain every financial transition. The route and
   template are adapters.
 - First viewport: quotation identity, expiry, authoritative currency and
-  deposit amount, secure-payment explanation, and one Paystack action.
+  deposit amount, payment-review status and explanation, and—only after current
+  staff approval—one Paystack action.
 - GET state: authentication, ownership, active status, expiry, paid state,
-  positive deposit, and Paystack availability are checked without creating an
+  current staff approval, positive deposit, and Paystack availability are checked without creating an
   invoice or payment intent. Missing or unauthorized quotations render the same
   not-found state.
+- Review state: Draft/Sent Quotes without a current approval show `Awaiting
+  staff review` and no payment action. Approved Quotes show `Approved — Payment
+  required`. Rejected Quotes show the owner-supplied rejection message. Mobile
+  must consume `can_pay_deposit`; it must not infer payment eligibility from
+  Quote status or deposit amount.
 - Mutation: the customer confirms through the CSRF-protected POST intent route.
   The request carries idempotency evidence only; it cannot submit amount,
   currency, invoice identity, or provider choice. The server fixes the provider
@@ -450,6 +493,33 @@ implementation.
   never in MIME headers or customer-facing projections.
 - Mobile layouts wrap long addresses without hiding recipients or displacing
   the message body and primary Send action.
+
+## Team Inbox Queue Position Contract
+
+- Authority: `communications.team_inbox_routing` owns queue membership,
+  admission sequence, current visible position, strict per-team FIFO,
+  assignment capacity and promotion. Templates and routes are adapters.
+- Staff and customer surfaces label only the live team-scoped rank as
+  **Position**. The durable admission sequence is ordering evidence and must
+  not be presented as the customer's current position.
+- Normal manual and self-assignment of a queued conversation may select only
+  the queue head and an eligible agent with capacity. A rejection must explain
+  that an older conversation or capacity limit prevents the action; the UI
+  must not imply that assignment succeeded.
+- After AI control has ended, the first eligible human reply to an unassigned
+  conversation atomically claims it for that agent and sends in one owner
+  transaction. The claim obeys the same team membership, presence, capacity,
+  and FIFO rules as explicit self-assignment. A simultaneous or later reply by
+  another agent sends nothing and returns the conflict message **This
+  conversation is currently assigned to [agent].** The composer presents that
+  message without implying that its draft was sent.
+- Admin → System → Settings → Comms exposes **Default active Inbox
+  conversations per agent** with range 1–100 and default 10. Per-agent backend
+  overrides are not presented as though they are editable when no Admin writer
+  exists.
+- Queue heartbeats are off by default. If enabled in AI intake policy they are
+  clearly identified as reassurance, use different copy from a position
+  update, and never repeat the current position.
 
 ## Agent Performance Analytics Page Contract
 
@@ -508,6 +578,27 @@ implementation.
   the note, and provides a temporary accessible highlight. Mentioning never
   assigns, transfers, or changes conversation status.
 
+## Inbox AI Ownership Contract
+
+- Authority: `ai.intake` owns active AI-session state. Team Inbox projection
+  consumes that typed fact and supplies `control_owner`, `ai_session_state`,
+  `can_take_over`, action booleans, and a denial reason; templates never infer
+  ownership from lifecycle status or metadata.
+- The default All/Actionable view excludes AI-owned work. AI Intake is a
+  separate read-only view with an `AI handling` or `Waiting on customer` badge;
+  Queue contains only durable active queue entries, and History preserves
+  lifecycle review.
+- While AI owns the thread, Reply, Private Note, assignment, status/workflow,
+  ticket, macro, and bulk controls are absent or disabled with an explanation.
+  Authorized operators receive one explicit `Take Over Conversation` control
+  with confirmation and expected-session evidence.
+- UI gating is presentation only. Every mutation rechecks ownership at its
+  backend owner and returns the stable AI-owned conflict; a normal reply never
+  becomes implicit takeover. Reply auto-claim runs only after the AI-owned check
+  succeeds and rechecks AI authority under the same conversation lock used for
+  the human claim. AI handoff or explicit takeover must end AI control and
+  cancel pending AI output before a reply can create human ownership.
+
 ## ONT Configure Page Contract
 
 - Audience and task: authorized network staff submit one customer-service
@@ -539,21 +630,23 @@ implementation.
 ## Admin Work-Order Expense Entry Page Contract
 
 - Audience and task: authenticated staff with read access to the exact work order
-  can track their own work-order expense claims. Creating a claim additionally
-  requires the matching write-tier dispatch access. Technician assignment is
-  not required on this admin web surface.
+  can track their own work-order expense claims and can create one after a
+  technician has been assigned. The requester does not need to be that technician.
 - Authority: `ui.work_order_expense_projection` owns the form, validation
   presentation, requester-owned list, action eligibility, and ERP delivery
   labels. `operations.expense_requests` owns the atomic claim and durable ERP
   staging; ERP owns approval routing and reimbursement.
 - First viewport: the work-order identity remains the page context. The expense
   card explains that approval and payment happen in ERP, shows the actor's
-  existing claims, and exposes one New Expense Claim action when ERP categories
-  are available.
-- Mutation: the multipart POST is explicitly CSRF protected, write-tier guarded,
+  existing claims, and always exposes one New Expense Claim action. The action
+  opens the form when a technician is assigned and ERP categories are available;
+  otherwise it remains visibly disabled with the authoritative reason, including
+  `Assign a technician first.` for an unassigned work order.
+- Mutation: the multipart POST is explicitly CSRF protected, read-scope guarded,
   and scoped to the work order in the URL. No work-order, requester, person,
   user, or requester email input is accepted. A stable client reference prevents
-  double creation.
+  double creation. The command owner rechecks current technician assignment while
+  holding the work-order lock, so a direct or stale form submission fails closed.
 - Form: purpose and expense date are required, currency defaults to NGN, notes
   are optional, and at least one stacked repeatable item remains. Items expose
   ERP category, description, positive amount, optional date/vendor/receipt
@@ -566,3 +659,36 @@ implementation.
 - Responsive behavior: line items are stacked cards at every width, controls
   retain labels and text errors, totals name their currency, and add/remove and
   submit actions remain accessible without relying on colour.
+
+## Field Work-Order Note Contract
+
+- Audience and task: an assigned technician records an internal staff note or
+  an external customer-history note and follows that exact note through mobile
+  delivery.
+- Authority: `operations.field_notes` owns note creation, assignment checks,
+  attachment links, retry identity, and the committed output.
+  `operations.work_orders` owns work-order and assignment facts. The mobile
+  outbox is a durable delivery projection only.
+- Mutation: the app creates one stable `client_ref` before enqueue and reuses it
+  for every retry. Identical retries return the original note; reuse with
+  changed content fails closed.
+- States: **Note saved** means the API accepted the note. **Queued for sync**
+  means the durable local request is pending. **Sync failed** means a permanent
+  rejection or exhausted retry is retained for review. These states are never
+  collapsed into a generic success message.
+- Refresh behavior: server notes and non-sent local note requests merge by
+  `client_ref`; refreshing or reopening a job cannot silently remove queued or
+  failed evidence.
+- Responsive behavior: visibility and delivery labels accompany the note text,
+  do not rely on colour alone, and remain readable on the mobile first viewport.
+- Staff web projection: after API acceptance, the same canonical note appears on
+  the work-order detail page and, when authoritative native links exist, on its
+  project-task and originating-ticket pages. Related-context entries name and
+  link their work order. They are not copied into task or ticket comment stores.
+- Staff privacy: internal and external-history labels remain visible on every
+  staff projection. Customer publication is out of scope; neither field-note
+  visibility value alone authorizes portal display. Attachment downloads require
+  the same exact work-order read scope as the detail page.
+- Freshness: staff pages read committed rows on every request. Device-local
+  queued or failed notes do not appear until delivery succeeds; no UI may imply
+  otherwise.

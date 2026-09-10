@@ -152,12 +152,14 @@ class FieldNoteCreate(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
     is_internal: bool = True
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    client_ref: UUID | None = None
 
 
 class FieldNoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    client_ref: UUID | None = None
     body: str
     is_internal: bool
     author_person_id: UUID | None = None
@@ -528,6 +530,9 @@ class FieldExpenseRequestRead(BaseModel):
     expense_claim_status: str | None = None
     erp_sync_status: str | None = None
     erp_sync_error: str | None = None
+    payment_status: str | None = None
+    payment_intent_id: str | None = None
+    payment_error: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None
@@ -546,6 +551,22 @@ class FieldExpenseApprovalRead(BaseModel):
     erp_sync_status: str
     erp_sync_event_id: UUID | None = None
     erp_sync_error: str | None = None
+
+
+class FieldExpenseRejectionRead(BaseModel):
+    id: UUID
+    status: Literal["rejected"]
+    rejected_at: datetime
+    rejection_reason: str
+    erp_sync_event_id: UUID
+
+
+class FieldExpensePaymentRead(BaseModel):
+    id: UUID
+    status: Literal["approved"]
+    payment_status: Literal["queued"]
+    payment_command_id: UUID
+    erp_sync_event_id: UUID
 
 
 class FieldJobHistoryItem(BaseModel):
@@ -645,6 +666,11 @@ class LocationPingInput(BaseModel):
     crm_work_order_id: str | None = Field(default=None, max_length=64)
     source: str = Field(default="mobile", max_length=32)
     status: str | None = Field(default=None, max_length=20)
+    # Optional: a stable id the client mints once per ping attempt so a retry
+    # after an ambiguous network failure replays instead of duplicating.
+    # Omitted by app builds that predate this field; dedup then simply
+    # doesn't run for that ping, matching today's behavior.
+    client_observation_id: UUID | None = None
 
 
 class LocationPingBatch(BaseModel):
@@ -674,6 +700,10 @@ class LocationIngestResponse(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
     presence: FieldPresenceRead
     transitions: list[dict[str, Any]] = Field(default_factory=list)
+    # Observability only: a replayed row is already counted in `accepted`
+    # above (never as an error), so an old client's `accepted + len(errors)
+    # == total_sent` check is unaffected whether or not it reads this field.
+    replays: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class VoiceExtractRequest(BaseModel):
@@ -766,6 +796,17 @@ class FieldLiveMapFeed(BaseModel):
     live_count: int
     stale_after_seconds: int
     items: list[FieldLiveMapPosition]
+
+
+class FieldLiveMapTechnicianDetailQuery(BaseModel):
+    technician_id: UUID
+    stale_after_seconds: int = Field(default=120, ge=15, le=3600)
+
+
+class FieldLiveMapTechnicianDetail(BaseModel):
+    position: FieldLiveMapPosition
+    address_text: str | None = None
+    address_status: Literal["available", "unavailable"]
 
 
 class FieldLiveMapSearchQuery(BaseModel):
@@ -1243,12 +1284,13 @@ class FieldManagerTechnician(BaseModel):
     status: str
     location_sharing_enabled: bool
     is_live: bool
-    last_latitude: float | None = None
-    last_longitude: float | None = None
-    accuracy_m: float | None = None
-    last_location_at: datetime | None = None
     last_seen_at: datetime | None = None
     active_work_order: FieldManagerActiveWorkOrder | None = None
+
+
+class FieldManagerTechniciansQuery(BaseModel):
+    stale_after_seconds: int = Field(default=120, ge=15, le=3600)
+    limit: int = Field(default=500, ge=1, le=500)
 
 
 class FieldManagerTechniciansResponse(BaseModel):

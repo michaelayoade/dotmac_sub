@@ -15,7 +15,13 @@ from app.schemas.field import (
     FieldEquipmentIssueRequest,
     FieldEquipmentReturnRequest,
     FieldExpenseApprovalRead,
+    FieldExpensePaymentRead,
+    FieldExpenseRejectionRead,
     FieldExpenseRequestRead,
+    FieldLiveMapFeed,
+    FieldLiveMapFeedQuery,
+    FieldLiveMapTechnicianDetail,
+    FieldLiveMapTechnicianDetailQuery,
     FieldManagerExpenseRejectRequest,
     FieldManagerJob,
     FieldManagerJobAssignRequest,
@@ -23,6 +29,7 @@ from app.schemas.field import (
     FieldManagerMaterialRejectRequest,
     FieldManagerMeResponse,
     FieldManagerSummary,
+    FieldManagerTechniciansQuery,
     FieldManagerTechniciansResponse,
     FieldMaterialRequestRead,
     TechnicianSatisfactionResponse,
@@ -32,6 +39,7 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceRead,
     VendorPurchaseInvoiceReview,
 )
+from app.services import field_maps as field_maps_service
 from app.services import technician_satisfaction
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
@@ -40,8 +48,12 @@ from app.services.field.equipment_custody import field_equipment_custody
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
     FieldExpenseRequestError,
+    InitiateFieldExpensePayment,
+    RejectFieldExpenseRequest,
     approve_field_expense_request_command,
     field_expense_requests,
+    initiate_field_expense_payment_command,
+    reject_field_expense_request_command,
 )
 from app.services.field.manager import field_manager
 from app.services.field.material_requests import field_material_requests
@@ -70,12 +82,14 @@ _ops_read = require_any_permission(
     "operations:work_order:read",
     "operations:technician:read",
 )
+_team_map_read = require_permission("operations:dispatch:read")
 _dispatch_write = require_any_permission(
     "operations:work_order:update",
     "operations:work_order:dispatch",
 )
 _expense_read = require_permission("operations:expense_request:read")
 _expense_write = require_permission("operations:expense_request:write")
+_expense_pay = require_permission("operations:expense_request:pay")
 _material_read = require_any_permission(
     "operations:material_request:read",
     "inventory:read",
@@ -136,6 +150,24 @@ def _expense_approval_context(
     )
 
 
+def _expense_action_context(
+    auth: dict,
+    *,
+    expense_request_id: UUID,
+    request_id: UUID,
+    action: str,
+    scope: str,
+) -> CommandContext:
+    return CommandContext(
+        command_id=request_id,
+        correlation_id=request_id,
+        actor=f"user:{auth['principal_id']}",
+        scope=scope,
+        reason=f"{action}_expense_request:{expense_request_id}",
+        idempotency_key=str(request_id),
+    )
+
+
 def _expense_approval_error(exc: FieldExpenseRequestError) -> HTTPException:
     if exc.code.endswith("request_not_found"):
         status_code = 404
@@ -172,18 +204,54 @@ def field_manager_technicians(
     limit: int = Query(default=500, ge=1, le=500),
     auth: dict = Depends(_ops_read),
     db: Session = Depends(get_db),
-):
-    items = field_manager.list_technicians(
-        db, stale_after_seconds=stale_after_seconds, limit=limit
+) -> FieldManagerTechniciansResponse:
+    return field_manager.list_technicians(
+        db,
+        FieldManagerTechniciansQuery(
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        ),
     )
-    return {
-        "items": items,
-        "count": len(items),
-        "live_count": sum(1 for item in items if item["is_live"]),
-        "sharing_count": sum(1 for item in items if item["location_sharing_enabled"]),
-        "limit": limit,
-        "offset": 0,
-    }
+
+
+@router.get("/team-map", response_model=FieldLiveMapFeed)
+def field_manager_team_map(
+    stale_after_seconds: int = Query(default=120, ge=15, le=3600),
+    limit: int = Query(default=500, ge=1, le=2000),
+    auth: dict = Depends(_team_map_read),
+    db: Session = Depends(get_db),
+) -> FieldLiveMapFeed:
+    """Return sharing-authorized positions through the canonical map owner."""
+    return field_maps_service.list_technician_positions(
+        db=db,
+        query=FieldLiveMapFeedQuery(
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        ),
+    )
+
+
+@router.get(
+    "/team-map/{technician_id}/location-detail",
+    response_model=FieldLiveMapTechnicianDetail,
+)
+def field_manager_team_map_technician_detail(
+    technician_id: UUID,
+    stale_after_seconds: int = Query(default=120, ge=15, le=3600),
+    auth: dict = Depends(_team_map_read),
+    db: Session = Depends(get_db),
+) -> FieldLiveMapTechnicianDetail:
+    """Resolve the selected sharing technician's latest location detail."""
+    detail = field_maps_service.get_technician_detail(
+        db=db,
+        query=FieldLiveMapTechnicianDetailQuery(
+            technician_id=technician_id,
+            stale_after_seconds=stale_after_seconds,
+        ),
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Technician location unavailable")
+    return detail
 
 
 @router.get("/technicians/satisfaction", response_model=TechnicianSatisfactionResponse)
@@ -269,7 +337,7 @@ def field_manager_unassign_job(
 
 @router.get("/expenses", response_model=ListResponse[FieldExpenseRequestRead])
 def field_manager_expenses(
-    status_filter: str | None = Query(default="submitted", alias="status"),
+    status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     auth: dict = Depends(_expense_read),
@@ -312,15 +380,66 @@ def field_manager_approve_expense(
 
 @router.post(
     "/expenses/{expense_request_id}/reject",
-    response_model=FieldExpenseRequestRead,
+    response_model=FieldExpenseRejectionRead,
 )
 def field_manager_reject_expense(
-    expense_request_id: str,
+    expense_request_id: UUID,
     payload: FieldManagerExpenseRejectRequest,
     auth: dict = Depends(_expense_write),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    return field_expense_requests.reject(db, expense_request_id, payload.reason)
+    command_id = request_id or uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return reject_field_expense_request_command(
+            db=db,
+            command=RejectFieldExpenseRequest(
+                context=_expense_action_context(
+                    auth,
+                    expense_request_id=expense_request_id,
+                    request_id=command_id,
+                    action="reject",
+                    scope="operations:expense_request:write",
+                ),
+                expense_request_id=expense_request_id,
+                reviewer_system_user_id=UUID(str(auth["principal_id"])),
+                reason=payload.reason,
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_approval_error(exc) from exc
+
+
+@router.post(
+    "/expenses/{expense_request_id}/pay",
+    response_model=FieldExpensePaymentRead,
+)
+def field_manager_pay_expense(
+    expense_request_id: UUID,
+    auth: dict = Depends(_expense_pay),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    command_id = request_id or uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return initiate_field_expense_payment_command(
+            db=db,
+            command=InitiateFieldExpensePayment(
+                context=_expense_action_context(
+                    auth,
+                    expense_request_id=expense_request_id,
+                    request_id=command_id,
+                    action="pay",
+                    scope="operations:expense_request:pay",
+                ),
+                expense_request_id=expense_request_id,
+                manager_system_user_id=UUID(str(auth["principal_id"])),
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_approval_error(exc) from exc
 
 
 @router.get("/materials", response_model=ListResponse[FieldMaterialRequestRead])
