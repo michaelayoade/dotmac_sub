@@ -1021,6 +1021,53 @@ async def _terminated_request_response(
 
 
 @app.middleware("http")
+async def customer_service_location_gate_middleware(request: Request, call_next):
+    """Require an exact service pin when the subscriber setting is enabled."""
+    path = request.url.path
+    is_customer_portal = path == "/portal" or path.startswith("/portal/")
+    location_route = path == "/portal/location" or path.startswith("/portal/location/")
+    auth_route = path == "/portal/auth" or path.startswith("/portal/auth/")
+    request.state.service_location_required = False
+    if (
+        not is_customer_portal
+        or location_route
+        or auth_route
+        or request.method.upper() == "OPTIONS"
+    ):
+        return await call_next(request)
+
+    db = SessionLocal()
+    try:
+        from starlette.responses import RedirectResponse
+
+        from app.services import location_capture
+        from app.services.customer_context import optional_customer_subscriber_id
+        from app.web.customer.auth import get_current_customer_from_request
+
+        customer = get_current_customer_from_request(request, db)
+        if not customer or customer.get("is_impersonation"):
+            return await call_next(request)
+        subscriber_id = optional_customer_subscriber_id(db, customer)
+        if subscriber_id:
+            try:
+                request.state.service_location_required = (
+                    location_capture.requires_service_location_update(
+                        db, str(subscriber_id)
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "customer service location gate failed for subscriber %s",
+                    subscriber_id,
+                )
+            if request.state.service_location_required:
+                return RedirectResponse(url="/portal/location", status_code=303)
+    finally:
+        db.close()
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def web_auth_refresh_middleware(request: Request, call_next):
     """Refresh expired web access cookies before protected routes handle the request."""
     refreshed: tuple[str, str | None] | None = None
