@@ -114,6 +114,7 @@ class InboxAssignmentProvenance(StrEnum):
 class InboxExistingAssignmentPolicy(StrEnum):
     replace_existing = "replace"
     preserve_existing = "preserve"
+    replace_offline_existing = "replace_offline"
 
 
 @dataclass(frozen=True)
@@ -834,6 +835,25 @@ def _active_assignment(
     )
 
 
+def _locked_effective_presence_status(
+    db: Session,
+    *,
+    person_id: UUID,
+    now: datetime,
+) -> InboxAgentPresenceStatus:
+    """Lock and resolve the routing owner's current presence evidence."""
+
+    presence = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == person_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if presence is None:
+        return InboxAgentPresenceStatus.offline
+    return InboxAgentPresenceStatus(effective_presence_status(presence, now=now))
+
+
 def _lock_active_conversation(
     db: Session,
     conversation: InboxConversation,
@@ -1185,18 +1205,35 @@ def assign_conversation_to_agent(
             reason="already_assigned",
         )
 
-    if (
-        previous_assignment is not None
-        and existing_assignment_policy
-        is InboxExistingAssignmentPolicy.preserve_existing
-        and previous_assignment.person_id != person_uuid
-    ):
-        return InboxAssignmentResult(
-            kind="assigned_to_other",
-            service_team_id=str(previous_assignment.service_team_id),
-            assigned_person_id=str(previous_assignment.person_id),
-            reason="Conversation is already assigned to another agent.",
+    replacing_offline_owner = False
+    if previous_assignment is not None and previous_assignment.person_id != person_uuid:
+        if (
+            existing_assignment_policy
+            is InboxExistingAssignmentPolicy.replace_offline_existing
+        ):
+            previous_owner_status = _locked_effective_presence_status(
+                db,
+                person_id=previous_assignment.person_id,
+                now=assigned_at,
+            )
+            replacing_offline_owner = (
+                previous_owner_status is InboxAgentPresenceStatus.offline
+            )
+        should_preserve_existing = (
+            existing_assignment_policy
+            is InboxExistingAssignmentPolicy.preserve_existing
+        ) or (
+            existing_assignment_policy
+            is InboxExistingAssignmentPolicy.replace_offline_existing
+            and not replacing_offline_owner
         )
+        if should_preserve_existing:
+            return InboxAssignmentResult(
+                kind="assigned_to_other",
+                service_team_id=str(previous_assignment.service_team_id),
+                assigned_person_id=str(previous_assignment.person_id),
+                reason="Conversation is already assigned to another agent.",
+            )
 
     queued_entry = _queue_entry(db, conversation.id)
     if (
@@ -1294,7 +1331,13 @@ def assign_conversation_to_agent(
         service_team_id=team_uuid,
         person_id=person_uuid,
         actor_person_id=actor_uuid,
-        reason_code=("reassigned" if previous_assignment else "assigned"),
+        reason_code=(
+            "reassigned_offline_owner"
+            if replacing_offline_owner
+            else "reassigned"
+            if previous_assignment
+            else "assigned"
+        ),
         occurred_at=assigned_at,
         source_id=source_id,
         decision_mode=decision_mode,

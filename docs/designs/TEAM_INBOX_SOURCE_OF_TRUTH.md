@@ -249,6 +249,12 @@ The per-agent lock is intentionally not team-scoped because one agent may be a
 member of several teams or channels. Normal manual, self, automation, workqueue
 and promotion assignments use the same membership, presence and capacity gate;
 there is no implicit force override and a queued non-head cannot be selected.
+Reply auto-claim preserves a different owner whose effective presence is
+`online`, `away`, or `on_break`. It may atomically replace that assignment only
+when the routing owner locks the prior owner's presence evidence and resolves it
+to `offline`; missing presence and online evidence older than the freshness
+window fail closed to offline. The replacement is recorded as a distinct
+routing reason in the same transaction as the reply and assignment transition.
 
 An `online` presence is eligible only when its `last_seen_at` evidence is no
 more than 30 minutes old; missing or stale presence fails closed as offline.

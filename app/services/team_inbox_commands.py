@@ -754,7 +754,7 @@ def _claim_conversation_for_reply(
         source=InboxTeamSource.manual.value,
         source_id=f"reply-auto-claim:{conversation.id}:{actor_person_id}",
         existing_assignment_policy=(
-            team_inbox_assignment.InboxExistingAssignmentPolicy.preserve_existing
+            team_inbox_assignment.InboxExistingAssignmentPolicy.replace_offline_existing
         ),
         conversation_lock_nowait=True,
     )

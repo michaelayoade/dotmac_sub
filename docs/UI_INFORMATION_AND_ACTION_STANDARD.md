@@ -473,10 +473,13 @@ implementation.
 - After AI control has ended, the first eligible human reply to an unassigned
   conversation atomically claims it for that agent and sends in one owner
   transaction. The claim obeys the same team membership, presence, capacity,
-  and FIFO rules as explicit self-assignment. A simultaneous or later reply by
-  another agent sends nothing and returns the conflict message **This
-  conversation is currently assigned to [agent].** The composer presents that
-  message without implying that its draft was sent.
+  and FIFO rules as explicit self-assignment. It may also replace a different
+  owner only when the routing owner's locked presence evidence resolves that
+  owner to `offline`, including missing or stale online evidence. Online,
+  away, and on-break owners remain protected. A simultaneous or later reply
+  against a protected assignment sends nothing and returns the conflict message
+  **This conversation is currently assigned to [agent].** The composer presents
+  that message without implying that its draft was sent.
 - Admin → System → Settings → Comms exposes **Default active Inbox
   conversations per agent** with range 1–100 and default 10. Per-agent backend
   overrides are not presented as though they are editable when no Admin writer

@@ -2646,7 +2646,11 @@ DOMAIN = DomainSOT(
                         name="conversation routing facts",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Recipients, current owner team, assignment, priority, and lifecycle.",
+                        source=(
+                            "Recipients, current owner team, assignment, priority, "
+                            "lifecycle, and locked prior-owner presence for "
+                            "offline-owner reply takeover."
+                        ),
                     ),
                     AuthorityInput(
                         name="operational escalation policy",
@@ -2718,6 +2722,7 @@ DOMAIN = DomainSOT(
                     "tests/test_admin_inbox_slice4_workflows.py",
                     "tests/test_auth_flow.py",
                     "tests/test_team_inbox_assignment.py",
+                    "tests/test_team_inbox_commands.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
                     "tests/integration/test_team_inbox_queue_concurrency.py",
