@@ -15,28 +15,38 @@ from pathlib import Path
 
 from app.services import team_inbox_projection
 
-CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
-COMMENT_THREAD = Path("templates/admin/inbox/_comment_thread.html").read_text()
-DRAWER = Path("templates/admin/inbox/_contact_drawer.html").read_text()
-EMPTY_STATE = Path("templates/admin/inbox/_empty_state.html").read_text()
+CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text(
+    encoding="utf-8"
+)
+COMMENT_THREAD = Path("templates/admin/inbox/_comment_thread.html").read_text(
+    encoding="utf-8"
+)
+DRAWER = Path("templates/admin/inbox/_contact_drawer.html").read_text(encoding="utf-8")
+EMPTY_STATE = Path("templates/admin/inbox/_empty_state.html").read_text(
+    encoding="utf-8"
+)
 AUTHORITATIVE_CONTEXT = Path(
     "templates/admin/inbox/_authoritative_context.html"
-).read_text()
+).read_text(encoding="utf-8")
 CONVERSATION_HISTORY = Path(
     "templates/admin/inbox/_conversation_history.html"
-).read_text()
-FLOATING_SURFACES = Path("templates/admin/inbox/_floating_surfaces.html").read_text()
-INDEX = Path("templates/admin/inbox/index.html").read_text()
-COMMENTS = Path("templates/admin/inbox/comments.html").read_text()
-LAYOUT = Path("templates/layouts/admin.html").read_text()
-OVERLAYS = Path("templates/admin/inbox/_overlays.html").read_text()
-QUEUE = Path("templates/admin/inbox/_queue_macros.html").read_text()
-SIDEBAR = Path("templates/admin/inbox/_sidebar.html").read_text()
-TICKET_PANEL = Path("templates/admin/inbox/_ticket_panel.html").read_text()
-TRIAGE = Path("templates/components/ui/triage.html").read_text()
-JAVASCRIPT = Path("static/js/admin-inbox.js").read_text()
-REPLICA_CSS = Path("static/css/admin-inbox-replica.css").read_text()
-ROUTES = Path("app/web/admin/inbox.py").read_text()
+).read_text(encoding="utf-8")
+FLOATING_SURFACES = Path("templates/admin/inbox/_floating_surfaces.html").read_text(
+    encoding="utf-8"
+)
+INDEX = Path("templates/admin/inbox/index.html").read_text(encoding="utf-8")
+COMMENTS = Path("templates/admin/inbox/comments.html").read_text(encoding="utf-8")
+LAYOUT = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
+OVERLAYS = Path("templates/admin/inbox/_overlays.html").read_text(encoding="utf-8")
+QUEUE = Path("templates/admin/inbox/_queue_macros.html").read_text(encoding="utf-8")
+SIDEBAR = Path("templates/admin/inbox/_sidebar.html").read_text(encoding="utf-8")
+TICKET_PANEL = Path("templates/admin/inbox/_ticket_panel.html").read_text(
+    encoding="utf-8"
+)
+TRIAGE = Path("templates/components/ui/triage.html").read_text(encoding="utf-8")
+JAVASCRIPT = Path("static/js/admin-inbox.js").read_text(encoding="utf-8")
+REPLICA_CSS = Path("static/css/admin-inbox-replica.css").read_text(encoding="utf-8")
+ROUTES = Path("app/web/admin/inbox.py").read_text(encoding="utf-8")
 
 
 # --- Workspace frame -----------------------------------------------------
@@ -426,7 +436,7 @@ def test_financial_and_network_detail_are_permission_gated():
     assert "can_view_financials" in DRAWER
     assert "can_view_network_detail" in DRAWER
 
-    routes = Path("app/web/admin/inbox.py").read_text()
+    routes = Path("app/web/admin/inbox.py").read_text(encoding="utf-8")
     assert 'can(request, "billing:account:read")' in routes
     assert 'can(request, "network:ip:read")' in routes
 
@@ -1011,9 +1021,11 @@ def test_visible_workspace_refreshes_agent_presence_without_overriding_status():
 
 
 def test_manager_capacity_links_to_an_explicit_bounded_save_control():
-    manager = Path("templates/admin/inbox/_manager_dashboard.html").read_text()
-    overlays = Path("templates/admin/inbox/_overlays.html").read_text()
-    settings = Path("templates/admin/system/settings.html").read_text()
+    manager = Path("templates/admin/inbox/_manager_dashboard.html").read_text(
+        encoding="utf-8"
+    )
+    overlays = Path("templates/admin/inbox/_overlays.html").read_text(encoding="utf-8")
+    settings = Path("templates/admin/system/settings.html").read_text(encoding="utf-8")
 
     for template in (manager, overlays):
         assert "can_manage_inbox_capacity" in template
