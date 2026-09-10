@@ -45,6 +45,7 @@ from app.schemas.status_presentation import (
     StatusPresentation,
     StatusTone,
 )
+from app.services.action_readiness import ReadinessState
 from app.services.field.work_order_status import WorkOrderStatus
 from app.services.topology.connection_status import ConnectionHealthState
 from app.services.topology.outage import OutageStatus
@@ -1342,3 +1343,25 @@ _CONTROL_PLANE_PHASE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]
 def control_plane_phase_presentation(status: object) -> StatusPresentation:
     """Project the control-plane convergence phase (server-owned tone)."""
     return _presentation(_status_value(status), _CONTROL_PLANE_PHASE_PRESENTATIONS)
+
+
+# ReadinessState (owner: ui.action_readiness_contracts) values.
+_ACTION_READINESS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ReadinessState.ready.value: ("Ready", StatusTone.positive, StatusIcon.check),
+    ReadinessState.blocked.value: ("Blocked", StatusTone.negative, StatusIcon.x),
+    ReadinessState.waiting.value: ("Waiting", StatusTone.warning, StatusIcon.clock),
+    ReadinessState.needs_verification.value: (
+        "Needs verification",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+    ReadinessState.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
+    ReadinessState.complete.value: ("Complete", StatusTone.positive, StatusIcon.check),
+}
+
+
+def action_readiness_presentation(
+    state: ReadinessState | str | None,
+) -> StatusPresentation:
+    """Project an ``ActionReadiness.state`` value (server-owned tone)."""
+    return _presentation(_status_value(state), _ACTION_READINESS_PRESENTATIONS)

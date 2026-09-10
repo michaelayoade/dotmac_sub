@@ -213,6 +213,42 @@ class ManagerTeamMapFeed {
       );
 }
 
+enum ManagerLocationAddressStatus {
+  available,
+  unavailable,
+  unknown;
+
+  factory ManagerLocationAddressStatus.fromWire(String? value) =>
+      switch (value) {
+        'available' => ManagerLocationAddressStatus.available,
+        'unavailable' => ManagerLocationAddressStatus.unavailable,
+        _ => ManagerLocationAddressStatus.unknown,
+      };
+}
+
+class ManagerTechnicianLocationDetail {
+  const ManagerTechnicianLocationDetail({
+    required this.position,
+    required this.addressStatus,
+    this.addressText,
+  });
+
+  final ManagerTeamMapPosition position;
+  final ManagerLocationAddressStatus addressStatus;
+  final String? addressText;
+
+  factory ManagerTechnicianLocationDetail.fromJson(Map<String, dynamic> json) =>
+      ManagerTechnicianLocationDetail(
+        position: ManagerTeamMapPosition.fromJson(
+          (json['position'] as Map).cast<String, dynamic>(),
+        ),
+        addressStatus: ManagerLocationAddressStatus.fromWire(
+          json['address_status']?.toString(),
+        ),
+        addressText: json['address_text']?.toString(),
+      );
+}
+
 class ManagerJob {
   ManagerJob({
     required this.id,
@@ -385,6 +421,18 @@ class ManagerRepository {
     );
   }
 
+  Future<ManagerTechnicianLocationDetail> fetchTechnicianLocationDetail({
+    required String technicianId,
+  }) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .get('/api/v1/field/manager/team-map/$technicianId/location-detail');
+    return ManagerTechnicianLocationDetail.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
+  }
+
   Future<List<ManagerJob>> fetchJobs() async {
     final response = await _ref
         .read(apiClientProvider)
@@ -488,6 +536,13 @@ final managerTechniciansProvider = FutureProvider<List<ManagerTechnician>>(
 final managerTeamMapProvider = FutureProvider<ManagerTeamMapFeed>(
   (ref) => ref.watch(managerRepositoryProvider).fetchTeamMap(),
 );
+
+final managerTechnicianLocationDetailProvider = FutureProvider.autoDispose
+    .family<ManagerTechnicianLocationDetail, String>(
+      (ref, technicianId) => ref
+          .watch(managerRepositoryProvider)
+          .fetchTechnicianLocationDetail(technicianId: technicianId),
+    );
 
 final managerJobsProvider = FutureProvider<List<ManagerJob>>(
   (ref) => ref.watch(managerRepositoryProvider).fetchJobs(),

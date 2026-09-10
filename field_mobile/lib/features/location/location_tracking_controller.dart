@@ -174,7 +174,7 @@ class _LocationSharingControlsState
       builder: (dialogContext) => AlertDialog(
         title: const Text('Enable location'),
         content: const Text(
-          'Location must be turned on and allowed before you can check in or start Shift.',
+          'Location must be turned on and allowed before you can check in and share your location.',
         ),
         actions: [
           TextButton(
@@ -206,16 +206,23 @@ class _LocationSharingControlsState
     try {
       switch (action) {
         case _LocationCardAction.checkIn:
-          await ref
+          final attendance = await ref
               .read(attendanceControllerProvider.notifier)
               .punch(AttendanceAction.checkIn);
-          message = 'Checked in. Enable Shift to start sharing.';
+          if (attendance.state == AttendanceState.checkedIn) {
+            final started = await _setShift(ShiftState.onShift);
+            message = started
+                ? 'Checked in. You are on shift and sharing your location.'
+                : 'Checked in, but location sharing could not start. Tap On shift to retry.';
+          } else {
+            message = attendance.reason;
+          }
           break;
-        case _LocationCardAction.shift:
+        case _LocationCardAction.onShift:
           if (!await _setShift(ShiftState.onShift)) {
             await ref.read(attendanceControllerProvider.notifier).refresh();
             message =
-                'Could not enable Shift. Confirm that you are checked in.';
+                'Could not start location sharing. Confirm that you are checked in.';
           }
           break;
         case _LocationCardAction.checkOut:
@@ -276,9 +283,9 @@ class _LocationSharingControlsState
                   label: const Text('Check In'),
                 ),
                 ButtonSegment(
-                  value: _LocationCardAction.shift,
+                  value: _LocationCardAction.onShift,
                   enabled: canShift && !_updating,
-                  label: Text('Shift'),
+                  label: Text('On shift'),
                 ),
                 ButtonSegment(
                   value: _LocationCardAction.checkOut,
@@ -287,7 +294,7 @@ class _LocationSharingControlsState
                 ),
               ],
               selected: canShift && shift == ShiftState.onShift
-                  ? const {_LocationCardAction.shift}
+                  ? const {_LocationCardAction.onShift}
                   : const {},
               onSelectionChanged: _updating || attendance == null
                   ? null
@@ -307,7 +314,7 @@ class _LocationSharingControlsState
   }
 }
 
-enum _LocationCardAction { checkIn, shift, checkOut }
+enum _LocationCardAction { checkIn, onShift, checkOut }
 
 String _statusText(
   AsyncValue<AttendanceView> attendanceAsync,
@@ -320,10 +327,12 @@ String _statusText(
         : 'Checking attendance…';
   }
   return switch (attendance.state) {
-    AttendanceState.notCheckedIn => 'Check in to make Shift available.',
+    AttendanceState.notCheckedIn =>
+      'Check in to go on shift and start location sharing.',
     AttendanceState.checkedIn when shift == ShiftState.onShift =>
       'On shift · sharing location with dispatch.',
-    AttendanceState.checkedIn => 'Checked in · location sharing is off.',
+    AttendanceState.checkedIn =>
+      'Checked in · location sharing could not start. Tap On shift to retry.',
     AttendanceState.checkedOut => 'Checked out · location sharing is off.',
     AttendanceState.ineligible =>
       attendance.reason ?? 'Attendance is not available for this account.',

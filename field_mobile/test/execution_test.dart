@@ -40,7 +40,12 @@ void main() {
     connectivity = FakeConnectivity(
       online: false,
     ); // keep entries queued for inspection
-    location = FakeLocation((latitude: 6.43, longitude: 3.42));
+    location = FakeLocation((
+      latitude: 6.43,
+      longitude: 3.42,
+      accuracy: 5.0,
+      timestamp: DateTime.utc(2026, 6, 1, 8),
+    ));
     final adapter = FakeHttpAdapter();
     final tokens = InMemoryTokenStore();
     final dio = Dio(BaseOptions(baseUrl: 'https://test.local'));

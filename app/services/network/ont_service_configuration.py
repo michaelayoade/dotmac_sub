@@ -736,10 +736,22 @@ def _load_customer_wifi_admission_scope(
             .order_by(OntAssignment.id)
         )
     )
-    if len(candidates) != 1:
+    if not candidates:
         raise _error(
-            "customer_subscription_not_found",
+            "customer_active_assignment_required",
             "No supported active device is linked to this service.",
+            subscriber_id=str(command.subscriber_id),
+            subscription_id=str(command.subscription_id),
+            candidate_count=0,
+        )
+    if len(candidates) > 1:
+        raise _error(
+            "customer_ambiguous_assignment",
+            "Multiple active devices are linked to this service; contact support.",
+            subscriber_id=str(command.subscriber_id),
+            subscription_id=str(command.subscription_id),
+            candidate_count=len(candidates),
+            candidate_assignment_ids=[str(item.id) for item in candidates],
         )
     candidate = candidates[0]
     ont = db.scalar(
@@ -747,8 +759,12 @@ def _load_customer_wifi_admission_scope(
     )
     if ont is None:
         raise _error(
-            "customer_subscription_not_found",
-            "No supported active device is linked to this service.",
+            "customer_assigned_ont_missing",
+            "The device linked to this service could not be found.",
+            subscriber_id=str(command.subscriber_id),
+            subscription_id=str(command.subscription_id),
+            assignment_id=str(candidate.id),
+            ont_unit_id=str(candidate.ont_unit_id),
         )
     assignments = list(
         db.scalars(
@@ -768,8 +784,14 @@ def _load_customer_wifi_admission_scope(
         or assignments[0].subscription_id != command.subscription_id
     ):
         raise _error(
-            "customer_subscription_not_found",
-            "No supported active device is linked to this service.",
+            "customer_assignment_inconsistent",
+            "The device's active assignment disagrees with this service's "
+            "assignment; contact support.",
+            subscriber_id=str(command.subscriber_id),
+            subscription_id=str(command.subscription_id),
+            candidate_assignment_id=str(candidate.id),
+            ont_unit_id=str(ont.id),
+            ont_active_assignment_ids=[str(item.id) for item in assignments],
         )
     assignment = assignments[0]
     if assignment.pon_port_id is None:
@@ -788,6 +810,14 @@ def _load_customer_wifi_admission_scope(
         raise _error(
             "customer_subscription_not_found",
             "No supported active device is linked to this service.",
+            subscriber_id=str(command.subscriber_id),
+            subscription_id=str(command.subscription_id),
+            subscription_status=(
+                subscription.status if subscription is not None else None
+            ),
+            subscription_subscriber_id=(
+                str(subscription.subscriber_id) if subscription is not None else None
+            ),
         )
     pon = db.scalar(
         select(PonPort).where(PonPort.id == assignment.pon_port_id).with_for_update()

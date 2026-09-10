@@ -142,6 +142,19 @@ awaiting approval. It does not inspect open pull requests and does not
 reinterpret the selected candidate; the candidate SHA and OCI digest remain
 the deployment authority.
 
+**Known limitation, not an oversight.** The gate's result is cached at a pull
+request's head SHA and is only re-evaluated when that PR's own branch moves --
+not when a release enters its approval wait after the check already reported
+green. While a promotion or deploy is sitting in its production approval-wait
+window, avoid merging other pull requests even if the freeze gate still shows
+green on them. Real merge-time enforcement would need a GitHub merge queue,
+which this repository cannot currently enable safely (see the header comment
+in `release-freeze-gate.yml`). What actually protects production if this
+discipline lapses is `release-promotion.yml`'s authorization pinning
+(`ref: ${{ github.sha }}`, not `ref: main`) and its post-approval reachability
+re-proof against main's live tip -- confirmed live in production 2026-09-09,
+these close the window this freeze gate cannot.
+
 ### One-time workflow bootstrap
 
 GitHub accepts `workflow_dispatch` only after the workflow file exists on the

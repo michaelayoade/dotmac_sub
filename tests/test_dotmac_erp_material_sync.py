@@ -479,6 +479,76 @@ def test_refresh_updates_status_for_in_flight_request(db_session):
     assert request.status == "issued"
 
 
+def test_refresh_drains_a_sent_row_that_the_linked_query_could_never_select(
+    db_session,
+):
+    """A ``sent`` row has no reference BY DEFINITION — the old query excluded it
+    forever (the dead end). The widened poller must find it via the outbox and
+    drain it to ``accepted`` once ERP returns a real id.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    assert request.support_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+    client = _FakeERPClient(
+        status_outcomes=[{"request_id": "ERP-MR-LATE", "status": "fulfilled"}]
+    )
+    result = material_sync.refresh_material_request_statuses(db_session, client=client)
+
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.accepted.value
+    assert request.support_reference == "ERP-MR-LATE"
+    assert result["processed"] == 1
+    assert result["updated"] == 1
+    assert client.status_calls == [str(request.id)]
+
+
+def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_flow(db_session):
+    """The poll-drain path (``_poll_unlinked_material_requests``, reached via
+    ``refresh_material_request_statuses``) makes a real ERP call
+    (``get_material_request_status``). It must be skipped for a currently
+    CRM-owned flow, even though the row was delivered while sub owned it —
+    ownership can move back to CRM after delivery (the cutover/shadow-phase
+    model this codebase uses), and this poll runs on a schedule left running
+    across cutovers.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    assert request.support_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+    # Ownership moves back to CRM before the poll runs.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.material_request.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    client = _FakeERPClient(
+        status_outcomes=[{"request_id": "SHOULD-NOT-HAPPEN", "status": "issued"}]
+    )
+    result = material_sync.refresh_material_request_statuses(db_session, client=client)
+
+    assert client.status_calls == []
+    assert result["skipped_not_owned"] == 1
+    db_session.refresh(request)
+    assert request.support_reference is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.sent.value
+
+
 def test_refresh_skips_unsynced_and_terminal_requests(db_session):
     # Not synced yet (no erp id) → excluded.
     unsynced = _make_approved_request(db_session, crm_work_order_id="wo-a")

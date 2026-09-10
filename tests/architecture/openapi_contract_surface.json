@@ -4627,6 +4627,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/manager/team-map/{technician_id}/location-detail": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:technician_id!",
+    "query:stale_after_seconds"
+   ],
+   "request": null,
+   "responses": {
+    "200": "d3beb2e54301",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/manager/technicians": {
    "params": [
     "header:authorization",
@@ -19388,7 +19401,7 @@
   "CustomerDefaultsResponse": "c0892eba5f8c",
   "CustomerDeviceCommandKind": "cb81f2ec8d71",
   "CustomerDeviceCommandOutcomeRead": "010e7587a7ae",
-  "CustomerDeviceCommandStatus": "e7911f4fdc39",
+  "CustomerDeviceCommandStatus": "57eb3ad93c5a",
   "CustomerExperienceAcceptRequest": "0e8608e2743a",
   "CustomerExperienceAttentionRequest": "870e7a93b7e7",
   "CustomerExperienceHandoffRead": "53183f1817a1",
@@ -19545,6 +19558,7 @@
   "FieldLinkBudgetRead": "0fe4def40cc4",
   "FieldLiveMapFeed": "048a87551489",
   "FieldLiveMapPosition": "ae257e574bcc",
+  "FieldLiveMapTechnicianDetail": "bf1e0e8c76ef",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",
@@ -19969,9 +19983,9 @@
   "ListResponse_WorkOrderAssignmentQueueRead_": "09219459d168",
   "ListResponse_WorkOrderHeaderRead_": "31c7a849dee1",
   "ListResponse_WorkqueueItemRead_": "69d754624d9b",
-  "LocationIngestResponse": "8671fb4c8950",
+  "LocationIngestResponse": "7a40e5e95bcc",
   "LocationPingBatch": "37a9a0a02de5",
-  "LocationPingInput": "cbc5ccd3d7b4",
+  "LocationPingInput": "5484be538ca7",
   "LocationSharingUpdate": "c6465626ff15",
   "LoginRequest": "6c0d177cb17d",
   "LoginResponse": "66d2d92d7c0a",

@@ -476,7 +476,11 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
 
     assert yaml.safe_load(workflow)
     assert "on:\n  workflow_dispatch:" in workflow
-    assert "ref: main" in workflow
+    # The authorizing checkout is pinned to the dispatched commit, not the
+    # moving branch tip -- see test_promotion_pins_the_authorizing_checkout_
+    # to_the_dispatched_commit for the full pin/canary/reachability-reproof
+    # assertions.
+    assert "ref: ${{ github.sha }}" in workflow
     assert 'for (const workflowName of ["CI", "Mobile CI"])' in workflow
     assert "git merge-base --is-ancestor" in workflow
     assert "authorize-production" in workflow
@@ -488,12 +492,35 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
     assert "run.head_repository.full_name !== context.repo.repo" not in workflow
     assert "docker buildx imagetools create" in workflow
     assert "--prefer-index=false" in workflow
-    assert "Version alias not moved" in workflow
-    assert "production authorization remains bound to $IMAGE_DIGEST" in workflow
     assert "production-authorization-${{ steps.release.outputs.sha }}" in workflow
     assert "docker/build-push-action" not in workflow
     assert "docker build " not in workflow
     assert "self-hosted" not in workflow
+
+
+def test_a_disagreeing_version_alias_fails_the_promotion_step() -> None:
+    """A `:X.Y.Z` tag that already points elsewhere than `latest` must hard-fail
+    the alias step, not merely warn — a disagreeing alias is a release-integrity
+    problem, not a cosmetic one (nearby verification loop uses the same
+    `echo ... >&2; exit 1` convention)."""
+
+    workflow = _read(".github/workflows/release-promotion.yml")
+
+    assert "::warning title=Version alias not moved::" not in workflow
+
+    match = re.search(
+        r'if \[ "\$existing_digest" = "\$IMAGE_DIGEST" \]; then\n'
+        r".*?\n"
+        r"            else\n"
+        r"(.*?)"
+        r"\n            fi",
+        workflow,
+        re.DOTALL,
+    )
+    assert match, "release-promotion.yml must guard a mismatched version alias"
+    mismatch_branch = match.group(1)
+    assert "exit 1" in mismatch_branch
+    assert ">&2" in mismatch_branch
 
 
 def test_promotion_separates_the_authorizing_main_from_the_staged_release() -> None:
@@ -532,6 +559,118 @@ def test_promotion_separates_the_authorizing_main_from_the_staged_release() -> N
     # Both identities reach the typed document.
     assert "--authorization-main-revision" in workflow
     assert "--source-revision-is-ancestor" in workflow
+
+
+def test_promotion_pins_the_authorizing_checkout_to_the_dispatched_commit() -> None:
+    """A merge landing during the human approval wait must not rebind authorization.
+
+    `authorize-and-promote` carries a job-level `environment: production`
+    approval gate, so every step in the job -- including its checkout -- runs
+    AFTER the human approval, not before. Checking out `ref: main` therefore
+    resolved to whatever main was AFTER the wait, not what was approved. This
+    reproduced live in production on 2026-09-09: a promotion entered its
+    approval wait, a PR merged during the wait, and the resulting
+    authorization document was bound to a commit nobody had approved --
+    caught one stage later by production-deploy.yml's verify step, after GHCR
+    aliases had already been mutated. The fix pins the checkout to
+    `github.sha` (the exact commit dispatched, frozen before the approval
+    wait, matching what production-deploy.yml separately checks), asserts
+    that pin holds as a canary, and re-proves reachability -- not equality --
+    against main's live tip immediately before the first GHCR-mutating step.
+    """
+
+    workflow = _read(".github/workflows/release-promotion.yml")
+
+    # The checkout no longer floats to whatever main is once the approval
+    # gate releases the job. (The YAML `ref:` line, not a comment mentioning
+    # the retired value -- this workflow's own comments cite `ref: main` by
+    # name to explain why it changed.)
+    assert "\n          ref: ${{ github.sha }}\n" in workflow
+    assert "\n          ref: main\n" not in workflow
+
+    # The pin-assertion canary: if github.sha and the checked-out HEAD ever
+    # diverge, fail loudly and closed here, before any side effect.
+    assert 'test "$authorization_main_sha" = "$GITHUB_SHA"' in workflow
+    assert "is not the dispatched commit" in workflow
+
+    # The reachability re-proof step: re-fetches main's live tip AFTER the
+    # approval wait and re-checks ancestry (not equality, so a routine advance
+    # of main during the wait stays informational, not a failure), and it must
+    # run before anything that mutates GHCR.
+    assert "git fetch --no-tags origin main" in workflow
+    assert 'current_main_sha="$(git rev-parse FETCH_HEAD)"' in workflow
+    assert 'git merge-base --is-ancestor "$STAGED_SHA" "$current_main_sha"' in workflow
+    assert "no longer an ancestor of main's current tip" in workflow
+    assert "::notice title=main advanced during the approval window" in workflow
+
+    reproof_index = workflow.index("Re-prove staged reachability")
+    buildx_index = workflow.index("Set up Buildx")
+    ghcr_login_index = workflow.index("Log in to GHCR")
+    imagetools_index = workflow.index("docker buildx imagetools create")
+    assert reproof_index < buildx_index < ghcr_login_index < imagetools_index
+
+    # The ordering assertion above is text-position only: a future
+    # `continue-on-error: true` or a step-level `if:` on the authorizing job
+    # would let a mutating step run even after a fail-closed check "failed",
+    # while every assertion above still passes. Guard that directly.
+    job_start = workflow.index("authorize-and-promote:")
+    job_body = workflow[
+        job_start : workflow.index("\njobs:", job_start)
+        if "\njobs:" in workflow[job_start:]
+        else len(workflow)
+    ]
+    assert "continue-on-error" not in job_body
+    assert "\n        if:" not in job_body
+
+
+def test_release_freeze_gate_documents_its_merge_time_limitation_accurately() -> None:
+    """The freeze gate's known-limitation comment must name the real blockers.
+
+    A prior draft of this comment blamed `ci.yml` and `version-bump-pr.yml`
+    for blocking merge-queue adoption; `ci.yml` already carries `merge_group:`
+    support (enforced by test_ci_workflow_contract.py) and is not the
+    blocker. The actual pull_request-only required-context workflows are
+    version-impact.yml and e2e-gate.yml. A future engineer evaluating merge
+    queue adoption must not be misled by a stale/incorrect premise on a
+    permanent, otherwise-unguarded documented limitation.
+    """
+
+    workflow = _read(".github/workflows/release-freeze-gate.yml")
+
+    assert "KNOWN LIMITATION" in workflow
+    assert "cached at the PR's" in workflow
+    assert "version-impact.yml" in workflow
+    assert "e2e-gate.yml" in workflow
+    # The corrected comment must not re-blame ci.yml for the merge-queue gap.
+    limitation = workflow[workflow.index("KNOWN LIMITATION") : workflow.index("on:")]
+    assert "`ci.yml`\n# (" not in limitation
+
+
+def test_production_deploy_binds_to_the_exact_digest_it_was_handed() -> None:
+    """The on-host anti-rollback gate's own authorization read is bound to its inputs.
+
+    `production-deploy.yml`'s `verify` job already binds
+    `--expected-authorization-run-id`/`--expected-authorization-main-revision`
+    (there is no `--expected-source-revision` flag anywhere in this repo --
+    that CLI argument is dead surface). `deploy_production.sh`'s own
+    `verify-production` call previously bound neither. In the automated path
+    this closes a regression guard rather than a live gap today (DIGEST and
+    AUTHORIZATION_RUN_ID both trace back to the same authorization.json the
+    check reads), but it also protects the documented hand-invocation path on
+    the host, where no such derivation guarantee exists.
+    """
+
+    adapter = _read("scripts/deploy_production.sh")
+
+    assert "verify-production" in adapter
+    assert '--expected-image-digest "${DIGEST}"' in adapter
+    assert '--expected-authorization-run-id "${AUTHORIZATION_RUN_ID}"' in adapter
+    # Bound before the gate's own verification call, not merely present
+    # somewhere later in the script.
+    gate = adapter.index("# --- Anti-rollback gate")
+    verify_call_index = adapter.index('--expected-image-digest "${DIGEST}"')
+    gate_end = adapter.index("# --- End anti-rollback gate")
+    assert gate < verify_call_index < gate_end
 
 
 def test_production_deploy_does_not_treat_head_sha_as_the_release_revision() -> None:
@@ -692,6 +831,71 @@ def test_runbook_keeps_the_delete_branch_on_merge_lesson() -> None:
     assert "not at its own former head" in runbook
 
 
+def test_promotion_and_deploy_refuse_a_rerun_of_the_approval_gated_job() -> None:
+    """A rerun after a partial failure must not re-enter the approval gate.
+
+    `authorize-and-promote` moves GHCR aliases and `deploy` mutates the live
+    production host, both after a human approval -- exactly the shape two
+    other production-gated workflows in this repo
+    (infrastructure-reconcile-apply.yml, legacy-image-pin-bootstrap-apply.yml)
+    already refuse a second attempt of. Neither `release-promotion.yml` nor
+    `production-deploy.yml` had this refusal; this proves it is present and
+    runs before the first mutating action in each job.
+    """
+
+    promotion = _read(".github/workflows/release-promotion.yml")
+    deploy_workflow = _read(".github/workflows/production-deploy.yml")
+
+    refusal_marker = 'process.env.RUN_ATTEMPT !== "1"'
+    assert refusal_marker in promotion
+    assert refusal_marker in deploy_workflow
+    assert "reruns are not admissible" in promotion
+    assert "reruns are not admissible" in deploy_workflow
+
+    # In release-promotion.yml the guard must be the FIRST step of
+    # authorize-and-promote -- before its own checkout, and long before the
+    # GHCR-mutating "Attach production aliases without rebuilding" step.
+    promotion_job = promotion[promotion.index("  authorize-and-promote:\n") :]
+    guard_index = promotion_job.index(refusal_marker)
+    checkout_index = promotion_job.index("Checkout current protected main")
+    alias_index = promotion_job.index("Attach production aliases without rebuilding")
+    assert guard_index < checkout_index < alias_index
+
+    # In production-deploy.yml the guard belongs to `deploy`, not `verify`:
+    # `verify` carries no `environment:` gate and is read-only, so it stays
+    # freely re-runnable. The guard must precede deploy's own checkout and the
+    # actual host-mutating "Deploy authorized digest" step.
+    deploy_job = deploy_workflow[deploy_workflow.index("  deploy:\n") :]
+    guard_index = deploy_job.index(refusal_marker)
+    checkout_index = deploy_job.index("Checkout authorized staged release")
+    deploy_step_index = deploy_job.index("Deploy authorized digest")
+    assert guard_index < checkout_index < deploy_step_index
+
+    verify_job = deploy_workflow[
+        deploy_workflow.index("  verify:\n") : deploy_workflow.index("  deploy:\n")
+    ]
+    assert refusal_marker not in verify_job
+    assert "environment:" not in verify_job
+
+
+def test_release_candidate_stays_reruns_admissible() -> None:
+    """`release-candidate.yml` must NOT gain this guard.
+
+    PR #3048 made a stalled candidate build safely resumable by re-running the
+    same workflow (4-state build/reuse/conflict reconciliation) specifically
+    so a rerun after a flaky post-push verification failure recovers instead
+    of being permanently refused. Copy-pasting the run-attempt guard here
+    would silently defeat that fix, so this is an explicit negative
+    assertion, not merely an absence noticed by accident.
+    """
+
+    workflow = _read(".github/workflows/release-candidate.yml")
+
+    assert 'process.env.RUN_ATTEMPT !== "1"' not in workflow
+    assert "RUN_ATTEMPT" not in workflow
+    assert "reruns are not admissible" not in workflow
+
+
 def test_hotfixes_have_no_pipeline_shortcut_left() -> None:
     """`dev-first:override` was the escape hatch; removing the gate removes it.
 
@@ -710,3 +914,49 @@ def test_hotfixes_have_no_pipeline_shortcut_left() -> None:
     assert "dev-first:override" not in guidance
     for path in RELEASE_CHAIN:
         assert "dev-first" not in _read(path)
+
+
+def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> None:
+    """A `vX.Y.Z` tag is the release-identity oracle (rule 27): its peeled
+    commit must genuinely be the release it names. Re-running on the commit
+    that already carries the tag stays a no-op; an existing tag pointing at
+    ANY other commit must fail the workflow rather than exit 0."""
+
+    workflow = _read(".github/workflows/version-tag.yml")
+
+    assert yaml.safe_load(workflow)
+    assert 'if git rev-parse "$TAG" >/dev/null 2>&1; then' in workflow
+
+    match = re.search(
+        r'if git rev-parse "\$TAG" >/dev/null 2>&1; then\n(.*?)\n          fi',
+        workflow,
+        re.DOTALL,
+    )
+    assert match, "version-tag.yml must guard the already-exists branch"
+    existing_tag_branch = match.group(1)
+
+    # Peeled commit comparison, not just tag existence.
+    assert "$TAG^{commit}" in existing_tag_branch
+    assert "git rev-parse HEAD" in existing_tag_branch
+    assert "existing_commit" in existing_tag_branch
+    assert "current_commit" in existing_tag_branch
+
+    # Matching commit: idempotent no-op.
+    assert 'if [ "$existing_commit" = "$current_commit" ]; then' in existing_tag_branch
+    assert "exit 0" in existing_tag_branch
+
+    # Mismatched commit: hard failure, not a silent exit 0.
+    lines = existing_tag_branch.splitlines()
+    match_block_start = next(
+        i
+        for i, line in enumerate(lines)
+        if '$existing_commit" = "$current_commit"' in line
+    )
+    match_block_end = next(
+        i
+        for i, line in enumerate(lines[match_block_start:], match_block_start)
+        if line.strip() == "fi"
+    )
+    after_match_block = "\n".join(lines[match_block_end + 1 :])
+    assert "exit 1" in after_match_block
+    assert "exit 0" not in after_match_block

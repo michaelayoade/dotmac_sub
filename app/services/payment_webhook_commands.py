@@ -112,10 +112,13 @@ _PAYSTACK_DISPUTE_EVENT_TYPES: frozenset[str] = frozenset(
 # ever adds one, `reference`) can equal the ORIGINAL charge's `charge.success`
 # reference. An unscoped identity would make the inbox's tamper-collision
 # detector treat the refund as a mismatched duplicate of the original charge
-# receipt and quarantine the whole installation. `charge.success` (and every
-# other already-live event identity, including Flutterwave's) keeps its
+# receipt and quarantine the whole installation. `charge.success` keeps its
 # existing unscoped format below, unchanged, so Paystack's retries of an
-# already-processed event still resolve to the same receipt.
+# already-processed event still resolve to the same receipt. Flutterwave's
+# `charge.completed` identity is separately event-scoped below for a
+# structurally different reason (multiple genuine transaction attempts
+# sharing one merchant-supplied `tx_ref`, not an event-type collision); see
+# `identify_verified_payment_webhook`'s Flutterwave branch.
 _PAYSTACK_EVENT_SCOPED_IDENTITY_TYPES: frozenset[str] = (
     _PAYSTACK_REFUND_EVENT_TYPES | _PAYSTACK_DISPUTE_EVENT_TYPES
 )
@@ -169,6 +172,16 @@ class PaymentWebhookReceiptIdentity:
     provider: PaymentWebhookProvider
     provider_event_id: str
     event_type: str
+    # Prior, now-retired identity string the inbox should ALSO recognize as
+    # "already processed" -- but only on an exact `payload_digest` match (see
+    # `inbox.receive_verified`). Populated only when a provider's identity
+    # CONSTRUCTION changed while it already had live receipts under the old
+    # format (Flutterwave's `charge.completed`, moving off the collision-prone
+    # bare `tx_ref`); `None` for every identity format that was never live
+    # under a different shape. Exactly one legacy alias, never a collection --
+    # `inbox.receive_verified` treats this as a narrow, bounded migration aid,
+    # not an open-ended alternate identity namespace.
+    legacy_provider_event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,9 +355,47 @@ def identify_verified_payment_webhook(
             provider_event_id=f"{provider.value}-{event_type}-{own_id}",
             event_type=event_type,
         )
-    reference_field = (
-        "reference" if provider is PaymentWebhookProvider.PAYSTACK else "tx_ref"
-    )
+    if provider is PaymentWebhookProvider.FLUTTERWAVE:
+        # `tx_ref` is Flutterwave's MERCHANT-supplied reference and Flutterwave
+        # explicitly permits it to repeat across multiple transaction ATTEMPTS
+        # on the same checkout (e.g. a failed attempt followed by a successful
+        # retry). Using it as the receipt identity (the prior format, below,
+        # kept only as a legacy alias) made every retry collide with the
+        # earlier attempt's receipt and get quarantined as tampering. `data.id`
+        # is Flutterwave's own provider-generated per-attempt id, already
+        # trusted elsewhere in this codebase as the per-attempt identity
+        # (required on a successful settlement, used as
+        # `PaymentProviderEvent.external_id`, which is itself unique per
+        # provider -- see `uq_payment_provider_events_external_id`). Confirmed
+        # against Flutterwave's webhook documentation
+        # (https://developer.flutterwave.com/v3.0/docs/webhooks) and checkout
+        # retry behavior
+        # (https://developer.flutterwave.com/v3.0/docs/flutterwave-standard-1):
+        # `data.id` is present on BOTH successful and failed `charge.completed`
+        # deliveries, so it is REQUIRED here, not merely preferred. There is
+        # deliberately no `data.flw_ref` fallback: that fallback was an
+        # unverified assumption in an earlier draft of this fix and has been
+        # removed rather than kept as an unconfirmed escape hatch -- a
+        # payload missing `data.id` is a hard reject, never a silent
+        # downgrade to a different, unverified field, and never a fall-back
+        # to `tx_ref`, which would silently reintroduce this exact bug.
+        own_id = str(data.get("id") or "").strip()
+        if not own_id:
+            raise _error(
+                "payload_invalid",
+                "Payment webhook omitted its provider event identity",
+                provider=provider.value,
+            )
+        tx_ref = str(data.get("tx_ref") or "").strip()
+        legacy_id = f"{provider.value}-{tx_ref}" if tx_ref else None
+        return PaymentWebhookReceiptIdentity(
+            provider=provider,
+            provider_event_id=f"{provider.value}-{event_type}-{own_id}",
+            event_type=event_type,
+            legacy_provider_event_id=legacy_id,
+        )
+
+    reference_field = "reference"
     identity = str(data.get(reference_field) or data.get("id") or "").strip()
     if not identity:
         raise _error(
@@ -710,8 +761,19 @@ def _prepare_payment_webhook(
             topup_intent=topup_intent,
         )
     if settlement.status != PaymentStatus.succeeded:
+        # A failed attempt now gets its own independently-persisted receipt
+        # (it is no longer collapsed into the same identity as a later
+        # successful retry -- see the Flutterwave identity fix above), so it
+        # must record `provider_reference` (the `tx_ref`) itself, or a failed
+        # attempt with no reference couldn't be correlated back to its
+        # checkout. Previously this branch dropped it; only the succeeded path
+        # below set it.
         return _PreparedPaymentWebhook(
-            ingest=replace(ingest, observed_payment_status=settlement.status),
+            ingest=replace(
+                ingest,
+                observed_payment_status=settlement.status,
+                provider_reference=settlement.reference,
+            ),
             settlement=settlement,
             topup_intent=topup_intent,
         )

@@ -1272,3 +1272,17 @@ def observe_webhook_event(
 
 def record_inbound_dedup_suppressed(channel: str | None) -> None:
     SUB_INBOUND_DEDUP_SUPPRESSED_TOTAL.labels(channel=str(channel or "unknown")).inc()
+
+
+CUSTOMER_DEVICE_COMMAND_REFUSALS_TOTAL = Counter(
+    "customer_device_command_refusals_total",
+    "Customer self-service device command refusals by command kind and "
+    "stable adapter-facing code",
+    ["command", "code"],
+)
+
+
+def record_customer_device_command_refusal(*, command: str, code: str) -> None:
+    CUSTOMER_DEVICE_COMMAND_REFUSALS_TOTAL.labels(
+        command=str(command), code=str(code)
+    ).inc()

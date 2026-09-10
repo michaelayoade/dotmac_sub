@@ -188,6 +188,7 @@ def test_material_writeback_failure_is_not_swallowed(monkeypatch):
 
     row = MagicMock(spec=FieldErpSyncEvent)
     row.flow = FieldErpSyncFlow.material_request.value
+    row.status = FieldErpSyncStatus.accepted.value
 
     def fail_writeback(*args, **kwargs):
         raise RuntimeError("projection failed")

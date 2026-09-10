@@ -327,17 +327,62 @@ void main() {
     expect(find.text('Team location'), findsNothing);
   });
 
-  testWidgets('check in unlocks Shift and enables mobile location sharing', (
+  testWidgets(
+    'check in immediately goes on shift and enables location sharing',
+    (tester) async {
+      final calls = <({bool enabled, ShiftState shift})>[];
+      final attendance = _FakeAttendanceRepository();
+      final locationService = LocationPingService(
+        location: FakeLocation(null),
+        poster: (_) async => true,
+        sharingUpdater: ({required enabled, required shift}) async {
+          calls.add((enabled: enabled, shift: shift));
+          return true;
+        },
+      );
+
+      await tester.pumpWidget(
+        _app(
+          locationPingService: locationService,
+          attendanceRepository: attendance,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Location sharing'), findsOneWidget);
+      expect(find.text('Check In'), findsOneWidget);
+      expect(find.text('Check Out'), findsOneWidget);
+      expect(find.text('Break'), findsNothing);
+      expect(find.text('Off'), findsNothing);
+
+      await tester.tap(find.text('On shift'));
+      await tester.pumpAndSettle();
+      expect(calls, isEmpty);
+
+      await tester.tap(find.text('Check In'));
+      await tester.pumpAndSettle();
+      expect(attendance.punches, [AttendanceAction.checkIn]);
+      expect(locationService.shift, ShiftState.onShift);
+      expect(calls.single.enabled, isTrue);
+      expect(calls.single.shift, ShiftState.onShift);
+      expect(
+        find.text('On shift · sharing location with dispatch.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('failed automatic sharing can be retried from On shift', (
     tester,
   ) async {
-    final calls = <({bool enabled, ShiftState shift})>[];
+    var attempts = 0;
     final attendance = _FakeAttendanceRepository();
     final locationService = LocationPingService(
       location: FakeLocation(null),
       poster: (_) async => true,
       sharingUpdater: ({required enabled, required shift}) async {
-        calls.add((enabled: enabled, shift: shift));
-        return true;
+        attempts += 1;
+        return attempts > 1;
       },
     );
 
@@ -349,26 +394,23 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Location sharing'), findsOneWidget);
-    expect(find.text('Check In'), findsOneWidget);
-    expect(find.text('Check Out'), findsOneWidget);
-    expect(find.text('Break'), findsNothing);
-    expect(find.text('Off'), findsNothing);
-
-    await tester.tap(find.text('Shift'));
-    await tester.pumpAndSettle();
-    expect(calls, isEmpty);
-
     await tester.tap(find.text('Check In'));
     await tester.pumpAndSettle();
-    expect(attendance.punches, [AttendanceAction.checkIn]);
 
-    await tester.tap(find.text('Shift'));
+    expect(attempts, 1);
+    expect(locationService.shift, ShiftState.offShift);
+    expect(
+      find.text(
+        'Checked in · location sharing could not start. Tap On shift to retry.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('On shift'));
     await tester.pumpAndSettle();
 
+    expect(attempts, 2);
     expect(locationService.shift, ShiftState.onShift);
-    expect(calls.single.enabled, isTrue);
-    expect(calls.single.shift, ShiftState.onShift);
   });
 
   testWidgets('restores server location sharing when the app starts', (
@@ -406,7 +448,7 @@ void main() {
     expect(find.text('Enable location'), findsNWidgets(2));
     expect(
       find.text(
-        'Location must be turned on and allowed before you can check in or start Shift.',
+        'Location must be turned on and allowed before you can check in and share your location.',
       ),
       findsOneWidget,
     );

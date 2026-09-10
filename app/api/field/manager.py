@@ -20,6 +20,8 @@ from app.schemas.field import (
     FieldExpenseRequestRead,
     FieldLiveMapFeed,
     FieldLiveMapFeedQuery,
+    FieldLiveMapTechnicianDetail,
+    FieldLiveMapTechnicianDetailQuery,
     FieldManagerExpenseRejectRequest,
     FieldManagerJob,
     FieldManagerJobAssignRequest,
@@ -227,6 +229,29 @@ def field_manager_team_map(
             limit=limit,
         ),
     )
+
+
+@router.get(
+    "/team-map/{technician_id}/location-detail",
+    response_model=FieldLiveMapTechnicianDetail,
+)
+def field_manager_team_map_technician_detail(
+    technician_id: UUID,
+    stale_after_seconds: int = Query(default=120, ge=15, le=3600),
+    auth: dict = Depends(_team_map_read),
+    db: Session = Depends(get_db),
+) -> FieldLiveMapTechnicianDetail:
+    """Resolve the selected sharing technician's latest location detail."""
+    detail = field_maps_service.get_technician_detail(
+        db=db,
+        query=FieldLiveMapTechnicianDetailQuery(
+            technician_id=technician_id,
+            stale_after_seconds=stale_after_seconds,
+        ),
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Technician location unavailable")
+    return detail
 
 
 @router.get("/technicians/satisfaction", response_model=TechnicianSatisfactionResponse)
