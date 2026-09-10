@@ -462,7 +462,16 @@ def reconcile_ont(
                         observed_surfaces=_surfaces_observed(olt_result, acs_result),
                         olt_read_status=olt_result.status,
                     )
-                if plan.actions:
+                if plan.actions or plan.drifts:
+                    # ``plan.actions`` empty does NOT mean "no drift" — a
+                    # non-repairable drift (e.g. a service port mismatched at
+                    # its allocated index) can be recorded with no
+                    # corresponding action and no ``olt_wait_reason``. Gating
+                    # on drift, not action count, mirrors the write path's own
+                    # gate (``verify_debt = verify_plan.drifts + ...`` below)
+                    # so a readback pass can never claim convergence, and
+                    # therefore can never clear ``out_of_sync``, while
+                    # unrelated drift remains on record.
                     return _finalise(
                         db,
                         ont,

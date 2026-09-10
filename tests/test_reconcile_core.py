@@ -728,6 +728,89 @@ def test_readback_only_never_reaches_apply_plan_even_with_genuine_drift(
     assert apply_plan_calls == []
     assert result.success is False
     assert result.failure is not None
+    # Pin down the SPECIFIC gate that fired — not just "some failure" — so
+    # this can't accidentally pass because an unrelated gate (e.g.
+    # ``_plan_wait_failure``) fired first instead of the one this test is
+    # meant to prove.
+    assert result.failure.reason is ReconcileFailureReason.VERIFICATION_MISMATCH
+    assert result.failure.evidence.get("readback_pending") is True
+    assert "acs:wifi_ssid" in result.failure.evidence.get("drift_fields", [])
+
+
+def test_readback_only_never_reports_verified_with_unrelated_unrepairable_olt_drift(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """Required-fix regression test: ``plan.actions`` empty does NOT mean "no
+    drift". A service port sitting at its allocated index with the WRONG
+    VLAN (Astra Bug 2 shape — see ``test_wrong_vlan_at_the_desired_index_is_
+    drift`` in ``tests/test_reconcile_planner.py``) is recorded as
+    unrepairable ``Drift`` with NO corresponding action and NO
+    ``olt_wait_reason``. Before the fix, the readback-only success branch
+    only checked ``plan.actions`` and reported this ONT ``verified``/
+    ``synced`` with the drift silently dropped. The gate must be drift-based,
+    matching the write path's own ``verify_debt`` gate.
+    """
+    desired = _make_desired(ont)
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.desired_from_ont_unit",
+        lambda db, target_ont: desired,
+    )
+
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_olt_read_with_mismatched_mgmt_port(
+        adapter, desired_state, *, deadline=None
+    ):
+        return ReadResult(
+            status="present",
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=4000,
+                olt_rx_dbm=-28.0,
+                olt_tx_dbm=2.0,
+                olt_temperature_c=40,
+                olt_description=desired_state.description,
+                olt_mgmt_ip=desired_state.mgmt_ip,
+                olt_mgmt_vlan=desired_state.mgmt_vlan,
+                olt_line_profile_id=desired_state.line_profile_id,
+                olt_service_profile_id=desired_state.service_profile_id,
+                olt_service_ports=(
+                    # Sits at the allocated mgmt index (23) but the WRONG
+                    # VLAN — unrepairable drift, no action, no wait reason.
+                    {"index": 23, "vlan_id": 999, "gem_index": 2, "state": "up"},
+                    {
+                        "index": desired_state.wan_service_port_index,
+                        "vlan_id": desired_state.wan_vlan,
+                        "gem_index": desired_state.wan_gem_index,
+                        "state": "up",
+                    },
+                ),
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_olt_read_with_mismatched_mgmt_port,
+    )
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert result.success is False
+    assert any(
+        drift.field == "olt_service_ports[mgmt]" and not drift.repairable
+        for drift in result.drift_after
+    )
 
 
 def test_write_mode_reaches_apply_plan_for_the_same_drift(

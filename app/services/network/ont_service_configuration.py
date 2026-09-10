@@ -1586,7 +1586,56 @@ def _execution_locked(
             waiting_reason=prior_waiting_reason,
             result=result,
         )
-        if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+        if command.force_readback_only and (readback_pending or lan_cr_pending):
+            # A readback-only verification (``verify_ont_service_configuration_
+            # readback``) must never auto re-dispatch. The retry loop below
+            # re-stages ``ont_service_config_apply_v1`` with a ``verify:N``
+            # dispatch key, which only STAYS readback-only because
+            # ``_ont_service_config_invocation`` parses that key into
+            # ``verification_attempt`` and this function's own
+            # ``readback_only`` check honours it — a flag check deep in
+            # shared dispatch code, exactly the shape this command was built
+            # to avoid relying on structurally. It also carries no
+            # ``explicit_repair`` marker, so that re-entry runs in
+            # ``mode="sync"`` while the ONT is still ``out_of_sync``, gets
+            # refused by the ``BLOCKED_OUT_OF_SYNC`` guard ~30s later, and
+            # overwrites this accurate "still not converged" diagnosis with a
+            # misleading one. Report the mismatch directly instead; an
+            # operator or scheduler re-runs the verify command explicitly.
+            head.phase = OntServiceConfigurationPhase.failed
+            revision.phase = OntServiceConfigurationPhase.failed
+            head.failure_code = "verification_mismatch"
+            head.failure_message = failure_message
+            head.waiting_reason = None
+            network_operations.mark_failed(
+                db,
+                str(operation.id),
+                failure_message,
+                output_payload={
+                    "configuration_head_id": str(head.id),
+                    "configuration_revision": revision.revision,
+                    "phase": OntServiceConfigurationPhase.failed.value,
+                    "failure_code": "verification_mismatch",
+                    "verification": "still_unverified",
+                },
+            )
+            _record_execution_event(
+                db,
+                ont=ont,
+                assignment=assignment,
+                head=head,
+                revision=revision,
+                operation_id=operation.id,
+                phase=OntServiceConfigurationPhase.failed,
+                message=failure_message,
+                success=False,
+            )
+            phase = OntServiceConfigurationPhase.failed
+            message = (
+                "still_unverified: readback did not converge. Re-run "
+                "verification once the device has informed again."
+            )
+        elif readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
             revision.phase = OntServiceConfigurationPhase.readback_pending
