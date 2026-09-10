@@ -10,6 +10,8 @@ import '../../app/theme.dart';
 import '../../app/status_presentation.dart';
 import '../../app/widgets/primary_action_button.dart';
 import '../../core/offline/draft_store.dart';
+import '../jobs/job_models.dart';
+import '../jobs/jobs_providers.dart';
 import '../manager/manager_providers.dart';
 import 'expense_models.dart';
 import 'expenses_providers.dart';
@@ -647,7 +649,6 @@ class _NewExpenseRequestScreenState
     extends ConsumerState<NewExpenseRequestScreen> {
   final _purpose = TextEditingController();
   final _notes = TextEditingController();
-  final _workOrderId = TextEditingController();
   final _projectId = TextEditingController();
   final _ticketId = TextEditingController();
   final _categoryCode = TextEditingController();
@@ -658,6 +659,7 @@ class _NewExpenseRequestScreenState
   final _accountNumber = TextEditingController();
   final _beneficiaryName = TextEditingController();
   final String _clientRef = const Uuid().v4();
+  String _workOrderId = '';
   DateTime _expenseDate = DateTime.now();
   ExpenseCategory? _selectedCategory;
   ExpenseApprover? _selectedApprover;
@@ -673,7 +675,7 @@ class _NewExpenseRequestScreenState
   @override
   void initState() {
     super.initState();
-    _workOrderId.text = widget.initialWorkOrderId ?? '';
+    _workOrderId = widget.initialWorkOrderId ?? '';
     _projectId.text = widget.initialProjectId ?? '';
     _ticketId.text = widget.initialTicketId ?? '';
     Future.microtask(_loadDraft);
@@ -693,7 +695,6 @@ class _NewExpenseRequestScreenState
   void dispose() {
     _purpose.dispose();
     _notes.dispose();
-    _workOrderId.dispose();
     _projectId.dispose();
     _ticketId.dispose();
     _categoryCode.dispose();
@@ -784,7 +785,7 @@ class _NewExpenseRequestScreenState
     setState(() {
       _purpose.text = draft['purpose'] as String? ?? '';
       _notes.text = draft['notes'] as String? ?? '';
-      _workOrderId.text =
+      _workOrderId =
           widget.initialWorkOrderId ?? draft['work_order_id'] as String? ?? '';
       _projectId.text =
           widget.initialProjectId ?? draft['project_id'] as String? ?? '';
@@ -810,7 +811,7 @@ class _NewExpenseRequestScreenState
             'purpose': _purpose.text,
             'expense_date': DateFormat('yyyy-MM-dd').format(_expenseDate),
             'notes': _notes.text,
-            'work_order_id': _workOrderId.text,
+            'work_order_id': _workOrderId,
             'project_id': _projectId.text,
             'ticket_id': _ticketId.text,
             'items': _items.map(_expenseDraftItemJson).toList(),
@@ -823,11 +824,94 @@ class _NewExpenseRequestScreenState
     ).showSnackBar(const SnackBar(content: Text('Draft saved')));
   }
 
+  Widget _workOrderSelector(AsyncValue<JobList> workOrders) {
+    return workOrders.when(
+      data: (list) {
+        final seen = <String>{};
+        final jobs = [
+          for (final job in list.jobs)
+            if (job.id.trim().isNotEmpty && seen.add(job.id)) job,
+        ];
+        JobSummary? selected;
+        for (final job in jobs) {
+          if (job.id == _workOrderId) {
+            selected = job;
+            break;
+          }
+        }
+        final savedSelectionIsUnavailable =
+            _workOrderId.isNotEmpty && selected == null;
+        if (jobs.isEmpty) {
+          return _WorkOrderAvailability(
+            message: 'No assigned work orders are available.',
+            onRetry: () => ref.invalidate(allAssignedJobsProvider),
+          );
+        }
+        return Semantics(
+          button: true,
+          child: InkWell(
+            key: const Key('expense-work-order'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: _saving
+                ? null
+                : () async {
+                    final picked = await showModalBottomSheet<JobSummary>(
+                      context: context,
+                      isScrollControlled: true,
+                      useSafeArea: true,
+                      builder: (context) => _WorkOrderPickerSheet(
+                        jobs: jobs,
+                        selectedId: selected?.id,
+                      ),
+                    );
+                    if (!mounted || picked == null) return;
+                    setState(() {
+                      _workOrderId = picked.id;
+                      _submitError = '';
+                    });
+                  },
+            child: InputDecorator(
+              isEmpty: selected == null,
+              decoration: InputDecoration(
+                labelText: 'Work order',
+                helperText: selected == null
+                    ? list.fromCache
+                          ? 'Choose from your saved assigned work orders.'
+                          : 'Choose from your assigned work orders.'
+                    : '${selected.id} · ${selected.statusPresentation.label}',
+                errorText: savedSelectionIsUnavailable
+                    ? 'This saved work order is no longer assigned. Choose another.'
+                    : null,
+                suffixIcon: const Icon(Icons.unfold_more_rounded),
+              ),
+              child: Text(
+                selected?.title ?? 'Select a work order',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: selected == null
+                    ? TextStyle(color: Theme.of(context).hintColor)
+                    : null,
+              ),
+            ),
+          ),
+        );
+      },
+      loading: () => const _WorkOrderAvailability(
+        message: 'Loading assigned work orders…',
+        loading: true,
+      ),
+      error: (_, _) => _WorkOrderAvailability(
+        message: 'Could not load assigned work orders.',
+        onRetry: () => ref.invalidate(allAssignedJobsProvider),
+      ),
+    );
+  }
+
   Future<void> _pickReceipt(ImageSource source) async {
-    final workOrderId = _workOrderId.text.trim();
+    final workOrderId = _workOrderId.trim();
     if (workOrderId.isEmpty) {
       setState(
-        () => _lineError = 'Enter a work order ID before uploading a receipt.',
+        () => _lineError = 'Select a work order before uploading a receipt.',
       );
       return;
     }
@@ -902,6 +986,26 @@ class _NewExpenseRequestScreenState
       setState(() => _submitError = 'Purpose is required.');
       return;
     }
+    final workOrderId = _workOrderId.trim();
+    if (workOrderId.isEmpty) {
+      setState(() => _submitError = 'Select a work order.');
+      return;
+    }
+    if (widget.initialWorkOrderId == null) {
+      final assigned = ref.read(allAssignedJobsProvider).asData?.value.jobs;
+      if (assigned == null) {
+        setState(
+          () => _submitError = 'Wait for your assigned work orders to load.',
+        );
+        return;
+      }
+      if (!assigned.any((job) => job.id == workOrderId)) {
+        setState(
+          () => _submitError = 'Select one of your assigned work orders.',
+        );
+        return;
+      }
+    }
     if (_selectedApprover == null) {
       setState(() => _submitError = 'Select an expense approver.');
       return;
@@ -931,7 +1035,7 @@ class _NewExpenseRequestScreenState
             clientRef: _clientRef,
             expenseDate: DateFormat('yyyy-MM-dd').format(_expenseDate),
             notes: _notes.text,
-            workOrderId: _workOrderId.text,
+            workOrderId: workOrderId,
             projectId: _projectId.text,
             ticketId: _ticketId.text,
             items: _items,
@@ -988,6 +1092,9 @@ class _NewExpenseRequestScreenState
     final categories = ref.watch(expenseCategoriesProvider);
     final vendors = ref.watch(expenseVendorsProvider);
     final formContext = ref.watch(expenseFormContextProvider);
+    final assignedWorkOrders = widget.initialWorkOrderId == null
+        ? ref.watch(allAssignedJobsProvider)
+        : null;
     final total = _items.fold<double>(0, (sum, item) => sum + item.amount);
     return Scaffold(
       appBar: AppBar(title: const Text('New expense request')),
@@ -1022,10 +1129,7 @@ class _NewExpenseRequestScreenState
               decoration: const InputDecoration(labelText: 'Linked work order'),
             ),
           ] else ...[
-            TextField(
-              controller: _workOrderId,
-              decoration: const InputDecoration(labelText: 'Work order ID'),
-            ),
+            _workOrderSelector(assignedWorkOrders!),
           ],
           const SizedBox(height: 12),
           if (widget.initialProjectId != null)
@@ -1357,6 +1461,173 @@ class _NewExpenseRequestScreenState
                 onPressed: _saving ? null : _saveDraft,
                 icon: const Icon(Icons.save_outlined),
                 label: const Text('Save draft'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkOrderAvailability extends StatelessWidget {
+  const _WorkOrderAvailability({
+    required this.message,
+    this.loading = false,
+    this.onRetry,
+  });
+
+  final String message;
+  final bool loading;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InputDecorator(
+          isEmpty: true,
+          decoration: const InputDecoration(labelText: 'Work order'),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(color: Theme.of(context).hintColor),
+                ),
+              ),
+              if (loading) ...[
+                const SizedBox(width: 12),
+                const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (onRetry != null)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _WorkOrderPickerSheet extends StatefulWidget {
+  const _WorkOrderPickerSheet({required this.jobs, this.selectedId});
+
+  final List<JobSummary> jobs;
+  final String? selectedId;
+
+  @override
+  State<_WorkOrderPickerSheet> createState() => _WorkOrderPickerSheetState();
+}
+
+class _WorkOrderPickerSheetState extends State<_WorkOrderPickerSheet> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _query.trim().toLowerCase();
+    final matches = query.isEmpty
+        ? widget.jobs
+        : widget.jobs
+              .where(
+                (job) =>
+                    job.title.toLowerCase().contains(query) ||
+                    job.id.toLowerCase().contains(query) ||
+                    job.statusPresentation.label.toLowerCase().contains(query),
+              )
+              .toList();
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: FractionallySizedBox(
+        heightFactor: 0.82,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Select work order',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('expense-work-order-search'),
+                controller: _search,
+                autofocus: false,
+                textInputAction: TextInputAction.search,
+                decoration: const InputDecoration(
+                  labelText: 'Search assigned work orders',
+                  prefixIcon: Icon(Icons.search_rounded),
+                ),
+                onChanged: (value) => setState(() => _query = value),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: matches.isEmpty
+                    ? const Center(
+                        child: Text('No matching work orders found.'),
+                      )
+                    : ListView.separated(
+                        itemCount: matches.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final job = matches[index];
+                          final selected = job.id == widget.selectedId;
+                          return ListTile(
+                            key: Key('expense-work-order-option-${job.id}'),
+                            selected: selected,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            title: Text(
+                              job.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              '${job.id} · ${job.statusPresentation.label}',
+                            ),
+                            trailing: selected
+                                ? const Icon(Icons.check_rounded)
+                                : null,
+                            onTap: () => Navigator.of(context).pop(job),
+                          );
+                        },
+                      ),
               ),
             ],
           ),

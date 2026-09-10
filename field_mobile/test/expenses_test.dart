@@ -9,6 +9,8 @@ import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
+import 'package:dotmac_field/features/jobs/job_models.dart';
+import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,6 +39,23 @@ const _testFormContext = ExpenseFormContext(
     beneficiaryName: 'Field Technician',
   ),
 );
+
+JobList _testAssignedJobs() => JobList([
+  JobSummary(
+    id: 'wo-1',
+    title: 'Campus fiber repair',
+    status: 'dispatched',
+    workType: 'repair',
+    priority: 'normal',
+  ),
+  JobSummary(
+    id: 'wo-2',
+    title: 'Library router installation',
+    status: 'scheduled',
+    workType: 'install',
+    priority: 'normal',
+  ),
+]);
 
 void main() {
   late ProviderContainer container;
@@ -527,7 +546,7 @@ void main() {
     expect(find.text('12345678'), findsNothing);
   });
 
-  testWidgets('new expense request validates lines and purpose then submits', (
+  testWidgets('new expense request requires a selected work order', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
@@ -601,6 +620,9 @@ void main() {
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
           ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
           managerExpensesProvider.overrideWith((ref) async {
             managerExpenseLoads += 1;
             return const [];
@@ -620,6 +642,7 @@ void main() {
     expect(find.text('New expense request'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
     expect(find.text('Save draft'), findsOneWidget);
+    expect(find.text('Work order ID'), findsNothing);
     await tester.tap(find.byKey(const Key('expense-approver')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Expense Approver').last);
@@ -654,17 +677,36 @@ void main() {
     expect(find.text('Purpose is required.'), findsOneWidget);
     expect(posted, isNull);
 
-    // With a purpose the request posts and navigates back to the list.
+    // A purpose is not enough without a selected assigned work order.
     await tester.enterText(
       find.byKey(const Key('expense-purpose')),
       'Site logistics',
     );
     await tester.tap(find.text('Submit request'));
+    await tester.pump();
+    expect(find.text('Select a work order.'), findsOneWidget);
+    expect(posted, isNull);
+
+    // Search the assigned-work list, select the matching job, and submit.
+    await tester.ensureVisible(find.byKey(const Key('expense-work-order')));
+    await tester.tap(find.byKey(const Key('expense-work-order')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('expense-work-order-search')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('expense-work-order-search')),
+      'fiber',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Campus fiber repair'), findsOneWidget);
+    expect(find.text('Library router installation'), findsNothing);
+    await tester.tap(find.byKey(const Key('expense-work-order-option-wo-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit request'));
     await tester.pumpAndSettle();
 
     expect(posted, isNotNull);
     expect(posted!['purpose'], 'Site logistics');
-    expect(posted!['work_order_id'], isNull);
+    expect(posted!['work_order_id'], 'wo-1');
     expect(posted!['items'], [
       {
         'category_code': 'TRANSPORT',
@@ -693,6 +735,9 @@ void main() {
           expenseCategoriesProvider.overrideWith((ref) async => const []),
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
+          ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
           ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),
@@ -732,10 +777,22 @@ void main() {
             expenseFormContextProvider.overrideWith(
               (ref) async => _testFormContext,
             ),
+            allAssignedJobsProvider.overrideWith(
+              (ref) async => _testAssignedJobs(),
+            ),
           ],
           child: const MaterialApp(home: NewExpenseRequestScreen()),
         ),
       );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('expense-work-order')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('expense-work-order-search')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView), const Offset(0, -700));
       await tester.pumpAndSettle();
@@ -767,6 +824,9 @@ void main() {
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
           ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),
       ),
@@ -782,6 +842,7 @@ void main() {
       'Diesel',
     );
     await tester.enterText(find.byKey(const Key('expense-amount')), '5000');
+    await tester.ensureVisible(find.byKey(const Key('add-expense-line')));
     await tester.tap(find.byKey(const Key('add-expense-line')));
     await tester.pump();
 
@@ -791,6 +852,7 @@ void main() {
       find.byKey(const Key('expense-receipt-url')),
       'https://receipts.test/fuel.jpg',
     );
+    await tester.ensureVisible(find.byKey(const Key('add-expense-line')));
     await tester.tap(find.byKey(const Key('add-expense-line')));
     await tester.pump();
 

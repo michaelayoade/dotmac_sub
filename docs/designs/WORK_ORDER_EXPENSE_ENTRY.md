@@ -15,6 +15,12 @@ Field/mobile/API callers supply only the typed public ID, which the owner
 resolves under assignment/access rules. Internal database UUIDs, placeholders,
 generic drafts, and standalone expense creation are not accepted.
 
+The Field app never asks a technician to type that public ID. Entry from an
+exact job carries the job identity into a locked field; entry from the Expenses
+tab uses a searchable choice backed by the technician's typed assigned-job
+projection, including its offline cache. The expense owner still revalidates
+the selected work order when the request is submitted.
+
 ## Owners and boundaries
 
 - `ui.work_order_expense_projection` owns the typed form, field errors,
