@@ -23,7 +23,6 @@ from app.models.dispatch import (
     WorkOrderAssignmentQueue,
 )
 from app.models.field_attachment import FieldAttachment
-from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
 from app.models.field_expense import (
     FIELD_EXPENSE_STATUSES,
     FieldExpenseRequest,
@@ -1082,11 +1081,10 @@ def recover_expense_delivery(
 ) -> ExpenseDeliveryRecoveryOutcome:
     """Append one verified replacement for a dead expense delivery."""
 
-    from app.services.dotmac_erp.outbox import enqueue
+    from app.services.backoffice import stage_expense_delivery_recovery
     from app.services.field.expense_recovery import (
         RECOVERY_CONTRACT_VERSION,
         ExpenseDeliveryRecoveryError,
-        _load_recoverable,
         _preview,
     )
 
@@ -1097,48 +1095,31 @@ def recover_expense_delivery(
                 code="operations.expense_requests.recovery_preview_stale",
                 message="Recovery evidence changed; preview it again.",
             )
-        original, request = _load_recoverable(db, command.dead_event_id, lock=False)
-        existing = (
-            db.query(FieldErpSyncEvent)
-            .filter(
-                FieldErpSyncEvent.idempotency_key == preview.replacement_idempotency_key
+        request = db.get(FieldExpenseRequest, preview.expense_request_id)
+        if request is None:
+            raise ExpenseDeliveryRecoveryError(
+                code="operations.expense_requests.recovery_state_invalid",
+                message="The expense recovery evidence is no longer available.",
             )
-            .one_or_none()
+        staged = stage_expense_delivery_recovery(
+            db,
+            dead_event_id=command.dead_event_id,
+            replacement_idempotency_key=preview.replacement_idempotency_key,
+            recovery_contract_version=RECOVERY_CONTRACT_VERSION,
         )
-        replayed = existing is not None
-        replacement = existing
-        if replacement is None:
-            payload = dict(original.payload or {})
-            payload.update(
-                {
-                    "_replaces_event_id": str(original.id),
-                    "_recovery_contract_version": RECOVERY_CONTRACT_VERSION,
-                }
-            )
-            replacement = enqueue(
-                db,
-                flow=FieldErpSyncFlow.expense_claim,
-                entity_type="field_expense_request",
-                entity_id=request.id,
-                idempotency_key=preview.replacement_idempotency_key,
-                payload=payload,
-                isolate=False,
-            )
-            if isinstance(original.erp_response, dict):
-                replacement.erp_response = dict(original.erp_response)
 
         metadata = dict(request.metadata_ or {})
         recoveries = list(metadata.get("expense_delivery_recoveries") or [])
         evidence = {
             "contract_version": RECOVERY_CONTRACT_VERSION,
-            "original_event_id": str(original.id),
-            "replacement_event_id": str(replacement.id),
+            "original_event_id": str(staged.original_event_id),
+            "replacement_event_id": str(staged.replacement_event_id),
             "command_id": str(command.context.command_id),
             "actor": command.context.actor,
             "occurred_at": datetime.now(UTC).isoformat(),
         }
         if not any(
-            item.get("replacement_event_id") == str(replacement.id)
+            item.get("replacement_event_id") == str(staged.replacement_event_id)
             for item in recoveries
             if isinstance(item, dict)
         ):
@@ -1147,10 +1128,10 @@ def recover_expense_delivery(
             request.metadata_ = metadata
         db.flush()
         return ExpenseDeliveryRecoveryOutcome(
-            original_event_id=original.id,
-            replacement_event_id=replacement.id,
-            replacement_idempotency_key=replacement.idempotency_key,
-            replayed=replayed,
+            original_event_id=staged.original_event_id,
+            replacement_event_id=staged.replacement_event_id,
+            replacement_idempotency_key=staged.replacement_idempotency_key,
+            replayed=staged.replayed,
         )
 
     return execute_owner_command(

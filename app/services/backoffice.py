@@ -77,6 +77,16 @@ class BackofficeExpensePaymentView:
     updated_at: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BackofficeExpenseRecoveryStaging:
+    """Provider-neutral evidence for one append-only delivery replacement."""
+
+    original_event_id: UUID
+    replacement_event_id: UUID
+    replacement_idempotency_key: str
+    replayed: bool
+
+
 def expense_payment_projection(
     request: FieldExpenseRequest,
 ) -> BackofficeExpensePaymentView:
@@ -481,6 +491,68 @@ def enqueue_expense_payment(
         status=BackofficeEnqueueStatus.ENQUEUED,
         provider="dotmac.erp",
         event=event,
+    )
+
+
+def stage_expense_delivery_recovery(
+    db: Session,
+    *,
+    dead_event_id: UUID,
+    replacement_idempotency_key: str,
+    recovery_contract_version: str,
+) -> BackofficeExpenseRecoveryStaging:
+    """Append or reuse one replacement for a verified dead expense delivery."""
+
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        FieldErpSyncStatus,
+    )
+    from app.services.dotmac_erp.outbox import enqueue
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense recovery requires the expense request owner")
+    original = db.get(FieldErpSyncEvent, dead_event_id)
+    if (
+        original is None
+        or original.flow != FieldErpSyncFlow.expense_claim.value
+        or original.status != FieldErpSyncStatus.dead.value
+        or str((original.payload or {}).get("_expense_action")) != "release_approved_v2"
+    ):
+        raise BackofficeUnavailableError(
+            "The expense delivery is no longer recoverable"
+        )
+    existing = (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.idempotency_key == replacement_idempotency_key)
+        .one_or_none()
+    )
+    replacement = existing
+    if replacement is None:
+        payload = dict(original.payload or {})
+        payload.update(
+            {
+                "_replaces_event_id": str(original.id),
+                "_recovery_contract_version": recovery_contract_version,
+            }
+        )
+        replacement = enqueue(
+            db,
+            flow=FieldErpSyncFlow.expense_claim,
+            entity_type="field_expense_request",
+            entity_id=original.entity_id,
+            idempotency_key=replacement_idempotency_key,
+            payload=payload,
+            isolate=False,
+        )
+        if isinstance(original.erp_response, dict):
+            replacement.erp_response = dict(original.erp_response)
+    return BackofficeExpenseRecoveryStaging(
+        original_event_id=original.id,
+        replacement_event_id=replacement.id,
+        replacement_idempotency_key=replacement.idempotency_key,
+        replayed=existing is not None,
     )
 
 

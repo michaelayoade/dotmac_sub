@@ -16,12 +16,14 @@ from app.models.field_erp_sync import (
 )
 from app.models.field_expense import FieldExpenseRequest
 from app.services.domain_errors import DomainError
-from app.services.dotmac_erp.client import DotMacERPError
 from app.services.field.expense_requests import (
     resolve_authoritative_expense_category_rules,
     validate_expense_receipt_delivery,
 )
-from app.services.integrations.erp_capability import capability_client
+from app.services.integrations.erp_capability import (
+    ErpCapabilityError,
+    capability_client,
+)
 
 RECOVERY_CONTRACT_VERSION = "expense-delivery-recovery.v1"
 
@@ -87,7 +89,7 @@ def _erp_status(db: Session, request_id: UUID) -> str | None:
     try:
         with capability_client(db) as client:
             observed = client.get_expense_claim_status(str(request_id))
-    except DotMacERPError as exc:
+    except ErpCapabilityError as exc:
         raise ExpenseDeliveryRecoveryError(
             code="operations.expense_requests.recovery_erp_unavailable",
             message="ERP state could not be verified for recovery.",
