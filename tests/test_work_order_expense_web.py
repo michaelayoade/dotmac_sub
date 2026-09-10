@@ -42,6 +42,20 @@ from app.services.field.expense_requests import (
 from app.services.file_storage import FileValidationError
 from app.services.owner_commands import CommandContext
 
+_APPROVER_ERP_ID = uuid4()
+_APPROVER_USER_ID = uuid4()
+
+
+def _approvers():
+    return (
+        expense_web.ExpenseApproverView(
+            erp_employee_id=_APPROVER_ERP_ID,
+            system_user_id=_APPROVER_USER_ID,
+            display_name="Expense Approver",
+            email="approver@example.com",
+        ),
+    )
+
 
 def _user(db_session, name: str) -> SystemUser:
     user = SystemUser(
@@ -165,6 +179,11 @@ def _valid_form(*, amount: str = "2500.00") -> expense_web.WorkOrderExpenseFormI
         expense_date=date.today().isoformat(),
         currency="ngn",
         notes="Customer outage",
+        selected_approver_id=str(_APPROVER_ERP_ID),
+        payment_destination_mode="erp_profile",
+        bank_code="",
+        account_number="",
+        beneficiary_name="",
         lines=(
             expense_web.ExpenseLineFormInput(
                 key="lineone",
@@ -348,12 +367,17 @@ def test_assigned_technician_can_submit_using_public_work_order_identity(db_sess
     profile = TechnicianProfile(
         person_id=user.id,
         system_user_id=user.id,
-        crm_person_id="crm-assigned-tech",
         is_active=True,
     )
     db_session.add(profile)
     work_order = _work_order(db_session, "assigned-field-work-order", assigned=False)
-    work_order.assigned_to_crm_person_id = profile.crm_person_id
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
+            assigned_technician_id=profile.id,
+        )
+    )
     command = _command(
         user,
         work_order,
@@ -404,7 +428,7 @@ def test_assigned_queue_entry_satisfies_assignment_requirement(db_session):
 def test_form_rejects_invalid_or_non_positive_amounts(amount):
     with pytest.raises(expense_web.WorkOrderExpenseFormError) as exc:
         expense_web.validate_work_order_expense_form(
-            _valid_form(amount=amount), category_rules=_rules()
+            _valid_form(amount=amount), category_rules=_rules(), approvers=_approvers()
         )
 
     assert any(error.field == "line.lineone.amount" for error in exc.value.errors)
@@ -418,16 +442,24 @@ def test_form_enforces_zero_lines_category_maximum_and_required_receipt():
         expense_date=empty.expense_date,
         currency=empty.currency,
         notes=empty.notes,
+        selected_approver_id=empty.selected_approver_id,
+        payment_destination_mode=empty.payment_destination_mode,
+        bank_code=empty.bank_code,
+        account_number=empty.account_number,
+        beneficiary_name=empty.beneficiary_name,
         lines=(),
     )
     with pytest.raises(expense_web.WorkOrderExpenseFormError) as zero_exc:
-        expense_web.validate_work_order_expense_form(empty, category_rules=_rules())
+        expense_web.validate_work_order_expense_form(
+            empty, category_rules=_rules(), approvers=_approvers()
+        )
     assert any(error.field == "lines" for error in zero_exc.value.errors)
 
     with pytest.raises(expense_web.WorkOrderExpenseFormError) as policy_exc:
         expense_web.validate_work_order_expense_form(
             _valid_form(amount="2500"),
             category_rules=_rules(receipt=True, maximum="2000"),
+            approvers=_approvers(),
         )
     assert {error.field for error in policy_exc.value.errors} >= {
         "line.lineone.receipt",
@@ -437,7 +469,7 @@ def test_form_enforces_zero_lines_category_maximum_and_required_receipt():
 
 def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
     prepared = expense_web.validate_work_order_expense_form(
-        _valid_form(), category_rules=_rules(receipt=False)
+        _valid_form(), category_rules=_rules(receipt=False), approvers=_approvers()
     )
 
     assert prepared.lines[0].receipt_url is None
@@ -451,6 +483,11 @@ def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
         expense_date=form.expense_date,
         currency=form.currency,
         notes=form.notes,
+        selected_approver_id=form.selected_approver_id,
+        payment_destination_mode="expense_override",
+        bank_code="058",
+        account_number="0123456789",
+        beneficiary_name="Field Technician",
         lines=(
             expense_web.ExpenseLineFormInput(
                 key=line.key,
@@ -466,7 +503,7 @@ def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
     )
 
     prepared_with_url = expense_web.validate_work_order_expense_form(
-        with_url, category_rules=_rules(receipt=True)
+        with_url, category_rules=_rules(receipt=True), approvers=_approvers()
     )
 
     assert prepared_with_url.lines[0].receipt_url == ("https://example.com/receipt.pdf")
@@ -761,6 +798,11 @@ def test_redisplay_preserves_values_and_explicitly_clears_file_input():
         expense_date=form.expense_date,
         currency=form.currency,
         notes=form.notes,
+        selected_approver_id=form.selected_approver_id,
+        payment_destination_mode="expense_override",
+        bank_code="058",
+        account_number="0123456789",
+        beneficiary_name="Field Technician",
         lines=(
             expense_web.ExpenseLineFormInput(
                 key=line.key,
@@ -782,6 +824,8 @@ def test_redisplay_preserves_values_and_explicitly_clears_file_input():
     assert preserved.purpose == form.purpose
     assert preserved.lines[0].amount == form.lines[0].amount
     assert preserved.lines[0].receipt_upload is None
+    assert preserved.account_number == ""
+    assert preserved.beneficiary_name == "Field Technician"
     assert errors[0].field == "line.lineone.receipt"
 
 
@@ -794,6 +838,11 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert "components/forms/csrf_input.html" in expense_form
     assert 'name="work_order_id"' not in expense_form
     assert 'name="client_ref"' in expense_form
+    assert 'name="selected_approver_id"' in expense_form
+    assert 'name="payment_destination_mode"' in expense_form
+    assert 'name="account_number"' in expense_form
+    assert 'autocomplete="off"' in expense_form
+    assert "does not change the technician's ERP profile" in expense_form
     assert "data-expense-line" in expense_form
     assert "data-add-expense-line" in expense_form
     assert "data-remove-expense-line" in expense_form
@@ -834,6 +883,7 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
         "purpose",
         "expense_date",
         "currency",
+        "selected_approver_id",
         "category_code_{{ line.key }}",
         "amount_{{ line.key }}",
         "description_{{ line.key }}",

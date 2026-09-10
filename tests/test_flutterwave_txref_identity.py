@@ -300,6 +300,70 @@ def test_legacy_receipt_with_matching_digest_is_treated_as_a_redelivery(
     assert db_session.query(PaymentProviderEvent).count() == 0
 
 
+def test_legacy_receipt_built_from_bare_id_with_matching_digest_is_a_redelivery(
+    db_session, subscriber, flutterwave_binding
+):
+    """The OLD (pre-fix) legacy identity was built from
+    `data.get("tx_ref") or data.get("id")` -- EITHER field, not `tx_ref`
+    alone. A redelivery of an old-format `charge.completed` event that had no
+    `tx_ref` (so the old system used `data.id` as its identity) must still
+    resolve via the legacy alias to the receipt already recorded under that
+    bare-id format, not be treated as a new event."""
+    _make_provider(db_session)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="600.00", invoice_number="INV-LEGACY-3"
+    )
+    body = _flutterwave_body(
+        tx_ref="",
+        tx_id="50",
+        amount="600.00",
+        status="successful",
+        meta={"invoice_id": str(invoice.id)},
+    )
+    payload = json.loads(body)
+    digest = payload_digest(payload)
+    # The old identity format for a `tx_ref`-less payload: `flutterwave-<id>`.
+    legacy_receipt = IntegrationInbox(
+        installation_id=flutterwave_binding.installation_id,
+        capability_binding_id=flutterwave_binding.id,
+        provider_event_id="flutterwave-50",
+        event_type="charge.completed",
+        payload_digest=digest,
+        headers_json={"provider": "flutterwave"},
+        payload_json=payload,
+        state="processed",
+        attempt_count=1,
+        consequence_json={"status": "ok", "http_status": 200},
+    )
+    db_session.add(legacy_receipt)
+    db_session.commit()
+
+    with patch("app.services.integrations.inbox.quarantine_installation") as quarantine:
+        response = _post_flutterwave(db_session, body)
+
+    quarantine.assert_not_called()
+    assert response.status_code == 200
+    assert db_session.query(IntegrationInbox).count() == 1
+    assert db_session.query(Payment).count() == 0
+    assert db_session.query(PaymentProviderEvent).count() == 0
+
+
+def test_identity_construction_legacy_alias_falls_back_to_id_when_tx_ref_absent():
+    """Unit-level pin for the identity construction itself: with `tx_ref`
+    absent, `legacy_provider_event_id` must fall back to `data.id` -- mirroring
+    the OLD `data.get("tx_ref") or data.get("id")` construction -- rather than
+    being `None`."""
+    identity = identify_verified_payment_webhook(
+        PaymentWebhookProvider.FLUTTERWAVE,
+        {
+            "event": "charge.completed",
+            "data": {"id": "60"},
+        },
+    )
+
+    assert identity.legacy_provider_event_id == "flutterwave-60"
+
+
 def test_legacy_receipt_with_differing_digest_resolves_under_new_identity(
     db_session, subscriber, flutterwave_binding
 ):

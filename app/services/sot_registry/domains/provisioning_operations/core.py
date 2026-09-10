@@ -889,6 +889,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "field expense request submission",
             "field expense request cancellation",
+            "field expense ERP form context",
             "expense receipt staging for submitted claims",
             "field expense approval and ERP delivery staging",
             "dead expense delivery recovery",
@@ -917,7 +918,10 @@ SERVICES: tuple[SOTService, ...] = (
             "separately authorized payment command stages reimbursement initiation, "
             "while ERP remains the payment and settlement authority. The client reference and "
             "normalized fingerprint make retries safe. The vendor picker remains "
-            "read-only and projects active vendor labels for expense entry."
+            "read-only and projects active vendor labels for expense entry. ERP "
+            "owns eligible approvers, bank identity, account verification, and the "
+            "opaque claim-bound destination token. Sub stores no raw account number; "
+            "it owns the selected local approver link and masked expense snapshot."
         ),
         contract=ServiceContract(
             concerns=(
@@ -928,6 +932,8 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical service work-order state",
                         "authenticated requester and work-order access evidence",
                         "ERP-owned expense category rules",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
                         "validated receipt content",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -940,6 +946,15 @@ SERVICES: tuple[SOTService, ...] = (
                         "authenticated requester and work-order access evidence",
                     ),
                     canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense ERP form context",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "authenticated requester and work-order access evidence",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
+                    ),
                 ),
                 ConcernContract(
                     name="expense receipt staging for submitted claims",
@@ -956,6 +971,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical submitted expense request",
+                        "selected expense approver",
                         "ERP-owned expense category rules",
                         "validated receipt content",
                         "expense ERP delivery cutover control",
@@ -1045,6 +1061,34 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="ERP-owned eligible approver observation",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Active ERP employees with an expense-approval permission, "
+                        "matched to one active Sub SystemUser by normalized email"
+                    ),
+                ),
+                AuthorityInput(
+                    name="ERP-verified payment destination token",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Short-lived claim-bound opaque token plus bank name, account "
+                        "last four digits, verified beneficiary, and verification time; "
+                        "the raw account number never crosses into Sub persistence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="selected expense approver",
+                    owner="operations.expense_requests",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "ERP employee identity and exact active Sub SystemUser/email "
+                        "selected when the expense is submitted"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical submitted expense request",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1096,13 +1140,16 @@ SERVICES: tuple[SOTService, ...] = (
                     "Create, submit, optional receipt metadata, and work-order activity "
                     "marking complete in one owner transaction without ERP staging. "
                     "Receipt storage is a flush-only participant. Manager approval "
-                    "locks the request and stages the sole ERP release intent in the "
+                    "requires the selected approver, locks the verified payment "
+                    "snapshot, and stages the sole ERP release intent in the "
                     "same transaction. Rejection and cancellation remain local; payment "
                     "stages a later ordered intent. Previewed recovery locks and "
                     "revalidates before appending linked replacement evidence. "
                     "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
-                    "side-effect free; revision 584 performs the bounded, idempotent "
+                    "side-effect free; ERP form-context and destination-verification "
+                    "queries are also side-effect free. "
+                    "Revision 584 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
@@ -1128,6 +1175,13 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "operations.expense_requests.invalid_request",
+                    "operations.expense_requests.approver_invalid",
+                    "operations.expense_requests.approver_mismatch",
+                    "operations.expense_requests.destination_expired",
+                    "operations.expense_requests.destination_invalid",
+                    "operations.expense_requests.destination_unavailable",
+                    "operations.expense_requests.form_context_unavailable",
+                    "operations.expense_requests.form_context_required",
                     "operations.expense_requests.idempotency_conflict",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
@@ -1151,14 +1205,18 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 mapping_owner="field expense request API adapter",
                 retryable_codes=(
+                    "operations.expense_requests.destination_unavailable",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
+                    "operations.expense_requests.form_context_unavailable",
                 ),
                 fail_closed_on=(
                     "unknown requester or work order",
                     "missing exact staff work-order authorization evidence",
                     "work order without a current technician assignment",
                     "unavailable or invalid ERP category rules",
+                    "unavailable or mismatched ERP approver identity",
+                    "missing, expired, or invalid ERP payment-destination token",
                     "invalid receipt evidence",
                     "ambiguous ERP state during dead-event recovery",
                     "client-reference fingerprint conflict",

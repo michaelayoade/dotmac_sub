@@ -10,7 +10,7 @@ is asserted to send nothing (the inert guarantee).
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -40,9 +40,7 @@ from app.services.field import expense_recovery as expense_recovery_module
 from app.services.field.attachments import ResolvedExpenseReceiptAttachment
 from app.services.field.expense_recovery import (
     PreviewExpenseDeliveryRecovery,
-    RecoverExpenseDelivery,
     preview_expense_delivery_recovery,
-    recover_expense_delivery,
 )
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -51,10 +49,14 @@ from app.services.field.expense_requests import (
     ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
     InitiateFieldExpensePayment,
+    RecoverExpenseDelivery,
     RejectFieldExpenseRequest,
+    SelectedExpenseApprover,
     SubmitFieldExpenseRequest,
+    VerifiedExpenseDestinationInput,
     approve_field_expense_request_command,
     initiate_field_expense_payment_command,
+    recover_expense_delivery,
     reject_field_expense_request_command,
     submit_field_expense_request_command,
 )
@@ -231,6 +233,22 @@ def _make_submitted_request(
         currency="NGN",
         notes="Customer site was missing materials",
         items=tuple(ExpenseRequestLineInput(**item) for item in (items or _items())),
+        selected_approver=SelectedExpenseApprover(
+            erp_employee_id=uuid4(),
+            system_user_id=user.id,
+            display_name=user.display_name,
+            email=user.email,
+        ),
+        payment_destination=VerifiedExpenseDestinationInput(
+            mode="erp_profile",
+            destination_token="verified-expense-destination-token",
+            bank_code="058",
+            bank_name="Example Bank",
+            masked_account_number="******6789",
+            verified_beneficiary_name=user.display_name,
+            verified_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        ),
     )
     db.commit()
     outcome = submit_field_expense_request_command(db, command)
@@ -382,12 +400,17 @@ class _FakeERPClient:
 
 def test_payload_mapping_matches_neutral_erp_contract(db_session):
     request = _make_submitted_request(db_session)
+    request.selected_approver_erp_id = uuid4()
+    request.payment_destination_token = "enc:opaque-destination-token"
     payload = expense_sync.build_expense_claim_payload(request)
 
     assert payload["source_claim_id"] == str(request.id)
     assert payload["purpose"] == "Transport for extra drop cable"
     assert payload["claim_date"] == date.today().isoformat()
     assert payload["requested_by_email"] == request.requested_by_system_user.email
+    assert payload["requested_approver_id"] == str(request.selected_approver_erp_id)
+    assert payload["payment_destination_token"] == "enc:opaque-destination-token"
+    assert "recipient_account_number" not in payload
     # Neutral source references come from retained work-order provenance.
     assert payload["ticket_source_reference"] == "crm-ticket-77"
     assert payload["project_source_reference"] == "crm-project-88"
@@ -422,6 +445,18 @@ def test_eligibility_requires_manager_approval(db_session):
 
     request.status = "draft"
     assert "cannot be synced" in expense_sync.expense_claim_eligibility_error(request)
+
+
+def test_only_selected_approver_can_approve(db_session):
+    request = _make_submitted_request(db_session)
+    selected_approver = _user(db_session, "Selected Approver")
+    request.selected_approver_system_user_id = selected_approver.id
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        _approve(db_session, request)
+
+    assert exc.value.code == "operations.expense_requests.approver_mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -914,11 +949,16 @@ def test_refresh_drains_a_sent_row_that_the_linked_query_could_never_select(
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
     _approve(db_session, request)
-    # Delivered with no terminal decision → sent, no reference on the request.
+    # Simulate a historical sent delivery whose projection write-back was lost.
     outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
     db_session.refresh(request)
-    assert request.expense_claim_reference is None
     row = _outbox_rows(db_session, request)[0]
+    row.status = FieldErpSyncStatus.sent.value
+    row.erp_response = {}
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+    assert request.expense_claim_reference is None
     assert row.status == FieldErpSyncStatus.sent.value
 
     client = _FakeERPClient(
@@ -970,14 +1010,11 @@ def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
     db_session.refresh(request)
     assert result["repaired"] == 1
     assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
-    # No re-emit: submission and approval retain the same two delivery rows.
-    # The submission response is accepted; the empty approval response remains
-    # sent until a later status poll supplies its terminal result.
+    # No re-emit: approval retains the same sole release-delivery row.
     rows = _outbox_rows(db_session, request)
     assert {row.id for row in rows} == row_ids_before
-    assert len(rows) == 2
+    assert len(rows) == 1
     assert sum(row.status == FieldErpSyncStatus.accepted.value for row in rows) == 1
-    assert sum(row.status == FieldErpSyncStatus.sent.value for row in rows) == 1
 
 
 def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_session):
@@ -1018,8 +1055,8 @@ def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_sessi
     db_session.refresh(request)
     assert result["repaired"] == 0
     assert result["processed"] == 0
-    # Both the submission and approval responses are deliberately skipped.
-    assert result["skipped_not_owned"] == 2
+    # The sole approval-release response is deliberately skipped.
+    assert result["skipped_not_owned"] == 1
     # No re-apply happened: the request's own reference is still missing.
     assert request.expense_claim_reference is None
     assert request.expense_claim_status is None
@@ -1039,8 +1076,13 @@ def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_expense_flow(
     _approve(db_session, request)
     outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
     db_session.refresh(request)
-    assert request.expense_claim_reference is None
     row = _outbox_rows(db_session, request)[0]
+    row.status = FieldErpSyncStatus.sent.value
+    row.erp_response = {}
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+    assert request.expense_claim_reference is None
     assert row.status == FieldErpSyncStatus.sent.value
 
     # Ownership moves back to CRM before the poll runs.
@@ -1135,7 +1177,10 @@ def test_diagnostics_reports_raw_count_and_oldest_age_with_no_threshold_flag(
     outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
     db_session.refresh(request)
     row = _outbox_rows(db_session, request)[0]
-    assert row.status == FieldErpSyncStatus.sent.value
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+    assert row.status == FieldErpSyncStatus.accepted.value
     # Backdate well past any plausible threshold — must still be reported
     # plainly, not filtered or flagged.
     row.created_at = datetime.now(UTC) - timedelta(hours=48)
@@ -1158,7 +1203,10 @@ def test_diagnostics_reports_a_fresh_unlinked_row_without_filtering_it(db_sessio
     outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
     db_session.refresh(request)
     row = _outbox_rows(db_session, request)[0]
-    assert row.status == FieldErpSyncStatus.sent.value
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
+    assert row.status == FieldErpSyncStatus.accepted.value
 
     report = outbox.delivered_unlinked_diagnostics(db_session)
 

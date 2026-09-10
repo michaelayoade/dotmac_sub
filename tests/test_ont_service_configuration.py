@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +55,7 @@ from app.services.network.ont_service_configuration import (
     OntConfigurationNextAction,
     OntConfigurationSection,
     RetryOntServiceConfigurationCommand,
+    VerifyOntServiceConfigurationReadbackCommand,
     WanConfigurationChange,
     WifiConfigurationChange,
     configure_customer_wifi,
@@ -63,6 +65,7 @@ from app.services.network.ont_service_configuration import (
     get_ont_service_configuration_eligibility,
     get_ont_service_configuration_projection,
     retry_ont_service_configuration,
+    verify_ont_service_configuration_readback,
 )
 from app.services.network.reconcile.lifecycle import (
     RetireOntReconcileProjectionForInventory,
@@ -1958,3 +1961,471 @@ def test_failed_current_revision_requires_explicit_retry_command(db_session):
         db_session.get(OntServiceConfigurationHead, head_id).latest_operation_id
         == outcome.operation_id
     )
+
+
+# ── VerifyOntServiceConfigurationReadbackCommand ────────────────────────────
+
+
+def _verify_setup(
+    db_session,
+    *,
+    suffix: str,
+    section: OntConfigurationSection = OntConfigurationSection.wifi,
+    desired_change_evidence: dict[str, object] | None = None,
+    fresh_inform: bool = True,
+):
+    ont = OntUnit(serial_number=f"VERIFY-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.failed,
+        suffix=suffix,
+        section=section,
+        desired_change_evidence=desired_change_evidence
+        or {"wifi.ssid": "Auto Computer"},
+    )
+    operation.status = NetworkOperationStatus.failed
+    failed_at = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+    operation.completed_at = failed_at
+    ont.acs_last_inform_at = (
+        failed_at + timedelta(minutes=10)
+        if fresh_inform
+        else failed_at - timedelta(minutes=10)
+    )
+    db_session.flush()
+    # No commit here (unlike earlier helpers that owned their own commit):
+    # ``execute_owner_command`` requires a transaction-free session at
+    # entry, and this ORM session expires instances on commit. Committing
+    # here and then reading ``.id``/``.revision`` back off the returned,
+    # now-expired instances would trigger an implicit SQLAlchemy autobegin
+    # refresh query -- leaving a *new*, unrelated transaction open by the
+    # time a test calls into ``verify_ont_service_configuration_readback``.
+    # Callers capture the plain ids they need and commit themselves,
+    # exactly once, immediately before invoking the owner command.
+    return ont, assignment, head, revision, operation
+
+
+def _verify_command(
+    *, ont_id, head_id, revision_number, failed_operation_id, idempotency_key: str
+) -> VerifyOntServiceConfigurationReadbackCommand:
+    command_id = uuid.uuid4()
+    return VerifyOntServiceConfigurationReadbackCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor="test:operator",
+            scope="network:ont:write",
+            reason="reviewed readback verification of a confirmed-delivered failure",
+            idempotency_key=idempotency_key,
+        ),
+        ont_unit_id=ont_id,
+        expected_head_id=head_id,
+        expected_revision=revision_number,
+        failed_operation_id=failed_operation_id,
+    )
+
+
+def test_verify_rejects_when_head_is_not_failed(db_session):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session, suffix="not-failed"
+    )
+    head.phase = OntServiceConfigurationPhase.queued
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
+    db_session.commit()
+
+    with pytest.raises(DomainError) as excinfo:
+        verify_ont_service_configuration_readback(
+            db_session,
+            _verify_command(
+                ont_id=ont_id,
+                head_id=head_id,
+                revision_number=revision_number,
+                failed_operation_id=operation_id,
+                idempotency_key="verify-not-failed",
+            ),
+        )
+    assert "verification_not_eligible" in str(excinfo.value.code)
+
+
+def test_verify_rejects_operation_id_mismatch(db_session):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session, suffix="mismatch"
+    )
+    other_operation = _operation(db_session, ont, "mismatch-other")
+    ont_id, head_id, revision_number, other_operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        other_operation.id,
+    )
+    db_session.commit()
+
+    with pytest.raises(DomainError) as excinfo:
+        verify_ont_service_configuration_readback(
+            db_session,
+            _verify_command(
+                ont_id=ont_id,
+                head_id=head_id,
+                revision_number=revision_number,
+                failed_operation_id=other_operation_id,
+                idempotency_key="verify-mismatch",
+            ),
+        )
+    assert "verification_operation_mismatch" in str(excinfo.value.code)
+
+
+def test_verify_reports_still_unverified_without_a_fresh_inform(db_session):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session, suffix="stale-inform", fresh_inform=False
+    )
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=operation_id,
+            idempotency_key="verify-stale-inform",
+        ),
+    )
+
+    assert "still_unverified" in outcome.message
+    assert outcome.phase is OntServiceConfigurationPhase.failed
+    # No new operation was created: the referenced failure is untouched.
+    assert (
+        db_session.get(OntServiceConfigurationHead, head_id).latest_operation_id
+        == operation_id
+    )
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(NetworkOperation)
+            .where(NetworkOperation.target_id == ont_id)
+        )
+        == 1
+    )
+
+
+def test_verify_ssid_convergence_marks_verified_through_reconcile(
+    db_session, monkeypatch
+):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session,
+        suffix="converged",
+        section=OntConfigurationSection.wifi,
+        desired_change_evidence={"wifi.ssid": "Auto Computer"},
+    )
+    ont_id, head_id, revision_number = ont.id, head.id, revision.revision
+    failed_operation_id = operation.id
+    db_session.commit()
+
+    # Capture plain values BEFORE the verify call, read back through the
+    # session rather than the identity-mapped ``operation`` instance: a
+    # comparison against ``operation`` itself after the call would be
+    # tautological (``x == x``, always true, proving nothing), and the
+    # pre-flush Python value on ``operation`` is tz-aware while the value
+    # ``db_session.get(...)`` later returns is the DB-normalized (tz-naive)
+    # representation — reading both sides through the session keeps the
+    # comparison meaningful instead of comparing aware to naive.
+    refreshed_operation = db_session.get(NetworkOperation, failed_operation_id)
+    original_completed_at = refreshed_operation.completed_at
+    original_status = refreshed_operation.status
+    original_error = refreshed_operation.error
+    original_output_payload = refreshed_operation.output_payload
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=failed_operation_id,
+            idempotency_key="verify-converged",
+        ),
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.queued
+    new_operation_id = outcome.operation_id
+    assert new_operation_id != failed_operation_id
+    assert (
+        db_session.get(NetworkOperation, new_operation_id).redrive_of_id
+        == failed_operation_id
+    )
+    # The read above expired this session's instances and autobegan a fresh
+    # transaction on top of the completed verify command's own commit; clear
+    # it before the next owner command, which requires a transaction-free
+    # session at entry.
+    db_session.commit()
+
+    reconcile_calls: list[dict[str, object]] = []
+
+    def reconciled(*_args, **kwargs):
+        reconcile_calls.append(kwargs)
+        return SimpleNamespace(
+            success=True,
+            sync_status="synced",
+            drift_after=(),
+            failure=None,
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+
+    execute_outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test readback verification execution",
+                command_id=uuid.uuid4(),
+                correlation_id=new_operation_id,
+                idempotency_key="verify-converged-execute",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=new_operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+            force_readback_only=True,
+        ),
+    )
+
+    assert execute_outcome.phase is OntServiceConfigurationPhase.verified
+    assert reconcile_calls[-1]["readback_only"] is True
+    # The reconcile lifecycle owner decides sync_status; this call proves the
+    # verification path went THROUGH ``reconcile_ont`` rather than assigning
+    # ``OntUnit.sync_status`` itself.
+    assert "lifecycle_binding" in reconcile_calls[-1]
+
+    # The original failed operation is preserved untouched — compared
+    # against plain values captured before the verify call, not the same
+    # identity-mapped ORM instance mutated in place.
+    db_session.expire_all()
+    original = db_session.get(NetworkOperation, failed_operation_id)
+    assert original.status is NetworkOperationStatus.failed
+    assert original.status == original_status
+    assert original.completed_at == original_completed_at
+    assert original.error == original_error
+    assert original.output_payload == original_output_payload
+
+
+def test_verify_residual_drift_reports_failed_not_verified(db_session, monkeypatch):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session,
+        suffix="mismatch-ssid",
+        section=OntConfigurationSection.wifi,
+        desired_change_evidence={"wifi.ssid": "Auto Computer"},
+    )
+    ont_id, head_id, revision_number = ont.id, head.id, revision.revision
+    failed_operation_id = operation.id
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=failed_operation_id,
+            idempotency_key="verify-ssid-mismatch",
+        ),
+    )
+    new_operation_id = outcome.operation_id
+
+    from app.services.network.reconcile import ReconcileFailure, ReconcileFailureReason
+
+    def reconciled(*_args, **kwargs):
+        return SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=(SimpleNamespace(field="wifi_ssid"),),
+            failure=ReconcileFailure(
+                reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
+                message="SSID still does not match.",
+                evidence={},
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+
+    execute_outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test readback verification execution",
+                command_id=uuid.uuid4(),
+                correlation_id=new_operation_id,
+                idempotency_key="verify-ssid-mismatch-execute",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=new_operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+            force_readback_only=True,
+        ),
+    )
+
+    assert execute_outcome.phase is OntServiceConfigurationPhase.failed
+
+
+def test_verify_readback_pending_reports_failed_without_apply_redispatch(
+    db_session, monkeypatch
+):
+    """Required-fix regression test: a readback-only verification that gets
+    ``readback_pending`` evidence must NOT auto re-dispatch
+    ``ont_service_config_apply_v1`` (the shared dispatch key parsing that
+    only keeps that hop readback-only is exactly the "flag deep in shared
+    code" shape this feature was built to avoid depending on) and must not
+    let a later ``BLOCKED_OUT_OF_SYNC`` refusal overwrite this diagnosis.
+    """
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session,
+        suffix="readback-pending",
+        section=OntConfigurationSection.wifi,
+        desired_change_evidence={"wifi.ssid": "Auto Computer"},
+    )
+    ont_id, head_id, revision_number = ont.id, head.id, revision.revision
+    failed_operation_id = operation.id
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=failed_operation_id,
+            idempotency_key="verify-readback-pending",
+        ),
+    )
+    new_operation_id = outcome.operation_id
+
+    from app.services.network.reconcile import ReconcileFailure, ReconcileFailureReason
+
+    def reconciled(*_args, **kwargs):
+        return SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=(SimpleNamespace(field="wifi_ssid"),),
+            failure=ReconcileFailure(
+                reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
+                message="Current revision is still awaiting device readback.",
+                evidence={"readback_pending": True, "drift_fields": ["acs:wifi_ssid"]},
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+
+    execute_outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test readback verification execution",
+                command_id=uuid.uuid4(),
+                correlation_id=new_operation_id,
+                idempotency_key="verify-readback-pending-execute",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=new_operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+            force_readback_only=True,
+        ),
+    )
+
+    assert execute_outcome.phase is OntServiceConfigurationPhase.failed
+    assert "still_unverified" in execute_outcome.message
+    refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
+    assert refreshed_head.failure_code == "verification_mismatch"
+    # No new dispatch was staged for this operation — no ``verify:1`` hop
+    # onto ``ont_service_config_apply_v1``.
+    dispatch_keys = db_session.scalars(
+        select(NetworkOperationDispatch.dispatch_key).where(
+            NetworkOperationDispatch.operation_id == new_operation_id
+        )
+    ).all()
+    assert all(not key.startswith("verify:") for key in dispatch_keys)
+
+
+def test_verify_write_only_password_reports_delivered_unverified(
+    db_session, monkeypatch
+):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session,
+        suffix="wifi-password",
+        section=OntConfigurationSection.wifi,
+        desired_change_evidence={
+            "wifi.ssid": "Auto Computer",
+            "wifi.password": "changed",
+        },
+    )
+    ont_id, head_id, revision_number = ont.id, head.id, revision.revision
+    failed_operation_id = operation.id
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=failed_operation_id,
+            idempotency_key="verify-password",
+        ),
+    )
+    new_operation_id = outcome.operation_id
+
+    def reconciled(*_args, **kwargs):
+        return SimpleNamespace(
+            success=True,
+            sync_status="synced",
+            drift_after=(),
+            failure=None,
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+
+    execute_outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test readback verification execution",
+                command_id=uuid.uuid4(),
+                correlation_id=new_operation_id,
+                idempotency_key="verify-password-execute",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=new_operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+            force_readback_only=True,
+        ),
+    )
+
+    assert execute_outcome.phase is OntServiceConfigurationPhase.delivered_unverified
+    refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
+    assert refreshed_head.failure_code == "wifi_password_write_only_unverifiable"

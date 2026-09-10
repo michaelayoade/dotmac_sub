@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from scripts.release_artifact_contract import (
     WorkflowRunId,
 )
 from scripts.release_candidate_reconciliation import (
+    _DEFINITE_NEGATIVE_PATTERN,
     CandidateConflictReason,
     CandidateMode,
     CandidateProvenanceObservation,
@@ -463,6 +465,15 @@ def test_classify_registry_inspect_error_treats_definite_negative_distinctly() -
         classify_registry_inspect_error("Error: No such manifest: ghcr.io/x@sha256:...")
         is RegistryReadOutcome.NOT_FOUND
     )
+    # `docker buildx imagetools inspect`'s actual "not found" text (confirmed
+    # live against GHCR 2026-09-10, incident behind #3061) -- a genuinely
+    # nonexistent ref, distinct from the two shapes above.
+    assert (
+        classify_registry_inspect_error(
+            "ERROR: ghcr.io/dotmac/app:candidate-abc123: not found"
+        )
+        is RegistryReadOutcome.NOT_FOUND
+    )
     # Near-miss: a transient/unknown error must NOT be misclassified as the
     # definite negative -- it stays ambiguous and retryable.
     assert (
@@ -473,6 +484,50 @@ def test_classify_registry_inspect_error_treats_definite_negative_distinctly() -
         classify_registry_inspect_error("context deadline exceeded")
         is RegistryReadOutcome.AMBIGUOUS
     )
+    # Near-miss: an unrelated error that merely contains the words "not
+    # found" (e.g. a DNS failure) must not be misread as the well-known CLI
+    # shape above -- the third alternative is anchored to the line start.
+    assert (
+        classify_registry_inspect_error(
+            "dial tcp: lookup ghcr.io: no such host, host not found"
+        )
+        is RegistryReadOutcome.AMBIGUOUS
+    )
+
+
+def test_definite_negative_pattern_matches_release_candidate_workflow_exactly() -> None:
+    """The classifier's pattern must never silently drift from the YAML's.
+
+    `release-candidate.yml`'s "Inspect existing candidate tag" step used to
+    recognize only `manifest unknown|no such manifest` as a definite
+    negative; that gap caused two real production release-dispatch failures
+    on 2026-09-10 (#3061) before the workflow's grep was fixed to also
+    recognize `docker buildx imagetools inspect`'s actual
+    `ERROR: <ref>: not found` text. This test reads the workflow file's exact
+    grep pattern and asserts every one of its `|`-separated alternatives is
+    also present in `classify_registry_inspect_error`'s own pattern, so the
+    next person who wires this classifier into a live caller can't silently
+    reintroduce that incident by having the two patterns diverge again.
+    """
+
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/release-candidate.yml"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"grep -qiE '([^']+)'", workflow)
+    assert match is not None, (
+        "release-candidate.yml no longer has a `grep -qiE '...'` "
+        "tag-existence check -- update this test to match its new shape"
+    )
+    yaml_alternatives = match.group(1).split("|")
+    assert yaml_alternatives, "expected at least one alternative in the YAML pattern"
+
+    python_pattern = _DEFINITE_NEGATIVE_PATTERN.pattern
+    for alternative in yaml_alternatives:
+        assert alternative in python_pattern, (
+            f"release-candidate.yml's definite-negative pattern includes "
+            f"{alternative!r}, but _DEFINITE_NEGATIVE_PATTERN does not -- "
+            "the Python classifier has drifted from the workflow's grep"
+        )
 
 
 def test_a_definite_negative_on_tag_existence_is_not_retried_and_builds() -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -18,17 +17,11 @@ from app.models.field_erp_sync import (
 from app.models.field_expense import FieldExpenseRequest
 from app.services.domain_errors import DomainError
 from app.services.dotmac_erp.client import DotMacERPError
-from app.services.dotmac_erp.outbox import enqueue
 from app.services.field.expense_requests import (
     resolve_authoritative_expense_category_rules,
     validate_expense_receipt_delivery,
 )
 from app.services.integrations.erp_capability import capability_client
-from app.services.owner_commands import (
-    CommandContext,
-    OwnerCommandDefinition,
-    execute_owner_command,
-)
 
 RECOVERY_CONTRACT_VERSION = "expense-delivery-recovery.v1"
 
@@ -49,28 +42,6 @@ class ExpenseDeliveryRecoveryPreview:
     replacement_idempotency_key: str
     fingerprint: str
     erp_claim_status: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class RecoverExpenseDelivery:
-    context: CommandContext
-    dead_event_id: UUID
-    preview_fingerprint: str
-
-
-@dataclass(frozen=True, slots=True)
-class ExpenseDeliveryRecoveryOutcome:
-    original_event_id: UUID
-    replacement_event_id: UUID
-    replacement_idempotency_key: str
-    replayed: bool
-
-
-_RECOVER_EXPENSE_DELIVERY = OwnerCommandDefinition(
-    owner="operations.expense_requests",
-    concern="dead expense delivery recovery",
-    name="recover_dead_expense_delivery",
-)
 
 
 def _replacement_key(event: FieldErpSyncEvent) -> str:
@@ -190,79 +161,3 @@ def preview_expense_delivery_recovery(
     query: PreviewExpenseDeliveryRecovery,
 ) -> ExpenseDeliveryRecoveryPreview:
     return _preview(db, query.dead_event_id, lock=False)
-
-
-def recover_expense_delivery(
-    db: Session,
-    *,
-    command: RecoverExpenseDelivery,
-) -> ExpenseDeliveryRecoveryOutcome:
-    def operation() -> ExpenseDeliveryRecoveryOutcome:
-        preview = _preview(db, command.dead_event_id, lock=True)
-        if preview.fingerprint != command.preview_fingerprint:
-            raise ExpenseDeliveryRecoveryError(
-                code="operations.expense_requests.recovery_preview_stale",
-                message="Recovery evidence changed; preview it again.",
-            )
-        original, request = _load_recoverable(db, command.dead_event_id, lock=False)
-        existing = (
-            db.query(FieldErpSyncEvent)
-            .filter(
-                FieldErpSyncEvent.idempotency_key == preview.replacement_idempotency_key
-            )
-            .one_or_none()
-        )
-        replayed = existing is not None
-        replacement = existing
-        if replacement is None:
-            payload = dict(original.payload or {})
-            payload.update(
-                {
-                    "_replaces_event_id": str(original.id),
-                    "_recovery_contract_version": RECOVERY_CONTRACT_VERSION,
-                }
-            )
-            replacement = enqueue(
-                db,
-                flow=FieldErpSyncFlow.expense_claim,
-                entity_type="field_expense_request",
-                entity_id=request.id,
-                idempotency_key=preview.replacement_idempotency_key,
-                payload=payload,
-                isolate=False,
-            )
-            if isinstance(original.erp_response, dict):
-                replacement.erp_response = dict(original.erp_response)
-
-        metadata = dict(request.metadata_ or {})
-        recoveries = list(metadata.get("expense_delivery_recoveries") or [])
-        evidence = {
-            "contract_version": RECOVERY_CONTRACT_VERSION,
-            "original_event_id": str(original.id),
-            "replacement_event_id": str(replacement.id),
-            "command_id": str(command.context.command_id),
-            "actor": command.context.actor,
-            "occurred_at": datetime.now(UTC).isoformat(),
-        }
-        if not any(
-            item.get("replacement_event_id") == str(replacement.id)
-            for item in recoveries
-            if isinstance(item, dict)
-        ):
-            recoveries.append(evidence)
-            metadata["expense_delivery_recoveries"] = recoveries[-100:]
-            request.metadata_ = metadata
-        db.flush()
-        return ExpenseDeliveryRecoveryOutcome(
-            original_event_id=original.id,
-            replacement_event_id=replacement.id,
-            replacement_idempotency_key=replacement.idempotency_key,
-            replayed=replayed,
-        )
-
-    return execute_owner_command(
-        db,
-        definition=_RECOVER_EXPENSE_DELIVERY,
-        context=command.context,
-        operation=operation,
-    )

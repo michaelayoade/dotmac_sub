@@ -51,18 +51,18 @@ from app.services.field.equipment_custody import field_equipment_custody
 from app.services.field.expense_recovery import (
     ExpenseDeliveryRecoveryError,
     PreviewExpenseDeliveryRecovery,
-    RecoverExpenseDelivery,
     preview_expense_delivery_recovery,
-    recover_expense_delivery,
 )
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
     FieldExpenseRequestError,
     InitiateFieldExpensePayment,
+    RecoverExpenseDelivery,
     RejectFieldExpenseRequest,
     approve_field_expense_request_command,
     field_expense_requests,
     initiate_field_expense_payment_command,
+    recover_expense_delivery,
     reject_field_expense_request_command,
 )
 from app.services.field.manager import field_manager
@@ -405,7 +405,11 @@ def field_manager_expenses(
     db: Session = Depends(get_db),
 ):
     items = field_expense_requests.list_all(
-        db, status=status_filter, limit=limit, offset=offset
+        db,
+        status=status_filter,
+        approver_system_user_id=UUID(str(auth["principal_id"])),
+        limit=limit,
+        offset=offset,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 

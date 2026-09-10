@@ -18,7 +18,13 @@ from app.api.field.work_order_compat import resolve_work_order_id
 from app.schemas.common import ListResponse
 from app.schemas.field import (
     FieldAttachmentRead,
+    FieldExpenseApproverRead,
+    FieldExpenseBankRead,
     FieldExpenseCategoryRead,
+    FieldExpenseDestinationRead,
+    FieldExpenseDestinationVerify,
+    FieldExpenseFormContextRead,
+    FieldExpenseProfileDestinationRead,
     FieldExpenseRequestCreate,
     FieldExpenseRequestRead,
     FieldExpenseRequestSubmit,
@@ -26,6 +32,7 @@ from app.schemas.field import (
 )
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
+from app.services.dotmac_erp.expense_form_contracts import ExpenseDestinationMode
 from app.services.field.attachments import field_attachments
 from app.services.field.expense_categories import (
     ExpenseCategoryQueryError,
@@ -37,12 +44,20 @@ from app.services.field.expense_requests import (
     ExpenseRequestLineInput,
     ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
+    GetFieldExpenseFormContext,
     ListFieldExpenseVendors,
+    ResolveFieldExpenseSubmissionContext,
     SubmitFieldExpenseRequest,
+    VerifyFieldExpenseDestination,
     cancel_field_expense_request_command,
     field_expense_requests,
     list_expense_vendors,
+    resolve_field_expense_submission_context,
     submit_field_expense_request_command,
+    verify_field_expense_destination,
+)
+from app.services.field.expense_requests import (
+    get_field_expense_form_context as resolve_field_expense_form_context,
 )
 from app.services.owner_commands import CommandContext
 
@@ -66,7 +81,11 @@ def _expense_command_error(exc: FieldExpenseRequestError) -> HTTPException:
         "requester_not_found"
     ):
         status_code = 404
-    elif exc.code.endswith("invalid_request"):
+    elif exc.code.endswith("_unavailable"):
+        status_code = 503
+    elif exc.code.endswith(
+        ("invalid_request", "approver_invalid", "destination_invalid")
+    ):
         status_code = 422
     else:
         status_code = 409
@@ -113,6 +132,69 @@ def list_field_expense_vendors(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/form-context", response_model=FieldExpenseFormContextRead)
+def get_field_expense_form_context(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> FieldExpenseFormContextRead:
+    try:
+        context = resolve_field_expense_form_context(
+            db=db,
+            query=GetFieldExpenseFormContext(
+                requester_system_user_id=UUID(str(auth["principal_id"]))
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_command_error(exc) from exc
+    return FieldExpenseFormContextRead(
+        approvers=[
+            FieldExpenseApproverRead(
+                erp_employee_id=approver.erp_employee_id,
+                system_user_id=approver.system_user_id,
+                display_name=approver.display_name,
+                email=approver.email,
+            )
+            for approver in context.approvers
+        ],
+        banks=[FieldExpenseBankRead(**bank.model_dump()) for bank in context.banks],
+        profile_destination=FieldExpenseProfileDestinationRead(
+            **context.profile_destination.model_dump()
+        ),
+    )
+
+
+@router.post("/payment-destination/verify", response_model=FieldExpenseDestinationRead)
+def verify_field_expense_payment_destination(
+    payload: FieldExpenseDestinationVerify,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> FieldExpenseDestinationRead:
+    try:
+        result = verify_field_expense_destination(
+            db=db,
+            command=VerifyFieldExpenseDestination(
+                requester_system_user_id=UUID(str(auth["principal_id"])),
+                source_claim_id=payload.source_claim_id,
+                mode=ExpenseDestinationMode(payload.mode),
+                bank_code=payload.bank_code,
+                account_number=payload.account_number,
+                beneficiary_name=payload.beneficiary_name,
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_command_error(exc) from exc
+    return FieldExpenseDestinationRead(
+        destination_token=result.destination_token,
+        mode=result.mode,
+        bank_code=result.bank_code,
+        bank_name=result.bank_name,
+        masked_account_number=result.masked_account_number,
+        verified_beneficiary_name=result.verified_beneficiary_name,
+        verified_at=result.verified_at,
+        expires_at=result.expires_at,
+    )
 
 
 @router.post("/receipts", response_model=FieldAttachmentRead, status_code=201)
@@ -196,6 +278,15 @@ def create_and_submit_field_expense_request(
     db: Session = Depends(get_db),
 ):
     try:
+        submission_context = resolve_field_expense_submission_context(
+            db=db,
+            query=ResolveFieldExpenseSubmissionContext(
+                requester_system_user_id=UUID(str(auth["principal_id"])),
+                selected_approver_erp_id=payload.selected_approver.erp_employee_id,
+                source_claim_id=payload.client_ref,
+                destination_token=payload.payment_destination.destination_token,
+            ),
+        )
         db_session_adapter.release_read_transaction(db)
         return submit_field_expense_request_command(
             db,
@@ -216,6 +307,8 @@ def create_and_submit_field_expense_request(
                     ExpenseRequestLineInput(**item.model_dump())
                     for item in payload.items
                 ),
+                selected_approver=submission_context.selected_approver,
+                payment_destination=submission_context.payment_destination,
             ),
         )
     except FieldExpenseRequestError as exc:

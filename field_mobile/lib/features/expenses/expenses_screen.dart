@@ -10,7 +10,6 @@ import '../../app/theme.dart';
 import '../../app/status_presentation.dart';
 import '../../app/widgets/primary_action_button.dart';
 import '../../core/offline/draft_store.dart';
-import '../execution/execution_controller.dart';
 import '../manager/manager_providers.dart';
 import 'expense_models.dart';
 import 'expenses_providers.dart';
@@ -457,6 +456,28 @@ class _ExpenseErpSummary extends StatelessWidget {
               ].join(' · '),
             ),
           ),
+        if (request.selectedApproverName != null)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.approval_outlined),
+            title: const Text('Expense approver'),
+            subtitle: Text(request.selectedApproverName!),
+          ),
+        if (request.recipientBankName != null)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.account_balance_wallet_outlined),
+            title: const Text('Payment destination'),
+            subtitle: Text(
+              [
+                if (request.verifiedBeneficiaryName != null)
+                  request.verifiedBeneficiaryName!,
+                request.recipientBankName!,
+                if (request.maskedAccountNumber != null)
+                  request.maskedAccountNumber!,
+              ].join(' · '),
+            ),
+          ),
         if (request.erpSyncStatus != null)
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -634,8 +655,14 @@ class _NewExpenseRequestScreenState
   final _amount = TextEditingController();
   final _vendor = TextEditingController();
   final _receiptUrl = TextEditingController();
+  final _accountNumber = TextEditingController();
+  final _beneficiaryName = TextEditingController();
+  final String _clientRef = const Uuid().v4();
   DateTime _expenseDate = DateTime.now();
   ExpenseCategory? _selectedCategory;
+  ExpenseApprover? _selectedApprover;
+  ExpenseBank? _selectedBank;
+  String _destinationMode = 'erp_profile';
   final _items = <ExpenseItemDraft>[];
   bool _saving = false;
   bool _receiptUploading = false;
@@ -650,6 +677,16 @@ class _NewExpenseRequestScreenState
     _projectId.text = widget.initialProjectId ?? '';
     _ticketId.text = widget.initialTicketId ?? '';
     Future.microtask(_loadDraft);
+    Future.microtask(() async {
+      try {
+        final data = await ref.read(expenseFormContextProvider.future);
+        if (mounted && !data.profileDestination.available) {
+          setState(() => _destinationMode = 'expense_override');
+        }
+      } catch (_) {
+        // The visible form-context error owns retry guidance.
+      }
+    });
   }
 
   @override
@@ -664,6 +701,8 @@ class _NewExpenseRequestScreenState
     _amount.dispose();
     _vendor.dispose();
     _receiptUrl.dispose();
+    _accountNumber.dispose();
+    _beneficiaryName.dispose();
     super.dispose();
   }
 
@@ -863,30 +902,41 @@ class _NewExpenseRequestScreenState
       setState(() => _submitError = 'Purpose is required.');
       return;
     }
-    final clientRef = const Uuid().v4();
-    final payload = buildExpenseRequestPayload(
-      purpose: _purpose.text,
-      clientRef: clientRef,
-      expenseDate: DateFormat('yyyy-MM-dd').format(_expenseDate),
-      notes: _notes.text,
-      workOrderId: _workOrderId.text,
-      projectId: _projectId.text,
-      ticketId: _ticketId.text,
-      items: _items,
-    );
+    if (_selectedApprover == null) {
+      setState(() => _submitError = 'Select an expense approver.');
+      return;
+    }
+    if (_destinationMode == 'expense_override' &&
+        (_selectedBank == null ||
+            _accountNumber.text.trim().isEmpty ||
+            _beneficiaryName.text.trim().isEmpty)) {
+      setState(() => _submitError = 'Complete the payment details.');
+      return;
+    }
     setState(() => _saving = true);
     try {
+      final verified = await ref
+          .read(expensesRepositoryProvider)
+          .verifyDestination(
+            sourceClaimId: _clientRef,
+            mode: _destinationMode,
+            bankCode: _selectedBank?.bankCode,
+            accountNumber: _accountNumber.text.trim(),
+            beneficiaryName: _beneficiaryName.text.trim(),
+          );
       final request = await ref
           .read(expensesRepositoryProvider)
           .createRequest(
             purpose: _purpose.text,
-            clientRef: clientRef,
+            clientRef: _clientRef,
             expenseDate: DateFormat('yyyy-MM-dd').format(_expenseDate),
             notes: _notes.text,
             workOrderId: _workOrderId.text,
             projectId: _projectId.text,
             ticketId: _ticketId.text,
             items: _items,
+            selectedApprover: _selectedApprover,
+            paymentDestination: verified,
           );
       _invalidateExpenseProjections(ref);
       try {
@@ -905,27 +955,12 @@ class _NewExpenseRequestScreenState
     } on DioException catch (error) {
       if (!mounted) return;
       if (error.response == null) {
-        await ref
-            .read(syncServiceProvider)
-            .enqueue(
-              kind: 'expense_request',
-              clientRef: clientRef,
-              payload: payload,
-            );
-        _invalidateExpenseProjections(ref);
-        try {
-          await ref.read(expenseRequestsProvider.future);
-        } catch (_) {
-          // The queued request remains authoritative local history even if
-          // the remote list cannot be refreshed while offline.
-        }
-        await ref.read(draftStoreProvider).delete(expenseRequestDraftId);
-        ref.invalidate(expenseRequestDraftsProvider);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Expense request queued for sync')),
-        );
-        context.go('/expenses');
+        const message =
+            'Connect to the internet to verify payment details and submit. You can save the non-sensitive draft.';
+        setState(() => _submitError = message);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(message)));
         return;
       }
       final message = _expenseErrorMessage(
@@ -952,6 +987,7 @@ class _NewExpenseRequestScreenState
   Widget build(BuildContext context) {
     final categories = ref.watch(expenseCategoriesProvider);
     final vendors = ref.watch(expenseVendorsProvider);
+    final formContext = ref.watch(expenseFormContextProvider);
     final total = _items.fold<double>(0, (sum, item) => sum + item.amount);
     return Scaffold(
       appBar: AppBar(title: const Text('New expense request')),
@@ -1010,6 +1046,98 @@ class _NewExpenseRequestScreenState
             controller: _notes,
             decoration: const InputDecoration(labelText: 'Notes'),
             maxLines: 3,
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Approval and payment destination',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          formContext.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (_, _) => const Text(
+              'Expense approvers and bank details are unavailable. Pull to retry.',
+            ),
+            data: (data) => Column(
+              children: [
+                DropdownButtonFormField<ExpenseApprover>(
+                  key: const Key('expense-approver'),
+                  initialValue: _selectedApprover,
+                  decoration: const InputDecoration(
+                    labelText: 'Expense approver',
+                  ),
+                  items: [
+                    for (final approver in data.approvers)
+                      DropdownMenuItem(
+                        value: approver,
+                        child: Text(approver.displayName),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _selectedApprover = value),
+                ),
+                RadioListTile<String>(
+                  value: 'erp_profile',
+                  // ignore: deprecated_member_use
+                  groupValue: _destinationMode,
+                  // ignore: deprecated_member_use
+                  onChanged: data.profileDestination.available
+                      ? (value) => setState(() => _destinationMode = value!)
+                      : null,
+                  title: const Text('Use ERP profile'),
+                  subtitle: Text(
+                    data.profileDestination.available
+                        ? '${data.profileDestination.beneficiaryName} · ${data.profileDestination.bankName} · ${data.profileDestination.maskedAccountNumber}'
+                        : 'ERP bank profile is incomplete.',
+                  ),
+                ),
+                RadioListTile<String>(
+                  value: 'expense_override',
+                  // ignore: deprecated_member_use
+                  groupValue: _destinationMode,
+                  // ignore: deprecated_member_use
+                  onChanged: (value) =>
+                      setState(() => _destinationMode = value!),
+                  title: const Text('Use different details for this expense'),
+                  subtitle: const Text(
+                    'This will not change your ERP profile.',
+                  ),
+                ),
+                if (_destinationMode == 'expense_override') ...[
+                  DropdownButtonFormField<ExpenseBank>(
+                    key: const Key('expense-bank'),
+                    initialValue: _selectedBank,
+                    decoration: const InputDecoration(labelText: 'Bank'),
+                    items: [
+                      for (final bank in data.banks)
+                        DropdownMenuItem(
+                          value: bank,
+                          child: Text(bank.bankName),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() => _selectedBank = value),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('expense-account-number'),
+                    controller: _accountNumber,
+                    keyboardType: TextInputType.number,
+                    autofillHints: const [],
+                    decoration: const InputDecoration(
+                      labelText: 'Account number',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('expense-beneficiary-name'),
+                    controller: _beneficiaryName,
+                    decoration: const InputDecoration(
+                      labelText: 'Beneficiary name',
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
           const SizedBox(height: 24),
           Text('Add expenses', style: Theme.of(context).textTheme.titleMedium),

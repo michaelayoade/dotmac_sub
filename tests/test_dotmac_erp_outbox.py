@@ -67,7 +67,10 @@ def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
     db.flush()
 
 
-def _enqueue(db, *, flow=FieldErpSyncFlow.expense_claim, key=None) -> FieldErpSyncEvent:
+_GENERIC_DELIVERY_FLOW = FieldErpSyncFlow.material_request
+
+
+def _enqueue(db, *, flow=_GENERIC_DELIVERY_FLOW, key=None) -> FieldErpSyncEvent:
     return outbox.enqueue(
         db,
         flow=flow,
@@ -205,7 +208,7 @@ def test_material_writeback_failure_is_not_swallowed(monkeypatch):
 
 
 def test_deliver_accepted_marks_row_and_sends_idempotency_key(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     client = FakeERPClient([{"claim_id": "ERP-123", "status": "approved"}])
 
@@ -218,12 +221,12 @@ def test_deliver_accepted_marks_row_and_sends_idempotency_key(db_session):
     assert event.erp_response == {"claim_id": "ERP-123", "status": "approved"}
     # The stored idempotency key is what gets sent (safe re-delivery).
     assert client.posts[0]["idempotency_key"] == event.idempotency_key
-    assert client.posts[0]["path"] == "/api/v1/sync/sub/expense-claims"
+    assert client.posts[0]["path"] == "/api/v1/sync/sub/material-requests"
     assert result.accepted == 1 and result.processed == 1
 
 
 def test_deliver_rejected_is_terminal(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     client = FakeERPClient([{"status": "rejected", "rejection_reason": "over budget"}])
 
@@ -235,7 +238,7 @@ def test_deliver_rejected_is_terminal(db_session):
 
 
 def test_deliver_2xx_without_decision_marks_sent(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     client = FakeERPClient([{"received": True}])  # no id, no terminal status
 
@@ -247,7 +250,7 @@ def test_deliver_2xx_without_decision_marks_sent(db_session):
 
 
 def test_deliver_transient_error_stays_pending_for_retry(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     client = FakeERPClient([DotMacERPTransientError("ERP 503")])
 
@@ -261,7 +264,7 @@ def test_deliver_transient_error_stays_pending_for_retry(db_session):
 
 
 def test_deliver_transient_dead_letters_at_attempt_budget(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     event.attempts = 7  # one below the default budget of 8
     db_session.flush()
@@ -276,7 +279,7 @@ def test_deliver_transient_dead_letters_at_attempt_budget(db_session):
 
 
 def test_deliver_permanent_error_dead_letters_immediately(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     event = _enqueue(db_session)
     client = FakeERPClient([DotMacERPError("422 validation", status_code=422)])
 
@@ -304,8 +307,8 @@ def test_deliver_refuses_flow_sub_does_not_own(db_session):
 
 
 def test_deliver_mixed_ownership_only_sends_owned_flow(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
-    owned = _enqueue(db_session, flow=FieldErpSyncFlow.expense_claim)
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
+    owned = _enqueue(db_session)
     not_owned = _enqueue(db_session, flow=FieldErpSyncFlow.purchase_order)
     client = FakeERPClient([{"claim_id": "ERP-9"}])
 
@@ -320,7 +323,7 @@ def test_deliver_mixed_ownership_only_sends_owned_flow(db_session):
 
 
 def test_deliver_no_pending_rows_is_noop(db_session):
-    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    _seed_ownership(db_session, sub_flows={_GENERIC_DELIVERY_FLOW.value})
     client = FakeERPClient([])
     result = outbox.deliver_pending(db_session, client=client)
     assert result.processed == 0 and result.skipped_not_owned == 0
@@ -436,8 +439,9 @@ def test_erp_manifest_owns_config_secrets_and_capabilities():
         "erp.staff_access.webhook.v1",
         "workforce.attendance.read.v1",
         "workforce.attendance.punch.v1",
+        "erp.expense.form_context.v1",
     }
-    assert definition.version == "1.3.0"
+    assert definition.version == "1.4.0"
 
 
 def test_erp_capability_fails_closed_without_binding(db_session):

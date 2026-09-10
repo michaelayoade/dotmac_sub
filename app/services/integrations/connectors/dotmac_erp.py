@@ -15,6 +15,7 @@ from app.services.dotmac_erp.client import (
 )
 from app.services.dotmac_erp.operational_contracts import ErpOperationalSyncCommand
 from app.services.integrations.backoffice_contracts import (
+    ERP_EXPENSE_FORM_CAPABILITY,
     ERP_INVENTORY_CAPABILITY,
     ERP_OPERATIONAL_SYNC_CAPABILITY,
     ERP_OUTBOX_CAPABILITY,
@@ -207,16 +208,22 @@ class DotmacErpRunner:
                 "attendance_today",
                 "attendance_check_in",
                 "attendance_check_out",
+                "list_expense_approvers",
+                "list_expense_banks",
+                "get_expense_profile_destination",
+                "verify_expense_destination",
+                "inspect_expense_destination",
             }
             else "unsupported_operation"
         )
         client = None
         try:
-            is_attendance = envelope.capability_id in {
+            is_interactive = envelope.capability_id in {
                 WORKFORCE_ATTENDANCE_READ_CAPABILITY,
                 WORKFORCE_ATTENDANCE_PUNCH_CAPABILITY,
+                ERP_EXPENSE_FORM_CAPABILITY,
             }
-            client = self._client(config, secret_material, interactive=is_attendance)
+            client = self._client(config, secret_material, interactive=is_interactive)
             if envelope.capability_id == ERP_OPERATIONAL_SYNC_CAPABILITY:
                 # This feed holds its admission lock until the remote result.
                 # Keep the whole transport budget bounded under the normal
@@ -370,6 +377,23 @@ class DotmacErpRunner:
                         str(params["source_invoice_id"])
                     )
                 }
+        elif capability_id == ERP_EXPENSE_FORM_CAPABILITY:
+            if action == "list_expense_approvers":
+                return {
+                    "items": client.get_expense_approvers(
+                        str(params["requested_by_email"])
+                    )
+                }
+            if action == "list_expense_banks":
+                return {"items": client.get_expense_banks()}
+            if action == "get_expense_profile_destination":
+                return client.get_expense_profile_destination(
+                    str(params["requested_by_email"])
+                )
+            if action == "verify_expense_destination":
+                return client.verify_expense_destination(dict(params["payload"]))
+            if action == "inspect_expense_destination":
+                return client.inspect_expense_destination(dict(params["payload"]))
         elif capability_id == ERP_INVENTORY_CAPABILITY:
             if action == "list_inventory":
                 return client.list_inventory(**params)

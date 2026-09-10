@@ -386,8 +386,16 @@ def identify_verified_payment_webhook(
                 "Payment webhook omitted its provider event identity",
                 provider=provider.value,
             )
+        # The legacy alias must reproduce BOTH branches of the OLD (pre-fix)
+        # identity construction (`data.get("tx_ref") or data.get("id")`), not
+        # just the `tx_ref` branch -- otherwise a redelivery of an
+        # already-processed, `tx_ref`-less old-format `charge.completed`
+        # event (old systems used `data.id` whenever `tx_ref` was absent)
+        # would fail to match its old receipt via this alias and could be
+        # treated as a new event. `own_id` above is already the resolved
+        # `data.id` value, now the REQUIRED primary identity field.
         tx_ref = str(data.get("tx_ref") or "").strip()
-        legacy_id = f"{provider.value}-{tx_ref}" if tx_ref else None
+        legacy_id = f"{provider.value}-{tx_ref or own_id}"
         return PaymentWebhookReceiptIdentity(
             provider=provider,
             provider_event_id=f"{provider.value}-{event_type}-{own_id}",

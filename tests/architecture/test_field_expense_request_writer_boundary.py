@@ -8,7 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = Path("app/services/field/expense_requests.py")
 PROJECTION_WRITER = Path("app/services/dotmac_erp/expense_sync.py")
-RECOVERY_OWNER = Path("app/services/field/expense_recovery.py")
 EXPENSE_MUTABLE_FIELDS = {
     "status",
     "approved_at",
@@ -89,7 +88,7 @@ def test_field_expense_request_mutations_have_enumerated_owners() -> None:
                 for target in targets
             ):
                 writers.add(relative)
-    assert writers == {OWNER, PROJECTION_WRITER, RECOVERY_OWNER}
+    assert writers == {OWNER, PROJECTION_WRITER}
 
 
 def test_deployed_chain_already_owns_the_non_null_work_order_fk() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -30,7 +30,10 @@ from app.services.field.expense_requests import (
     ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
     ListFieldExpenseVendors,
+    ResolvedFieldExpenseSubmissionContext,
+    SelectedExpenseApprover,
     SubmitFieldExpenseRequest,
+    VerifiedExpenseDestinationInput,
     cancel_field_expense_request_command,
     field_expense_requests,
     list_expense_vendors,
@@ -445,8 +448,9 @@ def test_expense_vendor_picker_lists_active_vendors(db_session):
     ]
 
 
-def test_expense_request_api(db_session, fake_uploads):
+def test_expense_request_api(db_session, fake_uploads, monkeypatch):
     user = _user(db_session)
+    approver = _user(db_session, "Approver")
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     _work_order(db_session, subscriber, crm_work_order_id="wo-expense-api")
@@ -460,6 +464,30 @@ def test_expense_request_api(db_session, fake_uploads):
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[require_user_auth] = lambda: _auth(user)
     client = TestClient(app)
+    client_ref = uuid4()
+    approver_erp_id = uuid4()
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        "app.api.field.expense_requests.resolve_field_expense_submission_context",
+        lambda **_kwargs: ResolvedFieldExpenseSubmissionContext(
+            selected_approver=SelectedExpenseApprover(
+                erp_employee_id=approver_erp_id,
+                system_user_id=approver.id,
+                display_name=approver.display_name,
+                email=approver.email,
+            ),
+            payment_destination=VerifiedExpenseDestinationInput(
+                mode="erp_profile",
+                destination_token="verified-destination-token",
+                bank_code="058",
+                bank_name="Example Bank",
+                masked_account_number="******6789",
+                verified_beneficiary_name=user.display_name,
+                verified_at=now,
+                expires_at=now + timedelta(minutes=10),
+            ),
+        ),
+    )
 
     vendors = client.get("/api/v1/field/expense-requests/vendors?limit=25")
     assert vendors.status_code == 200
@@ -505,10 +533,26 @@ def test_expense_request_api(db_session, fake_uploads):
     created = client.post(
         "/api/v1/field/expense-requests/submit",
         json={
-            "client_ref": str(uuid4()),
+            "client_ref": str(client_ref),
             "work_order_id": "wo-expense-api",
             "purpose": "Transport",
             "currency": "NGN",
+            "selected_approver": {
+                "erp_employee_id": str(approver_erp_id),
+                "system_user_id": str(approver.id),
+                "display_name": approver.display_name,
+                "email": approver.email,
+            },
+            "payment_destination": {
+                "destination_token": "verified-destination-token",
+                "mode": "erp_profile",
+                "bank_code": "058",
+                "bank_name": "Example Bank",
+                "masked_account_number": "******6789",
+                "verified_beneficiary_name": user.display_name,
+                "verified_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=10)).isoformat(),
+            },
             "items": [
                 {
                     "category_code": "transport",
@@ -531,8 +575,11 @@ def test_expense_request_api(db_session, fake_uploads):
     assert db_session.query(FieldExpenseRequest).count() == 1
 
 
-def test_atomic_expense_submission_replays_and_rejects_changed_payload(db_session):
+def test_atomic_expense_submission_replays_and_rejects_changed_payload(
+    db_session, monkeypatch
+):
     user = _user(db_session)
+    approver = _user(db_session, "Approver")
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
     _work_order(db_session, subscriber, crm_work_order_id="wo-expense-atomic")
@@ -544,11 +591,50 @@ def test_atomic_expense_submission_replays_and_rejects_changed_payload(db_sessio
     app.dependency_overrides[require_user_auth] = lambda: _auth(user)
     client = TestClient(app)
     client_ref = str(uuid4())
+    approver_erp_id = uuid4()
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        "app.api.field.expense_requests.resolve_field_expense_submission_context",
+        lambda **_kwargs: ResolvedFieldExpenseSubmissionContext(
+            selected_approver=SelectedExpenseApprover(
+                erp_employee_id=approver_erp_id,
+                system_user_id=approver.id,
+                display_name=approver.display_name,
+                email=approver.email,
+            ),
+            payment_destination=VerifiedExpenseDestinationInput(
+                mode="erp_profile",
+                destination_token="verified-destination-token",
+                bank_code="058",
+                bank_name="Example Bank",
+                masked_account_number="******6789",
+                verified_beneficiary_name=user.display_name,
+                verified_at=now,
+                expires_at=now + timedelta(minutes=10),
+            ),
+        ),
+    )
     payload = {
         "client_ref": client_ref,
         "work_order_id": "wo-expense-atomic",
         "purpose": "Transport",
         "currency": "NGN",
+        "selected_approver": {
+            "erp_employee_id": str(approver_erp_id),
+            "system_user_id": str(approver.id),
+            "display_name": approver.display_name,
+            "email": approver.email,
+        },
+        "payment_destination": {
+            "destination_token": "verified-destination-token",
+            "mode": "erp_profile",
+            "bank_code": "058",
+            "bank_name": "Example Bank",
+            "masked_account_number": "******6789",
+            "verified_beneficiary_name": user.display_name,
+            "verified_at": now.isoformat(),
+            "expires_at": (now + timedelta(minutes=10)).isoformat(),
+        },
         "items": [
             {
                 "category_code": "transport",

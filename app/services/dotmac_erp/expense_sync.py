@@ -132,6 +132,12 @@ def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
         "purpose": request.purpose,
         "claim_date": claim_date,
         "requested_by_email": _requester_email(request),
+        "requested_approver_id": (
+            str(request.selected_approver_erp_id)
+            if request.selected_approver_erp_id
+            else None
+        ),
+        "payment_destination_token": request.payment_destination_token,
         "ticket_source_reference": getattr(mirror, "crm_ticket_id", None),
         "project_source_reference": getattr(mirror, "crm_project_id", None),
         "currency_code": request.currency,
@@ -303,8 +309,33 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
     request.expense_system = PROVIDER
     if erp_id and not request.expense_claim_reference:
         request.expense_claim_reference = str(erp_id)[:120]
+    if erp_id and request.payment_destination_token:
+        # ERP has persisted the encrypted destination snapshot. Retain immutable
+        # outbox evidence, but remove the no-longer-needed token from the source row.
+        request.payment_destination_token = None
     if claim_number:
         request.expense_claim_number = str(claim_number)[:60]
+    approver_id = response.get("requested_approver_id")
+    if approver_id:
+        try:
+            request.selected_approver_erp_id = UUID(str(approver_id))
+        except ValueError:
+            pass
+    approver_name = response.get("requested_approver_name")
+    if approver_name:
+        request.selected_approver_name = str(approver_name)[:200]
+    destination_mode = response.get("payment_destination_mode")
+    if destination_mode in {"erp_profile", "expense_override"}:
+        request.payment_destination_mode = str(destination_mode)
+    bank_name = response.get("recipient_bank_name")
+    if bank_name:
+        request.recipient_bank_name = str(bank_name)[:100]
+    masked_account = response.get("masked_account_number")
+    if masked_account:
+        request.recipient_account_last4 = str(masked_account)[-4:]
+    beneficiary = response.get("verified_beneficiary_name")
+    if beneficiary:
+        request.verified_beneficiary_name = str(beneficiary)[:150]
     _apply_payment_projection(request, response)
     if not claim_status:
         return

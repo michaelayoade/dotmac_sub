@@ -288,11 +288,16 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "becomes available after a technician is assigned and ERP categories "
             "are available."
         ),
+        "Choose the intended approver from ERP's current eligible list.",
+        "Use the masked ERP payment profile or choose different details for this expense, then verify the beneficiary, bank, and account before submitting.",
         "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting. The work-order route supplies the identity and cannot be edited in the form.",
-        "A manager reviews the submitted claim and approves it when the work order, category, and receipt evidence are correct. Approval is the only action that releases the claim to ERP.",
+        "A manager reviews the submitted claim and approves it when the work order, category, receipt, approver, and payment-destination evidence are correct. Approval is the only action that releases the claim to ERP.",
         "Return to the work order to track claim delivery, required receipt delivery, and ERP acceptance separately.",
         notes=(
             "Only your claims appear in this card. Submitted claims create no ERP event while they wait for manager approval.",
+            "Different payment details apply only to this expense and do not change the technician's ERP profile.",
+            "The selected approver alone can approve or reject the submitted expense; ERP remains authoritative for eligibility, account verification, reimbursement, and payment.",
+            "Only masked payment details are displayed. If ERP verification is unavailable or expires, verify again before submitting.",
             "Required uploaded receipts remain private and must reach the ERP claim before delivery is accepted.",
             "A submitted claim is not approved, a sent delivery is not ERP acceptance, and reimbursement and payment remain in ERP.",
         ),

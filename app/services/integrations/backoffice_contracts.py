@@ -15,6 +15,7 @@ ERP_STAFF_ACCESS_RECONCILE_CAPABILITY = "erp.staff_access.reconcile.v1"
 ERP_STAFF_ACCESS_WEBHOOK_CAPABILITY = "erp.staff_access.webhook.v1"
 ERP_OPERATIONAL_SYNC_CAPABILITY = "erp.operational_context.sync.v1"
 ERP_REGULATORY_CAPABILITY = "erp.regulatory.read.v1"
+ERP_EXPENSE_FORM_CAPABILITY = "erp.expense.form_context.v1"
 WORKFORCE_ATTENDANCE_READ_CAPABILITY = "workforce.attendance.read.v1"
 WORKFORCE_ATTENDANCE_PUNCH_CAPABILITY = "workforce.attendance.punch.v1"
 
@@ -48,6 +49,8 @@ class ErpExpenseClaimDraftCommand(BaseModel):
     purpose: str
     claim_date: str
     requested_by_email: str
+    requested_approver_id: UUID | None = None
+    payment_destination_token: str | None = Field(default=None, repr=False)
     ticket_source_reference: str | None = None
     project_source_reference: str | None = None
     currency_code: str

@@ -4234,6 +4234,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/expense-requests/form-context": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": null,
+   "responses": {
+    "200": "c657f5409177",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/expense-requests/vendors": {
    "params": [
     "header:authorization",
@@ -4558,6 +4569,18 @@
    "request": null,
    "responses": {
     "200": "4b475834c8b9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/manager/expenses/deliveries/{event_id}/recovery-preview": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:event_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "e4fd08410238",
     "422": "a11c9d9b2af8"
    }
   },
@@ -14610,6 +14633,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/expense-requests/payment-destination/verify": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "abd33f3f3d26",
+   "responses": {
+    "200": "600fe80be6d6",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/expense-requests/receipts": {
    "params": [
     "header:authorization",
@@ -14634,6 +14668,7 @@
   },
   "POST /api/v1/field/expense-requests/{expense_request_id}/cancel": {
    "params": [
+    "header:X-Request-ID",
     "header:authorization",
     "header:x-api-key",
     "path:expense_request_id!"
@@ -14838,6 +14873,19 @@
    "request": "8a111cac2118",
    "responses": {
     "200": "65ed06ba93bf",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/field/manager/expenses/deliveries/{event_id}/recover": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:event_id!"
+   ],
+   "request": "bbdf8f1c80ce",
+   "responses": {
+    "200": "66744477f332",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19521,14 +19569,23 @@
   "FieldEquipmentRecord": "7c7bcf16d5ae",
   "FieldEquipmentReturnRequest": "80e3640552d3",
   "FieldExpenseApprovalRead": "64ecf6941a17",
+  "FieldExpenseApproverRead": "b302644dd976",
+  "FieldExpenseBankRead": "580ea29aafbe",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
+  "FieldExpenseDestinationRead": "29f660b85843",
+  "FieldExpenseDestinationVerify": "8d5426dc5450",
+  "FieldExpenseFormContextRead": "0071f146bfb9",
   "FieldExpensePaymentRead": "0b8340a83012",
-  "FieldExpenseRejectionRead": "a51a36ad03c8",
+  "FieldExpenseProfileDestinationRead": "6dcef13f513e",
+  "FieldExpenseRecoveryPreviewRead": "85ed7567c69d",
+  "FieldExpenseRecoveryRead": "84483e229efc",
+  "FieldExpenseRecoveryRequest": "aab4d7570997",
+  "FieldExpenseRejectionRead": "41e6ae96c94b",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
   "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "6125ac8eb73f",
-  "FieldExpenseRequestSubmit": "e8a7e3d6ec5a",
+  "FieldExpenseRequestRead": "23f318a271fd",
+  "FieldExpenseRequestSubmit": "60c02371fc62",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
   "FieldFiberOntLiveRead": "b56481e9b334",

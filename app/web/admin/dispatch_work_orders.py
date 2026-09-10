@@ -34,9 +34,12 @@ from app.services.field.expense_requests import (
     ExpenseRequestLineInput,
     ExpenseWorkOrderIdentity,
     ExpenseWorkOrderScopeGrant,
+    SelectedExpenseApprover,
     StaffWorkOrderAccess,
     SubmitFieldExpenseRequest,
+    VerifyFieldExpenseDestination,
     submit_field_expense_request_command,
+    verify_field_expense_destination,
 )
 from app.services.field.note_commands import (
     FieldNoteQueryError,
@@ -192,6 +195,11 @@ def _expense_form(form: FormData) -> expense_web.WorkOrderExpenseFormInput:
         expense_date=_form_text(form, "expense_date"),
         currency=_form_text(form, "currency"),
         notes=_form_text(form, "notes"),
+        selected_approver_id=_form_text(form, "selected_approver_id"),
+        payment_destination_mode=_form_text(form, "payment_destination_mode"),
+        bank_code=_form_text(form, "bank_code"),
+        account_number=_form_text(form, "account_number"),
+        beneficiary_name=_form_text(form, "beneficiary_name"),
         lines=tuple(lines),
     )
 
@@ -351,6 +359,18 @@ def create_work_order_expense(
         prepared = expense_web.validate_work_order_expense_form(
             form,
             category_rules=panel.categories,
+            approvers=panel.approvers,
+        )
+        verified_destination = verify_field_expense_destination(
+            db,
+            VerifyFieldExpenseDestination(
+                requester_system_user_id=actor_id,
+                source_claim_id=prepared.request_id,
+                mode=prepared.payment_destination_mode,
+                bank_code=prepared.bank_code,
+                account_number=prepared.account_number,
+                beneficiary_name=prepared.beneficiary_name,
+            ),
         )
         staff_access = _expense_staff_access(db, auth)
         db_session_adapter.release_read_transaction(db)
@@ -389,6 +409,13 @@ def create_work_order_expense(
                 ),
                 access_mode=ExpenseRequestAccessMode.STAFF_WORK_ORDER,
                 staff_access=staff_access,
+                selected_approver=SelectedExpenseApprover(
+                    erp_employee_id=prepared.selected_approver.erp_employee_id,
+                    system_user_id=prepared.selected_approver.system_user_id,
+                    display_name=prepared.selected_approver.display_name,
+                    email=prepared.selected_approver.email,
+                ),
+                payment_destination=verified_destination,
             ),
         )
     except expense_web.WorkOrderExpenseFormError as exc:

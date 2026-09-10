@@ -18,15 +18,27 @@
 1. Apply the existing `field_erp_sync_events` and `sync_flow_ownership` migration
    chain through repository head.
 2. Enable the typed ERP outbox-delivery and expense-status capabilities.
-3. Verify the ERP service identity has `sub:expense:write` for draft creation,
+3. Enable `erp.expense.form_context.v1` only after both ERP and Sub revisions
+   supporting the approver/destination contract are deployed. Explicitly
+   review and adopt the immutable `dotmac.erp` 1.4.0 manifest pin before
+   enabling its new capability; deployment does not auto-adopt the pin.
+4. Verify the ERP service identity has `sub:expense:write` for draft creation,
    private receipt upload,
    status, and Field manager decisions. Grant the separate exact
    `sub:expense:pay` scope only to the Sub integration identity that may request
    a transfer; do not grant broader human or finance-administration permissions.
-4. Confirm the ERP accepts stable Sub claim and line IDs, the
+5. Confirm the ERP accepts stable Sub claim and line IDs, the
    `exp-{request_id}-approved-release-v2` draft key, and receipt keys derived
    from contract version, expense, line, and attachment.
-5. Confirm the previous expense sender is disabled before changing ownership.
+6. Confirm the previous expense sender is disabled before changing ownership.
+7. Verify every technician email and intended approver email has one exact
+   active match across Sub and ERP. Verify at least one eligible ERP approver,
+   an active ERP bank directory, and each technician's intended default bank
+   profile. An incomplete profile is allowed only when the technician uses a
+   verified one-expense override.
+8. Verify account resolution succeeds without creating a transfer. Confirm the
+   response contains only a masked account and an opaque claim-bound token, and
+   that Sub logs, drafts, tables, and outbox rows contain no raw account number.
 
 ## Controlled activation
 
@@ -40,7 +52,9 @@
    creates no ERP outbox event.
 5. Approve the canary in the Field app and verify exactly one release event is
    accepted, all required receipts are attached, and the ERP claim becomes
-   `APPROVED`, not `PENDING_APPROVAL`.
+   `APPROVED`, not `PENDING_APPROVAL`. Confirm the ERP claim names the selected
+   approver and contains the expected masked destination. Do not inspect or
+   report the full account number.
 6. With a dedicated payment-authorized manager, select **Pay expense** and verify
    one payment event is staged. Confirm ERP creates one payment intent and reports
    `PROCESSING` (or `COMPLETED` for an immediate success).

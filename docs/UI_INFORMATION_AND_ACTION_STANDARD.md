@@ -634,8 +634,9 @@ implementation.
   technician has been assigned. The requester does not need to be that technician.
 - Authority: `ui.work_order_expense_projection` owns the form, validation
   presentation, requester-owned list, action eligibility, and ERP delivery
-  labels. `operations.expense_requests` owns the atomic claim and durable ERP
-  staging; ERP owns approval routing and reimbursement.
+  labels. `operations.expense_requests` owns the atomic claim, selected local
+  approver, masked destination snapshot, and durable ERP staging; ERP owns
+  approver eligibility, bank identity, account verification, and reimbursement.
 - First viewport: the work-order identity remains the page context. The expense
   card explains that approval and payment happen in ERP, shows the actor's
   existing claims, and always exposes one New Expense Claim action. The action
@@ -647,7 +648,11 @@ implementation.
   user, or requester email input is accepted. A stable client reference prevents
   double creation. The command owner rechecks current technician assignment while
   holding the work-order lock, so a direct or stale form submission fails closed.
-- Form: purpose and expense date are required, currency defaults to NGN, notes
+  - Form: the submitter selects an ERP-eligible approver and either the masked
+    ERP profile destination or editable one-expense beneficiary/bank/account
+    details. The override is verified by ERP and never updates the profile or
+    survives a failed redisplay as a raw account number. Purpose and expense
+    date are required, currency defaults to NGN, notes
   are optional, and at least one stacked repeatable item remains. Items expose
   ERP category, description, positive amount, optional date/vendor/receipt
   URL or upload/notes, category receipt rules, and category maximums. Server
