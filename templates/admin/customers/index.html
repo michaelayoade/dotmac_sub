@@ -4,10 +4,8 @@
     action_button, icon_plus, icon_users, icon_user, icon_building,
     animation_styles, filter_select
 %}
-{% from "components/ui/workflow_help.html" import workflow_help_control %}
 
 {% block title %}Customers - Admin{% endblock %}
-{% block workflow_guidance %}{% endblock %}
 
 {% block content %}
 <div x-data='customersPage({{ customer_bulk_action_contract | tojson }})' x-init="init()" class="space-y-6">
@@ -25,8 +23,7 @@
             icon=icon_users(),
             color="amber",
             color2="orange",
-            allow_overflow=True,
-            title_suffix=workflow_help_control(workflow_guide, container_class="inline-flex") if workflow_guide else ""
+            allow_overflow=True
         ) %}
             {% if can(request, "network:map:read") %}
             <a href="/admin/network/map?focus=customers"

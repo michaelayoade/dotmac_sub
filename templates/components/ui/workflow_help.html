@@ -1,5 +1,5 @@
 {% macro workflow_help_control(workflow_guide, container_class="mb-3 flex justify-end", button_class="h-11 w-11 text-lg") %}
-<span class="{{ container_class }}" x-data="{ workflowHelpOpen: false }">
+<span class="{{ container_class }}" data-admin-workflow-help-control x-data="{ workflowHelpOpen: false }">
     <button type="button"
             x-on:click="workflowHelpOpen = true"
             class="inline-flex {{ button_class }} flex-shrink-0 items-center justify-center rounded-full border border-teal-200 bg-teal-100 font-bold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-200 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:border-teal-800 dark:bg-teal-950/60 dark:text-teal-200 dark:hover:bg-teal-900/70 dark:focus:ring-offset-slate-950"

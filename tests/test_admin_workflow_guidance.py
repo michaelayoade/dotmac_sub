@@ -188,10 +188,17 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     control = Path("templates/components/ui/workflow_help.html").read_text(
         encoding="utf-8"
     )
+    placement = Path("static/js/admin-workflow-help.js").read_text(encoding="utf-8")
     billing = Path("templates/admin/billing/index.html").read_text(encoding="utf-8")
 
     assert "{% block workflow_guidance %}" in layout
-    assert "{{ workflow_help_control(workflow_guide) }}" in layout
+    assert 'data-admin-workflow-help-staging' in layout
+    assert 'admin-workflow-help.js' in layout
+    assert 'data-admin-workflow-help-control' in control
+    assert 'document.querySelectorAll("main h1")' in placement
+    assert '[role="dialog"], [hidden], [x-cloak]' in placement
+    assert 'data-admin-workflow-title-group' in placement
+    assert 'htmx:afterSwap' in placement
     assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in control
     assert 'aria-haspopup="dialog"' in control
     assert 'aria-modal="true"' in control
@@ -202,13 +209,13 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     assert "billingHelpOpen" not in billing
 
 
-def test_customer_list_places_workflow_help_beside_the_page_title() -> None:
+def test_customer_list_uses_shared_workflow_help_placement() -> None:
     customer_list = Path("templates/admin/customers/index.html").read_text(
         encoding="utf-8"
     )
 
-    assert "{% block workflow_guidance %}{% endblock %}" in customer_list
-    assert 'title_suffix=workflow_help_control(workflow_guide' in customer_list
+    assert "workflow_guidance" not in customer_list
+    assert "workflow_help_control" not in customer_list
 
 
 def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:
