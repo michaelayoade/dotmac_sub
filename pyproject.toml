@@ -140,7 +140,24 @@ target-version = "py311"
 # clean; this repository pins ruff 0.15.1, which additionally flags one
 # C420 finding on the identical, unmodified source — a linter-version
 # difference, not a defect in the mirror.)
-extend-exclude = ["tests/architecture/composition_schema.py"]
+#
+# docs/kernel-runtime-composition.json and docs/kernel-runtime-readiness.json
+# are strict-JSON evidence documents, not formattable source: `ruff format`
+# rewrites a JSON file with a trailing comma before the closing `}`/`]`,
+# which `json.load` then refuses (confirmed directly against this repository
+# — `ruff format` on a copy of kernel-runtime-composition.json produces
+# "Illegal trailing comma before end of object"). This is pre-existing and
+# not specific to the composition record: docs/kernel-runtime-readiness.json,
+# untouched by this change, reports the identical "Would reformat". Their
+# validity is enforced instead by tests/architecture/
+# test_strict_json_evidence_documents.py, which runs `json.load` directly —
+# never by accepting ruff-formatted pseudo-JSON. Scoped to exactly these two
+# documents, not docs/ wholesale.
+extend-exclude = [
+    "tests/architecture/composition_schema.py",
+    "docs/kernel-runtime-composition.json",
+    "docs/kernel-runtime-readiness.json",
+]
 
 [tool.ruff.lint]
 select = [
