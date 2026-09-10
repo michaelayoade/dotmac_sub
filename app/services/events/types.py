@@ -28,6 +28,9 @@ class EventType(enum.Enum):
     authentication_session_rotated = "authentication_session.rotated"
     authentication_session_refresh_refused = "authentication_session.refresh_refused"
 
+    # Canonical Party identity events
+    party_identity_reactivated = "party.identity_reactivated"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"
