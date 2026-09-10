@@ -44,11 +44,14 @@ def test_within_send_window_respects_timezone(monkeypatch):
     assert not ew.within_send_window(object(), datetime(2026, 1, 5, 8, 30, tzinfo=UTC))
 
 
-def test_within_send_window_invalid_hour_is_open(monkeypatch):
+def test_within_send_window_invalid_hour_fails_closed(monkeypatch):
+    # A malformed (non-integer) or out-of-range send hour must fail CLOSED —
+    # i.e. treated as outside the window — rather than silently degrading to
+    # "always send" (see enforcement_window.within_send_window docstring).
     _patch_settings(monkeypatch, send_hour="nope")
-    assert ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
+    assert not ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
     _patch_settings(monkeypatch, send_hour=99)
-    assert ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
+    assert not ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
 
 
 def test_run_billing_notifications_skips_outside_window(monkeypatch):
