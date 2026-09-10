@@ -499,7 +499,9 @@ def reboot_my_subscription_device(
     """Reboot the exact device currently assigned to the caller's service."""
     from app.services.customer_device_commands import (
         CustomerDeviceCommandError,
+        CustomerDeviceCommandKind,
         reboot_subscription_device,
+        record_device_command_refusal,
     )
 
     try:
@@ -510,6 +512,12 @@ def reboot_my_subscription_device(
             actor_id=str(principal.get("id") or _subscriber_id(principal)),
         )
     except CustomerDeviceCommandError as exc:
+        record_device_command_refusal(
+            kind=CustomerDeviceCommandKind.reboot,
+            code=exc.code,
+            correlation_id=str(subscription_id),
+            details=exc.details,
+        )
         status_code = 404 if exc.code == "subscription_not_found" else 409
         raise HTTPException(
             status_code=status_code,
@@ -531,11 +539,13 @@ def update_my_subscription_wifi(
     """Update Wi-Fi on the exact device assigned to the caller's service."""
     from app.services.customer_device_commands import (
         CustomerDeviceCommandError,
+        CustomerDeviceCommandKind,
+        record_device_command_refusal,
         update_subscription_wifi,
     )
 
+    command_id = uuid4()
     try:
-        command_id = uuid4()
         with owner_session(db) as owner_db:
             return update_subscription_wifi(
                 owner_db,
@@ -555,6 +565,16 @@ def update_my_subscription_wifi(
                 password=payload.password,
             )
     except CustomerDeviceCommandError as exc:
+        # Recorded here, outside the owner-command transaction
+        # ``update_subscription_wifi``/``configure_customer_wifi`` already
+        # rolled back on this exception -- see
+        # ``record_device_command_refusal``'s docstring.
+        record_device_command_refusal(
+            kind=CustomerDeviceCommandKind.wifi_update,
+            code=exc.code,
+            correlation_id=str(command_id),
+            details=exc.details,
+        )
         status_code = 404 if exc.code == "subscription_not_found" else 409
         raise HTTPException(
             status_code=status_code,

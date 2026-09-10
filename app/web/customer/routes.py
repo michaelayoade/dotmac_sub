@@ -1305,7 +1305,9 @@ def customer_reboot_service_ont(
 
     from app.services.customer_device_commands import (
         CustomerDeviceCommandError,
+        CustomerDeviceCommandKind,
         reboot_subscription_device,
+        record_device_command_refusal,
     )
 
     account_id = require_customer_account_id(db, customer)
@@ -1320,6 +1322,12 @@ def customer_reboot_service_ont(
     except CustomerDeviceCommandError as exc:
         outcome = None
         ok, message = False, str(exc)
+        record_device_command_refusal(
+            kind=CustomerDeviceCommandKind.reboot,
+            code=exc.code,
+            correlation_id=str(subscription_id),
+            details=exc.details,
+        )
     if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
@@ -1362,21 +1370,23 @@ def customer_update_service_wifi(
 
     from app.services.customer_device_commands import (
         CustomerDeviceCommandError,
+        CustomerDeviceCommandKind,
+        record_device_command_refusal,
         update_subscription_wifi,
     )
 
     account_id = require_customer_account_id(db, customer)
+    command_id = uuid4()
+    request_id = str(getattr(request.state, "request_id", "") or "").strip()
+    try:
+        correlation_id = UUID(request_id)
+    except ValueError:
+        correlation_id = command_id
     try:
         if password.strip() != password_confirm.strip():
             raise CustomerDeviceCommandError(
                 "wifi_password_mismatch", "WiFi passwords do not match"
             )
-        command_id = uuid4()
-        request_id = str(getattr(request.state, "request_id", "") or "").strip()
-        try:
-            correlation_id = UUID(request_id)
-        except ValueError:
-            correlation_id = command_id
         finish_read_transaction(db)
         outcome = update_subscription_wifi(
             db,
@@ -1397,6 +1407,15 @@ def customer_update_service_wifi(
     except CustomerDeviceCommandError as exc:
         outcome = None
         ok, message = False, str(exc)
+        # Recorded here, outside update_subscription_wifi's owner-command
+        # transaction, which already rolled back on this exception -- see
+        # ``record_device_command_refusal``'s docstring.
+        record_device_command_refusal(
+            kind=CustomerDeviceCommandKind.wifi_update,
+            code=exc.code,
+            correlation_id=str(correlation_id),
+            details=exc.details,
+        )
     status = "wifi_queued" if ok else "wifi_error"
     evidence = ""
     if outcome is not None:
