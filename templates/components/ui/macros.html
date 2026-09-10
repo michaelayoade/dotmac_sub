@@ -84,7 +84,7 @@
    PAGE HEADER
    Title section with gradient icon and actions
    ============================================ #}
-{% macro page_header(title, subtitle="", icon="", color="amber", color2=None, actions=None, breadcrumbs=None, allow_overflow=False) %}
+{% macro page_header(title, subtitle="", icon="", color="amber", color2=None, actions=None, breadcrumbs=None, allow_overflow=False, title_suffix="") %}
 {% set c2 = color2 or color %}
 {% set auto_breadcrumbs = breadcrumbs %}
 {% if not auto_breadcrumbs and request is defined and request and request.url and request.url.path %}
@@ -128,7 +128,10 @@
                 {% endfor %}
             </nav>
             {% endif %}
-            <h1 class="text-2xl font-bold font-display tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
+            <div class="flex items-center gap-2">
+                <h1 class="text-2xl font-bold font-display tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
+                {% if title_suffix %}{{ title_suffix|safe }}{% endif %}
+            </div>
             {% if subtitle %}
             <p class="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
             {% endif %}

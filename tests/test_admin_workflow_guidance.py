@@ -185,17 +185,30 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
 
 def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
+    control = Path("templates/components/ui/workflow_help.html").read_text(
+        encoding="utf-8"
+    )
     billing = Path("templates/admin/billing/index.html").read_text(encoding="utf-8")
 
     assert "{% block workflow_guidance %}" in layout
-    assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in layout
-    assert 'aria-haspopup="dialog"' in layout
-    assert 'aria-modal="true"' in layout
-    assert 'x-trap.inert.noscroll="workflowHelpOpen"' in layout
-    assert "items-center justify-center" in layout
-    assert "{{ workflow_guide.purpose }}" in layout
-    assert "{% for step in workflow_guide.steps %}" in layout
+    assert "{{ workflow_help_control(workflow_guide) }}" in layout
+    assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in control
+    assert 'aria-haspopup="dialog"' in control
+    assert 'aria-modal="true"' in control
+    assert 'x-trap.inert.noscroll="workflowHelpOpen"' in control
+    assert "items-center justify-center" in control
+    assert "{{ workflow_guide.purpose }}" in control
+    assert "{% for step in workflow_guide.steps %}" in control
     assert "billingHelpOpen" not in billing
+
+
+def test_customer_list_places_workflow_help_beside_the_page_title() -> None:
+    customer_list = Path("templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "{% block workflow_guidance %}{% endblock %}" in customer_list
+    assert 'title_suffix=workflow_help_control(workflow_guide' in customer_list
 
 
 def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:
