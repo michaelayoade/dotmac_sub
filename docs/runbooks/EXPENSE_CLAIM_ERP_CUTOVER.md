@@ -6,24 +6,39 @@
   rejection decision.
 - ERP owns the accounting claim, payment intent, transfer execution,
   reconciliation, and final paid fact.
-- Submission is the first release point. It creates an ordered ERP delivery
-  intent so the ERP claim is visible as `SUBMITTED` before manager approval.
-- Approval, rejection, and payment initiation each commit atomically with their
-  own outbox row. ERP delivery and status reconciliation remain asynchronous and
-  idempotent.
+- Submission is local only and creates no ERP outbox event.
+- Manager approval is the sole release point. Approval and one versioned outbox
+  event commit atomically; rejection remains local.
+- The worker creates or retrieves an ERP draft, uploads every private receipt,
+  and only then delivers the trusted approval. Payment initiation remains a
+  separately authorized, ordered event.
 
 ## Deployment prerequisites
 
 1. Apply the existing `field_erp_sync_events` and `sync_flow_ownership` migration
    chain through repository head.
 2. Enable the typed ERP outbox-delivery and expense-status capabilities.
-3. Verify the ERP service identity has `sub:expense:write` for claim creation,
+3. Enable `erp.expense.form_context.v1` only after both ERP and Sub revisions
+   supporting the approver/destination contract are deployed. Explicitly
+   review and adopt the immutable `dotmac.erp` 1.4.0 manifest pin before
+   enabling its new capability; deployment does not auto-adopt the pin.
+4. Verify the ERP service identity has `sub:expense:write` for draft creation,
+   private receipt upload,
    status, and Field manager decisions. Grant the separate exact
    `sub:expense:pay` scope only to the Sub integration identity that may request
    a transfer; do not grant broader human or finance-administration permissions.
-4. Confirm the ERP accepts `source_claim_id` and the stable
-   `exp-{request_id}-submit-v1` idempotency key.
-5. Confirm the previous expense sender is disabled before changing ownership.
+5. Confirm the ERP accepts stable Sub claim and line IDs, the
+   `exp-{request_id}-approved-release-v2` draft key, and receipt keys derived
+   from contract version, expense, line, and attachment.
+6. Confirm the previous expense sender is disabled before changing ownership.
+7. Verify every technician email and intended approver email has one exact
+   active match across Sub and ERP. Verify at least one eligible ERP approver,
+   an active ERP bank directory, and each technician's intended default bank
+   profile. An incomplete profile is allowed only when the technician uses a
+   verified one-expense override.
+8. Verify account resolution succeeds without creating a transfer. Confirm the
+   response contains only a masked account and an opaque claim-bound token, and
+   that Sub logs, drafts, tables, and outbox rows contain no raw account number.
 
 ## Controlled activation
 
@@ -33,11 +48,13 @@
 2. Before ownership cutover, verify a submitted expense creates no outbox row.
 3. Assign `expense_claim` ownership to `sub` through the reviewed production
    configuration procedure.
-4. Submit one newly created canary expense and verify its submit event reaches
-   `accepted`, the ERP claim is exactly `SUBMITTED`, and the ERP claim reference
-   is projected back to Sub.
-5. Approve the canary in the Field app and verify the ordered approval event is
-   accepted and the ERP claim becomes `APPROVED`, not `PENDING_APPROVAL`.
+4. Submit one newly created canary expense and verify it is work-order-bound and
+   creates no ERP outbox event.
+5. Approve the canary in the Field app and verify exactly one release event is
+   accepted, all required receipts are attached, and the ERP claim becomes
+   `APPROVED`, not `PENDING_APPROVAL`. Confirm the ERP claim names the selected
+   approver and contains the expected masked destination. Do not inspect or
+   report the full account number.
 6. With a dedicated payment-authorized manager, select **Pay expense** and verify
    one payment event is staged. Confirm ERP creates one payment intent and reports
    `PROCESSING` (or `COMPLETED` for an immediate success).
@@ -60,6 +77,21 @@ with a null `requested_by_system_user_id`. After migration, investigate every
 remaining row rather than inferring an owner. Verify a repaired claim appears
 for its requester through `GET /api/v1/field/expense-requests` and that it
 remains invisible to another requester.
+
+## Dead-event recovery
+
+Recovery is operator-initiated and always starts with
+`GET /api/v1/field/manager/expenses/deliveries/{event_id}/recovery-preview`.
+The preview revalidates the approved expense, active work order, current ERP
+category rules, private attachment content, and ERP claim state. If the
+evidence is unambiguous, submit its fingerprint to the matching `recover`
+endpoint. Recovery preserves the dead event and appends a linked replacement
+using `expense-delivery-recovery.v1`. Never recover without a fresh preview,
+and never use this interface for a historical bulk backfill.
+
+Legacy pre-approval `submit`, `approve`, or `reject` events are intentionally
+left untouched and refused by the worker. They are not eligible for this
+recovery command.
 
 ## Rollback
 
