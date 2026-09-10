@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.subscriber import Subscriber
+from app.schemas.subscriber import CustomerServiceLocationUpdate
 from app.services import customer_location_requests as location_service
 from app.services import geocoding as geocoding_service
 from app.services import location_capture
+from app.services import subscriber as subscriber_service
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -19,6 +21,7 @@ templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
+READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
 
 
 def _page_context(request: Request, db: Session, customer: dict) -> dict:
@@ -52,35 +55,67 @@ def customer_location_page(
 @router.post("/location", response_class=HTMLResponse)
 def customer_location_submit(
     request: Request,
+    address_line1: str = Form(...),
+    address_line2: str = Form(""),
+    city: str = Form(""),
+    region: str = Form(""),
+    lga: str = Form(""),
+    postal_code: str = Form(""),
+    country_code: str = Form("NG"),
     latitude: float = Form(...),
     longitude: float = Form(...),
-    customer_note: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
-    try:
-        location_service.submit_request(
-            db,
-            subscriber_id=subscriber_id,
-            latitude=latitude,
-            longitude=longitude,
-            customer_note=customer_note,
-            actor_id=subscriber_id or None,
-            actor_name=str(customer.get("username") or "") or None,
-            submitted_from_ip=request.client.host if request.client else None,
+    if customer.get("read_only"):
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {
+                "request": request,
+                "customer": customer,
+                "message": READ_ONLY_MUTATION_MESSAGE,
+                "active_page": "location",
+            },
+            status_code=403,
         )
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    if not subscriber_id:
+        return RedirectResponse(url="/portal/location?error=1", status_code=303)
+    try:
+        subscriber_service.update_customer_service_location(
+            db=db,
+            payload=CustomerServiceLocationUpdate(
+                subscriber_id=subscriber_id,
+                address_line1=address_line1.strip(),
+                address_line2=address_line2.strip() or None,
+                city=city.strip() or None,
+                region=region.strip() or None,
+                lga=lga.strip() or None,
+                postal_code=postal_code.strip() or None,
+                country_code=country_code.strip().upper() or "NG",
+                latitude=latitude,
+                longitude=longitude,
+                address_type="service",
+                label="Primary service",
+                is_primary=True,
+                actor_id=subscriber_id,
+                actor_name=str(customer.get("username") or "") or None,
+            ),
+        )
+        db.commit()
     except Exception as exc:
-        detail = getattr(exc, "detail", None) or "Unable to submit the correction."
+        db.rollback()
+        detail = (
+            getattr(exc, "detail", None) or str(exc) or "Unable to save your location."
+        )
         context = _page_context(request, db, customer)
         context["form_error"] = str(detail)
-        context["form_note"] = customer_note
         return templates.TemplateResponse(
             "customer/location/index.html", context, status_code=400
         )
-    return RedirectResponse(url="/portal/location?submitted=1", status_code=303)
+    return RedirectResponse(url="/portal/location?saved=1", status_code=303)
 
 
 @router.post("/location-requests/{request_id}/cancel")

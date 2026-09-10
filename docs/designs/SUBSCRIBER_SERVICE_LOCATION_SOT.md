@@ -114,3 +114,22 @@ are removed, the canonical `Address` becomes the primary NCC location source.
 - `docs/designs/FIBER_TOPOLOGY_SOT.md` (coordinates owned by `gis.spatial_sync`).
 - Knowledge: `sub-subscriber-location-inline-no-coords`,
   `splynx-seabone-restore-geo-source`, `crm-parallel-osp-fiber-authority`.
+
+## Customer portal direct-edit contract
+
+`/portal/location` is a direct self-service editor. It displays the canonical
+service Address, including the `Region` field, and lets the authenticated
+customer edit the address and place an exact draggable map pin. Search, GPS,
+map clicks, and marker dragging all update one form; Save applies the address
+and coordinates atomically through `customer.accounts` and `gis.spatial_sync`.
+There is no customer review or pending state for this editor. Clear restores
+the stored values before submission.
+## Mandatory customer location rollout
+
+The subscriber setting `service_location_required` is the operator-controlled,
+default-off switch for mandatory portal completion. When enabled, the portal
+policy checks the canonical service Address for valid latitude and longitude.
+Incomplete customers receive a banner and are redirected to `/portal/location`
+until the direct address-and-pin save succeeds. Authentication, location
+editing/geocoding routes, and operator impersonation remain reachable so the
+customer can complete the action and support staff can recover accounts.
