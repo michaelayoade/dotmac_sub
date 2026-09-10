@@ -34,6 +34,9 @@ class EventType(enum.Enum):
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"
+    subscriber_service_location_updated = "subscriber.service_location_updated"
+    subscriber_location_confirmed = "subscriber.location_confirmed"
+    subscriber_location_prompt_snoozed = "subscriber.location_prompt_snoozed"
     field_location_history_pruned = "field_location.history_pruned"
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     carried_source_identity_adjudicated = "billing.carried_source_identity.adjudicated"

@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from sqlalchemy import String, and_, case, cast, func, not_, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.audit import AuditActorType
 from app.models.billing import TaxRate
 from app.models.catalog import BillingCycle, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
@@ -41,7 +40,7 @@ from app.schemas.subscriber import (
 from app.services import billing_day as billing_day_service
 from app.services import geocoding as geocoding_service
 from app.services import gis_sync, numbering, settings_spec
-from app.services.audit_adapter import record_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -1761,10 +1760,15 @@ def update_customer_service_location(
         db, address, latitude=payload.latitude, longitude=payload.longitude
     )
     db.flush()
-    record_audit_event(
+    stage_audit_event(
         db,
-        actor_type=AuditActorType.user,
-        actor_id=str(payload.actor_id) if payload.actor_id else None,
+        actor=(
+            AuditActor.user(str(payload.actor_id), label=payload.actor_name)
+            if payload.actor_id
+            else AuditActor.system(
+                "customer-service-location", label=payload.actor_name
+            )
+        ),
         action="customer_service_address_updated",
         entity_type="address",
         entity_id=str(address.id),
@@ -1775,7 +1779,6 @@ def update_customer_service_location(
             "latitude": payload.latitude,
             "longitude": payload.longitude,
         },
-        defer_until_commit=False,
     )
     return address
 

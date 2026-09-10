@@ -19,6 +19,7 @@ The canonical record is the **service `Address`** (`app/models/subscriber.py`,
 | Coordinate projection to the map | `gis.spatial_sync` (`app/services/gis_sync.py`) | Writes `latitude`/`longitude`/`geom` and projects `Address` → `geo_locations`. Owns *where*, not *what*. |
 | New location capture | `customer.location_capture` (`app/services/location_capture.py`) | Field-arrival GPS, portal pin, agent. Feature-gated. |
 | Capture adjudication | `customer.location_verification` (`app/services/geocode_reconciler.py`) | Adjudicates a pin against the claimed location; writes the verification ledger. |
+| Customer portal mutation coordination | `customer.portal_location_commands` (`app/services/customer_portal_location_commands.py`) | Owns the transaction for direct updates, confirmation, and snooze commands while delegating each fact to its canonical owner. |
 
 Coordinates and spatial projection stay with `gis.spatial_sync`; the customer
 domain owns what the address is. A captured pin flows capture → verification
@@ -124,6 +125,14 @@ map clicks, and marker dragging all update one form; Save applies the address
 and coordinates atomically through `customer.accounts` and `gis.spatial_sync`.
 There is no customer review or pending state for this editor. Clear restores
 the stored values before submission.
+
+The portal route is an adapter: after authentication and scope resolution it
+releases its read transaction and calls the typed
+`customer.portal_location_commands` coordinator. The coordinator locks the
+Subscriber and completes one owner-managed transaction for the canonical
+address, spatial projection, audit evidence, and durable event. Confirmation
+and prompt snooze use the same boundary; no portal location route commits or
+rolls back business state.
 ## Mandatory customer location rollout
 
 The subscriber setting `service_location_required` is the operator-controlled,

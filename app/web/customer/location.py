@@ -7,14 +7,15 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.models.subscriber import AddressType, Subscriber
 from app.schemas.subscriber import CustomerServiceLocationUpdate
 from app.services import customer_location_requests as location_service
+from app.services import customer_portal_location_commands as location_commands
 from app.services import geocoding as geocoding_service
 from app.services import location_capture
-from app.services import subscriber as subscriber_service
 from app.services.customer_context import optional_customer_subscriber_id
+from app.services.owner_commands import CommandContext
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -86,29 +87,35 @@ def customer_location_submit(
         return RedirectResponse(url="/portal/location?error=1", status_code=303)
     try:
         subscriber_uuid = UUID(subscriber_id)
-        subscriber_service.update_customer_service_location(
-            db=db,
-            payload=CustomerServiceLocationUpdate(
-                subscriber_id=subscriber_uuid,
-                address_line1=address_line1.strip(),
-                address_line2=address_line2.strip() or None,
-                city=city.strip() or None,
-                region=region.strip() or None,
-                lga=lga.strip() or None,
-                postal_code=postal_code.strip() or None,
-                country_code=country_code.strip().upper() or "NG",
-                latitude=latitude,
-                longitude=longitude,
-                address_type=AddressType.service,
-                label="Primary service",
-                is_primary=True,
-                actor_id=subscriber_uuid,
-                actor_name=str(customer.get("username") or "") or None,
+        finish_read_transaction(db)
+        location_commands.update_service_location(
+            db,
+            location_commands.UpdateServiceLocationCommand(
+                context=CommandContext.system(
+                    actor=f"user:{subscriber_uuid}",
+                    scope=location_commands.PORTAL_LOCATION_WRITE_SCOPE,
+                    reason="Customer updated the portal service location",
+                ),
+                location=CustomerServiceLocationUpdate(
+                    subscriber_id=subscriber_uuid,
+                    address_line1=address_line1.strip(),
+                    address_line2=address_line2.strip() or None,
+                    city=city.strip() or None,
+                    region=region.strip() or None,
+                    lga=lga.strip() or None,
+                    postal_code=postal_code.strip() or None,
+                    country_code=country_code.strip().upper() or "NG",
+                    latitude=latitude,
+                    longitude=longitude,
+                    address_type=AddressType.service,
+                    label="Primary service",
+                    is_primary=True,
+                    actor_id=subscriber_uuid,
+                    actor_name=str(customer.get("username") or "") or None,
+                ),
             ),
         )
-        db.commit()
     except Exception as exc:
-        db.rollback()
         detail = (
             getattr(exc, "detail", None) or str(exc) or "Unable to save your location."
         )
@@ -210,23 +217,30 @@ def customer_location_confirm(
     if not subscriber_id:
         return RedirectResponse(url="/portal/location?error=1", status_code=303)
     try:
-        location_capture.capture(
+        subscriber_uuid = UUID(subscriber_id)
+        finish_read_transaction(db)
+        location_commands.confirm_location(
             db,
-            subscriber_id,
-            lat=latitude,
-            lng=longitude,
-            accuracy_m=accuracy_m,
-            source=location_capture.SOURCE_CUSTOMER_PORTAL,
-            actor_id=subscriber_id,
-            actor_name=str(customer.get("username") or "") or None,
-            claimed_state=claimed_state,
-            claimed_lga=claimed_lga,
-            claimed_postcode=claimed_postcode,
+            location_commands.ConfirmLocationCommand(
+                context=CommandContext.system(
+                    actor=f"user:{subscriber_uuid}",
+                    scope=location_commands.PORTAL_LOCATION_WRITE_SCOPE,
+                    reason="Customer confirmed the portal service location",
+                ),
+                subscriber_id=subscriber_uuid,
+                latitude=latitude,
+                longitude=longitude,
+                accuracy_m=accuracy_m,
+                actor_name=str(customer.get("username") or "") or None,
+                claimed_state=claimed_state,
+                claimed_lga=claimed_lga,
+                claimed_postcode=claimed_postcode,
+            ),
         )
-    except location_capture.LocationCaptureDisabled:
-        db.rollback()
-        return RedirectResponse(url="/portal/location?disabled=1", status_code=303)
-    db.commit()
+    except location_commands.PortalLocationCommandError as exc:
+        if exc.code == "customer.portal_location_commands.capture_disabled":
+            return RedirectResponse(url="/portal/location?disabled=1", status_code=303)
+        raise
     return RedirectResponse(url="/portal/location?confirmed=1", status_code=303)
 
 
@@ -241,11 +255,25 @@ def customer_location_snooze(
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     if subscriber_id:
         try:
-            location_capture.snooze_prompt(db, subscriber_id)
-        except location_capture.LocationCaptureDisabled:
-            db.rollback()
-            return RedirectResponse(url="/portal/location?disabled=1", status_code=303)
-        db.commit()
+            subscriber_uuid = UUID(subscriber_id)
+            finish_read_transaction(db)
+            location_commands.snooze_location_prompt(
+                db,
+                location_commands.SnoozeLocationPromptCommand(
+                    context=CommandContext.system(
+                        actor=f"user:{subscriber_uuid}",
+                        scope=location_commands.PORTAL_LOCATION_WRITE_SCOPE,
+                        reason="Customer snoozed the portal location prompt",
+                    ),
+                    subscriber_id=subscriber_uuid,
+                ),
+            )
+        except location_commands.PortalLocationCommandError as exc:
+            if exc.code == "customer.portal_location_commands.capture_disabled":
+                return RedirectResponse(
+                    url="/portal/location?disabled=1", status_code=303
+                )
+            raise
     return RedirectResponse(url="/portal", status_code=303)
 
 
