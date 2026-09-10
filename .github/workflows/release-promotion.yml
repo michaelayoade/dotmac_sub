@@ -305,10 +305,44 @@ jobs:
           source_ref="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           version_ref="${REGISTRY}/${IMAGE_NAME}:${version}"
           latest_ref="${REGISTRY}/${IMAGE_NAME}:latest"
-          existing="$(docker buildx imagetools inspect "$version_ref" --format '{{json .Manifest}}' 2>/dev/null || true)"
+          # A bare `2>/dev/null || true` here would treat EVERY inspect
+          # failure -- a transient registry/auth error just as much as a
+          # genuine "this version tag doesn't exist yet" -- identically as
+          # "doesn't exist", which then re-points an already-published
+          # version tag at a different digest on nothing more than a blip.
+          # The post-create verification loop below can't catch that
+          # specific failure mode: after the overwrite, the alias legitimately
+          # matches the new digest. So distinguish the two like
+          # release-candidate.yml's "Inspect existing candidate tag" step
+          # does (#3061): a definite negative resolves on the first attempt,
+          # anything ambiguous is retried a bounded number of times and then
+          # fails closed rather than proceeding as if the tag doesn't exist.
+          existing_digest=""
+          attempt=1
+          max_attempts=3
+          while true; do
+            if version_manifest_json="$(docker buildx imagetools inspect "$version_ref" --format '{{json .Manifest}}' 2>"$RUNNER_TEMP/inspect-version-tag.err")"; then
+              existing_digest="$(jq -r '.digest' <<<"$version_manifest_json")"
+              break
+            fi
+            version_tag_error="$(cat "$RUNNER_TEMP/inspect-version-tag.err")"
+            # Same definite-negative shapes as release-candidate.yml's
+            # tag-existence check, reused rather than re-derived so the two
+            # never drift apart.
+            if grep -qiE 'manifest unknown|no such manifest|^error: .*: not found$' <<<"$version_tag_error"; then
+              existing_digest=""
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "Cannot safely determine whether $version_ref already exists; refusing to guess and possibly re-point an already-published version tag." >&2
+              printf '%s\n' "$version_tag_error" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 3))"
+            attempt=$((attempt + 1))
+          done
           alias_args=(--tag "$latest_ref")
-          if [ -n "$existing" ]; then
-            existing_digest="$(jq -r '.digest' <<<"$existing")"
+          if [ -n "$existing_digest" ]; then
             if [ "$existing_digest" = "$IMAGE_DIGEST" ]; then
               alias_args+=(--tag "$version_ref")
             else
