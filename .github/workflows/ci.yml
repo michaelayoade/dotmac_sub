@@ -205,8 +205,12 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Lint and format checks are not needed for documentation-only changes."
 
+      # Deliberately UNGUARDED, unlike every step below it in this job: this
+      # checkout exists for the strict-JSON step at the bottom, which must
+      # run on EVERY invocation of this job, including a docs-only one — see
+      # that step's comment for why. Skipping checkout on docs-only would
+      # leave that step with no files to open at all.
       - uses: actions/checkout@v4
-        if: needs.changes.outputs.docs-only != 'true'
 
       - uses: ./.github/actions/setup-ci-python
         if: needs.changes.outputs.docs-only != 'true'
@@ -235,8 +239,29 @@ jobs:
       # any other route (a hand edit, a bad merge, a different tool
       # entirely); this step catches only the formatter-in-this-run case,
       # with the causal ordering Michael's ruling requires. Keep both.
+      #
+      # This step and the checkout above it are DELIBERATELY UNGUARDED,
+      # unlike every other step in this job (Ruff check/format, setup-ci-
+      # python): those guard Python linting, which genuinely has nothing to
+      # do on a docs-only change. This step's entire SUBJECT is a docs/
+      # file — the `changes` job's own docs-only classifier
+      # (`grep -Ev '^(docs/|.*\.md$)'`) treats anything under docs/ as
+      # docs-only, so a pull request that changes ONLY
+      # docs/kernel-runtime-composition.json — precisely the shape every
+      # future record update has — sets docs-only=true. Guarding this step
+      # the same way its neighbours are guarded would make the one check
+      # that exists to catch a corrupted record skip itself on exactly the
+      # PRs most likely to corrupt it: a check that cannot fire when it
+      # matters is the dominant defect class this programme exists to
+      # retire. Do NOT "fix" an apparent guard inconsistency here by adding
+      # the `docs-only != 'true'` condition back — that is precisely how
+      # this defect re-enters. The `lint` job itself is not skipped on a
+      # docs-only change (see its own `if:` above, which runs whenever
+      # `changes` succeeds regardless of docs-only), so this step is always
+      # reached when this job runs at all; it needs only the stdlib
+      # (`json`, `sys` via system `python3`, not `poetry run`), so it does
+      # not need `setup-ci-python`/poetry either.
       - name: Strict-JSON evidence documents parse after formatting
-        if: needs.changes.outputs.docs-only != 'true'
         run: |
           python3 -c "
           import json, sys
