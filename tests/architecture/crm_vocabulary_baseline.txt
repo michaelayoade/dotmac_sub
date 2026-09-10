@@ -40,7 +40,7 @@
 #
 #
 #
-# --- app: 250 files ---
+# --- app: 251 files ---
 app/api/campaigns.py
 app/api/crm.py
 app/api/crm_referrals.py
@@ -148,6 +148,7 @@ app/services/dotmac_erp/domain_sync.py
 app/services/dotmac_erp/expense_sync.py
 app/services/dotmac_erp/material_sync.py
 app/services/dotmac_erp/outbox.py
+app/services/dotmac_erp/purchase_invoice_sync.py
 app/services/dotmac_erp/purchase_order_sync.py
 app/services/dynamic_filters.py
 app/services/events/handlers/referral.py
@@ -506,7 +507,7 @@ scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py
 scripts/seed/seed_rbac.py
 #
-# --- tests: 251 files ---
+# --- tests: 252 files ---
 tests/architecture/adapter_keyword_service_call_baseline.txt
 tests/architecture/adapter_transaction_baseline.txt
 tests/architecture/connector_manifest_pins.json
@@ -631,6 +632,7 @@ tests/test_dotmac_erp_expense_sync.py
 tests/test_dotmac_erp_material_sync.py
 tests/test_dotmac_erp_neutral_status_contract.py
 tests/test_dotmac_erp_outbox.py
+tests/test_dotmac_erp_purchase_invoice_sync.py
 tests/test_dotmac_erp_purchase_order_sync.py
 tests/test_dynamic_filters_tickets.py
 tests/test_egress_gateway.py
@@ -759,4 +761,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 709 files
+# TOTAL: 711 files
