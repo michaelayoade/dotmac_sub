@@ -48,8 +48,8 @@
 {% endcall %}
 {% call card('Expense claims', color='emerald') %}
 <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-<div><p class="text-sm text-slate-600 dark:text-slate-300">Create a reimbursable expense for this exact work order. Approval and payment remain in ERP.</p><p class="mt-1 text-xs text-slate-500">Only claims you created are shown here.</p></div>
-{% if action_permitted(request, expense_panel.create_action) %}<a href="#new-expense-claim" class="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-emerald-700">New Expense Claim</a>{% else %}<button type="button" disabled aria-disabled="true" aria-describedby="expense-creation-unavailable" class="shrink-0 cursor-not-allowed rounded-xl bg-slate-200 px-3 py-2 text-center text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">New Expense Claim</button>{% endif %}
+<div><p class="text-sm text-slate-600 dark:text-slate-300">Create a reimbursable expense for this exact work order. Manager approval releases it to ERP for reimbursement.</p><p class="mt-1 text-xs text-slate-500">Only claims you created are shown here.</p></div>
+{% if action_permitted(request, expense_panel.create_action) %}<button type="button" aria-controls="new-expense-claim" aria-expanded="{{ 'true' if expense_panel.form_open else 'false' }}" data-open-expense-form class="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-emerald-700">New Expense Claim</button>{% else %}<button type="button" disabled aria-disabled="true" aria-controls="new-expense-claim" aria-expanded="false" aria-describedby="expense-creation-unavailable" class="shrink-0 cursor-not-allowed rounded-xl bg-slate-200 px-3 py-2 text-center text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">New Expense Claim</button>{% endif %}
 </div>
 {% if expense_panel.claims %}<div class="space-y-3">{% for claim in expense_panel.claims %}
 <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
@@ -67,7 +67,7 @@
 <input type="hidden" name="client_ref" value="{{ expense_panel.form.request_id }}">
 {% if expense_panel.error_for('form') %}<p class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800" role="alert">{{ expense_panel.error_for('form') }}</p>{% endif %}
 <div class="grid gap-4 sm:grid-cols-2">
-<label class="text-sm font-semibold">Purpose <span class="text-rose-600" aria-hidden="true">*</span><input name="purpose" value="{{ expense_panel.form.purpose }}" required maxlength="500" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900" aria-describedby="expense-purpose-error">{% if expense_panel.error_for('purpose') %}<span id="expense-purpose-error" class="mt-1 block text-xs text-rose-700">{{ expense_panel.error_for('purpose') }}</span>{% endif %}</label>
+<label class="text-sm font-semibold">Purpose <span class="text-rose-600" aria-hidden="true">*</span><input name="purpose" value="{{ expense_panel.form.purpose }}" required maxlength="500" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900" aria-describedby="expense-purpose-error" data-expense-purpose>{% if expense_panel.error_for('purpose') %}<span id="expense-purpose-error" class="mt-1 block text-xs text-rose-700">{{ expense_panel.error_for('purpose') }}</span>{% endif %}</label>
 <label class="text-sm font-semibold">Expense date <span class="text-rose-600" aria-hidden="true">*</span><input type="date" name="expense_date" value="{{ expense_panel.form.expense_date }}" required class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900">{% if expense_panel.error_for('expense_date') %}<span class="mt-1 block text-xs text-rose-700">{{ expense_panel.error_for('expense_date') }}</span>{% endif %}</label>
 <label class="text-sm font-semibold">Currency <span class="text-rose-600" aria-hidden="true">*</span><input name="currency" value="{{ expense_panel.form.currency }}" required minlength="3" maxlength="3" autocomplete="off" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 uppercase dark:bg-slate-900">{% if expense_panel.error_for('currency') %}<span class="mt-1 block text-xs text-rose-700">{{ expense_panel.error_for('currency') }}</span>{% endif %}</label>
 <label class="text-sm font-semibold sm:col-span-2">Notes<textarea name="notes" maxlength="2000" rows="2" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900">{{ expense_panel.form.notes }}</textarea>{% if expense_panel.error_for('notes') %}<span class="mt-1 block text-xs text-rose-700">{{ expense_panel.error_for('notes') }}</span>{% endif %}</label>
@@ -115,6 +115,7 @@
 <button class="w-full rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white">Assign technician</button></form>
 {% elif can(request, queue_action.permission) %}<p class="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">{{ queue_action.reason }}</p>{% endif %}
 {% endcall %}</aside></div></div>
+<script src="/static/js/work-order-expense-form.js"></script>
 <script>
 (() => {
   const form = document.querySelector('[data-expense-form]');

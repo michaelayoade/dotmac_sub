@@ -1,10 +1,11 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     UploadFile,
@@ -32,10 +33,13 @@ from app.services.field.expense_categories import (
     list_expense_categories,
 )
 from app.services.field.expense_requests import (
+    CancelFieldExpenseRequest,
     ExpenseRequestLineInput,
+    ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
     ListFieldExpenseVendors,
     SubmitFieldExpenseRequest,
+    cancel_field_expense_request_command,
     field_expense_requests,
     list_expense_vendors,
     submit_field_expense_request_command,
@@ -171,16 +175,13 @@ def create_field_expense_request(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_expense_requests.create(
-        db,
-        auth,
-        crm_work_order_id=payload.work_order_id,
-        purpose=payload.purpose,
-        expense_date=payload.expense_date,
-        currency=payload.currency,
-        notes=payload.notes,
-        client_ref=payload.client_ref,
-        items=[item.model_dump() for item in payload.items],
+    del payload, auth, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Standalone expense drafts are retired; submit a route-bound "
+            "work-order expense through /expense-requests/submit."
+        ),
     )
 
 
@@ -205,7 +206,7 @@ def create_and_submit_field_expense_request(
                     reason="field_expense_request_submission",
                 ),
                 requester_person_id=UUID(str(auth["principal_id"])),
-                work_order_public_id=payload.work_order_id,
+                work_order=ExpenseWorkOrderIdentity(public_id=payload.work_order_id),
                 request_id=payload.client_ref,
                 purpose=payload.purpose,
                 expense_date=payload.expense_date,
@@ -236,13 +237,38 @@ def submit_field_expense_request(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_expense_requests.submit(db, auth, expense_request_id)
+    del expense_request_id, auth, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Legacy draft submission is retired; create and submit through "
+            "/expense-requests/submit."
+        ),
+    )
 
 
 @router.post("/{expense_request_id}/cancel", response_model=FieldExpenseRequestRead)
 def cancel_field_expense_request(
     expense_request_id: UUID,
     auth: dict = Depends(require_user_auth),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    return field_expense_requests.cancel(db, auth, expense_request_id)
+    command_id = request_id or uuid4()
+    try:
+        db_session_adapter.release_read_transaction(db)
+        outcome = cancel_field_expense_request_command(
+            db,
+            command=CancelFieldExpenseRequest(
+                context=_command_context(
+                    auth,
+                    request_id=command_id,
+                    reason=f"cancel_expense_request:{expense_request_id}",
+                ),
+                expense_request_id=expense_request_id,
+                requester_person_id=UUID(str(auth["principal_id"])),
+            ),
+        )
+        return field_expense_requests.get(db, auth, outcome.id)
+    except FieldExpenseRequestError as exc:
+        raise _expense_command_error(exc) from exc

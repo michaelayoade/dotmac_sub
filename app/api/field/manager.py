@@ -16,6 +16,9 @@ from app.schemas.field import (
     FieldEquipmentReturnRequest,
     FieldExpenseApprovalRead,
     FieldExpensePaymentRead,
+    FieldExpenseRecoveryPreviewRead,
+    FieldExpenseRecoveryRead,
+    FieldExpenseRecoveryRequest,
     FieldExpenseRejectionRead,
     FieldExpenseRequestRead,
     FieldLiveMapFeed,
@@ -45,6 +48,13 @@ from app.services.auth_dependencies import require_any_permission, require_permi
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field.equipment_custody import field_equipment_custody
+from app.services.field.expense_recovery import (
+    ExpenseDeliveryRecoveryError,
+    PreviewExpenseDeliveryRecovery,
+    RecoverExpenseDelivery,
+    preview_expense_delivery_recovery,
+    recover_expense_delivery,
+)
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
     FieldExpenseRequestError,
@@ -168,7 +178,7 @@ def _expense_action_context(
     )
 
 
-def _expense_approval_error(exc: FieldExpenseRequestError) -> HTTPException:
+def _expense_approval_error(exc: DomainError) -> HTTPException:
     if exc.code.endswith("request_not_found"):
         status_code = 404
     elif exc.code.endswith(("erp_staging_failed", "erp_delivery_not_configured")):
@@ -290,6 +300,57 @@ def field_manager_jobs(
         offset=offset,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+
+@router.get(
+    "/expenses/deliveries/{event_id}/recovery-preview",
+    response_model=FieldExpenseRecoveryPreviewRead,
+)
+def field_manager_preview_expense_recovery(
+    event_id: UUID,
+    auth: dict = Depends(_expense_write),
+    db: Session = Depends(get_db),
+):
+    del auth
+    try:
+        return preview_expense_delivery_recovery(
+            db,
+            PreviewExpenseDeliveryRecovery(dead_event_id=event_id),
+        )
+    except ExpenseDeliveryRecoveryError as exc:
+        raise _expense_approval_error(exc) from exc
+
+
+@router.post(
+    "/expenses/deliveries/{event_id}/recover",
+    response_model=FieldExpenseRecoveryRead,
+)
+def field_manager_recover_expense_delivery(
+    event_id: UUID,
+    payload: FieldExpenseRecoveryRequest,
+    auth: dict = Depends(_expense_write),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    command_id = request_id or uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return recover_expense_delivery(
+            db,
+            command=RecoverExpenseDelivery(
+                context=_expense_action_context(
+                    auth,
+                    expense_request_id=event_id,
+                    request_id=command_id,
+                    action="recover_delivery",
+                    scope="operations:expense_request:write",
+                ),
+                dead_event_id=event_id,
+                preview_fingerprint=payload.preview_fingerprint,
+            ),
+        )
+    except ExpenseDeliveryRecoveryError as exc:
+        raise _expense_approval_error(exc) from exc
 
 
 @router.post("/jobs/{crm_work_order_id}/assign", response_model=FieldManagerJob)

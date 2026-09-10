@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -23,14 +24,38 @@ from app.models.work_order import WorkOrder
 from app.schemas.field import FieldManagerTechniciansQuery
 from app.schemas.geocoding import ReverseGeocodeResult
 from app.services.auth_dependencies import require_user_auth
+from app.services.field import expense_categories as expense_categories_module
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
+    ExpenseCategoryRule,
+    ExpenseRequestLineInput,
+    ExpenseWorkOrderIdentity,
+    RejectFieldExpenseRequest,
+    SubmitFieldExpenseRequest,
     approve_field_expense_request_command,
     field_expense_requests,
+    reject_field_expense_request_command,
+    submit_field_expense_request_command,
 )
 from app.services.field.jobs import field_jobs
 from app.services.field.manager import field_manager
 from app.services.owner_commands import CommandContext
+
+
+@pytest.fixture(autouse=True)
+def _authoritative_expense_rules(monkeypatch):
+    monkeypatch.setattr(
+        expense_categories_module,
+        "list_expense_categories",
+        lambda _db, _query: (
+            ExpenseCategoryRule(
+                category_code="transport",
+                category_name="Transport",
+                requires_receipt=False,
+                max_amount_per_claim=Decimal("10000.00"),
+            ),
+        ),
+    )
 
 
 def _user(db_session, name: str = "Manager") -> SystemUser:
@@ -148,28 +173,57 @@ def _presence(db_session, profile: TechnicianProfile, **overrides) -> FieldTechP
 
 
 def _expense(db_session, tech_user, profile, work_order, status="submitted") -> dict:
-    created = field_expense_requests.create(
+    assert status == "submitted"
+    request_id = uuid4()
+    tech_user_id = tech_user.id
+    requester_person_id = profile.person_id
+    work_order_public_id = work_order.public_id
+    db_session.commit()
+    outcome = submit_field_expense_request_command(
         db_session,
-        _auth(tech_user, roles=[]),
-        crm_work_order_id=work_order.crm_work_order_id,
-        purpose="Transport",
-        expense_date=date.today(),
-        currency="NGN",
-        notes=None,
-        client_ref=None,
-        items=[
-            {
-                "category_code": "transport",
-                "description": "Bike delivery",
-                "amount": "2500.00",
-            }
-        ],
+        SubmitFieldExpenseRequest(
+            context=CommandContext(
+                command_id=request_id,
+                correlation_id=request_id,
+                actor=f"user:{tech_user_id}",
+                scope="field:expense_requests:write",
+                reason="manager test expense submission",
+                idempotency_key=str(request_id),
+            ),
+            requester_person_id=requester_person_id,
+            work_order=ExpenseWorkOrderIdentity(public_id=work_order_public_id),
+            request_id=request_id,
+            purpose="Transport",
+            expense_date=date.today(),
+            currency="NGN",
+            notes=None,
+            items=(
+                ExpenseRequestLineInput(
+                    category_code="transport",
+                    category_name="Transport",
+                    description="Bike delivery",
+                    amount=Decimal("2500.00"),
+                    expense_date=date.today(),
+                    vendor_name=None,
+                    receipt_url=None,
+                    receipt_attachment_id=None,
+                    notes=None,
+                ),
+            ),
+        ),
     )
-    if status != "draft":
-        created = field_expense_requests.submit(
-            db_session, _auth(tech_user, roles=[]), str(created["id"])
-        )
-    return created
+    return field_expense_requests.get(
+        db_session,
+        {
+            "principal_id": str(tech_user_id),
+            "person_id": str(tech_user_id),
+            "subscriber_id": str(tech_user_id),
+            "principal_type": "system_user",
+            "roles": [],
+            "scopes": [],
+        },
+        str(outcome.id),
+    )
 
 
 def test_manager_me_summary_and_technicians(db_session):
@@ -348,11 +402,28 @@ def test_manager_expense_approve_and_reject(db_session):
     assert approved.approved_at is not None
     assert approved.erp_sync_status.value == "pending"
 
-    rejected = field_expense_requests.reject(
-        db_session, str(second["id"]), "No receipt provided"
+    rejection_id = uuid4()
+    reviewer_id = tech_user.id
+    second_id = second["id"]
+    db_session.commit()
+    rejected_outcome = reject_field_expense_request_command(
+        db_session,
+        command=RejectFieldExpenseRequest(
+            context=CommandContext(
+                command_id=rejection_id,
+                correlation_id=rejection_id,
+                actor=f"user:{reviewer_id}",
+                scope="operations:expense_request:write",
+                reason=f"reject_expense_request:{second_id}",
+                idempotency_key=str(rejection_id),
+            ),
+            expense_request_id=second_id,
+            reviewer_system_user_id=reviewer_id,
+            reason="No receipt provided",
+        ),
     )
-    assert rejected["status"] == "rejected"
-    assert rejected["rejection_reason"] == "No receipt provided"
+    assert rejected_outcome.status == "rejected"
+    assert rejected_outcome.rejection_reason == "No receipt provided"
 
     re_approved = _approve_expense(
         db_session, request_id=first["id"], reviewer_id=tech_user.id

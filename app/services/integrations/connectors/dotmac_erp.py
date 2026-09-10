@@ -189,6 +189,9 @@ class DotmacErpRunner:
                 "sync_operational_domains",
                 "deliver_outbox",
                 "upload_purchase_invoice_attachment",
+                "create_expense_claim_draft",
+                "upload_expense_receipt",
+                "approve_expense_claim",
                 "expense_claim_status",
                 "material_request_status",
                 "purchase_invoice_status",
@@ -318,6 +321,35 @@ class DotmacErpRunner:
                     idempotency_key=str(
                         params.get("idempotency_key") or idempotency_key
                     ),
+                )
+            if action == "create_expense_claim_draft":
+                return client.post(
+                    "/api/v1/sync/sub/expense-claims/drafts",
+                    dict(params["payload"]),
+                    idempotency_key=str(
+                        params.get("idempotency_key") or idempotency_key
+                    ),
+                    expected_status_codes={200, 201},
+                )
+            if action == "upload_expense_receipt":
+                return client.post(
+                    "/api/v1/sync/sub/expense-claims/"
+                    f"{params['source_claim_id']}/items/{params['item_id']}/receipts",
+                    dict(params["payload"]),
+                    idempotency_key=str(
+                        params.get("idempotency_key") or idempotency_key
+                    ),
+                    expected_status_codes={200, 201},
+                )
+            if action == "approve_expense_claim":
+                return client.post(
+                    "/api/v1/sync/sub/expense-claims/"
+                    f"{params['source_claim_id']}/approve",
+                    dict(params["payload"]),
+                    idempotency_key=str(
+                        params.get("idempotency_key") or idempotency_key
+                    ),
+                    expected_status_codes={200},
                 )
         elif capability_id == ERP_STATUS_CAPABILITY:
             if action == "expense_claim_status":

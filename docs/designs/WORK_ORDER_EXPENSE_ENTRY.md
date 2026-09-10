@@ -9,10 +9,11 @@ access rule: global dispatch-read access, or a matching reseller or region
 scoped grant, permits both viewing the page and creating a claim. Field/mobile
 expense entry retains its assigned-technician scope.
 
-Every claim created here is bound to the work order in the route. The browser
-does not submit a work-order identifier and cannot create a work-order-less
-claim. The authenticated session supplies the system-user and person identity;
-requester identifiers and email are not form inputs.
+Every claim is bound to an active authoritative work order by the expense owner.
+The admin browser supplies no work-order identifier: the route is authoritative.
+Field/mobile/API callers supply only the typed public ID, which the owner
+resolves under assignment/access rules. Internal database UUIDs, placeholders,
+generic drafts, and standalone expense creation are not accepted.
 
 ## Owners and boundaries
 
@@ -24,9 +25,9 @@ requester identifiers and email are not form inputs.
   are distinct and both disable submission.
 - `operations.expense_requests` owns validation and the atomic submitted claim,
   line items, requester evidence, idempotency fingerprint, receipt metadata,
-  work-order assignment eligibility, activity mark, and durable ERP delivery
-  staging. It rejects submission when the current work order has no assigned
-  technician.
+  work-order assignment eligibility, activity mark, and manager-approval ERP
+  release. It rejects submission when the work order is inactive, unauthorized,
+  unknown, or has no assigned technician. Submission creates no ERP event.
 - The admin route parses HTTP form and file values, enforces CSRF and the exact
   work-order read RBAC scope, releases its read transaction, and invokes
   the typed owner command. It does not commit or call ERP.
@@ -45,6 +46,12 @@ Staff uploader identity is recorded on `FieldAttachment`; the legacy
 subscriber-only `StoredFile.uploaded_by` field remains empty for these staff
 uploads.
 
+The reusable disclosure control is a semantic button with `aria-controls` and
+synchronized `aria-expanded`. Activation opens the existing `details`, scrolls
+the form into view, and focuses Purpose. Native `summary` mouse and keyboard
+behavior remains available; permission-denied users receive a disabled button
+and no submit surface.
+
 ## State and delivery semantics
 
 The work-order card shows only claims created by the authenticated staff
@@ -53,8 +60,12 @@ ERP acceptance, ERP accepted, rejected, failed/dead, approved, and paid facts
 remain distinct. `sent` outbox evidence is not presented as ERP acceptance;
 only an accepted event or ERP claim reference qualifies.
 
-Expense delivery is ordered: submit creates the ERP `SUBMITTED` claim; approve
-or reject waits for that create event; payment waits for the approval event.
+Manager approval is the sole ERP release point. Its single durable event creates
+or retrieves an idempotent ERP draft, maps stable Sub line IDs to ERP items,
+streams each private receipt from storage, uploads only missing attachments, and
+delivers the trusted approval after all uploads succeed. Receipt bytes/base64
+never enter the database outbox; supported URL receipts remain claim-line data.
+Payment waits for the accepted approval-release event.
 Managers with the exact `operations:expense_request:pay` permission may stage a
 payment command for an approved expense. The Field app never calls Paystack or
 marks the claim paid. ERP creates and initiates the transfer, and Sub projects
@@ -86,10 +97,24 @@ text when the category changes, then validates the URL-or-file choice as one
 requirement. Category receipt and maximum rules are enforced again by the
 command owner. Browser calculations and required markers are assistance only.
 
+Private attachments must be active, owned by the same authoritative work order,
+present in storage, within the receipt size limit, and have a supported MIME,
+consistent size, and matching stored checksum. Receipt URLs must use a supported
+HTTP(S) shape and cannot contain credentials, fragments, localhost, or literal
+private-network addresses. Approval revalidates current category and receipt
+evidence before staging delivery.
+
 Text values and the stable claim client reference survive validation errors.
 Browsers cannot repopulate file inputs, so a selected receipt is cleared and an
 explicit field error asks the user to reselect it. ERP category or sync
 unavailability never fabricates a usable fallback.
+
+A dead approval-release event may be recovered only through a typed preview and
+explicit recovery command. The owner revalidates approval, work order, category,
+receipt, and ERP state, refuses ambiguity or a stale preview, preserves the
+original event, and appends linked replacement evidence using a versioned key.
+No automatic historical backfill or replay exists; legacy pre-approval events
+are left untouched and refused by the worker.
 
 Alembic revision `587_field_request_requester_history` repairs older claims
 whose durable SystemUser link can be proven from their technician profile,

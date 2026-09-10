@@ -558,7 +558,26 @@ class FieldExpenseRejectionRead(BaseModel):
     status: Literal["rejected"]
     rejected_at: datetime
     rejection_reason: str
-    erp_sync_event_id: UUID
+    erp_sync_event_id: UUID | None = None
+
+
+class FieldExpenseRecoveryPreviewRead(BaseModel):
+    dead_event_id: UUID
+    expense_request_id: UUID
+    replacement_idempotency_key: str
+    fingerprint: str
+    erp_claim_status: str | None = None
+
+
+class FieldExpenseRecoveryRequest(BaseModel):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class FieldExpenseRecoveryRead(BaseModel):
+    original_event_id: UUID
+    replacement_event_id: UUID
+    replacement_idempotency_key: str
+    replayed: bool
 
 
 class FieldExpensePaymentRead(BaseModel):

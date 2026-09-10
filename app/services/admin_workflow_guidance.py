@@ -279,8 +279,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "work-order-expenses",
         "Operations",
         "Record a work-order expense",
-        "Field operations staff",
-        "Create and track your own expense claim against the exact work order.",
+        "Field operations staff and expense managers",
+        "Create, review, and track an expense claim against the exact work order.",
         (),
         "Open the exact work order and review its customer and operational context.",
         (
@@ -288,11 +288,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "becomes available after a technician is assigned and ERP categories "
             "are available."
         ),
-        "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting.",
-        "Return to the work order to track delivery and ERP acceptance separately.",
+        "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting. The work-order route supplies the identity and cannot be edited in the form.",
+        "A manager reviews the submitted claim and approves it when the work order, category, and receipt evidence are correct. Approval is the only action that releases the claim to ERP.",
+        "Return to the work order to track claim delivery, required receipt delivery, and ERP acceptance separately.",
         notes=(
-            "Only your claims appear in this card; approval, reimbursement, and payment remain in ERP.",
-            "A submitted claim is not approved, and a sent delivery is not ERP acceptance.",
+            "Only your claims appear in this card. Submitted claims create no ERP event while they wait for manager approval.",
+            "Required uploaded receipts remain private and must reach the ERP claim before delivery is accepted.",
+            "A submitted claim is not approved, a sent delivery is not ERP acceptance, and reimbursement and payment remain in ERP.",
         ),
         route_templates=("/admin/dispatch/work-orders/{work_order_id}",),
     ),

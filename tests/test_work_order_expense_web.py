@@ -27,12 +27,15 @@ from app.models.work_order import WorkOrder
 from app.services import web_work_order_expenses as expense_web
 from app.services.backoffice import ExpenseCategoryView
 from app.services.field import attachments as attachments_module
+from app.services.field import expense_categories as expense_categories_module
 from app.services.field.expense_requests import (
     ExpenseCategoryRule,
     ExpenseReceiptUploadInput,
     ExpenseRequestAccessMode,
     ExpenseRequestLineInput,
+    ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
+    StaffWorkOrderAccess,
     SubmitFieldExpenseRequest,
     submit_field_expense_request_command,
 )
@@ -117,10 +120,15 @@ def _line(**overrides) -> ExpenseRequestLineInput:
 
 def _command(user: SystemUser, work_order: WorkOrder, **overrides):
     request_id = overrides.pop("request_id", uuid4())
+    overrides.pop("category_rules", None)
+    work_order_identity = overrides.pop(
+        "work_order_identity",
+        ExpenseWorkOrderIdentity(public_id=work_order.public_id),
+    )
     values = {
         "context": _context(user, request_id),
         "requester_person_id": None,
-        "work_order_public_id": work_order.public_id,
+        "work_order": work_order_identity,
         "request_id": request_id,
         "purpose": "Travel for fibre repair",
         "expense_date": date.today(),
@@ -128,18 +136,26 @@ def _command(user: SystemUser, work_order: WorkOrder, **overrides):
         "notes": "Customer outage",
         "items": (_line(),),
         "access_mode": ExpenseRequestAccessMode.STAFF_WORK_ORDER,
-        "authorized_work_order_id": work_order.id,
-        "category_rules": (
-            ExpenseCategoryRule(
+        "staff_access": StaffWorkOrderAccess(global_access=True),
+    }
+    values.update(overrides)
+    return SubmitFieldExpenseRequest(**values)
+
+
+@pytest.fixture(autouse=True)
+def _authoritative_expense_rules(monkeypatch):
+    monkeypatch.setattr(
+        expense_categories_module,
+        "list_expense_categories",
+        lambda _db, _query: (
+            ExpenseCategoryView(
                 category_code="transport",
                 category_name="Transport",
                 requires_receipt=False,
                 max_amount_per_claim=Decimal("10000.00"),
             ),
         ),
-    }
-    values.update(overrides)
-    return SubmitFieldExpenseRequest(**values)
+    )
 
 
 def _valid_form(*, amount: str = "2500.00") -> expense_web.WorkOrderExpenseFormInput:
@@ -201,7 +217,7 @@ def test_staff_without_technician_profile_can_submit_for_authorized_work_order(
 def test_staff_command_rejects_missing_exact_work_order_access_evidence(db_session):
     user = _user(db_session, "Bola")
     work_order = _work_order(db_session, "sub-expense-no-proof")
-    command = _command(user, work_order, authorized_work_order_id=None)
+    command = _command(user, work_order, staff_access=None)
     db_session.commit()
 
     with pytest.raises(FieldExpenseRequestError) as exc:
@@ -210,8 +226,147 @@ def test_staff_command_rejects_missing_exact_work_order_access_evidence(db_sessi
             command,
         )
 
+    assert exc.value.code.endswith("work_order_unauthorized")
+    assert db_session.query(FieldExpenseRequest).count() == 0
+
+
+@pytest.mark.parametrize("public_id", ["", "unknown-work-order"])
+def test_owner_rejects_missing_or_unknown_work_order_identity(db_session, public_id):
+    user = _user(db_session, "UnknownWorkOrder")
+    work_order = _work_order(db_session, "known-work-order")
+    command = _command(
+        user,
+        work_order,
+        work_order_identity=ExpenseWorkOrderIdentity(public_id=public_id),
+    )
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
     assert exc.value.code.endswith("work_order_not_found")
     assert db_session.query(FieldExpenseRequest).count() == 0
+
+
+def test_owner_rejects_inactive_work_order(db_session):
+    user = _user(db_session, "InactiveWorkOrder")
+    work_order = _work_order(db_session, "inactive-work-order")
+    work_order.is_active = False
+    command = _command(user, work_order)
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("work_order_not_found")
+
+
+def test_owner_rejects_attachment_from_another_work_order(db_session):
+    user = _user(db_session, "CrossWorkOrder")
+    target = _work_order(db_session, "target-work-order")
+    other = _work_order(db_session, "other-work-order")
+    stored = StoredFile(
+        entity_type="field_attachment",
+        entity_id=other.public_id,
+        original_filename="receipt.pdf",
+        storage_key_or_relative_path="attachments/other/receipt.pdf",
+        file_size=8,
+        content_type="application/pdf",
+        storage_provider="s3",
+    )
+    db_session.add(stored)
+    db_session.flush()
+    attachment = FieldAttachment(
+        work_order_mirror_id=other.id,
+        stored_file_id=stored.id,
+        kind="document",
+        file_name="receipt.pdf",
+        mime_type="application/pdf",
+        size_bytes=8,
+        uploaded_by_person_id=user.id,
+        uploaded_by_system_user_id=user.id,
+    )
+    db_session.add(attachment)
+    db_session.flush()
+    command = _command(
+        user,
+        target,
+        items=(_line(receipt_attachment_id=attachment.id),),
+    )
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("invalid_request")
+    assert "Receipt attachment not found" in exc.value.message
+
+
+def test_owner_rejects_attachment_owned_by_another_requester(db_session):
+    user = _user(db_session, "AttachmentRequester")
+    other = _user(db_session, "AttachmentOwner")
+    work_order = _work_order(db_session, "same-work-order-wrong-owner")
+    stored = StoredFile(
+        entity_type="field_attachment",
+        entity_id=work_order.public_id,
+        original_filename="receipt.pdf",
+        storage_key_or_relative_path="attachments/wrong-owner/receipt.pdf",
+        file_size=8,
+        content_type="application/pdf",
+        storage_provider="s3",
+    )
+    db_session.add(stored)
+    db_session.flush()
+    attachment = FieldAttachment(
+        work_order_mirror_id=work_order.id,
+        stored_file_id=stored.id,
+        kind="document",
+        file_name="receipt.pdf",
+        mime_type="application/pdf",
+        size_bytes=8,
+        uploaded_by_person_id=other.id,
+        uploaded_by_system_user_id=other.id,
+    )
+    db_session.add(attachment)
+    db_session.flush()
+    command = _command(
+        user,
+        work_order,
+        items=(_line(receipt_attachment_id=attachment.id),),
+    )
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("invalid_request")
+    assert "Receipt attachment not found" in exc.value.message
+
+
+def test_assigned_technician_can_submit_using_public_work_order_identity(db_session):
+    user = _user(db_session, "AssignedTechnician")
+    profile = TechnicianProfile(
+        person_id=user.id,
+        system_user_id=user.id,
+        crm_person_id="crm-assigned-tech",
+        is_active=True,
+    )
+    db_session.add(profile)
+    work_order = _work_order(db_session, "assigned-field-work-order", assigned=False)
+    work_order.assigned_to_crm_person_id = profile.crm_person_id
+    command = _command(
+        user,
+        work_order,
+        requester_person_id=user.id,
+        access_mode=ExpenseRequestAccessMode.FIELD_ASSIGNMENT,
+        staff_access=None,
+    )
+    db_session.commit()
+
+    outcome = submit_field_expense_request_command(db_session, command)
+
+    assert outcome.status == "submitted"
+    assert outcome.work_order_id == work_order.public_id
 
 
 def test_staff_command_rejects_unassigned_work_order(db_session):
@@ -318,6 +473,76 @@ def test_receipt_fields_are_optional_unless_the_category_requires_evidence():
     assert prepared_with_url.lines[0].receipt_upload is None
 
 
+def test_owner_enforces_receipt_required_category(db_session, monkeypatch):
+    monkeypatch.setattr(
+        expense_categories_module,
+        "list_expense_categories",
+        lambda _db, _query: (
+            ExpenseCategoryView(
+                category_code="transport",
+                category_name="Transport",
+                requires_receipt=True,
+                max_amount_per_claim=Decimal("10000.00"),
+            ),
+        ),
+    )
+    user = _user(db_session, "ReceiptRequired")
+    work_order = _work_order(db_session, "receipt-required-work-order")
+    command = _command(user, work_order)
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("invalid_request")
+    assert "receipt is required" in exc.value.message.lower()
+
+
+def test_owner_accepts_supported_receipt_url_for_required_category(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        expense_categories_module,
+        "list_expense_categories",
+        lambda _db, _query: (
+            ExpenseCategoryView(
+                category_code="transport",
+                category_name="Transport",
+                requires_receipt=True,
+                max_amount_per_claim=Decimal("10000.00"),
+            ),
+        ),
+    )
+    user = _user(db_session, "ReceiptUrl")
+    work_order = _work_order(db_session, "receipt-url-work-order")
+    command = _command(
+        user,
+        work_order,
+        items=(_line(receipt_url="https://receipts.example/expense.pdf"),),
+    )
+    db_session.commit()
+
+    outcome = submit_field_expense_request_command(db_session, command)
+
+    assert outcome.items[0].receipt_url == "https://receipts.example/expense.pdf"
+
+
+def test_owner_rejects_unsafe_receipt_url(db_session):
+    user = _user(db_session, "UnsafeReceiptUrl")
+    work_order = _work_order(db_session, "unsafe-receipt-url-work-order")
+    command = _command(
+        user,
+        work_order,
+        items=(_line(receipt_url="http://127.0.0.1/private-receipt"),),
+    )
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        submit_field_expense_request_command(db_session, command)
+
+    assert exc.value.code.endswith("receipt_url_invalid")
+
+
 def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     class _RejectUploads:
         @staticmethod
@@ -372,6 +597,17 @@ def test_staff_receipt_upload_avoids_legacy_subscriber_uploader_fk(
             kwargs["db"].add(stored)
             kwargs["db"].flush()
             return stored
+
+        @staticmethod
+        def stream_file(stored):
+            return type(
+                "Stream",
+                (),
+                {
+                    "chunks": (b"%PDF-1.4",),
+                    "content_type": stored.content_type,
+                },
+            )()
 
     monkeypatch.setattr(attachments_module, "file_uploads", _StageUploads())
     user = _user(db_session, "StaffReceipt")

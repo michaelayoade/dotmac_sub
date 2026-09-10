@@ -29,6 +29,11 @@ from app.services.integrations.backoffice_contracts import (
     ERP_STATUS_CAPABILITY,
     WORKFORCE_ATTENDANCE_PUNCH_CAPABILITY,
     WORKFORCE_ATTENDANCE_READ_CAPABILITY,
+    ErpExpenseApprovalCommand,
+    ErpExpenseClaimDraftCommand,
+    ErpExpenseClaimDraftOutcome,
+    ErpExpenseReceiptUploadCommand,
+    ErpExpenseReceiptUploadOutcome,
 )
 from app.services.integrations.runtime import OperationStatus, OperationTrigger
 from app.services.integrations.runtime_execution import (
@@ -156,6 +161,65 @@ class ErpCapabilityClient:
             },
             trigger=OperationTrigger.scheduled,
             correlation_id=f"erp-invoice-attachment:{key}",
+        )
+
+    def create_expense_claim_draft(
+        self,
+        command: ErpExpenseClaimDraftCommand,
+        *,
+        idempotency_key: str,
+    ) -> ErpExpenseClaimDraftOutcome:
+        response = self._execute(
+            ERP_OUTBOX_CAPABILITY,
+            "create_expense_claim_draft",
+            {
+                "payload": command.model_dump(mode="json", exclude_none=True),
+                "idempotency_key": idempotency_key,
+            },
+            trigger=OperationTrigger.scheduled,
+            correlation_id=f"erp-expense-draft:{idempotency_key}",
+        )
+        return ErpExpenseClaimDraftOutcome.model_validate(response)
+
+    def upload_expense_receipt(
+        self,
+        command: ErpExpenseReceiptUploadCommand,
+    ) -> ErpExpenseReceiptUploadOutcome:
+        response = self._execute(
+            ERP_OUTBOX_CAPABILITY,
+            "upload_expense_receipt",
+            {
+                "source_claim_id": str(command.source_claim_id),
+                "item_id": str(command.item_id),
+                "payload": command.model_dump(
+                    mode="json",
+                    exclude={"source_claim_id", "item_id"},
+                ),
+                "idempotency_key": command.idempotency_key,
+            },
+            trigger=OperationTrigger.scheduled,
+            correlation_id=f"erp-expense-receipt:{command.idempotency_key}",
+        )
+        return ErpExpenseReceiptUploadOutcome.model_validate(response)
+
+    def approve_expense_claim(
+        self,
+        command: ErpExpenseApprovalCommand,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self._execute(
+            ERP_OUTBOX_CAPABILITY,
+            "approve_expense_claim",
+            {
+                "source_claim_id": str(command.source_claim_id),
+                "payload": command.model_dump(
+                    mode="json", exclude={"source_claim_id"}, exclude_none=True
+                ),
+                "idempotency_key": idempotency_key,
+            },
+            trigger=OperationTrigger.scheduled,
+            correlation_id=f"erp-expense-approve:{idempotency_key}",
         )
 
     def list_inventory(self, **params) -> dict:
