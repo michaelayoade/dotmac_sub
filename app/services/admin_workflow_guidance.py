@@ -288,10 +288,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "becomes available after a technician is assigned and ERP categories "
             "are available."
         ),
+        "Choose the intended approver from ERP's current eligible list.",
+        "Use the masked ERP payment profile or choose different details for this expense, then verify the beneficiary, bank, and account before submitting.",
         "Enter the purpose, date, currency, and item details; attach required receipt evidence before submitting.",
         "Return to the work order to track delivery and ERP acceptance separately.",
         notes=(
-            "Only your claims appear in this card; approval, reimbursement, and payment remain in ERP.",
+            "Different payment details apply only to this expense and do not change the technician's ERP profile.",
+            "The selected approver alone can approve or reject the submitted expense; ERP remains authoritative for eligibility, account verification, reimbursement, and payment.",
+            "Only masked payment details are displayed. If ERP verification is unavailable or expires, verify again before submitting.",
             "A submitted claim is not approved, and a sent delivery is not ERP acceptance.",
         ),
         route_templates=("/admin/dispatch/work-orders/{work_order_id}",),
