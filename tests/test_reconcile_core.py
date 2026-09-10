@@ -34,6 +34,7 @@ from app.services.network.reconcile import (
     reconcile_ont,
 )
 from app.services.network.reconcile import core as reconcile_core
+from app.services.network.reconcile.applier import ApplyResult
 
 
 class _PostgresSessionStub:
@@ -651,6 +652,120 @@ def test_persisted_wifi_password_scope_pushes_without_proposed_value(
         if any("PreSharedKey" in parameter for parameter in call[1])
     ]
     assert len(psk_writes) == 1
+
+
+def test_readback_only_never_calls_set_parameter_values(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Structural write-incapability, part 1: a readback-only pass against
+    the EXACT same pending-write scenario as
+    ``test_persisted_wifi_password_scope_pushes_without_proposed_value``
+    (that test is the near-miss: identical setup, ``readback_only`` simply
+    omitted, and it asserts exactly one ``PreSharedKey`` write happened)
+    issues zero ACS writes. The only difference between the two tests is the
+    ``readback_only=True`` argument.
+    """
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_password_ref"})
+        ),
+        mode="sync",
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert acs.spv_calls == []
+    assert acs.add_object_calls == []
+    assert result.success is False
+    assert result.failure is not None
+    assert result.failure.reason is ReconcileFailureReason.VERIFICATION_MISMATCH
+    assert result.failure.evidence.get("readback_pending") is True
+
+
+def test_readback_only_never_reaches_apply_plan_even_with_genuine_drift(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """Structural write-incapability, part 2: patch ``apply_plan`` itself
+    (the ONE function in ``reconcile_ont`` that can call an ACS or OLT write)
+    to blow up if it is ever invoked, then run a readback-only pass against a
+    device document with a GENUINE SSID mismatch — the case most likely to
+    produce a non-empty write plan. ``reconcile_ont`` must return a failure
+    without ever calling the patched function: the readback-only branch in
+    ``app/services/network/reconcile/core.py`` returns before the
+    ``apply_plan(...)`` call site is ever reached, for any plan content.
+    """
+    apply_plan_calls: list[object] = []
+
+    def _spy_apply_plan(plan, ctx, *, deadline=None):
+        apply_plan_calls.append(plan)
+        raise AssertionError("apply_plan must never be called on a readback-only pass")
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.apply_plan", _spy_apply_plan
+    )
+
+    device = _synced_acs_device(ont)
+    device["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]["1"][
+        "SSID"
+    ] = {"_value": "WRONG-SSID", "_object": False, "_writable": True}
+    acs = _StubAcsClient(device=device)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        mode="sync",
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert apply_plan_calls == []
+    assert result.success is False
+    assert result.failure is not None
+
+
+def test_write_mode_reaches_apply_plan_for_the_same_drift(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """Near-miss for the two tests above: identical setup, minus
+    ``readback_only``. ``apply_plan`` IS reached — proving the guard in the
+    prior tests is actually exercising the ``readback_only`` branch and not
+    some unrelated reason ``apply_plan`` never runs (e.g. a broken fixture).
+    """
+    apply_plan_calls: list[object] = []
+
+    def _spy_apply_plan(plan, ctx, *, deadline=None):
+        apply_plan_calls.append(plan)
+        return ApplyResult(success=True, actions_applied=(), halted_by=None)
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.apply_plan", _spy_apply_plan
+    )
+
+    device = _synced_acs_device(ont)
+    device["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]["1"][
+        "SSID"
+    ] = {"_value": "WRONG-SSID", "_object": False, "_writable": True}
+    acs = _StubAcsClient(device=device)
+
+    reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        mode="sync",
+        acs_client=acs,
+        readback_only=False,
+    )
+
+    assert len(apply_plan_calls) == 1
 
 
 def test_persisted_admin_wan_change_scopes_delivery_without_writing_back(
