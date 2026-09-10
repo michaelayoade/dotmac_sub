@@ -24,11 +24,11 @@ class DeviceCommandOutcome {
   bool get needsVerification => status == 'needs_verification';
 
   bool get accepted => const {
-        'queued',
-        'waiting',
-        'succeeded',
-        'needs_verification',
-      }.contains(status);
+    'queued',
+    'waiting',
+    'succeeded',
+    'needs_verification',
+  }.contains(status);
 
   factory DeviceCommandOutcome.fromJson(Map<String, dynamic> json) =>
       DeviceCommandOutcome(
