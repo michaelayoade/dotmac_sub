@@ -1,0 +1,2 @@
+package = "dotmac-auth-oidc"
+classification = "stateless-protocol-adapter"

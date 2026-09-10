@@ -1,0 +1,957 @@
+{
+  "schema_version": "dimensional-composition.v2",
+  "product": "dotmac_sub",
+  "starter_catalogue_revision": "08a2dae1b1f6510e9d1076ac9dbd6eca0db06137",
+  "records": [
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-accounting",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-ai-operations",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-analytics",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-app-sync",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-application-directory",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-approvals",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-assets",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-auth-oidc",
+      "classification": "stateless-protocol-adapter",
+      "installation": "true",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "true"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-banking",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-billing",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-brand-profiles",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-campaigns",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-collections",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "true"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-commercial-agreements",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-compliance-reporting",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-flutterwave",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-linkedin",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-meta-social",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-mono",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-nira",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-paystack",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-remita",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-connector-whatsapp",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-content",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-customers",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-deployment-control",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-deployment-foundation",
+      "classification": "universal-facility",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-document-rendering",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-documents",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-durable-timers",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-entitlement-allocation",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-expenses",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-fiber-plant",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-files",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-finance",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-forms",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-fulfillment",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-fx-policy",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-imports",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-inbox",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-inbox-operations",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-integration",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-inventory",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-ipam",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-kernel",
+      "classification": "universal-facility",
+      "installation": "true",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "true"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-licensing",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-media-observations",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-access",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-assurance",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-control",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-inventory",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-observability",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-network-topology",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-numbering",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-operational-escalations",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-party",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-payables",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-payments",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-payroll",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-people",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-platform-health",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-pon-access",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-positioning",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-procurement",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-projects",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-publishing",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-qualification",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-records",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-referrals",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-release-catalog",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-remote-access",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-reseller-management",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-response-obligations",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-runner-transport",
+      "classification": "universal-facility",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-runner-transport-github-actions",
+      "classification": "stateless-protocol-adapter",
+      "installation": "false",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-sales",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-service-access-policy",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-service-catalog",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-service-changes",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-service-orders",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-services",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-sites",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-subscriptions",
+      "classification": "optional-module",
+      "installation": "true",
+      "module_registration": "false",
+      "migration_lineage": "true",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-support-access",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-surveys",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-tax",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-template-studio",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-ticketing",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-ui",
+      "classification": "presentation-foundation",
+      "installation": "true",
+      "module_registration": "not_applicable",
+      "migration_lineage": "not_applicable",
+      "runtime_consumption": "true"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-usage",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-usage-rating",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-web-analytics",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-work-orders",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-workflow-runtime",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    },
+    {
+      "schema_version": "dimensional-composition.v2",
+      "product": "dotmac_sub",
+      "distribution": "dotmac-workforce",
+      "classification": "optional-module",
+      "installation": "false",
+      "module_registration": "false",
+      "migration_lineage": "false",
+      "runtime_consumption": "false"
+    }
+  ]
+}
