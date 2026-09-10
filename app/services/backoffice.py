@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
@@ -77,6 +77,16 @@ class BackofficeExpensePaymentView:
     updated_at: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BackofficeExpenseRecoveryStaging:
+    """Provider-neutral evidence for one append-only delivery replacement."""
+
+    original_event_id: UUID
+    replacement_event_id: UUID
+    replacement_idempotency_key: str
+    replayed: bool
+
+
 def expense_payment_projection(
     request: FieldExpenseRequest,
 ) -> BackofficeExpensePaymentView:
@@ -88,19 +98,6 @@ def expense_payment_projection(
         error=str(raw["error"]) if raw.get("error") else None,
         updated_at=str(raw["updated_at"]) if raw.get("updated_at") else None,
     )
-
-
-def mark_expense_payment_queued(
-    request: FieldExpenseRequest, *, command_id: UUID, event_id: UUID
-) -> None:
-    metadata = dict(request.metadata_ or {})
-    metadata["erp_payment"] = {
-        "status": "queued",
-        "command_id": str(command_id),
-        "event_id": str(event_id),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    request.metadata_ = metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +237,8 @@ def get_expense_claim_deliveries(
     rows = [
         row
         for row in rows
-        if str((row.payload or {}).get("_expense_action") or "submit") == "submit"
+        if str((row.payload or {}).get("_expense_action") or "submit")
+        in {"submit", "release_approved_v2"}
     ]
     latest = {row.entity_id: row for row in rows}
     return {
@@ -317,21 +315,23 @@ def get_expense_decision_delivery(
 
     flow = FieldErpSyncFlow.expense_claim.value
     owner = get_flow_ownership(db)[flow]
-    row = (
+    rows = (
         db.query(FieldErpSyncEvent)
         .filter(
             FieldErpSyncEvent.flow == flow,
-            FieldErpSyncEvent.entity_type == "field_expense_decision",
             FieldErpSyncEvent.entity_id == request_id,
         )
         .order_by(FieldErpSyncEvent.created_at.desc())
         .all()
     )
+    accepted_actions = (
+        {"approve", "release_approved_v2"} if action == "approve" else {action}
+    )
     matching = next(
         (
             candidate
-            for candidate in row
-            if str((candidate.payload or {}).get("_expense_action")) == action
+            for candidate in rows
+            if str((candidate.payload or {}).get("_expense_action")) in accepted_actions
         ),
         None,
     )
@@ -393,11 +393,7 @@ def _enqueue_with_provider(
     provider = _provider_for_outbox(db)
 
     event: object | None
-    if flow == "expense_claim":
-        from app.services.dotmac_erp.expense_sync import enqueue_expense_claim
-
-        event = enqueue_expense_claim(db, source)
-    elif flow == "material_request":
+    if flow == "material_request":
         from app.services.dotmac_erp.material_sync import enqueue_material_request
 
         event = enqueue_material_request(db, source)
@@ -424,32 +420,6 @@ def _enqueue_with_provider(
     )
 
 
-def enqueue_expense_claim(
-    db: Session, request: FieldExpenseRequest
-) -> BackofficeEnqueueResult:
-    """Stage a submitted claim without requiring the delivery runtime to be online.
-
-    Flow ownership is the single-writer cutover gate. The capability binding is
-    resolved later by the delivery worker, so a temporary configuration outage
-    cannot erase a submitted expense's durable delivery intent.
-    """
-    if not _flow_owned_by_sub(db, "expense_claim"):
-        return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
-
-    from app.services.dotmac_erp.expense_sync import enqueue_expense_claim as enqueue
-
-    event = enqueue(db, request, isolate=False)
-    return BackofficeEnqueueResult(
-        status=(
-            BackofficeEnqueueStatus.ENQUEUED
-            if event is not None
-            else BackofficeEnqueueStatus.NOT_ENQUEUED
-        ),
-        provider="dotmac.erp",
-        event=event,
-    )
-
-
 def enqueue_expense_decision(
     db: Session,
     request: FieldExpenseRequest,
@@ -460,6 +430,12 @@ def enqueue_expense_decision(
     decided_at: datetime,
     reason: str | None = None,
 ) -> BackofficeEnqueueResult:
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense release requires the expense request owner")
+    if action != "approve":
+        raise ValueError("Only manager approval may release an expense to ERP")
     if not _flow_owned_by_sub(db, "expense_claim"):
         return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
 
@@ -495,6 +471,10 @@ def enqueue_expense_payment(
     initiated_by_email: str,
     initiated_at: datetime,
 ) -> BackofficeEnqueueResult:
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense payment requires the expense request owner")
     if not _flow_owned_by_sub(db, "expense_claim"):
         return BackofficeEnqueueResult(status=BackofficeEnqueueStatus.NOT_OWNED)
     from app.services.dotmac_erp.expense_sync import enqueue_expense_payment as enqueue
@@ -511,6 +491,68 @@ def enqueue_expense_payment(
         status=BackofficeEnqueueStatus.ENQUEUED,
         provider="dotmac.erp",
         event=event,
+    )
+
+
+def stage_expense_delivery_recovery(
+    db: Session,
+    *,
+    dead_event_id: UUID,
+    replacement_idempotency_key: str,
+    recovery_contract_version: str,
+) -> BackofficeExpenseRecoveryStaging:
+    """Append or reuse one replacement for a verified dead expense delivery."""
+
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        FieldErpSyncStatus,
+    )
+    from app.services.dotmac_erp.outbox import enqueue
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense recovery requires the expense request owner")
+    original = db.get(FieldErpSyncEvent, dead_event_id)
+    if (
+        original is None
+        or original.flow != FieldErpSyncFlow.expense_claim.value
+        or original.status != FieldErpSyncStatus.dead.value
+        or str((original.payload or {}).get("_expense_action")) != "release_approved_v2"
+    ):
+        raise BackofficeUnavailableError(
+            "The expense delivery is no longer recoverable"
+        )
+    existing = (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.idempotency_key == replacement_idempotency_key)
+        .one_or_none()
+    )
+    replacement = existing
+    if replacement is None:
+        payload = dict(original.payload or {})
+        payload.update(
+            {
+                "_replaces_event_id": str(original.id),
+                "_recovery_contract_version": recovery_contract_version,
+            }
+        )
+        replacement = enqueue(
+            db,
+            flow=FieldErpSyncFlow.expense_claim,
+            entity_type="field_expense_request",
+            entity_id=original.entity_id,
+            idempotency_key=replacement_idempotency_key,
+            payload=payload,
+            isolate=False,
+        )
+        if isinstance(original.erp_response, dict):
+            replacement.erp_response = dict(original.erp_response)
+    return BackofficeExpenseRecoveryStaging(
+        original_event_id=original.id,
+        replacement_event_id=replacement.id,
+        replacement_idempotency_key=replacement.idempotency_key,
+        replayed=existing is not None,
     )
 
 

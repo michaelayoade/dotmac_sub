@@ -888,8 +888,11 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.field.expense_requests",
         owns=(
             "field expense request submission",
+            "field expense request cancellation",
+            "field expense ERP form context",
             "expense receipt staging for submitted claims",
             "field expense approval and ERP delivery staging",
+            "dead expense delivery recovery",
             "field expense payment initiation and ERP delivery staging",
             "field expense vendor picker",
             "requester-owned field expense history",
@@ -907,12 +910,18 @@ SERVICES: tuple[SOTService, ...] = (
             "supplies exact RBAC-authorized work-order evidence and derives the actor "
             "from the authenticated session. Every submission requires current "
             "technician-assignment evidence. Receipt metadata is staged flush-only "
-            "inside the same command. Submission stages ERP claim visibility; typed "
-            "manager approval and rejection commands stage ordered ERP decisions. A "
+            "inside the same command. Submission never stages ERP delivery. Manager "
+            "approval is the sole ERP release point and atomically stages one event "
+            "that creates or reuses a draft, uploads missing receipts, then approves. "
+            "Rejection remains local. Explicit previewed recovery appends a linked "
+            "replacement without changing the original dead event. A "
             "separately authorized payment command stages reimbursement initiation, "
             "while ERP remains the payment and settlement authority. The client reference and "
             "normalized fingerprint make retries safe. The vendor picker remains "
-            "read-only and projects active vendor labels for expense entry."
+            "read-only and projects active vendor labels for expense entry. ERP "
+            "owns eligible approvers, bank identity, account verification, and the "
+            "opaque claim-bound destination token. Sub stores no raw account number; "
+            "it owns the selected local approver link and masked expense snapshot."
         ),
         contract=ServiceContract(
             concerns=(
@@ -923,9 +932,29 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical service work-order state",
                         "authenticated requester and work-order access evidence",
                         "ERP-owned expense category rules",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
                         "validated receipt content",
                     ),
                     canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense request cancellation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical field expense request state",
+                        "authenticated requester and work-order access evidence",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense ERP form context",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "authenticated requester and work-order access evidence",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
+                    ),
                 ),
                 ConcernContract(
                     name="expense receipt staging for submitted claims",
@@ -942,6 +971,20 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical submitted expense request",
+                        "selected expense approver",
+                        "ERP-owned expense category rules",
+                        "validated receipt content",
+                        "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="dead expense delivery recovery",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical approved expense request",
+                        "ERP-owned expense category rules",
+                        "validated receipt content",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -1018,6 +1061,34 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="ERP-owned eligible approver observation",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Active ERP employees with an expense-approval permission, "
+                        "matched to one active Sub SystemUser by normalized email"
+                    ),
+                ),
+                AuthorityInput(
+                    name="ERP-verified payment destination token",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Short-lived claim-bound opaque token plus bank name, account "
+                        "last four digits, verified beneficiary, and verification time; "
+                        "the raw account number never crosses into Sub persistence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="selected expense approver",
+                    owner="operations.expense_requests",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "ERP employee identity and exact active Sub SystemUser/email "
+                        "selected when the expense is submitted"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical submitted expense request",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1067,13 +1138,18 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Create, submit, optional receipt metadata, and work-order activity "
-                    "marking and submitted ERP outbox staging complete in one owner "
-                    "transaction. Receipt storage is a flush-only participant. Manager "
-                    "approval, rejection, and payment initiation each lock the request "
-                    "and stage an ordered ERP intent in the same owner transaction. "
+                    "marking complete in one owner transaction without ERP staging. "
+                    "Receipt storage is a flush-only participant. Manager approval "
+                    "requires the selected approver, locks the verified payment "
+                    "snapshot, and stages the sole ERP release intent in the "
+                    "same transaction. Rejection and cancellation remain local; payment "
+                    "stages a later ordered intent. Previewed recovery locks and "
+                    "revalidates before appending linked replacement evidence. "
                     "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
-                    "side-effect free; revision 584 performs the bounded, idempotent "
+                    "side-effect free; ERP form-context and destination-verification "
+                    "queries are also side-effect free. "
+                    "Revision 584 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
@@ -1085,8 +1161,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "A unique client reference replays only when the normalized "
                     "submission fingerprint is identical. An already-approved "
                     "request returns its current delivery outcome; the first "
-                    "transition records its command id. Submit and manager decisions "
-                    "have stable per-request delivery keys; each payment command id "
+                    "transition records its command id. Approval and receipt upload "
+                    "have stable versioned delivery keys; each payment command id "
                     "has one stable key and one ERP payment intent."
                 ),
                 retries=(
@@ -1099,6 +1175,13 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "operations.expense_requests.invalid_request",
+                    "operations.expense_requests.approver_invalid",
+                    "operations.expense_requests.approver_mismatch",
+                    "operations.expense_requests.destination_expired",
+                    "operations.expense_requests.destination_invalid",
+                    "operations.expense_requests.destination_unavailable",
+                    "operations.expense_requests.form_context_unavailable",
+                    "operations.expense_requests.form_context_required",
                     "operations.expense_requests.idempotency_conflict",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
@@ -1108,21 +1191,34 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.payment_already_active",
                     "operations.expense_requests.requester_not_found",
                     "operations.expense_requests.request_not_found",
+                    "operations.expense_requests.receipt_required",
+                    "operations.expense_requests.receipt_url_invalid",
+                    "operations.expense_requests.recovery_not_available",
+                    "operations.expense_requests.recovery_state_invalid",
+                    "operations.expense_requests.recovery_erp_unavailable",
+                    "operations.expense_requests.recovery_ambiguous",
+                    "operations.expense_requests.recovery_preview_stale",
                     "operations.expense_requests.work_order_not_found",
+                    "operations.expense_requests.work_order_unauthorized",
                     "operations.expense_requests.work_order_unassigned",
                     *owner_command_boundary_error_codes("operations.expense_requests"),
                 ),
                 mapping_owner="field expense request API adapter",
                 retryable_codes=(
+                    "operations.expense_requests.destination_unavailable",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
+                    "operations.expense_requests.form_context_unavailable",
                 ),
                 fail_closed_on=(
                     "unknown requester or work order",
                     "missing exact staff work-order authorization evidence",
                     "work order without a current technician assignment",
                     "unavailable or invalid ERP category rules",
+                    "unavailable or mismatched ERP approver identity",
+                    "missing, expired, or invalid ERP payment-destination token",
                     "invalid receipt evidence",
+                    "ambiguous ERP state during dead-event recovery",
                     "client-reference fingerprint conflict",
                     "expense-flow ownership not assigned to Sub",
                     "ERP outbox staging failure after expense-flow cutover",
@@ -1200,19 +1296,21 @@ SERVICES: tuple[SOTService, ...] = (
                 old_owner="separate field expense draft creation and submit calls",
                 new_owner="operations.expense_requests",
                 verification=(
-                    "Atomic submission, approval/outbox, replay, failure rollback, "
-                    "conflict, requester-history, and exact identity-repair tests pass."
+                    "Work-order-bound submission, approval-only release, private receipt "
+                    "delivery, partial-failure replay, explicit dead-event recovery, "
+                    "conflict, requester-history, and identity-repair tests pass."
                 ),
                 cutover_gate=(
                     "Mobile clients use the typed submit, decision, and payment "
                     "endpoints, ERP delivery "
                     "capabilities are enabled, and expense_claim ownership moves to "
-                    "Sub before submitting a new production expense. Historical test "
-                    "expenses are not backfilled into ERP delivery; exact requester-"
+                    "Sub before approving a new production expense. Historical expense "
+                    "events are not delivered or backfilled; exact requester-"
                     "identity repair remains a separate local migration."
                 ),
                 fallback_retirement=(
-                    "Retire separate mobile create-then-submit use after compatibility expiry."
+                    "Generic create and create-then-submit writers return 410; all new "
+                    "expense creation uses the work-order-bound owner command."
                 ),
             ),
             steward="field operations and finance",
@@ -1225,6 +1323,8 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_field_expense_requests.py",
                 "tests/test_work_order_expense_web.py",
                 "tests/test_dotmac_erp_expense_sync.py",
+                "tests/playwright/e2e/test_work_order_expense_disclosure.py",
+                "tests/architecture/test_field_expense_request_writer_boundary.py",
                 "tests/architecture/test_field_request_history_identity.py",
                 "tests/integration/test_field_request_requester_history_migration.py",
             ),

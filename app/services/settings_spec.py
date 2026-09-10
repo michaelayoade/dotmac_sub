@@ -2660,6 +2660,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="service_location_required",
+        env_var="CUSTOMER_SERVICE_LOCATION_REQUIRED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Require customer service location",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="default_country_code",
         env_var="DEFAULT_COUNTRY_CODE",
         value_type=SettingValueType.string,

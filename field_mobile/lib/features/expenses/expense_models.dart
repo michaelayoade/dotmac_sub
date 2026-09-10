@@ -25,6 +25,91 @@ class ExpenseCategory {
       );
 }
 
+class ExpenseApprover {
+  const ExpenseApprover({
+    required this.erpEmployeeId,
+    required this.systemUserId,
+    required this.displayName,
+    required this.email,
+  });
+  final String erpEmployeeId;
+  final String systemUserId;
+  final String displayName;
+  final String email;
+  factory ExpenseApprover.fromJson(Map<String, dynamic> json) =>
+      ExpenseApprover(
+        erpEmployeeId: json['erp_employee_id'].toString(),
+        systemUserId: json['system_user_id'].toString(),
+        displayName: json['display_name'].toString(),
+        email: json['email'].toString(),
+      );
+  Map<String, dynamic> toJson() => {
+    'erp_employee_id': erpEmployeeId,
+    'system_user_id': systemUserId,
+    'display_name': displayName,
+    'email': email,
+  };
+}
+
+class ExpenseBank {
+  const ExpenseBank({required this.bankCode, required this.bankName});
+  final String bankCode;
+  final String bankName;
+  factory ExpenseBank.fromJson(Map<String, dynamic> json) => ExpenseBank(
+    bankCode: json['bank_code'].toString(),
+    bankName: json['bank_name'].toString(),
+  );
+}
+
+class ExpenseProfileDestination {
+  const ExpenseProfileDestination({
+    required this.available,
+    this.bankCode,
+    this.bankName,
+    this.maskedAccountNumber,
+    this.beneficiaryName,
+  });
+  final bool available;
+  final String? bankCode;
+  final String? bankName;
+  final String? maskedAccountNumber;
+  final String? beneficiaryName;
+  factory ExpenseProfileDestination.fromJson(Map<String, dynamic> json) =>
+      ExpenseProfileDestination(
+        available: json['available'] == true,
+        bankCode: _string(json['bank_code']),
+        bankName: _string(json['bank_name']),
+        maskedAccountNumber: _string(json['masked_account_number']),
+        beneficiaryName: _string(json['beneficiary_name']),
+      );
+}
+
+class ExpenseFormContext {
+  const ExpenseFormContext({
+    required this.approvers,
+    required this.banks,
+    required this.profileDestination,
+  });
+  final List<ExpenseApprover> approvers;
+  final List<ExpenseBank> banks;
+  final ExpenseProfileDestination profileDestination;
+  factory ExpenseFormContext.fromJson(Map<String, dynamic> json) =>
+      ExpenseFormContext(
+        approvers: _mapList(
+          json['approvers'],
+        ).map(ExpenseApprover.fromJson).toList(),
+        banks: _mapList(json['banks']).map(ExpenseBank.fromJson).toList(),
+        profileDestination: ExpenseProfileDestination.fromJson(
+          (json['profile_destination'] as Map).cast<String, dynamic>(),
+        ),
+      );
+}
+
+class VerifiedExpenseDestination {
+  const VerifiedExpenseDestination(this.data);
+  final Map<String, dynamic> data;
+}
+
 class ExpenseItemDraft {
   const ExpenseItemDraft({
     required this.categoryCode,
@@ -123,6 +208,11 @@ class ExpenseRequest {
     this.paymentStatus,
     this.paymentIntentId,
     this.paymentError,
+    this.selectedApproverName,
+    this.paymentDestinationMode,
+    this.recipientBankName,
+    this.maskedAccountNumber,
+    this.verifiedBeneficiaryName,
     this.total,
     this.ticketId,
     this.projectId,
@@ -151,6 +241,11 @@ class ExpenseRequest {
   final String? paymentStatus;
   final String? paymentIntentId;
   final String? paymentError;
+  final String? selectedApproverName;
+  final String? paymentDestinationMode;
+  final String? recipientBankName;
+  final String? maskedAccountNumber;
+  final String? verifiedBeneficiaryName;
   final double? total;
   final String? ticketId;
   final String? projectId;
@@ -183,6 +278,11 @@ class ExpenseRequest {
     paymentStatus: _string(json['payment_status']),
     paymentIntentId: _string(json['payment_intent_id']),
     paymentError: _string(json['payment_error']),
+    selectedApproverName: _string(json['selected_approver_name']),
+    paymentDestinationMode: _string(json['payment_destination_mode']),
+    recipientBankName: _string(json['recipient_bank_name']),
+    maskedAccountNumber: _string(json['masked_account_number']),
+    verifiedBeneficiaryName: _string(json['verified_beneficiary_name']),
     total: _double(json['total_amount']),
     ticketId: json['ticket_id']?.toString(),
     projectId: json['project_id']?.toString(),

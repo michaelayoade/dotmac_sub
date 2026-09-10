@@ -2646,7 +2646,11 @@ DOMAIN = DomainSOT(
                         name="conversation routing facts",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Recipients, current owner team, assignment, priority, and lifecycle.",
+                        source=(
+                            "Recipients, current owner team, assignment, priority, "
+                            "lifecycle, and locked prior-owner presence for "
+                            "offline-owner reply takeover."
+                        ),
                     ),
                     AuthorityInput(
                         name="operational escalation policy",
@@ -2671,8 +2675,11 @@ DOMAIN = DomainSOT(
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
-                            "Active-session ownership plus typed AI-handoff provenance; "
-                            "ordinary and generic assignment paths fail closed."
+                            "Active-session ownership plus typed AI-handoff and "
+                            "explicit-human-takeover provenance; ordinary and generic "
+                            "assignment paths fail closed. Explicit takeover accepts "
+                            "any active authorized staff actor independently of team "
+                            "membership, presence, capacity, FIFO, or an existing owner."
                         ),
                     ),
                     AuthorityInput(
@@ -2683,6 +2690,17 @@ DOMAIN = DomainSOT(
                             "The exact active AuthSession UUID and bound active "
                             "SystemUser UUID after successful credential and MFA "
                             "verification."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authenticated visible Inbox activity",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "A permission-checked SystemUser heartbeat emitted only "
+                            "while the Inbox workspace is visible; it refreshes "
+                            "selected online presence and never overrides explicit "
+                            "away, on-break, or offline state."
                         ),
                     ),
                     AuthorityInput(
@@ -2718,6 +2736,7 @@ DOMAIN = DomainSOT(
                     "tests/test_admin_inbox_slice4_workflows.py",
                     "tests/test_auth_flow.py",
                     "tests/test_team_inbox_assignment.py",
+                    "tests/test_team_inbox_commands.py",
                     "tests/test_team_inbox_fifo_queue.py",
                     "tests/test_team_inbox_queue_notifications.py",
                     "tests/integration/test_team_inbox_queue_concurrency.py",
@@ -3269,7 +3288,10 @@ DOMAIN = DomainSOT(
                         source=(
                             "Assignment, escalation, and lifecycle eligibility, "
                             "including preserve-existing-owner reply auto-claim with "
-                            "team membership, presence, capacity, and FIFO checks."
+                            "team membership, presence, capacity, and FIFO checks; "
+                            "explicit human takeover is the typed exception that "
+                            "bypasses those gates while preserving active-team "
+                            "routing and audit attribution."
                         ),
                     ),
                     AuthorityInput(

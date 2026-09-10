@@ -486,6 +486,51 @@ class FieldExpenseVendorRead(BaseModel):
     label: str
 
 
+class FieldExpenseApproverRead(BaseModel):
+    erp_employee_id: UUID
+    system_user_id: UUID
+    display_name: str
+    email: str
+
+
+class FieldExpenseBankRead(BaseModel):
+    bank_code: str
+    bank_name: str
+
+
+class FieldExpenseProfileDestinationRead(BaseModel):
+    available: bool
+    bank_code: str | None = None
+    bank_name: str | None = None
+    masked_account_number: str | None = None
+    beneficiary_name: str | None = None
+
+
+class FieldExpenseFormContextRead(BaseModel):
+    approvers: list[FieldExpenseApproverRead] = Field(default_factory=list)
+    banks: list[FieldExpenseBankRead] = Field(default_factory=list)
+    profile_destination: FieldExpenseProfileDestinationRead
+
+
+class FieldExpenseDestinationVerify(BaseModel):
+    source_claim_id: UUID
+    mode: Literal["erp_profile", "expense_override"]
+    bank_code: str | None = Field(default=None, min_length=2, max_length=20)
+    account_number: str | None = Field(default=None, min_length=6, max_length=30)
+    beneficiary_name: str | None = Field(default=None, min_length=2, max_length=150)
+
+
+class FieldExpenseDestinationRead(BaseModel):
+    destination_token: str = Field(min_length=20, max_length=4096, repr=False)
+    mode: Literal["erp_profile", "expense_override"]
+    bank_code: str
+    bank_name: str
+    masked_account_number: str
+    verified_beneficiary_name: str
+    verified_at: datetime
+    expires_at: datetime
+
+
 class FieldExpenseRequestCreate(WorkOrderCompatibilityInput):
     purpose: str = Field(min_length=1, max_length=500)
     expense_date: date | None = None
@@ -497,6 +542,8 @@ class FieldExpenseRequestCreate(WorkOrderCompatibilityInput):
 
 class FieldExpenseRequestSubmit(FieldExpenseRequestCreate):
     client_ref: UUID
+    selected_approver: FieldExpenseApproverRead
+    payment_destination: FieldExpenseDestinationRead
 
 
 class FieldExpenseRequestItemRead(BaseModel):
@@ -518,6 +565,13 @@ class FieldExpenseRequestRead(BaseModel):
     crm_expense_request_id: str | None = None
     requested_by_person_id: UUID
     requested_by_system_user_id: UUID | None = None
+    selected_approver_erp_id: UUID | None = None
+    selected_approver_name: str | None = None
+    selected_approver_email: str | None = None
+    payment_destination_mode: str | None = None
+    recipient_bank_name: str | None = None
+    masked_account_number: str | None = None
+    verified_beneficiary_name: str | None = None
     status: str
     purpose: str
     expense_date: date | None = None
@@ -558,7 +612,26 @@ class FieldExpenseRejectionRead(BaseModel):
     status: Literal["rejected"]
     rejected_at: datetime
     rejection_reason: str
-    erp_sync_event_id: UUID
+    erp_sync_event_id: UUID | None = None
+
+
+class FieldExpenseRecoveryPreviewRead(BaseModel):
+    dead_event_id: UUID
+    expense_request_id: UUID
+    replacement_idempotency_key: str
+    fingerprint: str
+    erp_claim_status: str | None = None
+
+
+class FieldExpenseRecoveryRequest(BaseModel):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class FieldExpenseRecoveryRead(BaseModel):
+    original_event_id: UUID
+    replacement_event_id: UUID
+    replacement_idempotency_key: str
+    replayed: bool
 
 
 class FieldExpensePaymentRead(BaseModel):
