@@ -239,6 +239,21 @@ domain rules; they must not silently become zero.
 - Return an operation or event identifier for asynchronous actions and show
   progress without claiming an optimistic final state.
 - Audit administrative mutations through the canonical audit/event owner.
+- When a gated action's blockers, evidence, and next steps are worth showing
+  together (not just a single `disabled_reason` string), the owning service
+  hands them to the caller as an `ActionReadiness` verdict
+  (`app/services/action_readiness.py`) rather than inventing a new ad-hoc
+  shape — see `docs/designs/ACTION_READINESS_CONTRACT.md`.
+- A blocker's declared `owner` must be a real, decision-making backend
+  service — never the readiness contract itself and never another
+  pure-vocabulary UI layer.
+- Render an `ActionReadiness` verdict through the shared
+  `action_readiness_panel` macro
+  (`templates/components/actions/action_readiness.html`); do not re-derive
+  its state, tone, or audience-specific message in a template.
+- `ActionForm.gated_by(readiness, …)` is the standard way to turn a readiness
+  verdict into a form's `allowed`/`disabled_reason` — it changes no
+  eligibility decision, only the transport shape reaching the form.
 
 The admin subscription detail page presents an outstanding pending plan-change
 request with its target plan, effective date, execution state, request identity,
