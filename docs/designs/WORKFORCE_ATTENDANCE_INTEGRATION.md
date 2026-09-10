@@ -26,13 +26,16 @@ validation. ERP server time is authoritative, and ERP alone accepts or rejects
 the geofence result. Mutations use ERP platform idempotency and the dashboard
 reads ERP after an ambiguous timeout rather than inferring success.
 
-The field app offers `Check In`, `Shift`, and `Check Out` in its location card.
-`Shift` is fail-closed until a fresh ERP observation confirms `checked_in`;
-the field location-sharing adapter repeats that check server-side before it
-accepts enablement. Attendance punches are online-only and are never written to
-the mobile offline queue. After ERP confirms checkout, the client immediately
-stops local tracking and requests the server presence projection be switched to
-`off_shift`.
+The field app offers `Check In`, `On shift`, and `Check Out` in its location
+card. After a fresh ERP observation confirms `checked_in`, the field app
+immediately requests location sharing with presence status `on_shift`; the
+field location-sharing adapter repeats that attendance check server-side before
+it accepts enablement. If that follow-up request fails, the confirmed attendance
+state remains visible and `On shift` provides an explicit retry rather than
+implying that sharing started. Attendance punches are online-only and are never
+written to the mobile offline queue. After ERP confirms checkout, the client
+immediately stops local tracking and requests the server presence projection be
+switched to `off_shift`.
 
 Attendance is synchronous request/response capability traffic, not a webhook.
 ERP material-status and staff-access webhooks are separate contracts and do not
