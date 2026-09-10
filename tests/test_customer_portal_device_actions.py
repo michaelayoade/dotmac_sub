@@ -505,15 +505,19 @@ def test_record_device_command_refusal_logs_and_increments_the_counter(
     database write."""
     import logging
 
-    from app import metrics
+    from app.services import customer_device_commands
     from app.services.customer_device_commands import (
         CustomerDeviceCommandKind,
         record_device_command_refusal,
     )
 
     incremented = []
+    # `customer_device_commands` imports the metrics helper by name at
+    # module load time (`from app.metrics import
+    # record_customer_device_command_refusal`), so the name to patch is the
+    # one bound in *this* module's namespace, not `app.metrics`'s.
     monkeypatch.setattr(
-        metrics,
+        customer_device_commands,
         "record_customer_device_command_refusal",
         lambda **kwargs: incremented.append(kwargs),
     )
