@@ -2693,6 +2693,17 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
+                        name="authenticated visible Inbox activity",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "A permission-checked SystemUser heartbeat emitted only "
+                            "while the Inbox workspace is visible; it refreshes "
+                            "selected online presence and never overrides explicit "
+                            "away, on-break, or offline state."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="active staff principal",
                         owner="auth.staff_provisioning",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,

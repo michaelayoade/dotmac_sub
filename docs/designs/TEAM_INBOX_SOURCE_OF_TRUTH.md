@@ -261,14 +261,24 @@ routing reason in the same transaction as the reply and assignment transition.
 
 An `online` presence is eligible only when its `last_seen_at` evidence is no
 more than 30 minutes old; missing or stale presence fails closed as offline.
+The authenticated Inbox workspace sends a best-effort heartbeat when it opens,
+every five minutes while visible, and when a hidden tab becomes visible again.
+The routing owner accepts that heartbeat only for an active `SystemUser`. It
+creates missing online presence and refreshes selected online presence, but
+never overrides an explicit `away`, `on_break`, or `offline` selection. A
+hidden or closed workspace naturally becomes stale after the same 30-minute
+window.
 The default capacity is the `comms.inbox_agent_default_max_concurrent_conversations`
 setting (default `10`, allowed range `1..100`) unless
 `InboxAgentPresence.max_concurrent_conversations` supplies the existing
 per-agent override. Administrators edit the default at **Admin → System →
 Settings → Comms**, field **Default active Inbox conversations per agent**;
-the canonical settings writer invalidates the cache on commit and subsequent
-assignment decisions consume the new value immediately. There is currently no
-Admin writer for the per-agent override. Capacity counts active human
+the field states its `1..100` range, identifies `10` as the default rather than
+a maximum, and provides an adjacent save action. The Inbox Manager Dashboard
+links authorized settings operators directly to that control. The canonical
+settings writer invalidates the cache on commit and subsequent assignment
+decisions consume the new value immediately. There is currently no Admin writer
+for the per-agent override. Capacity counts active human
 assignments on `open`, human-owned `pending`, and `snoozed` conversations while
 ownership remains active. It excludes resolved and AI-owned conversations even
 if legacy drift left an assignment projection behind. Default/actionable,

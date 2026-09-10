@@ -68,13 +68,25 @@ _ROUTING_COMMAND = OwnerCommandDefinition(
     concern="routing assignment and escalation transitions",
     name="execute_team_inbox_routing_command",
 )
+_PRESENCE_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="agent presence transitions",
+    name="refresh_team_inbox_agent_presence",
+)
 
 
-def _commit(db: Session, action: Callable[[], T]) -> T:
+def _commit(
+    db: Session,
+    action: Callable[[], T],
+    *,
+    context: CommandContext | None = None,
+    definition: OwnerCommandDefinition = _ROUTING_COMMAND,
+) -> T:
     return execute_owner_command(
         db,
-        definition=_ROUTING_COMMAND,
-        context=CommandContext.system(
+        definition=definition,
+        context=context
+        or CommandContext.system(
             actor="system:team-inbox-routing-adapter",
             scope="team-inbox:routing-command",
             reason="execute Team Inbox routing transition",
@@ -95,6 +107,7 @@ class InboxAgentCandidate:
 class InboxPresenceReason(StrEnum):
     manual_change = "manual_change"
     staff_sign_in = "staff_sign_in"
+    authenticated_inbox_activity = "authenticated_inbox_activity"
     session_timeout = "session_timeout"
     logout = "logout"
     connection_lost = "connection_lost"
@@ -131,6 +144,27 @@ class AgentSignedInPresenceOutcome:
     presence_id: UUID
     status: InboxAgentPresenceStatus
     transition_recorded: bool
+
+
+class AgentPresenceHeartbeatDisposition(StrEnum):
+    refreshed = "refreshed"
+    explicit_unavailable = "explicit_unavailable"
+    inactive_principal = "inactive_principal"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPresenceHeartbeatCommand:
+    context: CommandContext
+    system_user_id: UUID
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPresenceHeartbeatOutcome:
+    system_user_id: UUID
+    status: InboxAgentPresenceStatus
+    disposition: AgentPresenceHeartbeatDisposition
+    last_seen_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -403,6 +437,77 @@ def record_agent_reply_activity(
     db.flush()
     presence.last_seen_at = refreshed_at
     return presence
+
+
+def refresh_agent_presence(
+    db: Session,
+    *,
+    command: AgentPresenceHeartbeatCommand,
+) -> AgentPresenceHeartbeatOutcome:
+    """Record authenticated, visible Inbox activity without overriding absence."""
+
+    def action() -> AgentPresenceHeartbeatOutcome:
+        active_principal_id = (
+            db.query(SystemUser.id)
+            .filter(SystemUser.id == command.system_user_id)
+            .filter(SystemUser.is_active.is_(True))
+            .with_for_update()
+            .scalar()
+        )
+        if active_principal_id is None:
+            return AgentPresenceHeartbeatOutcome(
+                system_user_id=command.system_user_id,
+                status=InboxAgentPresenceStatus.offline,
+                disposition=AgentPresenceHeartbeatDisposition.inactive_principal,
+                last_seen_at=None,
+            )
+
+        existing = (
+            db.query(InboxAgentPresence)
+            .filter(InboxAgentPresence.person_id == command.system_user_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        selected_status = (
+            existing.manual_override_status or existing.status
+            if existing is not None
+            else InboxAgentPresenceStatus.online.value
+        )
+        if selected_status != InboxAgentPresenceStatus.online.value:
+            return AgentPresenceHeartbeatOutcome(
+                system_user_id=command.system_user_id,
+                status=InboxAgentPresenceStatus(selected_status),
+                disposition=AgentPresenceHeartbeatDisposition.explicit_unavailable,
+                last_seen_at=existing.last_seen_at if existing is not None else None,
+            )
+
+        presence = set_agent_presence(
+            db,
+            person_id=command.system_user_id,
+            status=InboxAgentPresenceStatus.online.value,
+            now=command.observed_at,
+            actor_person_id=command.system_user_id,
+            reason_code=InboxPresenceReason.authenticated_inbox_activity,
+            source_id=f"inbox-heartbeat:{command.context.command_id}",
+            manual_override=(
+                existing is not None
+                and existing.manual_override_status
+                == InboxAgentPresenceStatus.online.value
+            ),
+        )
+        return AgentPresenceHeartbeatOutcome(
+            system_user_id=command.system_user_id,
+            status=InboxAgentPresenceStatus.online,
+            disposition=AgentPresenceHeartbeatDisposition.refreshed,
+            last_seen_at=presence.last_seen_at,
+        )
+
+    return _commit(
+        db,
+        action,
+        context=command.context,
+        definition=_PRESENCE_COMMAND,
+    )
 
 
 def agent_availability_snapshots(

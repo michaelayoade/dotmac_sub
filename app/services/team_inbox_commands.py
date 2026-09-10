@@ -1379,6 +1379,16 @@ def set_agent_presence(
     return _commit(db, action)
 
 
+def refresh_agent_presence(
+    db: Session,
+    *,
+    command: team_inbox_assignment.AgentPresenceHeartbeatCommand,
+) -> team_inbox_assignment.AgentPresenceHeartbeatOutcome:
+    """Delegate authenticated activity to the routing presence owner."""
+
+    return team_inbox_assignment.refresh_agent_presence(db, command=command)
+
+
 def bulk_action(
     db: Session,
     *,

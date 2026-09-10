@@ -483,7 +483,14 @@ implementation.
 - Admin → System → Settings → Comms exposes **Default active Inbox
   conversations per agent** with range 1–100 and default 10. Per-agent backend
   overrides are not presented as though they are editable when no Admin writer
-  exists.
+  exists. The Inbox Manager Dashboard links authorized settings operators to
+  that exact control, which explains that 10 is the default rather than the
+  maximum and provides an adjacent **Save Inbox capacity** action.
+- While the authenticated Inbox workspace is visible, it supplies a
+  best-effort agent-presence heartbeat at five-minute intervals and immediately
+  when visibility resumes. The routing owner may use this only to refresh
+  selected online state; explicit away, on-break, and offline choices remain
+  authoritative.
 - Queue heartbeats are off by default. If enabled in AI intake policy they are
   clearly identified as reassurance, use different copy from a position
   update, and never repeat the current position.
