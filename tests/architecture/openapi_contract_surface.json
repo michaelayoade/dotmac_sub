@@ -4627,6 +4627,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/manager/team-map/{technician_id}/location-detail": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:technician_id!",
+    "query:stale_after_seconds"
+   ],
+   "request": null,
+   "responses": {
+    "200": "d3beb2e54301",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/manager/technicians": {
    "params": [
     "header:authorization",
@@ -19545,6 +19558,7 @@
   "FieldLinkBudgetRead": "0fe4def40cc4",
   "FieldLiveMapFeed": "048a87551489",
   "FieldLiveMapPosition": "ae257e574bcc",
+  "FieldLiveMapTechnicianDetail": "bf1e0e8c76ef",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",

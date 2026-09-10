@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.field import FieldManagerTechniciansQuery
+from app.schemas.geocoding import ReverseGeocodeResult
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -432,6 +434,21 @@ def test_manager_api(db_session):
     )
     assert map_item["latitude"] == pytest.approx(9.0765)
     assert map_item["longitude"] == pytest.approx(7.3986)
+
+    with patch(
+        "app.services.field_maps.geocoding.resolve_coordinates",
+        return_value=ReverseGeocodeResult(
+            display_name="Central District, Abuja",
+            latitude=9.0765,
+            longitude=7.3986,
+        ),
+    ):
+        location_detail = client.get(
+            f"/api/v1/field/manager/team-map/{profile.id}/location-detail"
+        )
+    assert location_detail.status_code == 200
+    assert location_detail.json()["address_text"] == "Central District, Abuja"
+    assert location_detail.json()["position"]["person_id"] == str(profile.person_id)
 
     jobs = client.get("/api/v1/field/manager/jobs")
     assert jobs.status_code == 200

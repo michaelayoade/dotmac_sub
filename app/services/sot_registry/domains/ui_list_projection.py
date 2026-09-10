@@ -1162,9 +1162,11 @@ DOMAIN = DomainSOT(
                 "dispatch field-map sharing-authorized technician position projection",
                 "dispatch field-map searchable fields and focus coordinates",
                 "dispatch field-map stale-position semantics",
+                "selected technician nearest-address projection",
             ),
             depends_on=(
                 "customer.accounts",
+                "gis.geocoding",
                 "operations.work_orders",
             ),
             notes=(
@@ -1173,6 +1175,8 @@ DOMAIN = DomainSOT(
                 "sharing is disabled. Search resolves technician identity and "
                 "native work-order/customer/service-address facts before "
                 "returning only results with valid, focusable coordinates. The "
+                "selected-technician detail rechecks sharing and delegates its "
+                "on-demand nearest-address lookup to gis.geocoding. The "
                 "admin-web and manager-mobile adapters both enforce "
                 "operations:dispatch:read, and their navigation uses the same "
                 "permission for discoverability."
@@ -1202,6 +1206,15 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=(
                             "native field-technician presence facts",
+                            "dispatch field-map freshness input",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="selected technician nearest-address projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "native field-technician presence facts",
+                            "provider-neutral reverse-geocode result",
                             "dispatch field-map freshness input",
                         ),
                     ),
@@ -1247,12 +1260,22 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="typed bounded stale-after duration",
                     ),
+                    AuthorityInput(
+                        name="provider-neutral reverse-geocode result",
+                        owner="gis.geocoding",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "typed nearest-address lookup for the selected, "
+                            "sharing-authorized technician coordinates"
+                        ),
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
                     boundary=(
-                        "Feed and search queries read one adapter-owned session and "
-                        "perform no ORM mutation or transaction completion."
+                        "Feed, search, and selected-detail queries read one "
+                        "adapter-owned session and perform no ORM mutation or "
+                        "transaction completion."
                     ),
                     locking="No locks; the projection is observational and read-only.",
                     idempotency=(
@@ -1271,6 +1294,7 @@ DOMAIN = DomainSOT(
                         "missing operations:dispatch:read permission",
                         "disabled technician location sharing",
                         "missing or invalid focus coordinates",
+                        "missing selected-technician location detail",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1281,8 +1305,8 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="ui.field_live_map_projection",
                     verification=(
-                        "typed feed/search contracts, sharing/privacy tests, street "
-                        "search tests, route permission tests, and UI focus tests"
+                        "typed feed/search/detail contracts, sharing/privacy tests, "
+                        "street search tests, route permission tests, and UI focus tests"
                     ),
                     cutover_gate=(
                         "Routes return owner-provided typed outcomes; web and mobile "

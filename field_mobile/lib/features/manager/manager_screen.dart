@@ -147,8 +147,10 @@ enum _TeamFilter { all, live, stale, notSharing }
 class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
     with WidgetsBindingObserver {
   static const _refreshInterval = Duration(seconds: 30);
+  static const _selectedTechnicianZoom = 17.0;
 
   final _mapController = MapController();
+  final _scrollController = ScrollController();
   Timer? _refreshTimer;
   bool _isForeground = true;
   bool _isVisible = true;
@@ -179,6 +181,7 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
     WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     _mapController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -235,6 +238,7 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: CustomScrollView(
+          controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverPadding(
@@ -363,7 +367,9 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
             return _TechnicianTile(
               technician: technician,
               position: position,
-              onTap: () => _showTechnician(technician, position),
+              onTap: () => unawaited(
+                _showTechnician(technician, position, bringMapIntoView: true),
+              ),
             );
           },
         ),
@@ -402,16 +408,20 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
         break;
       }
     }
-    _focusPosition(position);
-    _showTechnician(technician, position);
+    unawaited(_showTechnician(technician, position));
   }
 
-  void _showTechnician(
+  Future<void> _showTechnician(
     ManagerTechnician? technician,
-    ManagerTeamMapPosition? position,
-  ) {
+    ManagerTeamMapPosition? position, {
+    bool bringMapIntoView = false,
+  }) async {
+    if (position != null && bringMapIntoView) {
+      await _bringMapIntoView();
+    }
+    if (!mounted) return;
     if (position != null) _focusPosition(position);
-    showModalBottomSheet<void>(
+    await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => _TechnicianLocationSheet(
@@ -427,8 +437,21 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
     );
   }
 
+  Future<void> _bringMapIntoView() async {
+    if (!_scrollController.hasClients) return;
+    await _scrollController.animateTo(
+      _scrollController.position.minScrollExtent,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
   void _focusPosition(ManagerTeamMapPosition position) {
-    _mapController.move(LatLng(position.latitude, position.longitude), 16);
+    _mapController.move(
+      LatLng(position.latitude, position.longitude),
+      _selectedTechnicianZoom,
+    );
   }
 
   int _compareTechnicians(
@@ -1119,7 +1142,7 @@ class _TeamFilterChip extends StatelessWidget {
   }
 }
 
-class _TechnicianLocationSheet extends StatelessWidget {
+class _TechnicianLocationSheet extends ConsumerWidget {
   const _TechnicianLocationSheet({
     required this.technician,
     required this.position,
@@ -1131,58 +1154,116 @@ class _TechnicianLocationSheet extends StatelessWidget {
   final VoidCallback? onOpenDispatch;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final title = technician?.name ?? position?.label ?? 'Technician';
-    final status = position == null
+    final locationDetail = position == null
+        ? null
+        : ref.watch(
+            managerTechnicianLocationDetailProvider(position!.technicianId),
+          );
+    final displayedPosition = locationDetail?.valueOrNull?.position ?? position;
+    final status = displayedPosition == null
         ? technician?.locationSharingEnabled == true
               ? 'Waiting for a shared location'
               : 'Location sharing is off'
-        : _positionStatus(position!);
+        : _positionStatus(displayedPosition);
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            Text(status),
-            if (position?.lastLocationAt != null) ...[
-              const SizedBox(height: 10),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               Text(
-                'Location updated ${_relativeTime(position!.lastLocationAt!)}',
-              ),
-            ],
-            if (position?.accuracyM != null) ...[
-              const SizedBox(height: 4),
-              Text('Accuracy ±${position!.accuracyM!.round()} m'),
-            ],
-            if (technician?.activeWorkOrderTitle != null) ...[
-              const SizedBox(height: 14),
-              Text(
-                'Current work order',
+                title,
                 style: Theme.of(
                   context,
-                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
               ),
-              const SizedBox(height: 3),
-              Text(technician!.activeWorkOrderTitle!),
+              const SizedBox(height: 6),
+              Text(status),
+              if (locationDetail != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  displayedPosition!.isLive
+                      ? 'Live location address'
+                      : 'Last known address',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 3),
+                locationDetail.when(
+                  loading: () => const Row(
+                    children: [
+                      SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(child: Text('Finding nearest address...')),
+                    ],
+                  ),
+                  error: (_, _) => Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Address currently unavailable'),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.invalidate(
+                          managerTechnicianLocationDetailProvider(
+                            position!.technicianId,
+                          ),
+                        ),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                  data: (detail) {
+                    final address = detail.addressText?.trim();
+                    if (detail.addressStatus !=
+                            ManagerLocationAddressStatus.available ||
+                        address == null ||
+                        address.isEmpty) {
+                      return const Text('Nearest address unavailable');
+                    }
+                    return Text(address);
+                  },
+                ),
+              ],
+              if (displayedPosition?.lastLocationAt != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Location updated '
+                  '${_relativeTime(displayedPosition!.lastLocationAt!)}',
+                ),
+              ],
+              if (displayedPosition?.accuracyM != null) ...[
+                const SizedBox(height: 4),
+                Text('Accuracy ±${displayedPosition!.accuracyM!.round()} m'),
+              ],
+              if (technician?.activeWorkOrderTitle != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Current work order',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 3),
+                Text(technician!.activeWorkOrderTitle!),
+              ],
+              if (onOpenDispatch != null) ...[
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: onOpenDispatch,
+                  icon: const Icon(Icons.assignment_ind_outlined),
+                  label: const Text('View dispatch'),
+                ),
+              ],
             ],
-            if (onOpenDispatch != null) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: onOpenDispatch,
-                icon: const Icon(Icons.assignment_ind_outlined),
-                label: const Text('View dispatch'),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
