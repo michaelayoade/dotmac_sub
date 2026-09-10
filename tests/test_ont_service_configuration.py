@@ -1999,7 +1999,15 @@ def _verify_setup(
         else failed_at - timedelta(minutes=10)
     )
     db_session.flush()
-    db_session.commit()
+    # No commit here (unlike earlier helpers that owned their own commit):
+    # ``execute_owner_command`` requires a transaction-free session at
+    # entry, and this ORM session expires instances on commit. Committing
+    # here and then reading ``.id``/``.revision`` back off the returned,
+    # now-expired instances would trigger an implicit SQLAlchemy autobegin
+    # refresh query -- leaving a *new*, unrelated transaction open by the
+    # time a test calls into ``verify_ont_service_configuration_readback``.
+    # Callers capture the plain ids they need and commit themselves,
+    # exactly once, immediately before invoking the owner command.
     return ont, assignment, head, revision, operation
 
 
@@ -2028,16 +2036,22 @@ def test_verify_rejects_when_head_is_not_failed(db_session):
         db_session, suffix="not-failed"
     )
     head.phase = OntServiceConfigurationPhase.queued
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
     db_session.commit()
 
     with pytest.raises(DomainError) as excinfo:
         verify_ont_service_configuration_readback(
             db_session,
             _verify_command(
-                ont_id=ont.id,
-                head_id=head.id,
-                revision_number=revision.revision,
-                failed_operation_id=operation.id,
+                ont_id=ont_id,
+                head_id=head_id,
+                revision_number=revision_number,
+                failed_operation_id=operation_id,
                 idempotency_key="verify-not-failed",
             ),
         )
@@ -2049,16 +2063,22 @@ def test_verify_rejects_operation_id_mismatch(db_session):
         db_session, suffix="mismatch"
     )
     other_operation = _operation(db_session, ont, "mismatch-other")
+    ont_id, head_id, revision_number, other_operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        other_operation.id,
+    )
     db_session.commit()
 
     with pytest.raises(DomainError) as excinfo:
         verify_ont_service_configuration_readback(
             db_session,
             _verify_command(
-                ont_id=ont.id,
-                head_id=head.id,
-                revision_number=revision.revision,
-                failed_operation_id=other_operation.id,
+                ont_id=ont_id,
+                head_id=head_id,
+                revision_number=revision_number,
+                failed_operation_id=other_operation_id,
                 idempotency_key="verify-mismatch",
             ),
         )
@@ -2069,12 +2089,18 @@ def test_verify_reports_still_unverified_without_a_fresh_inform(db_session):
     ont, assignment, head, revision, operation = _verify_setup(
         db_session, suffix="stale-inform", fresh_inform=False
     )
-    head_id, revision_number, operation_id = head.id, revision.revision, operation.id
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
+    db_session.commit()
 
     outcome = verify_ont_service_configuration_readback(
         db_session,
         _verify_command(
-            ont_id=ont.id,
+            ont_id=ont_id,
             head_id=head_id,
             revision_number=revision_number,
             failed_operation_id=operation_id,
@@ -2093,7 +2119,7 @@ def test_verify_reports_still_unverified_without_a_fresh_inform(db_session):
         db_session.scalar(
             select(func.count())
             .select_from(NetworkOperation)
-            .where(NetworkOperation.target_id == ont.id)
+            .where(NetworkOperation.target_id == ont_id)
         )
         == 1
     )
@@ -2110,14 +2136,22 @@ def test_verify_ssid_convergence_marks_verified_through_reconcile(
     )
     ont_id, head_id, revision_number = ont.id, head.id, revision.revision
     failed_operation_id = operation.id
-    # Capture plain values BEFORE the verify call — ``db_session.get(...)``
-    # later returns the SAME identity-map instance as ``operation`` in this
-    # session, so comparing against ``operation.completed_at`` after the
-    # call would be tautological (``x == x``, always true, proving nothing).
-    original_completed_at = operation.completed_at
-    original_status = operation.status
-    original_error = operation.error
-    original_output_payload = operation.output_payload
+    db_session.commit()
+
+    # Capture plain values BEFORE the verify call, read back through the
+    # session rather than the identity-mapped ``operation`` instance: a
+    # comparison against ``operation`` itself after the call would be
+    # tautological (``x == x``, always true, proving nothing), and the
+    # pre-flush Python value on ``operation`` is tz-aware while the value
+    # ``db_session.get(...)`` later returns is the DB-normalized (tz-naive)
+    # representation — reading both sides through the session keeps the
+    # comparison meaningful instead of comparing aware to naive.
+    refreshed_operation = db_session.get(NetworkOperation, failed_operation_id)
+    original_completed_at = refreshed_operation.completed_at
+    original_status = refreshed_operation.status
+    original_error = refreshed_operation.error
+    original_output_payload = refreshed_operation.output_payload
+    db_session.commit()
 
     outcome = verify_ont_service_configuration_readback(
         db_session,
@@ -2136,6 +2170,11 @@ def test_verify_ssid_convergence_marks_verified_through_reconcile(
         db_session.get(NetworkOperation, new_operation_id).redrive_of_id
         == failed_operation_id
     )
+    # The read above expired this session's instances and autobegan a fresh
+    # transaction on top of the completed verify command's own commit; clear
+    # it before the next owner command, which requires a transaction-free
+    # session at entry.
+    db_session.commit()
 
     reconcile_calls: list[dict[str, object]] = []
 
@@ -2197,6 +2236,7 @@ def test_verify_residual_drift_reports_failed_not_verified(db_session, monkeypat
     )
     ont_id, head_id, revision_number = ont.id, head.id, revision.revision
     failed_operation_id = operation.id
+    db_session.commit()
 
     outcome = verify_ont_service_configuration_readback(
         db_session,
@@ -2266,6 +2306,7 @@ def test_verify_readback_pending_reports_failed_without_apply_redispatch(
     )
     ont_id, head_id, revision_number = ont.id, head.id, revision.revision
     failed_operation_id = operation.id
+    db_session.commit()
 
     outcome = verify_ont_service_configuration_readback(
         db_session,
@@ -2342,6 +2383,7 @@ def test_verify_write_only_password_reports_delivered_unverified(
     )
     ont_id, head_id, revision_number = ont.id, head.id, revision.revision
     failed_operation_id = operation.id
+    db_session.commit()
 
     outcome = verify_ont_service_configuration_readback(
         db_session,
