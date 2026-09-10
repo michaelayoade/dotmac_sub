@@ -469,7 +469,7 @@ def test_delivery_approved_maps_terminal_status(db_session):
     assert request.approved_at is not None
 
 
-def test_delivery_rejected_records_reason(db_session):
+def test_delivery_rejected_keeps_failure_evidence_on_outbox(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
@@ -484,7 +484,7 @@ def test_delivery_rejected_records_reason(db_session):
     row = _outbox_rows(db_session, request)[0]
     assert result.rejected == 1
     assert row.status == FieldErpSyncStatus.rejected.value
-    assert request.expense_claim_status == "rejected"
+    assert request.expense_claim_status is None
     assert request.status == "approved"
     assert request.rejection_reason is None
 
@@ -646,11 +646,14 @@ def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
     db_session.refresh(request)
     assert result["repaired"] == 1
     assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
-    # No re-emit: submission and approval retain the same two terminal rows.
+    # No re-emit: submission and approval retain the same two delivery rows.
+    # The submission response is accepted; the empty approval response remains
+    # sent until a later status poll supplies its terminal result.
     rows = _outbox_rows(db_session, request)
     assert {row.id for row in rows} == row_ids_before
     assert len(rows) == 2
-    assert all(row.status == FieldErpSyncStatus.accepted.value for row in rows)
+    assert sum(row.status == FieldErpSyncStatus.accepted.value for row in rows) == 1
+    assert sum(row.status == FieldErpSyncStatus.sent.value for row in rows) == 1
 
 
 def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_session):
