@@ -41,21 +41,22 @@ from app.services.backoffice import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
-from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientError
-from app.services.dotmac_erp.expense_form_contracts import (
+from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import (
+    mark_sub_authoritative as _mark_source_authoritative,
+)
+from app.services.integrations import installations
+from app.services.integrations.erp_capability import (
+    ErpCapabilityError,
+    ErpCapabilityTransientError,
     ExpenseApproverOption,
     ExpenseBankOption,
     ExpenseDestinationMode,
     ExpenseProfileDestination,
     InspectExpenseDestination,
     VerifyExpenseDestination,
+    capability_client,
 )
-from app.services.field.jobs import _profile_from_principal, _scoped_query
-from app.services.field.source import (
-    mark_sub_authoritative as _mark_source_authoritative,
-)
-from app.services.integrations import installations
-from app.services.integrations.erp_capability import capability_client
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -362,7 +363,7 @@ def get_field_expense_form_context(
         profile_destination = client.get_expense_profile_destination(
             requested_by_email=requester.email
         )
-    except (DotMacERPError, installations.InstallationError) as exc:
+    except (ErpCapabilityError, installations.InstallationError) as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.form_context_unavailable",
             message="Expense approvers and payment details are unavailable from ERP.",
@@ -390,12 +391,12 @@ def verify_field_expense_destination(
                 beneficiary_name=command.beneficiary_name,
             )
         )
-    except (DotMacERPTransientError, installations.InstallationError) as exc:
+    except (ErpCapabilityTransientError, installations.InstallationError) as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.destination_unavailable",
             message="Bank account verification is temporarily unavailable.",
         ) from exc
-    except DotMacERPError as exc:
+    except ErpCapabilityError as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.destination_invalid",
             message="ERP could not verify the payment details.",
@@ -420,7 +421,7 @@ def resolve_field_expense_submission_context(
     client = capability_client(db)
     try:
         erp_approvers = client.get_expense_approvers(requested_by_email=requester.email)
-    except (DotMacERPError, installations.InstallationError) as exc:
+    except (ErpCapabilityError, installations.InstallationError) as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.form_context_unavailable",
             message="Expense approvers are unavailable from ERP.",
@@ -446,12 +447,12 @@ def resolve_field_expense_submission_context(
                 destination_token=query.destination_token,
             )
         )
-    except (DotMacERPTransientError, installations.InstallationError) as exc:
+    except (ErpCapabilityTransientError, installations.InstallationError) as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.destination_unavailable",
             message="Payment details cannot be checked with ERP right now.",
         ) from exc
-    except DotMacERPError as exc:
+    except ErpCapabilityError as exc:
         raise FieldExpenseRequestError(
             code="operations.expense_requests.destination_invalid",
             message="Payment details expired or do not belong to this expense.",

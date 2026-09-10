@@ -18,6 +18,7 @@ from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientErr
 from app.services.dotmac_erp.expense_form_contracts import (
     ExpenseApproverOption,
     ExpenseBankOption,
+    ExpenseDestinationMode,
     ExpenseProfileDestination,
     InspectExpenseDestination,
     VerifiedExpenseDestination,
@@ -43,6 +44,21 @@ from app.services.integrations.runtime import OperationStatus, OperationTrigger
 from app.services.integrations.runtime_execution import (
     build_execution_context,
     make_operation_executor,
+)
+
+# Provider-neutral error names exposed to domain callers. The facade keeps the
+# historical concrete exception identities for existing transport consumers.
+ErpCapabilityError = DotMacERPError
+ErpCapabilityTransientError = DotMacERPTransientError
+
+__all__ = (
+    "ErpCapabilityError",
+    "ErpCapabilityTransientError",
+    "ExpenseApproverOption",
+    "ExpenseBankOption",
+    "ExpenseDestinationMode",
+    "InspectExpenseDestination",
+    "VerifyExpenseDestination",
 )
 
 
