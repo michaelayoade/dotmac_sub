@@ -46,13 +46,9 @@ def test_within_send_window_respects_timezone(monkeypatch):
 
 def test_within_send_window_invalid_hour_fails_closed(monkeypatch):
     _patch_settings(monkeypatch, send_hour="nope")
-    assert not ew.within_send_window(
-        object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
-    )
+    assert not ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
     _patch_settings(monkeypatch, send_hour=99)
-    assert not ew.within_send_window(
-        object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
-    )
+    assert not ew.within_send_window(object(), datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
 
 
 def test_run_billing_notifications_skips_outside_window(monkeypatch):

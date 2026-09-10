@@ -37,11 +37,7 @@ _NON_SUB_OWNER = next(
 def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
     sub_flows = sub_flows or set()
     for flow in FieldErpSyncFlow:
-        owner = (
-            SyncFlowOwner.sub.value
-            if flow.value in sub_flows
-            else _NON_SUB_OWNER
-        )
+        owner = SyncFlowOwner.sub.value if flow.value in sub_flows else _NON_SUB_OWNER
         db.add(SyncFlowOwnership(flow=flow.value, owner=owner))
     db.flush()
 
