@@ -278,7 +278,8 @@ def test_eligibility_accepts_submitted_claims(db_session):
 
 def test_only_selected_approver_can_approve(db_session):
     request = _make_submitted_request(db_session)
-    request.selected_approver_system_user_id = uuid4()
+    selected_approver = _user(db_session, "Selected Approver")
+    request.selected_approver_system_user_id = selected_approver.id
     db_session.commit()
 
     with pytest.raises(FieldExpenseRequestError) as exc:

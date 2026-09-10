@@ -888,6 +888,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.field.expense_requests",
         owns=(
             "field expense request submission",
+            "field expense ERP form context",
             "expense receipt staging for submitted claims",
             "field expense approval and ERP delivery staging",
             "field expense payment initiation and ERP delivery staging",
@@ -931,6 +932,15 @@ SERVICES: tuple[SOTService, ...] = (
                         "validated receipt content",
                     ),
                     canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="field expense ERP form context",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "authenticated requester and work-order access evidence",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
+                    ),
                 ),
                 ConcernContract(
                     name="expense receipt staging for submitted claims",
@@ -1108,7 +1118,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "and stage an ordered ERP intent in the same owner transaction. "
                     "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
-                    "side-effect free; revision 584 performs the bounded, idempotent "
+                    "side-effect free; ERP form-context and destination-verification "
+                    "queries are also side-effect free. "
+                    "Revision 584 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
@@ -1138,6 +1150,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.approver_mismatch",
                     "operations.expense_requests.destination_expired",
                     "operations.expense_requests.destination_invalid",
+                    "operations.expense_requests.destination_unavailable",
+                    "operations.expense_requests.form_context_unavailable",
                     "operations.expense_requests.form_context_required",
                     "operations.expense_requests.idempotency_conflict",
                     "operations.expense_requests.erp_delivery_not_configured",
@@ -1154,8 +1168,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 mapping_owner="field expense request API adapter",
                 retryable_codes=(
+                    "operations.expense_requests.destination_unavailable",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
+                    "operations.expense_requests.form_context_unavailable",
                 ),
                 fail_closed_on=(
                     "unknown requester or work order",

@@ -9,7 +9,7 @@ from enum import StrEnum
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.field_erp_sync import (
@@ -21,7 +21,6 @@ from app.models.field_expense import FieldExpenseRequest
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.domain_errors import DomainError
-from app.services.dotmac_erp.client import DotMacERPError
 from app.services.dotmac_erp.expense_form_contracts import (
     ExpenseBankOption,
     ExpenseDestinationMode,
@@ -35,13 +34,14 @@ from app.services.field.expense_categories import (
 from app.services.field.expense_requests import (
     ExpenseCategoryRule,
     ExpenseReceiptUploadInput,
+    FieldExpenseRequestError,
     FieldExpenseVendorOption,
+    GetFieldExpenseFormContext,
     ListFieldExpenseVendors,
     evaluate_expense_work_order_eligibility,
+    get_field_expense_form_context,
     list_expense_vendors,
 )
-from app.services.integrations.erp_capability import capability_client
-from app.services.integrations.installations import InstallationError
 from app.services.status_presentation import (
     StatusPresentation,
     field_expense_status_presentation,
@@ -244,35 +244,24 @@ def build_work_order_expense_panel(
     banks: tuple[ExpenseBankOption, ...] = ()
     profile_destination = ExpenseProfileDestination(available=False)
     try:
-        erp_client = capability_client(db)
-        erp_approvers = erp_client.get_expense_approvers(requested_by_email=user.email)
-        banks = erp_client.get_expense_banks()
-        profile_destination = erp_client.get_expense_profile_destination(
-            requested_by_email=user.email
+        context = get_field_expense_form_context(
+            db,
+            GetFieldExpenseFormContext(requester_system_user_id=user.id),
         )
-        emails = {item.email.strip().lower() for item in erp_approvers}
-        local_users = {
-            item.email.strip().lower(): item
-            for item in db.query(SystemUser)
-            .filter(
-                SystemUser.is_active.is_(True),
-                func.lower(SystemUser.email).in_(emails),
-            )
-            .all()
-        }
+        banks = context.banks
+        profile_destination = context.profile_destination
         approvers = tuple(
             ExpenseApproverView(
-                erp_employee_id=item.employee_id,
-                system_user_id=local_users[item.email.strip().lower()].id,
+                erp_employee_id=item.erp_employee_id,
+                system_user_id=item.system_user_id,
                 display_name=item.display_name,
                 email=item.email,
             )
-            for item in erp_approvers
-            if item.email.strip().lower() in local_users
+            for item in context.approvers
         )
         if not approvers:
             category_message = "No ERP expense approver has a matching active Sub user."
-    except (DotMacERPError, InstallationError):
+    except FieldExpenseRequestError:
         category_message = "Expense approvers and payment details are temporarily unavailable from ERP."
 
     vendors = list_expense_vendors(

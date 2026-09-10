@@ -12,7 +12,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.dispatch import (
@@ -41,10 +41,21 @@ from app.services.backoffice import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
+from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientError
+from app.services.dotmac_erp.expense_form_contracts import (
+    ExpenseApproverOption,
+    ExpenseBankOption,
+    ExpenseDestinationMode,
+    ExpenseProfileDestination,
+    InspectExpenseDestination,
+    VerifyExpenseDestination,
+)
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
 )
+from app.services.integrations import installations
+from app.services.integrations.erp_capability import capability_client
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -134,6 +145,42 @@ class VerifiedExpenseDestinationInput:
     verified_beneficiary_name: str
     verified_at: datetime
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class GetFieldExpenseFormContext:
+    requester_system_user_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class FieldExpenseFormContext:
+    approvers: tuple[SelectedExpenseApprover, ...]
+    banks: tuple[ExpenseBankOption, ...]
+    profile_destination: ExpenseProfileDestination
+
+
+@dataclass(frozen=True, slots=True)
+class VerifyFieldExpenseDestination:
+    requester_system_user_id: UUID
+    source_claim_id: UUID
+    mode: ExpenseDestinationMode
+    bank_code: str | None
+    account_number: str | None
+    beneficiary_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveFieldExpenseSubmissionContext:
+    requester_system_user_id: UUID
+    selected_approver_erp_id: UUID
+    source_claim_id: UUID
+    destination_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedFieldExpenseSubmissionContext:
+    selected_approver: SelectedExpenseApprover
+    payment_destination: VerifiedExpenseDestinationInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +309,166 @@ class FieldExpenseVendorOption:
 
 class FieldExpenseRequestError(DomainError):
     pass
+
+
+def _active_expense_requester(db: Session, system_user_id: UUID) -> SystemUser:
+    requester = db.get(SystemUser, system_user_id)
+    if requester is None or not requester.is_active or not requester.email.strip():
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.invalid_request",
+            message="An active staff user with an email address is required.",
+        )
+    return requester
+
+
+def _local_expense_approvers(
+    db: Session,
+    *,
+    erp_approvers: tuple[ExpenseApproverOption, ...],
+) -> tuple[SelectedExpenseApprover, ...]:
+    emails = {item.email.strip().lower() for item in erp_approvers}
+    if not emails:
+        return ()
+    local_users = {
+        user.email.strip().lower(): user
+        for user in db.scalars(
+            select(SystemUser).where(
+                SystemUser.is_active.is_(True),
+                func.lower(SystemUser.email).in_(emails),
+            )
+        ).all()
+    }
+    return tuple(
+        SelectedExpenseApprover(
+            erp_employee_id=item.employee_id,
+            system_user_id=local_users[item.email.strip().lower()].id,
+            display_name=item.display_name,
+            email=item.email,
+        )
+        for item in erp_approvers
+        if item.email.strip().lower() in local_users
+    )
+
+
+def get_field_expense_form_context(
+    db: Session,
+    query: GetFieldExpenseFormContext,
+) -> FieldExpenseFormContext:
+    requester = _active_expense_requester(db, query.requester_system_user_id)
+    client = capability_client(db)
+    try:
+        erp_approvers = client.get_expense_approvers(requested_by_email=requester.email)
+        banks = client.get_expense_banks()
+        profile_destination = client.get_expense_profile_destination(
+            requested_by_email=requester.email
+        )
+    except (DotMacERPError, installations.InstallationError) as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.form_context_unavailable",
+            message="Expense approvers and payment details are unavailable from ERP.",
+        ) from exc
+    return FieldExpenseFormContext(
+        approvers=_local_expense_approvers(db, erp_approvers=erp_approvers),
+        banks=banks,
+        profile_destination=profile_destination,
+    )
+
+
+def verify_field_expense_destination(
+    db: Session,
+    command: VerifyFieldExpenseDestination,
+) -> VerifiedExpenseDestinationInput:
+    requester = _active_expense_requester(db, command.requester_system_user_id)
+    try:
+        verified = capability_client(db).verify_expense_destination(
+            VerifyExpenseDestination(
+                requested_by_email=requester.email,
+                source_claim_id=command.source_claim_id,
+                mode=command.mode,
+                bank_code=command.bank_code,
+                account_number=command.account_number,
+                beneficiary_name=command.beneficiary_name,
+            )
+        )
+    except (DotMacERPTransientError, installations.InstallationError) as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.destination_unavailable",
+            message="Bank account verification is temporarily unavailable.",
+        ) from exc
+    except DotMacERPError as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.destination_invalid",
+            message="ERP could not verify the payment details.",
+        ) from exc
+    return VerifiedExpenseDestinationInput(
+        mode=verified.mode.value,
+        destination_token=verified.destination_token,
+        bank_code=verified.bank_code,
+        bank_name=verified.bank_name,
+        masked_account_number=verified.masked_account_number,
+        verified_beneficiary_name=verified.verified_beneficiary_name,
+        verified_at=verified.verified_at,
+        expires_at=verified.expires_at,
+    )
+
+
+def resolve_field_expense_submission_context(
+    db: Session,
+    query: ResolveFieldExpenseSubmissionContext,
+) -> ResolvedFieldExpenseSubmissionContext:
+    requester = _active_expense_requester(db, query.requester_system_user_id)
+    client = capability_client(db)
+    try:
+        erp_approvers = client.get_expense_approvers(requested_by_email=requester.email)
+    except (DotMacERPError, installations.InstallationError) as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.form_context_unavailable",
+            message="Expense approvers are unavailable from ERP.",
+        ) from exc
+    selected = next(
+        (
+            approver
+            for approver in _local_expense_approvers(db, erp_approvers=erp_approvers)
+            if approver.erp_employee_id == query.selected_approver_erp_id
+        ),
+        None,
+    )
+    if selected is None:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.approver_invalid",
+            message="Select an eligible expense approver with an active Sub account.",
+        )
+    try:
+        verified = client.inspect_expense_destination(
+            InspectExpenseDestination(
+                requested_by_email=requester.email,
+                source_claim_id=query.source_claim_id,
+                destination_token=query.destination_token,
+            )
+        )
+    except (DotMacERPTransientError, installations.InstallationError) as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.destination_unavailable",
+            message="Payment details cannot be checked with ERP right now.",
+        ) from exc
+    except DotMacERPError as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.destination_invalid",
+            message="Payment details expired or do not belong to this expense.",
+        ) from exc
+    return ResolvedFieldExpenseSubmissionContext(
+        selected_approver=selected,
+        payment_destination=VerifiedExpenseDestinationInput(
+            mode=verified.mode.value,
+            destination_token=verified.destination_token,
+            bank_code=verified.bank_code,
+            bank_name=verified.bank_name,
+            masked_account_number=verified.masked_account_number,
+            verified_beneficiary_name=verified.verified_beneficiary_name,
+            verified_at=verified.verified_at,
+            expires_at=verified.expires_at,
+        ),
+    )
 
 
 _EXPENSE_SUBMIT_COMMAND = OwnerCommandDefinition(
@@ -1157,6 +1364,7 @@ class FieldExpenseRequests:
             query = query.filter(
                 or_(
                     FieldExpenseRequest.status != "submitted",
+                    FieldExpenseRequest.selected_approver_system_user_id.is_(None),
                     FieldExpenseRequest.selected_approver_system_user_id
                     == approver_system_user_id,
                 )

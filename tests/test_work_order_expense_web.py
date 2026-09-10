@@ -557,6 +557,11 @@ def test_redisplay_preserves_values_and_explicitly_clears_file_input():
         expense_date=form.expense_date,
         currency=form.currency,
         notes=form.notes,
+        selected_approver_id=form.selected_approver_id,
+        payment_destination_mode="expense_override",
+        bank_code="058",
+        account_number="0123456789",
+        beneficiary_name="Field Technician",
         lines=(
             expense_web.ExpenseLineFormInput(
                 key=line.key,
@@ -637,6 +642,7 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
         "purpose",
         "expense_date",
         "currency",
+        "selected_approver_id",
         "category_code_{{ line.key }}",
         "amount_{{ line.key }}",
         "description_{{ line.key }}",
