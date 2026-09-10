@@ -163,7 +163,20 @@ jobs:
             # retried: retrying a "this commit was never built" answer only
             # spends the normal-build budget on a question that already has a
             # confident answer.
-            if grep -qiE 'manifest unknown|no such manifest' <<<"$manifest_error"; then
+            #
+            # `docker buildx imagetools inspect` (used here, not the older
+            # `docker manifest inspect`) reports a missing ref as
+            # `ERROR: <ref>: not found` -- a different string from the
+            # `manifest unknown`/`no such manifest` shapes this guard
+            # originally anticipated. Confirmed live against GHCR
+            # 2026-09-10: a genuinely nonexistent candidate tag produced
+            # exactly this text and exhausted the retry budget as a false
+            # "ambiguous" read, incorrectly failing closed on the first
+            # dispatch of a brand-new candidate. Anchored on the line start
+            # so an unrelated network error that merely contains the words
+            # "not found" (e.g. a DNS failure) cannot be misread as this
+            # specific, well-known CLI shape.
+            if grep -qiE 'manifest unknown|no such manifest|^error: .*: not found$' <<<"$manifest_error"; then
               echo "present=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
