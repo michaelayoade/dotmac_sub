@@ -32,8 +32,11 @@ def _quarantined_party(db_session):
     )
     target.status = PartyIdentityStatus.quarantined.value
     target.merge_reason = "Ambiguous import identity"
+    db_session.flush()
+    party_id = target.id
+    expected_updated_at = _aware(target.updated_at)
     db_session.commit()
-    return target.id, _aware(target.updated_at)
+    return party_id, expected_updated_at
 
 
 def _command(
@@ -114,10 +117,13 @@ def test_active_party_without_matching_evidence_is_refused(db_session):
     target = party.create_party(
         db_session, party_type=PartyType.person, display_name="Already active"
     )
+    db_session.flush()
+    party_id = target.id
+    expected_updated_at = _aware(target.updated_at)
     db_session.commit()
     command = _command(
-        party_id=target.id,
-        expected_updated_at=_aware(target.updated_at),
+        party_id=party_id,
+        expected_updated_at=expected_updated_at,
     )
 
     with pytest.raises(PartyIdentityReactivationError, match="matching"):
@@ -137,10 +143,13 @@ def test_archived_and_merged_parties_are_refused(db_session, status):
         )
         target.merged_into_party_id = canonical.id
     target.status = status.value
+    db_session.flush()
+    party_id = target.id
+    expected_updated_at = _aware(target.updated_at)
     db_session.commit()
     command = _command(
-        party_id=target.id,
-        expected_updated_at=_aware(target.updated_at),
+        party_id=party_id,
+        expected_updated_at=expected_updated_at,
     )
 
     with pytest.raises(PartyIdentityReactivationError, match="Only a quarantined"):
