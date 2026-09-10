@@ -14,8 +14,8 @@ own technician cannot collide with an unrelated technician's row. Postgres
 unique indexes never treat two NULLs as equal, so old pings with no
 client_observation_id are unaffected.
 
-Revision ID: 591_field_location_ping_client_observation_id
-Revises: 590_olt_observation_read_status
+Revision ID: 593_field_location_ping_client_observation_id
+Revises: 592_field_expense_payment_permission
 Create Date: 2026-09-09
 """
 
@@ -27,8 +27,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "591_field_location_ping_client_observation_id"
-down_revision = "590_olt_observation_read_status"
+revision = "593_field_location_ping_client_observation_id"
+down_revision = "592_field_expense_payment_permission"
 branch_labels = None
 depends_on = None
 
