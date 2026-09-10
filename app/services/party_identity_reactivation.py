@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.party import Party, PartyIdentityStatus, PartyType
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -217,9 +217,11 @@ def _reactivate(
         action=AUDIT_ACTION,
         entity_type="party",
         entity_id=str(party.id),
-        actor_type=AuditActorType.user,
-        actor_id=actor_id,
-        actor_label=command.context.actor,
+        actor=AuditActor(
+            actor_type=AuditActorType.user,
+            actor_id=actor_id,
+            label=command.context.actor,
+        ),
         request_id=str(command.context.correlation_id),
         metadata=evidence,
     )

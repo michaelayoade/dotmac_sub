@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_party_identity_reactivation_has_complete_registered_contract():
-    service = registry.service("party.identity_reactivation")
+    service = registry.service_relationship("party.identity_reactivation")
     assert service.module == "app.services.party_identity_reactivation"
     assert service.is_contracted is True
     assert service.contract is not None
