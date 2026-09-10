@@ -535,6 +535,23 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "The dispatch outbox admits an existing operation once; exact assignment, "
         "configuration-head, revision, and readback evidence prevent stale delivery.",
     ),
+    "app.tasks.ont_service_configuration.verify_readback": _c(
+        "network",
+        STATE,
+        IDEMP,
+        STATUS,
+        "No autoretry_for is configured, so Celery never retries this task "
+        "automatically. force_readback_only=True is fixed in the task and "
+        "accepted from neither the caller nor the dispatch payload, so this "
+        "path can only observe device state through reconcile's "
+        "readback-only branch and never calls setParameterValues or any "
+        "other OLT write function -- repeated execution against the same "
+        "operation is inherently safe, unlike the sibling apply task it "
+        "otherwise mirrors. The dispatch outbox still admits the queued "
+        "verification operation once; an operator queues a fresh attempt "
+        "through verify_ont_service_configuration_readback, which is itself "
+        "gated on a fresh ACS Inform since the original failure.",
+    ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

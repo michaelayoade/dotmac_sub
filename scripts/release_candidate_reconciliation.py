@@ -134,17 +134,26 @@ def registry_read_found(raw_digest: str, *, source: str) -> RegistryReadAttempt:
 
 
 _DEFINITE_NEGATIVE_PATTERN = re.compile(
-    r"manifest unknown|no such manifest", re.IGNORECASE
+    r"manifest unknown|no such manifest|^error: .*: not found$",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
 def classify_registry_inspect_error(stderr: str) -> RegistryReadOutcome:
     """Classify one failed `docker buildx imagetools inspect` attempt.
 
-    Mirrors the exact `grep -qiE 'manifest unknown|no such manifest'` pattern
-    `release-candidate.yml`'s tag-existence check uses to resolve a definite
-    negative on the first attempt; everything else is ambiguous and safe to
-    retry.
+    Mirrors the exact
+    `grep -qiE 'manifest unknown|no such manifest|^error: .*: not found$'`
+    pattern `release-candidate.yml`'s tag-existence check uses to resolve a
+    definite negative on the first attempt; everything else is ambiguous and
+    safe to retry. The third alternative was added 2026-09-10 after
+    `docker buildx imagetools inspect` (used here, not the older `docker
+    manifest inspect`) was observed live against GHCR reporting a genuinely
+    missing ref as `ERROR: <ref>: not found` -- a shape the first two
+    alternatives don't cover -- and is anchored to the line start so an
+    unrelated ambiguous error that merely contains the words "not found"
+    (e.g. a DNS failure) is not misread as this specific, well-known CLI
+    message.
     """
 
     if _DEFINITE_NEGATIVE_PATTERN.search(stderr):
