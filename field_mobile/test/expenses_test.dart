@@ -659,6 +659,41 @@ void main() {
     expect(find.byKey(const Key('expense-category')), findsNothing);
   });
 
+  testWidgets(
+    'new expense request constrains dropdown labels on compact screens',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(360, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            expenseCategoriesProvider.overrideWith(
+              (ref) async => const [
+                ExpenseCategory(
+                  categoryCode: 'SITE_OPERATIONS',
+                  categoryName:
+                      'Emergency site operations and maintenance supplies',
+                ),
+              ],
+            ),
+            expenseVendorsProvider.overrideWith(
+              (ref) async => const [
+                'Dotmac Infrastructure Maintenance and Logistics Limited',
+              ],
+            ),
+          ],
+          child: const MaterialApp(home: NewExpenseRequestScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('expense-category')), findsOneWidget);
+      expect(find.byKey(const Key('expense-vendor')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('new expense request requires receipt for receipt categories', (
     tester,
   ) async {

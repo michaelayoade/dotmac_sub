@@ -589,6 +589,7 @@ class _VendorField extends StatelessWidget {
     return DropdownButtonFormField<String>(
       key: const Key('expense-vendor'),
       initialValue: selected,
+      isExpanded: true,
       decoration: const InputDecoration(labelText: 'Vendor'),
       items: [
         for (final vendor in values)
@@ -1025,6 +1026,7 @@ class _NewExpenseRequestScreenState
                 : DropdownButtonFormField<ExpenseCategory>(
                     key: const Key('expense-category'),
                     initialValue: _selectedCategory,
+                    isExpanded: true,
                     decoration: const InputDecoration(labelText: 'Category'),
                     items: [
                       for (final category in items)
