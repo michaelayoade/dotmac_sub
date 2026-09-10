@@ -16,7 +16,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.metrics import record_customer_device_command_refusal
+from app import metrics
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.network import OntAssignment, OntUnit
@@ -118,7 +118,7 @@ def record_device_command_refusal(
             "details": safe_details,
         },
     )
-    record_customer_device_command_refusal(command=kind.value, code=code)
+    metrics.record_customer_device_command_refusal(command=kind.value, code=code)
 
 
 def _assigned_ont(
