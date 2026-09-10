@@ -558,7 +558,13 @@ implementation.
 - While AI owns the thread, Reply, Private Note, assignment, status/workflow,
   ticket, macro, and bulk controls are absent or disabled with an explanation.
   Authorized operators receive one explicit `Take Over Conversation` control
-  with confirmation and expected-session evidence.
+  with confirmation and expected-session evidence. Takeover is available to any
+  active staff actor with the required permissions regardless of team
+  membership, presence, capacity, FIFO position, or an existing human
+  assignment. The control submits the active primary team, defaults the sole
+  active team, or requires an explicit team selection when several are active;
+  team selection supplies routing and audit attribution rather than operator
+  eligibility.
 - UI gating is presentation only. Every mutation rechecks ownership at its
   backend owner and returns the stable AI-owned conflict; a normal reply never
   becomes implicit takeover. Reply auto-claim runs only after the AI-owned check

@@ -2675,8 +2675,11 @@ DOMAIN = DomainSOT(
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
-                            "Active-session ownership plus typed AI-handoff provenance; "
-                            "ordinary and generic assignment paths fail closed."
+                            "Active-session ownership plus typed AI-handoff and "
+                            "explicit-human-takeover provenance; ordinary and generic "
+                            "assignment paths fail closed. Explicit takeover accepts "
+                            "any active authorized staff actor independently of team "
+                            "membership, presence, capacity, FIFO, or an existing owner."
                         ),
                     ),
                     AuthorityInput(
@@ -3274,7 +3277,10 @@ DOMAIN = DomainSOT(
                         source=(
                             "Assignment, escalation, and lifecycle eligibility, "
                             "including preserve-existing-owner reply auto-claim with "
-                            "team membership, presence, capacity, and FIFO checks."
+                            "team membership, presence, capacity, and FIFO checks; "
+                            "explicit human takeover is the typed exception that "
+                            "bypasses those gates while preserving active-team "
+                            "routing and audit attribution."
                         ),
                     ),
                     AuthorityInput(

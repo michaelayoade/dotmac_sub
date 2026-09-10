@@ -37,7 +37,7 @@ from app.models.party import (
     PartyType,
 )
 from app.models.sales import Lead, LeadCaptureMethod, LeadSourcePlatform, LeadStatus
-from app.models.service_team import ServiceTeamMember
+from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.subscriber import Reseller, Subscriber
 from app.models.system_user import SystemUser
 from app.models.team_inbox import (
@@ -46,6 +46,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationStatus,
+    InboxConversationTeam,
     InboxMessage,
     InboxMessageDirection,
     InboxSavedFilter,
@@ -1660,6 +1661,53 @@ def _takeover_replay(
     )
 
 
+def _takeover_service_team_id(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    requested_team_id: UUID | None,
+) -> UUID | None:
+    """Resolve the audited team attribution for an explicit human takeover."""
+
+    if requested_team_id is not None:
+        return requested_team_id
+    if conversation.primary_service_team_id is not None:
+        return conversation.primary_service_team_id
+
+    linked_team_ids = tuple(
+        team_id
+        for (team_id,) in (
+            db.query(InboxConversationTeam.service_team_id)
+            .join(ServiceTeam, ServiceTeam.id == InboxConversationTeam.service_team_id)
+            .filter(InboxConversationTeam.conversation_id == conversation.id)
+            .filter(InboxConversationTeam.is_active.is_(True))
+            .filter(ServiceTeam.is_active.is_(True))
+            .order_by(
+                InboxConversationTeam.created_at.asc(), InboxConversationTeam.id.asc()
+            )
+            .all()
+        )
+    )
+    if len(linked_team_ids) == 1:
+        return linked_team_ids[0]
+
+    fallback_team_id = coerce_uuid(team_inbox_routing.default_service_team_id(db))
+    if fallback_team_id is not None:
+        return fallback_team_id
+
+    active_team_ids = tuple(
+        team_id
+        for (team_id,) in (
+            db.query(ServiceTeam.id)
+            .filter(ServiceTeam.is_active.is_(True))
+            .order_by(ServiceTeam.name.asc(), ServiceTeam.id.asc())
+            .limit(2)
+            .all()
+        )
+    )
+    return active_team_ids[0] if len(active_team_ids) == 1 else None
+
+
 def take_over_conversation(
     db: Session,
     command: TakeOverConversationCommand,
@@ -1766,10 +1814,10 @@ def take_over_conversation(
             source_id=f"ai-human-takeover:{command.context.command_id}",
             compatibility_source="explicit_ai_human_takeover",
         )
-        team_uuid = (
-            command.service_team_id
-            or conversation.primary_service_team_id
-            or coerce_uuid(team_inbox_routing.default_service_team_id(db))
+        team_uuid = _takeover_service_team_id(
+            db,
+            conversation=conversation,
+            requested_team_id=command.service_team_id,
         )
         if team_uuid is None:
             raise ai_conversation_ownership.AiTakeoverConflictError(
@@ -1783,6 +1831,11 @@ def take_over_conversation(
             person_id=command.actor_person_id,
             assigned_by_person_id=command.actor_person_id,
             reason=reason,
+            source=InboxTeamSource.manual.value,
+            source_id=f"ai-human-takeover:{command.context.command_id}",
+            provenance=(
+                team_inbox_assignment.InboxAssignmentProvenance.explicit_human_takeover
+            ),
         )
         if assignment.kind != "assigned":
             raise ai_conversation_ownership.AiTakeoverConflictError(

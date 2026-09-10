@@ -13,7 +13,7 @@
     soundEnabled: "dotmac.inbox.soundEnabled",
     draftPrefix: "dotmac.inbox.draft.",
   };
-  const INBOX_FRAGMENT_VERSION = "20260827a";
+  const INBOX_FRAGMENT_VERSION = "20260910b";
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const parseStoredBoolean = (key, fallback) => {
     const value = localStorage.getItem(key);

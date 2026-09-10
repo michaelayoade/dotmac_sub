@@ -118,13 +118,16 @@ provenance is the only exception for AI-authorized routing.
 `TakeOverConversationCommand` is the only ordinary human transition out of AI
 control. It locks and rechecks the expected conversation/session/state, stops
 the session as `stopped_human_takeover`, clears customer wait, records actor,
-reason, timestamps and prior state, acquires the agent through existing Inbox
-assignment rules, suppresses pending AI outbox rows, and stages projection and
-realtime effects in one owner transaction. Assignment failure rolls the whole
-operation back. A stable idempotency key replays the completed takeover; stale
-session or state evidence returns a conflict. Delivery workers independently
-revalidate the referenced active AI session immediately before provider contact
-and cancel stale queued AI messages after takeover.
+reason, timestamps and prior state, and assigns the authorized active staff
+actor. Explicit takeover deliberately bypasses ordinary assignment membership,
+presence, capacity, FIFO, and existing-owner gates; the selected active service
+team remains required as routing and audit attribution, but it is not an
+operator-eligibility gate. The same transaction suppresses pending AI outbox
+rows and stages projection and realtime effects. Assignment failure rolls the
+whole operation back. A stable idempotency key replays the completed takeover;
+stale session or state evidence returns a conflict. Delivery workers
+independently revalidate the referenced active AI session immediately before
+provider contact and cancel stale queued AI messages after takeover.
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the
@@ -271,7 +274,12 @@ ownership remains active. It excludes resolved and AI-owned conversations even
 if legacy drift left an assignment projection behind. Default/actionable,
 unassigned, pending-response, needs-response, unread-work, and manager workload
 counts apply the same authoritative exclusion; AI Intake has its own count.
-Explicit takeover uses the same membership, presence, FIFO, and capacity gates.
+Explicit takeover is the intentional exception to membership, presence, FIFO,
+capacity, and existing-owner assignment gates. Any active staff actor with both
+takeover permissions may stop AI and acquire the conversation. The routing owner
+still validates an active service team and records current availability as audit
+evidence; bypassed eligibility never becomes the policy for ordinary manual or
+automatic assignment.
 
 Capacity-opening transitions schedule an idempotent promotion task after the
 owning transaction commits. Agent return to eligible online presence,

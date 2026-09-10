@@ -109,6 +109,7 @@ class InboxAgentUnavailabilityReason(StrEnum):
 class InboxAssignmentProvenance(StrEnum):
     human_or_generic = "human_or_generic"
     ai_intake_handoff = "ai_intake_handoff"
+    explicit_human_takeover = "explicit_human_takeover"
 
 
 class InboxExistingAssignmentPolicy(StrEnum):
@@ -1136,30 +1137,32 @@ def assign_conversation_to_agent(
             reason="service_team_id must reference an active team",
         )
 
-    member = (
-        db.query(ServiceTeamMember)
-        .join(
-            SystemUser,
-            SystemUser.person_party_id == ServiceTeamMember.person_id,
-        )
-        .filter(ServiceTeamMember.team_id == team_uuid)
-        .filter(ServiceTeamMember.is_active.is_(True))
-        .filter(SystemUser.id == person_uuid)
-        .filter(SystemUser.is_active.is_(True))
-        .one_or_none()
-    )
-    if member is None:
-        return InboxAssignmentResult(
-            kind="invalid_agent",
-            service_team_id=str(team_uuid),
-            reason="person_id must be an active member of the target team",
-        )
     if _lock_agent_capacity(db, person_uuid) is None:
         return InboxAssignmentResult(
             kind="invalid_agent",
             service_team_id=str(team_uuid),
             reason="person_id must reference an active staff user",
         )
+    explicit_takeover = provenance is InboxAssignmentProvenance.explicit_human_takeover
+    if not explicit_takeover:
+        member = (
+            db.query(ServiceTeamMember)
+            .join(
+                SystemUser,
+                SystemUser.person_party_id == ServiceTeamMember.person_id,
+            )
+            .filter(ServiceTeamMember.team_id == team_uuid)
+            .filter(ServiceTeamMember.is_active.is_(True))
+            .filter(SystemUser.id == person_uuid)
+            .filter(SystemUser.is_active.is_(True))
+            .one_or_none()
+        )
+        if member is None:
+            return InboxAssignmentResult(
+                kind="invalid_agent",
+                service_team_id=str(team_uuid),
+                reason="person_id must be an active member of the target team",
+            )
 
     locked_conversation = _lock_active_conversation(
         db,
@@ -1173,7 +1176,10 @@ def assign_conversation_to_agent(
             reason="Conversation not found",
         )
     conversation = locked_conversation
-    if provenance is not InboxAssignmentProvenance.ai_intake_handoff:
+    if provenance not in {
+        InboxAssignmentProvenance.ai_intake_handoff,
+        InboxAssignmentProvenance.explicit_human_takeover,
+    }:
         ai_conversation_ownership.require_human_control(
             db,
             conversation_id=conversation.id,
@@ -1237,7 +1243,8 @@ def assign_conversation_to_agent(
 
     queued_entry = _queue_entry(db, conversation.id)
     if (
-        queued_entry is not None
+        not explicit_takeover
+        and queued_entry is not None
         and queued_entry.status == InboxQueueEntryStatus.queued.value
     ):
         if queued_entry.service_team_id != team_uuid:
@@ -1268,7 +1275,11 @@ def assign_conversation_to_agent(
         availability.unavailability_reason is InboxAgentUnavailabilityReason.at_capacity
         and replacing_same_agent
     )
-    if not availability.assignment_eligible and not capacity_only_block:
+    if (
+        not explicit_takeover
+        and not availability.assignment_eligible
+        and not capacity_only_block
+    ):
         if (
             availability.unavailability_reason
             is InboxAgentUnavailabilityReason.at_capacity
@@ -1332,7 +1343,9 @@ def assign_conversation_to_agent(
         person_id=person_uuid,
         actor_person_id=actor_uuid,
         reason_code=(
-            "reassigned_offline_owner"
+            "explicit_human_takeover"
+            if explicit_takeover
+            else "reassigned_offline_owner"
             if replacing_offline_owner
             else "reassigned"
             if previous_assignment
