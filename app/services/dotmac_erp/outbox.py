@@ -332,14 +332,19 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
     commit as the delivered outcome, otherwise the idempotent ERP request is
     retried. Legacy flows retain their existing logged best-effort behavior until
     their own ownership slices migrate.
-    Rejected and dead responses are durable failure evidence, never accepted
-    provider links. Only accepted responses and non-terminal ``sent`` responses
-    may reach a flow-specific write-back owner.
+    Dead responses remain outbox-only failure evidence. Rejected responses also
+    remain outbox-only except for the material-support flow, whose owning
+    contract explicitly projects ERP rejection status without creating an ERP
+    reference. Accepted responses and non-terminal ``sent`` responses reach
+    their flow-specific write-back owner.
     """
-    if row.status not in {
+    writeback_statuses = {
         FieldErpSyncStatus.accepted.value,
         FieldErpSyncStatus.sent.value,
-    }:
+    }
+    if row.flow == FieldErpSyncFlow.material_request.value:
+        writeback_statuses.add(FieldErpSyncStatus.rejected.value)
+    if row.status not in writeback_statuses:
         return
 
     if row.flow == FieldErpSyncFlow.expense_claim.value:

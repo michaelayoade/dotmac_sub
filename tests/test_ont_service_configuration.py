@@ -6,7 +6,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import func, select
 
 from app.models.catalog import (
     AccessType,
@@ -439,8 +439,11 @@ def test_customer_wifi_admission_names_no_active_assignment(
 ):
     """Zero active-assignment candidates gets its own code, distinct from
     ambiguity, a missing ONT row, and an inactive subscription."""
+    subscriber_id = subscriber.id
+    subscription_id = subscription.id
+    db_session.commit()
     command = _customer_wifi_command(
-        subscriber.id, subscription.id, idempotency_key="no-assignment-candidate"
+        subscriber_id, subscription_id, idempotency_key="no-assignment-candidate"
     )
 
     with pytest.raises(DomainError) as excinfo:
@@ -448,8 +451,8 @@ def test_customer_wifi_admission_names_no_active_assignment(
 
     assert excinfo.value.code.endswith("customer_active_assignment_required")
     assert excinfo.value.details["candidate_count"] == 0
-    assert excinfo.value.details["subscriber_id"] == str(subscriber.id)
-    assert excinfo.value.details["subscription_id"] == str(subscription.id)
+    assert excinfo.value.details["subscriber_id"] == str(subscriber_id)
+    assert excinfo.value.details["subscription_id"] == str(subscription_id)
 
 
 def test_customer_wifi_admission_names_ambiguous_assignment(
@@ -483,10 +486,12 @@ def test_customer_wifi_admission_names_ambiguous_assignment(
             active=True,
         )
     )
+    subscriber_id = subscriber.id
+    subscription_id = subscription.id
     db_session.commit()
 
     command = _customer_wifi_command(
-        subscriber.id, subscription.id, idempotency_key="ambiguous-assignment"
+        subscriber_id, subscription_id, idempotency_key="ambiguous-assignment"
     )
 
     with pytest.raises(DomainError) as excinfo:
@@ -513,16 +518,16 @@ def test_customer_wifi_admission_names_a_missing_ont_row(
         subscription=subscription,
         subscriber=subscriber,
     )
-    # Simulate an orphaned assignment (a hard-deleted ONT row) without
-    # tripping SQLite's enforced FK check, which a real migration/backfill
-    # bug could otherwise leave behind.
-    db_session.execute(text("PRAGMA foreign_keys=OFF"))
-    db_session.execute(delete(OntUnit).where(OntUnit.id == ont_id))
+    subscriber_id = subscriber.id
+    subscription_id = subscription.id
     db_session.commit()
-    db_session.execute(text("PRAGMA foreign_keys=ON"))
+    # The deployed schema prevents manufacturing this drift through ordinary
+    # writes. Simulate the authoritative ONT lookup missing after the exact
+    # assignment candidate has been selected.
+    monkeypatch.setattr(db_session, "scalar", lambda *_args, **_kwargs: None)
 
     command = _customer_wifi_command(
-        subscriber.id, subscription.id, idempotency_key="ont-row-missing"
+        subscriber_id, subscription_id, idempotency_key="ont-row-missing"
     )
 
     with pytest.raises(DomainError) as excinfo:
@@ -571,22 +576,40 @@ def test_customer_wifi_admission_names_assignment_inconsistency(
     )
     db_session.add(other_subscription)
     db_session.flush()
-    # A second active assignment on the SAME ONT for a different
-    # subscriber/subscription -- the ONT-level view now disagrees with the
-    # subscription-scoped candidate found above.
-    db_session.add(
-        OntAssignment(
-            ont_unit_id=ont_id,
-            subscriber_id=other_subscriber.id,
-            subscription_id=other_subscription.id,
-            active=True,
-        )
-    )
+    subscriber_id = subscriber.id
+    subscription_id = subscription.id
+    other_subscriber_id = other_subscriber.id
+    other_subscription_id = other_subscription.id
     db_session.commit()
 
     command = _customer_wifi_command(
-        subscriber.id, subscription.id, idempotency_key="assignment-inconsistent"
+        subscriber_id, subscription_id, idempotency_key="assignment-inconsistent"
     )
+
+    original_scalars = db_session.scalars
+    scalar_calls = 0
+
+    def inconsistent_assignments(*args, **kwargs):
+        nonlocal scalar_calls
+        scalar_calls += 1
+        result = original_scalars(*args, **kwargs)
+        if scalar_calls != 2:
+            return result
+        assignments = list(result)
+        return iter(
+            [
+                *assignments,
+                SimpleNamespace(
+                    id=uuid.uuid4(),
+                    ont_unit_id=ont_id,
+                    subscriber_id=other_subscriber_id,
+                    subscription_id=other_subscription_id,
+                    active=True,
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(db_session, "scalars", inconsistent_assignments)
 
     with pytest.raises(DomainError) as excinfo:
         configure_customer_wifi(db_session, command)
@@ -615,10 +638,12 @@ def test_customer_wifi_admission_names_inactive_subscription(
         subscriber=subscriber,
     )
     subscription.status = SubscriptionStatus.suspended
+    subscriber_id = subscriber.id
+    subscription_id = subscription.id
     db_session.commit()
 
     command = _customer_wifi_command(
-        subscriber.id, subscription.id, idempotency_key="inactive-subscription"
+        subscriber_id, subscription_id, idempotency_key="inactive-subscription"
     )
 
     with pytest.raises(DomainError) as excinfo:
@@ -626,7 +651,7 @@ def test_customer_wifi_admission_names_inactive_subscription(
 
     assert excinfo.value.code.endswith("customer_subscription_not_found")
     assert excinfo.value.details["subscription_status"] == "suspended"
-    assert excinfo.value.details["subscriber_id"] == str(subscriber.id)
+    assert excinfo.value.details["subscriber_id"] == str(subscriber_id)
 
 
 def test_configuration_admission_rollback_leaves_no_partial_records(
