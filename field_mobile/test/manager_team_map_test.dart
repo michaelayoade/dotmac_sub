@@ -79,6 +79,21 @@ Widget _subject({
     overrides: [
       managerTeamMapProvider.overrideWith((ref) async => _feed(positions)),
       managerTechniciansProvider.overrideWith((ref) async => technicians),
+      managerTechnicianLocationDetailProvider.overrideWith((
+        ref,
+        technicianId,
+      ) async {
+        final position = positions.firstWhere(
+          (item) => item.technicianId == technicianId,
+        );
+        return ManagerTechnicianLocationDetail(
+          position: position,
+          addressStatus: ManagerLocationAddressStatus.available,
+          addressText: technicianId == 'tech-live'
+              ? 'Marina Road, Lagos'
+              : 'Central District, Abuja',
+        );
+      }),
     ],
     child: const MaterialApp(home: ManagerTeamMapScreen(showTiles: false)),
   );
@@ -111,6 +126,120 @@ void main() {
     expect(find.text('Accuracy ±8 m'), findsOneWidget);
     expect(find.text('Install at Marina'), findsOneWidget);
     expect(find.text('View dispatch'), findsOneWidget);
+    expect(find.text('Live location address'), findsOneWidget);
+    expect(find.text('Marina Road, Lagos'), findsOneWidget);
+  });
+
+  testWidgets(
+    'roster tap brings the map into view and focuses the technician',
+    (tester) async {
+      await tester.pumpWidget(_subject());
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('team-map-search')),
+        250,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.enterText(find.byKey(const Key('team-map-search')), 'bola');
+      await tester.pumpAndSettle();
+      final rosterTile = find.byKey(const Key('team-technician-person-stale'));
+      expect(rosterTile, findsOneWidget);
+
+      await tester.tap(rosterTile);
+      await tester.pumpAndSettle();
+
+      final map = tester.widget<FlutterMap>(find.byType(FlutterMap));
+      expect(
+        map.mapController!.camera.center.latitude,
+        closeTo(9.0765, 0.000001),
+      );
+      expect(
+        map.mapController!.camera.center.longitude,
+        closeTo(7.3986, 0.000001),
+      );
+      expect(map.mapController!.camera.zoom, 17);
+      expect(find.text('Last known address'), findsOneWidget);
+      expect(find.text('Central District, Abuja'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(FlutterMap)).dy,
+        greaterThanOrEqualTo(0),
+      );
+    },
+  );
+
+  testWidgets('address-unavailable detail preserves the location drawer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          managerTeamMapProvider.overrideWith(
+            (ref) async => _feed(const [_livePosition]),
+          ),
+          managerTechniciansProvider.overrideWith(
+            (ref) async => [_technicians.first],
+          ),
+          managerTechnicianLocationDetailProvider.overrideWith((ref, id) async {
+            return const ManagerTechnicianLocationDetail(
+              position: _livePosition,
+              addressStatus: ManagerLocationAddressStatus.unavailable,
+            );
+          }),
+        ],
+        child: const MaterialApp(home: ManagerTeamMapScreen(showTiles: false)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('team-map-marker-tech-live')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nearest address unavailable'), findsOneWidget);
+    expect(find.text('Live location address'), findsOneWidget);
+    expect(find.text('Ada Technician'), findsWidgets);
+  });
+
+  testWidgets('location-less technician opens status without address lookup', (
+    tester,
+  ) async {
+    var addressLookups = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          managerTeamMapProvider.overrideWith(
+            (ref) async => _feed(const [_livePosition]),
+          ),
+          managerTechniciansProvider.overrideWith((ref) async => _technicians),
+          managerTechnicianLocationDetailProvider.overrideWith((ref, id) async {
+            addressLookups += 1;
+            return const ManagerTechnicianLocationDetail(
+              position: _livePosition,
+              addressStatus: ManagerLocationAddressStatus.available,
+              addressText: 'Marina Road, Lagos',
+            );
+          }),
+        ],
+        child: const MaterialApp(home: ManagerTeamMapScreen(showTiles: false)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('team-map-search')),
+      250,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.enterText(find.byKey(const Key('team-map-search')), 'chidi');
+    await tester.pumpAndSettle();
+    final rosterTile = find.byKey(const Key('team-technician-person-private'));
+    expect(rosterTile, findsOneWidget);
+
+    await tester.tap(rosterTile);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Location sharing is off'), findsOneWidget);
+    expect(find.text('Live location address'), findsNothing);
+    expect(find.text('Last known address'), findsNothing);
+    expect(addressLookups, 0);
   });
 
   testWidgets('search and privacy filter narrow the synchronized roster', (

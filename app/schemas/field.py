@@ -798,6 +798,17 @@ class FieldLiveMapFeed(BaseModel):
     items: list[FieldLiveMapPosition]
 
 
+class FieldLiveMapTechnicianDetailQuery(BaseModel):
+    technician_id: UUID
+    stale_after_seconds: int = Field(default=120, ge=15, le=3600)
+
+
+class FieldLiveMapTechnicianDetail(BaseModel):
+    position: FieldLiveMapPosition
+    address_text: str | None = None
+    address_status: Literal["available", "unavailable"]
+
+
 class FieldLiveMapSearchQuery(BaseModel):
     query: str = Field(min_length=1, max_length=160)
     limit: int = Field(default=20, ge=1, le=50)

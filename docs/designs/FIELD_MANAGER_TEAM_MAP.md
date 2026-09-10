@@ -22,13 +22,16 @@ Owner: field operations UI
 - **First viewport:** geographic map, live/stale counts, feed freshness, and a
   fit-all control. Search and live/stale/not-sharing filters lead the
   synchronized roster immediately below it.
-- **Actions:** tap a marker or roster row to focus the map and inspect status,
-  observation time, accuracy, and current work. The one workflow action opens
-  the dispatch queue.
+- **Actions:** tap a marker or roster row to bring the map into view, focus the
+  exact shared coordinate, and inspect status, nearest address, observation
+  time, accuracy, and current work. The one workflow action opens the dispatch
+  queue.
 - **Sensitivity:** exact coordinates are private operational data. The map
   owner excludes technicians with sharing disabled before serialization, and
   the roster contract never contains latitude, longitude, accuracy, or the
-  location-observation timestamp.
+  location-observation timestamp. The selected-detail owner rechecks sharing
+  before sending that one current coordinate to the configured geocoding
+  provider; bulk and refresh-time reverse geocoding are forbidden.
 - **Freshness:** the owner supplies `is_live` and `stale_after_seconds`; the
   client shows both live and stale positions distinctly and labels last-known
   observation time. It refreshes the feed every 30 seconds only while the app
@@ -50,6 +53,7 @@ Owner: field operations UI
 - Architecture tests prove the mobile adapter calls the typed owner and uses
   `operations:dispatch:read`.
 - Flutter widget tests cover live and stale geographic markers, marker detail,
-  filtering, invalid coordinates, and retryable error state.
+  roster focus, live/last-known address detail, filtering, invalid coordinates,
+  and retryable error state.
 - The standard mobile viewport must be checked for overflow with one, many,
   and no mapped technicians before release.

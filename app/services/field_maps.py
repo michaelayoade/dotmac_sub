@@ -33,11 +33,15 @@ from app.schemas.field import (
     FieldLiveMapSearchQuery,
     FieldLiveMapSearchResponse,
     FieldLiveMapSearchResult,
+    FieldLiveMapTechnicianDetail,
+    FieldLiveMapTechnicianDetailQuery,
     FieldMovementPlaybackFeed,
     FieldMovementPlaybackPoint,
     FieldMovementPlaybackQuery,
     FieldMovementWorkOrderOption,
 )
+from app.schemas.geocoding import ReverseGeocodeQuery
+from app.services import geocoding
 from app.services.field.jobs import _location
 from app.services.service_address import service_address
 
@@ -139,6 +143,51 @@ def list_technician_positions(
         live_count=live_count,
         stale_after_seconds=query.stale_after_seconds,
         items=items,
+    )
+
+
+def get_technician_detail(
+    db: Session,
+    query: FieldLiveMapTechnicianDetailQuery,
+) -> FieldLiveMapTechnicianDetail | None:
+    """Return one sharing technician's latest position and nearest address."""
+    presence = (
+        db.query(FieldTechPresence)
+        .filter(FieldTechPresence.technician_id == query.technician_id)
+        .filter(FieldTechPresence.location_sharing_enabled.is_(True))
+        .one_or_none()
+    )
+    if presence is None:
+        return None
+    coordinates = _validated_coordinates(
+        presence.last_latitude,
+        presence.last_longitude,
+    )
+    if coordinates is None:
+        return None
+    latitude, longitude = coordinates
+    last_at = _as_utc(presence.last_location_at)
+    is_live = bool(
+        last_at and (_now() - last_at).total_seconds() <= query.stale_after_seconds
+    )
+    address = geocoding.resolve_coordinates(
+        db,
+        ReverseGeocodeQuery(latitude=latitude, longitude=longitude),
+    )
+    return FieldLiveMapTechnicianDetail(
+        position=FieldLiveMapPosition(
+            technician_id=presence.technician_id,
+            person_id=presence.person_id,
+            label=_technician_label(presence.technician),
+            status=presence.status,
+            latitude=latitude,
+            longitude=longitude,
+            accuracy_m=presence.last_location_accuracy_m,
+            last_location_at=last_at,
+            is_live=is_live,
+        ),
+        address_text=address.display_name if address is not None else None,
+        address_status="available" if address is not None else "unavailable",
     )
 
 
