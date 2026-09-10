@@ -45,6 +45,10 @@ def _has_column(table: str, column: str) -> bool:
     return column in {col["name"] for col in inspect(op.get_bind()).get_columns(table)}
 
 
+def _has_index(table: str, index: str) -> bool:
+    return index in {idx["name"] for idx in inspect(op.get_bind()).get_indexes(table)}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
@@ -56,12 +60,13 @@ def upgrade() -> None:
             _TABLE,
             sa.Column(_COLUMN, postgresql.UUID(as_uuid=True), nullable=True),
         )
-    op.create_index(
-        _INDEX,
-        _TABLE,
-        ["technician_id", _COLUMN],
-        unique=True,
-    )
+    if not _has_index(_TABLE, _INDEX):
+        op.create_index(
+            _INDEX,
+            _TABLE,
+            ["technician_id", _COLUMN],
+            unique=True,
+        )
 
 
 def downgrade() -> None:
@@ -70,6 +75,7 @@ def downgrade() -> None:
         return
     if not _has_table(_TABLE):
         return
-    op.drop_index(_INDEX, table_name=_TABLE)
+    if _has_index(_TABLE, _INDEX):
+        op.drop_index(_INDEX, table_name=_TABLE)
     if _has_column(_TABLE, _COLUMN):
         op.drop_column(_TABLE, _COLUMN)
