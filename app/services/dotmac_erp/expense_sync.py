@@ -320,22 +320,27 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
     erp_id = _extract_claim_id(response)
     claim_number = response.get("claim_number")
     claim_status = _extract_claim_status(response)
+    mapped = _ERP_TERMINAL_STATUS_MAP.get(claim_status) if claim_status else None
+    # A rejected claim's id/number could still technically ride along in the
+    # response — never link it as if ERP had accepted the claim. Rejection is
+    # a terminal business decision, recorded via expense_claim_status below,
+    # not a linkage.
+    is_rejected = mapped == "rejected"
 
     if request.expense_system not in {None, PROVIDER}:
         raise ValueError(
             f"Expense source changed: {request.expense_system} -> {PROVIDER}"
         )
     request.expense_system = PROVIDER
-    if erp_id and not request.expense_claim_reference:
+    if erp_id and not request.expense_claim_reference and not is_rejected:
         request.expense_claim_reference = str(erp_id)[:120]
-    if claim_number:
+    if claim_number and not is_rejected:
         request.expense_claim_number = str(claim_number)[:60]
     _apply_payment_projection(request, response)
     if not claim_status:
         return
 
     request.expense_claim_status = claim_status
-    mapped = _ERP_TERMINAL_STATUS_MAP.get(claim_status)
     now = datetime.now(UTC)
     if mapped and request.status == "submitted":
         request.status = mapped

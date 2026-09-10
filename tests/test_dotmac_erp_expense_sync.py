@@ -645,10 +645,17 @@ def test_repair_restores_a_dropped_expense_claim_writeback(db_session):
     db_session.refresh(request)
     assert result["repaired"] == 1
     assert request.expense_claim_reference == "ERP-CLAIM-REPAIR"
-    # No re-emit: still exactly one outbox row, still terminal-accepted.
+    # No re-emit: repair only re-applied the stored response, it never
+    # created a new outbox row. Two rows are expected here — the SUBMIT
+    # action and the separately auto-enqueued APPROVE action (see
+    # test_approval_enqueues_with_owner_and_enabled_capability) — both
+    # already delivered before repair ran, since the approve row's own
+    # prerequisite (submit accepted) was satisfied within that same
+    # deliver_pending pass.
     rows = _outbox_rows(db_session, request)
-    assert len(rows) == 1
-    assert rows[0].status == FieldErpSyncStatus.accepted.value
+    assert len(rows) == 2
+    submit_row = next(row for row in rows if row.payload["_expense_action"] == "submit")
+    assert submit_row.status == FieldErpSyncStatus.accepted.value
 
 
 def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_session):
@@ -689,7 +696,11 @@ def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_sessi
     db_session.refresh(request)
     assert result["repaired"] == 0
     assert result["processed"] == 0
-    assert result["skipped_not_owned"] == 1
+    # Both the SUBMIT and the separately auto-enqueued APPROVE outbox rows
+    # are delivered (accepted/sent) by this point — see
+    # test_repair_restores_a_dropped_expense_claim_writeback for why there
+    # are two — so the ownership guard skips both, not just one.
+    assert result["skipped_not_owned"] == 2
     # No re-apply happened: the request's own reference is still missing.
     assert request.expense_claim_reference is None
     assert request.expense_claim_status is None
