@@ -436,8 +436,9 @@ def test_erp_manifest_owns_config_secrets_and_capabilities():
         "erp.staff_access.webhook.v1",
         "workforce.attendance.read.v1",
         "workforce.attendance.punch.v1",
+        "erp.expense.form_context.v1",
     }
-    assert definition.version == "1.3.0"
+    assert definition.version == "1.4.0"
 
 
 def test_erp_capability_fails_closed_without_binding(db_session):

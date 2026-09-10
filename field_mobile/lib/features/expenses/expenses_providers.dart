@@ -52,6 +52,8 @@ class ExpensesRepository {
     String? projectId,
     String? ticketId,
     bool submit = true,
+    ExpenseApprover? selectedApprover,
+    VerifiedExpenseDestination? paymentDestination,
   }) async {
     if (submit && (clientRef == null || clientRef.trim().isEmpty)) {
       throw ArgumentError(
@@ -75,6 +77,8 @@ class ExpensesRepository {
             workOrderId: workOrderId,
             projectId: projectId,
             ticketId: ticketId,
+            selectedApprover: selectedApprover,
+            paymentDestination: paymentDestination,
           ),
         );
     return ExpenseRequest.fromJson(
@@ -98,6 +102,41 @@ class ExpensesRepository {
         .dio
         .get('/api/v1/field/expense-requests/categories');
     return _items(response.data).map(ExpenseCategory.fromJson).toList();
+  }
+
+  Future<ExpenseFormContext> fetchFormContext() async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .get('/api/v1/field/expense-requests/form-context');
+    return ExpenseFormContext.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
+  }
+
+  Future<VerifiedExpenseDestination> verifyDestination({
+    required String sourceClaimId,
+    required String mode,
+    String? bankCode,
+    String? accountNumber,
+    String? beneficiaryName,
+  }) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .post(
+          '/api/v1/field/expense-requests/payment-destination/verify',
+          data: {
+            'source_claim_id': sourceClaimId,
+            'mode': mode,
+            if (mode == 'expense_override') 'bank_code': bankCode,
+            if (mode == 'expense_override') 'account_number': accountNumber,
+            if (mode == 'expense_override') 'beneficiary_name': beneficiaryName,
+          },
+        );
+    return VerifiedExpenseDestination(
+      (response.data as Map).cast<String, dynamic>(),
+    );
   }
 
   Future<List<String>> fetchVendors({String query = '', int limit = 25}) async {
@@ -178,6 +217,8 @@ Map<String, dynamic> buildExpenseRequestPayload({
   String? workOrderId,
   String? projectId,
   String? ticketId,
+  ExpenseApprover? selectedApprover,
+  VerifiedExpenseDestination? paymentDestination,
 }) => {
   'purpose': purpose.trim(),
   if (clientRef != null && clientRef.trim().isNotEmpty)
@@ -193,6 +234,9 @@ Map<String, dynamic> buildExpenseRequestPayload({
     'project_id': projectId.trim(),
   if (ticketId != null && ticketId.trim().isNotEmpty)
     'ticket_id': ticketId.trim(),
+  if (selectedApprover != null) 'selected_approver': selectedApprover.toJson(),
+  if (paymentDestination != null)
+    'payment_destination': paymentDestination.data,
   'items': items.map((item) => item.toJson()).toList(),
 };
 
@@ -240,6 +284,10 @@ final expenseRequestProvider = FutureProvider.family<ExpenseRequest, String>(
 
 final expenseCategoriesProvider = FutureProvider<List<ExpenseCategory>>(
   (ref) => ref.watch(expensesRepositoryProvider).fetchCategories(),
+);
+
+final expenseFormContextProvider = FutureProvider<ExpenseFormContext>(
+  (ref) => ref.watch(expensesRepositoryProvider).fetchFormContext(),
 );
 
 final expenseVendorsProvider = FutureProvider<List<String>>(

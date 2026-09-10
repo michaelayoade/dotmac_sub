@@ -912,7 +912,10 @@ SERVICES: tuple[SOTService, ...] = (
             "separately authorized payment command stages reimbursement initiation, "
             "while ERP remains the payment and settlement authority. The client reference and "
             "normalized fingerprint make retries safe. The vendor picker remains "
-            "read-only and projects active vendor labels for expense entry."
+            "read-only and projects active vendor labels for expense entry. ERP "
+            "owns eligible approvers, bank identity, account verification, and the "
+            "opaque claim-bound destination token. Sub stores no raw account number; "
+            "it owns the selected local approver link and masked expense snapshot."
         ),
         contract=ServiceContract(
             concerns=(
@@ -923,6 +926,8 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical service work-order state",
                         "authenticated requester and work-order access evidence",
                         "ERP-owned expense category rules",
+                        "ERP-owned eligible approver observation",
+                        "ERP-verified payment destination token",
                         "validated receipt content",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -942,6 +947,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical submitted expense request",
+                        "selected expense approver",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -1018,6 +1024,34 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="ERP-owned eligible approver observation",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Active ERP employees with an expense-approval permission, "
+                        "matched to one active Sub SystemUser by normalized email"
+                    ),
+                ),
+                AuthorityInput(
+                    name="ERP-verified payment destination token",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Short-lived claim-bound opaque token plus bank name, account "
+                        "last four digits, verified beneficiary, and verification time; "
+                        "the raw account number never crosses into Sub persistence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="selected expense approver",
+                    owner="operations.expense_requests",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "ERP employee identity and exact active Sub SystemUser/email "
+                        "selected when the expense is submitted"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical submitted expense request",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1069,7 +1103,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "Create, submit, optional receipt metadata, and work-order activity "
                     "marking and submitted ERP outbox staging complete in one owner "
                     "transaction. Receipt storage is a flush-only participant. Manager "
-                    "approval, rejection, and payment initiation each lock the request "
+                    "approval and rejection require the selected approver and lock the "
+                    "verified payment snapshot; payment initiation locks the request "
                     "and stage an ordered ERP intent in the same owner transaction. "
                     "The vendor picker performs a "
                     "read-only session-scoped query. Requester-history reads are "
@@ -1099,6 +1134,11 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "operations.expense_requests.invalid_request",
+                    "operations.expense_requests.approver_invalid",
+                    "operations.expense_requests.approver_mismatch",
+                    "operations.expense_requests.destination_expired",
+                    "operations.expense_requests.destination_invalid",
+                    "operations.expense_requests.form_context_required",
                     "operations.expense_requests.idempotency_conflict",
                     "operations.expense_requests.erp_delivery_not_configured",
                     "operations.expense_requests.erp_staging_failed",
@@ -1122,6 +1162,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "missing exact staff work-order authorization evidence",
                     "work order without a current technician assignment",
                     "unavailable or invalid ERP category rules",
+                    "unavailable or mismatched ERP approver identity",
+                    "missing, expired, or invalid ERP payment-destination token",
                     "invalid receipt evidence",
                     "client-reference fingerprint conflict",
                     "expense-flow ownership not assigned to Sub",

@@ -117,6 +117,26 @@ class ExpenseRequestLineInput:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectedExpenseApprover:
+    erp_employee_id: UUID
+    system_user_id: UUID
+    display_name: str
+    email: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedExpenseDestinationInput:
+    mode: Literal["erp_profile", "expense_override"]
+    destination_token: str
+    bank_code: str
+    bank_name: str
+    masked_account_number: str
+    verified_beneficiary_name: str
+    verified_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class SubmitFieldExpenseRequest:
     context: CommandContext
     requester_person_id: UUID | None
@@ -130,6 +150,8 @@ class SubmitFieldExpenseRequest:
     access_mode: ExpenseRequestAccessMode = ExpenseRequestAccessMode.FIELD_ASSIGNMENT
     authorized_work_order_id: UUID | None = None
     category_rules: tuple[ExpenseCategoryRule, ...] = ()
+    selected_approver: SelectedExpenseApprover | None = None
+    payment_destination: VerifiedExpenseDestinationInput | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +296,29 @@ def _expense_fingerprint(command: SubmitFieldExpenseRequest) -> str:
         "expense_date": str(command.expense_date) if command.expense_date else None,
         "currency": command.currency.strip().upper(),
         "notes": (command.notes or "").strip() or None,
+        "selected_approver": (
+            {
+                "erp_employee_id": str(command.selected_approver.erp_employee_id),
+                "system_user_id": str(command.selected_approver.system_user_id),
+                "email": command.selected_approver.email.strip().lower(),
+            }
+            if command.selected_approver
+            else None
+        ),
+        "payment_destination": (
+            {
+                "mode": command.payment_destination.mode,
+                "destination_token_sha256": hashlib.sha256(
+                    command.payment_destination.destination_token.encode()
+                ).hexdigest(),
+                "bank_code": command.payment_destination.bank_code,
+                "account_last4": command.payment_destination.masked_account_number[-4:],
+                "beneficiary": command.payment_destination.verified_beneficiary_name,
+                "expires_at": command.payment_destination.expires_at.isoformat(),
+            }
+            if command.payment_destination
+            else None
+        ),
         "items": [
             {
                 "category_code": item.category_code.strip(),
@@ -326,11 +371,6 @@ def submit_field_expense_request_command(
                 code="operations.expense_requests.requester_not_found",
                 message="The requesting staff user is unavailable.",
             )
-        profile = _requesting_technician(
-            db,
-            requester_person_id=command.requester_person_id,
-            system_user_id=system_user_id,
-        )
         existing = (
             db.query(FieldExpenseRequest)
             .options(selectinload(FieldExpenseRequest.items))
@@ -359,6 +399,40 @@ def submit_field_expense_request_command(
                     message="Request identity was already used with different expense details.",
                 )
             return _submission_outcome(existing)
+        approver = command.selected_approver
+        destination = command.payment_destination
+        if (approver is None) != (destination is None):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.form_context_required",
+                message="Approver and verified payment details must be supplied together.",
+            )
+        now = datetime.now(UTC)
+        if approver is not None and destination is not None:
+            approver_user = db.get(SystemUser, approver.system_user_id)
+            if (
+                approver_user is None
+                or not approver_user.is_active
+                or approver_user.email.strip().lower() != approver.email.strip().lower()
+            ):
+                raise FieldExpenseRequestError(
+                    code="operations.expense_requests.approver_invalid",
+                    message="The selected expense approver is no longer available.",
+                )
+            if destination.expires_at <= now:
+                raise FieldExpenseRequestError(
+                    code="operations.expense_requests.destination_expired",
+                    message="Payment details expired. Verify them again.",
+                )
+            if len(destination.masked_account_number) < 4:
+                raise FieldExpenseRequestError(
+                    code="operations.expense_requests.destination_invalid",
+                    message="Verified payment details are invalid.",
+                )
+        profile = _requesting_technician(
+            db,
+            requester_person_id=command.requester_person_id,
+            system_user_id=system_user_id,
+        )
         if command.access_mode == ExpenseRequestAccessMode.FIELD_ASSIGNMENT:
             if profile is None:
                 raise FieldExpenseRequestError(
@@ -460,12 +534,37 @@ def submit_field_expense_request_command(
                 ),
             )
             item["receipt_attachment_id"] = receipt.id
-        now = datetime.now(UTC)
         request = FieldExpenseRequest(
             work_order_mirror_id=row.id,
             requested_by_technician_id=profile.id if profile else None,
             requested_by_person_id=system_user.person_party_id or system_user.id,
             requested_by_system_user_id=system_user.id,
+            selected_approver_erp_id=(approver.erp_employee_id if approver else None),
+            selected_approver_system_user_id=(
+                approver.system_user_id if approver else None
+            ),
+            selected_approver_name=(
+                approver.display_name.strip() if approver else None
+            ),
+            selected_approver_email=(
+                approver.email.strip().lower() if approver else None
+            ),
+            payment_destination_mode=(destination.mode if destination else None),
+            payment_destination_token=(
+                destination.destination_token if destination else None
+            ),
+            recipient_bank_code=(destination.bank_code if destination else None),
+            recipient_bank_name=(destination.bank_name if destination else None),
+            recipient_account_last4=(
+                destination.masked_account_number[-4:] if destination else None
+            ),
+            verified_beneficiary_name=(
+                destination.verified_beneficiary_name if destination else None
+            ),
+            destination_verified_at=(destination.verified_at if destination else None),
+            destination_token_expires_at=(
+                destination.expires_at if destination else None
+            ),
             status="submitted",
             purpose=purpose,
             expense_date=command.expense_date,
@@ -522,10 +621,20 @@ def approve_field_expense_request_command(
                 code="operations.expense_requests.invalid_transition",
                 message="Only submitted expense requests can be approved.",
             )
+        if (
+            request.selected_approver_system_user_id is not None
+            and request.selected_approver_system_user_id
+            != command.reviewer_system_user_id
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.approver_mismatch",
+                message="Only the selected expense approver can approve this request.",
+            )
 
         now = datetime.now(UTC)
         request.status = "approved"
         request.approved_at = now
+        request.payment_destination_locked_at = now
         request.rejection_reason = None
         _note_approval_command(request, command, occurred_at=now)
         _mark_sub_authoritative(request.work_order_mirror)
@@ -597,6 +706,15 @@ def reject_field_expense_request_command(
             raise FieldExpenseRequestError(
                 code="operations.expense_requests.invalid_transition",
                 message="Only submitted expense requests can be rejected.",
+            )
+        if (
+            request.selected_approver_system_user_id is not None
+            and request.selected_approver_system_user_id
+            != command.reviewer_system_user_id
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.approver_mismatch",
+                message="Only the selected expense approver can reject this request.",
             )
         reason = command.reason.strip()
         if not reason:
@@ -819,6 +937,17 @@ def serialize_expense_request(
         "crm_expense_request_id": request.crm_expense_request_id,
         "requested_by_person_id": request.requested_by_person_id,
         "requested_by_system_user_id": request.requested_by_system_user_id,
+        "selected_approver_erp_id": request.selected_approver_erp_id,
+        "selected_approver_name": request.selected_approver_name,
+        "selected_approver_email": request.selected_approver_email,
+        "payment_destination_mode": request.payment_destination_mode,
+        "recipient_bank_name": request.recipient_bank_name,
+        "masked_account_number": (
+            f"******{request.recipient_account_last4}"
+            if request.recipient_account_last4
+            else None
+        ),
+        "verified_beneficiary_name": request.verified_beneficiary_name,
         "status": request.status,
         "purpose": request.purpose,
         "expense_date": request.expense_date,
@@ -1011,6 +1140,7 @@ class FieldExpenseRequests:
         db: Session,
         *,
         status: str | None = None,
+        approver_system_user_id: UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
@@ -1023,6 +1153,14 @@ class FieldExpenseRequests:
         )
         if status:
             query = query.filter(FieldExpenseRequest.status == _status(status))
+        if approver_system_user_id is not None:
+            query = query.filter(
+                or_(
+                    FieldExpenseRequest.status != "submitted",
+                    FieldExpenseRequest.selected_approver_system_user_id
+                    == approver_system_user_id,
+                )
+            )
         requests = apply_pagination(query, limit, offset).all()
         return _serialize_expense_requests(db, requests)
 

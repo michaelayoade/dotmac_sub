@@ -9,7 +9,7 @@ from enum import StrEnum
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.field_erp_sync import (
@@ -21,6 +21,12 @@ from app.models.field_expense import FieldExpenseRequest
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.domain_errors import DomainError
+from app.services.dotmac_erp.client import DotMacERPError
+from app.services.dotmac_erp.expense_form_contracts import (
+    ExpenseBankOption,
+    ExpenseDestinationMode,
+    ExpenseProfileDestination,
+)
 from app.services.field.expense_categories import (
     ExpenseCategoryQueryError,
     ListExpenseCategories,
@@ -34,6 +40,8 @@ from app.services.field.expense_requests import (
     evaluate_expense_work_order_eligibility,
     list_expense_vendors,
 )
+from app.services.integrations.erp_capability import capability_client
+from app.services.integrations.installations import InstallationError
 from app.services.status_presentation import (
     StatusPresentation,
     field_expense_status_presentation,
@@ -74,7 +82,20 @@ class WorkOrderExpenseFormInput:
     expense_date: str
     currency: str
     notes: str
+    selected_approver_id: str
+    payment_destination_mode: str
+    bank_code: str
+    account_number: str
+    beneficiary_name: str
     lines: tuple[ExpenseLineFormInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExpenseApproverView:
+    erp_employee_id: UUID
+    system_user_id: UUID
+    display_name: str
+    email: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +120,11 @@ class PreparedWorkOrderExpense:
     notes: str | None
     lines: tuple[PreparedExpenseLine, ...]
     category_rules: tuple[ExpenseCategoryRule, ...]
+    selected_approver: ExpenseApproverView
+    payment_destination_mode: ExpenseDestinationMode
+    bank_code: str | None
+    account_number: str | None
+    beneficiary_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +149,9 @@ class WorkOrderExpensePanel:
     claims: tuple[WorkOrderExpenseClaimView, ...]
     categories: tuple[ExpenseCategoryRule, ...]
     vendors: tuple[FieldExpenseVendorOption, ...]
+    approvers: tuple[ExpenseApproverView, ...]
+    banks: tuple[ExpenseBankOption, ...]
+    profile_destination: ExpenseProfileDestination
     create_action: Action
     form: WorkOrderExpenseFormInput
     errors: tuple[ExpenseFieldError, ...]
@@ -160,6 +189,11 @@ def default_expense_form() -> WorkOrderExpenseFormInput:
         expense_date=date.today().isoformat(),
         currency="NGN",
         notes="",
+        selected_approver_id="",
+        payment_destination_mode="erp_profile",
+        bank_code="",
+        account_number="",
+        beneficiary_name="",
         lines=(_empty_line(),),
     )
 
@@ -206,6 +240,41 @@ def build_work_order_expense_panel(
     except ExpenseCategoryQueryError:
         category_message = "Expense categories are temporarily unavailable from ERP."
 
+    approvers: tuple[ExpenseApproverView, ...] = ()
+    banks: tuple[ExpenseBankOption, ...] = ()
+    profile_destination = ExpenseProfileDestination(available=False)
+    try:
+        erp_client = capability_client(db)
+        erp_approvers = erp_client.get_expense_approvers(requested_by_email=user.email)
+        banks = erp_client.get_expense_banks()
+        profile_destination = erp_client.get_expense_profile_destination(
+            requested_by_email=user.email
+        )
+        emails = {item.email.strip().lower() for item in erp_approvers}
+        local_users = {
+            item.email.strip().lower(): item
+            for item in db.query(SystemUser)
+            .filter(
+                SystemUser.is_active.is_(True),
+                func.lower(SystemUser.email).in_(emails),
+            )
+            .all()
+        }
+        approvers = tuple(
+            ExpenseApproverView(
+                erp_employee_id=item.employee_id,
+                system_user_id=local_users[item.email.strip().lower()].id,
+                display_name=item.display_name,
+                email=item.email,
+            )
+            for item in erp_approvers
+            if item.email.strip().lower() in local_users
+        )
+        if not approvers:
+            category_message = "No ERP expense approver has a matching active Sub user."
+    except (DotMacERPError, InstallationError):
+        category_message = "Expense approvers and payment details are temporarily unavailable from ERP."
+
     vendors = list_expense_vendors(
         db=db,
         query=ListFieldExpenseVendors(limit=100),
@@ -229,6 +298,9 @@ def build_work_order_expense_panel(
         claims=claims,
         categories=categories,
         vendors=vendors,
+        approvers=approvers,
+        banks=banks,
+        profile_destination=profile_destination,
         create_action=create_action,
         form=form or default_expense_form(),
         errors=errors,
@@ -241,6 +313,7 @@ def validate_work_order_expense_form(
     form: WorkOrderExpenseFormInput,
     *,
     category_rules: tuple[ExpenseCategoryRule, ...],
+    approvers: tuple[ExpenseApproverView, ...],
 ) -> PreparedWorkOrderExpense:
     errors: list[ExpenseFieldError] = []
     try:
@@ -267,6 +340,39 @@ def validate_work_order_expense_form(
         errors.append(
             ExpenseFieldError("notes", "Notes must not exceed 2,000 characters.")
         )
+    try:
+        selected_approver_id = UUID(form.selected_approver_id)
+    except ValueError:
+        selected_approver_id = None
+    selected_approver = next(
+        (item for item in approvers if item.erp_employee_id == selected_approver_id),
+        None,
+    )
+    if selected_approver is None:
+        errors.append(
+            ExpenseFieldError("selected_approver_id", "Select an expense approver.")
+        )
+    try:
+        destination_mode = ExpenseDestinationMode(form.payment_destination_mode.strip())
+    except ValueError:
+        destination_mode = ExpenseDestinationMode.ERP_PROFILE
+        errors.append(
+            ExpenseFieldError("payment_destination_mode", "Select payment details.")
+        )
+    bank_code = form.bank_code.strip() or None
+    account_number = form.account_number.strip() or None
+    beneficiary_name = form.beneficiary_name.strip() or None
+    if destination_mode is ExpenseDestinationMode.EXPENSE_OVERRIDE:
+        if not bank_code:
+            errors.append(ExpenseFieldError("bank_code", "Select a bank."))
+        if not account_number or not account_number.isdigit():
+            errors.append(
+                ExpenseFieldError("account_number", "Enter a valid account number.")
+            )
+        if not beneficiary_name:
+            errors.append(
+                ExpenseFieldError("beneficiary_name", "Enter the beneficiary name.")
+            )
     if not form.lines:
         errors.append(ExpenseFieldError("lines", "Add at least one expense item."))
     elif len(form.lines) > 50:
@@ -378,6 +484,7 @@ def validate_work_order_expense_form(
             form=form,
             errors=tuple(errors),
         )
+    assert selected_approver is not None
     return PreparedWorkOrderExpense(
         request_id=request_id,
         purpose=purpose,
@@ -386,6 +493,23 @@ def validate_work_order_expense_form(
         notes=notes,
         lines=tuple(prepared_lines),
         category_rules=category_rules,
+        selected_approver=selected_approver,
+        payment_destination_mode=destination_mode,
+        bank_code=(
+            bank_code
+            if destination_mode is ExpenseDestinationMode.EXPENSE_OVERRIDE
+            else None
+        ),
+        account_number=(
+            account_number
+            if destination_mode is ExpenseDestinationMode.EXPENSE_OVERRIDE
+            else None
+        ),
+        beneficiary_name=(
+            beneficiary_name
+            if destination_mode is ExpenseDestinationMode.EXPENSE_OVERRIDE
+            else None
+        ),
     )
 
 
@@ -407,7 +531,11 @@ def prepare_form_redisplay(
             )
             line = replace(line, receipt_upload=None)
         lines.append(line)
-    return replace(form, lines=tuple(lines)), tuple(redisplay_errors)
+    return replace(
+        form,
+        lines=tuple(lines),
+        account_number="",
+    ), tuple(redisplay_errors)
 
 
 def _claim_views(

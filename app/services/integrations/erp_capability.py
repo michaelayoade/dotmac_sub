@@ -15,12 +15,21 @@ from sqlalchemy.orm import Session
 from app.schemas.erp_staff_access_webhook import ErpStaffAccessProjectionPage
 from app.services.backoffice import ExpenseCategoryView
 from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientError
+from app.services.dotmac_erp.expense_form_contracts import (
+    ExpenseApproverOption,
+    ExpenseBankOption,
+    ExpenseProfileDestination,
+    InspectExpenseDestination,
+    VerifiedExpenseDestination,
+    VerifyExpenseDestination,
+)
 from app.services.dotmac_erp.operational_contracts import (
     ErpOperationalSyncCommand,
     ErpOperationalSyncOutcome,
 )
 from app.services.integrations import installations
 from app.services.integrations.backoffice_contracts import (
+    ERP_EXPENSE_FORM_CAPABILITY,
     ERP_INVENTORY_CAPABILITY,
     ERP_OPERATIONAL_SYNC_CAPABILITY,
     ERP_OUTBOX_CAPABILITY,
@@ -212,6 +221,69 @@ class ErpCapabilityClient:
         if not isinstance(items, list):
             raise DotMacERPError("ERP expense categories response is invalid")
         return tuple(_expense_category(item) for item in items)
+
+    def get_expense_approvers(
+        self, *, requested_by_email: str
+    ) -> tuple[ExpenseApproverOption, ...]:
+        output = self._execute(
+            ERP_EXPENSE_FORM_CAPABILITY,
+            "list_expense_approvers",
+            {"requested_by_email": requested_by_email},
+            trigger=OperationTrigger.interactive,
+            correlation_id="erp-expenses:approvers",
+        )
+        return tuple(
+            ExpenseApproverOption.model_validate(item)
+            for item in output.get("items") or []
+        )
+
+    def get_expense_banks(self) -> tuple[ExpenseBankOption, ...]:
+        output = self._execute(
+            ERP_EXPENSE_FORM_CAPABILITY,
+            "list_expense_banks",
+            {},
+            trigger=OperationTrigger.interactive,
+            correlation_id="erp-expenses:banks",
+        )
+        return tuple(
+            ExpenseBankOption.model_validate(item) for item in output.get("items") or []
+        )
+
+    def get_expense_profile_destination(
+        self, *, requested_by_email: str
+    ) -> ExpenseProfileDestination:
+        output = self._execute(
+            ERP_EXPENSE_FORM_CAPABILITY,
+            "get_expense_profile_destination",
+            {"requested_by_email": requested_by_email},
+            trigger=OperationTrigger.interactive,
+            correlation_id="erp-expenses:profile-destination",
+        )
+        return ExpenseProfileDestination.model_validate(output)
+
+    def verify_expense_destination(
+        self, command: VerifyExpenseDestination
+    ) -> VerifiedExpenseDestination:
+        output = self._execute(
+            ERP_EXPENSE_FORM_CAPABILITY,
+            "verify_expense_destination",
+            {"payload": command.model_dump(mode="json", exclude_none=True)},
+            trigger=OperationTrigger.interactive,
+            correlation_id=f"erp-expenses:verify:{command.source_claim_id}",
+        )
+        return VerifiedExpenseDestination.model_validate(output)
+
+    def inspect_expense_destination(
+        self, command: InspectExpenseDestination
+    ) -> VerifiedExpenseDestination:
+        output = self._execute(
+            ERP_EXPENSE_FORM_CAPABILITY,
+            "inspect_expense_destination",
+            {"payload": command.model_dump(mode="json")},
+            trigger=OperationTrigger.interactive,
+            correlation_id=f"erp-expenses:inspect:{command.source_claim_id}",
+        )
+        return VerifiedExpenseDestination.model_validate(output)
 
     def list_available_serials(self, **params) -> dict:
         return self._execute(

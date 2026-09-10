@@ -230,12 +230,17 @@ class _FakeERPClient:
 
 def test_payload_mapping_matches_neutral_erp_contract(db_session):
     request = _make_submitted_request(db_session)
+    request.selected_approver_erp_id = uuid4()
+    request.payment_destination_token = "enc:opaque-destination-token"
     payload = expense_sync.build_expense_claim_payload(request)
 
     assert payload["source_claim_id"] == str(request.id)
     assert payload["purpose"] == "Transport for extra drop cable"
     assert payload["claim_date"] == date.today().isoformat()
     assert payload["requested_by_email"] == request.requested_by_system_user.email
+    assert payload["requested_approver_id"] == str(request.selected_approver_erp_id)
+    assert payload["payment_destination_token"] == "enc:opaque-destination-token"
+    assert "recipient_account_number" not in payload
     # Neutral source references come from retained work-order provenance.
     assert payload["ticket_source_reference"] == "crm-ticket-77"
     assert payload["project_source_reference"] == "crm-project-88"
@@ -269,6 +274,17 @@ def test_eligibility_accepts_submitted_claims(db_session):
 
     request.status = "draft"
     assert "cannot be synced" in expense_sync.expense_claim_eligibility_error(request)
+
+
+def test_only_selected_approver_can_approve(db_session):
+    request = _make_submitted_request(db_session)
+    request.selected_approver_system_user_id = uuid4()
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as exc:
+        _approve(db_session, request)
+
+    assert exc.value.code == "operations.expense_requests.approver_mismatch"
 
 
 # ---------------------------------------------------------------------------

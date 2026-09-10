@@ -344,7 +344,11 @@ def field_manager_expenses(
     db: Session = Depends(get_db),
 ):
     items = field_expense_requests.list_all(
-        db, status=status_filter, limit=limit, offset=offset
+        db,
+        status=status_filter,
+        approver_system_user_id=UUID(str(auth["principal_id"])),
+        limit=limit,
+        offset=offset,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 

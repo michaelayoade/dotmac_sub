@@ -18,6 +18,7 @@ from starlette.datastructures import FormData, UploadFile
 from app.csrf import CSRF_COOKIE_NAME, CSRFValidationError
 from app.db import get_db
 from app.models.stored_file import StoredFile
+from app.models.system_user import SystemUser
 from app.services import web_dispatch_work_orders as work_orders_service
 from app.services import web_work_order_expenses as expense_web
 from app.services.auth_dependencies import (
@@ -28,11 +29,15 @@ from app.services.auth_dependencies import (
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.dotmac_erp.client import DotMacERPError
+from app.services.dotmac_erp.expense_form_contracts import VerifyExpenseDestination
 from app.services.field.expense_requests import (
     ExpenseReceiptUploadInput,
     ExpenseRequestAccessMode,
     ExpenseRequestLineInput,
+    SelectedExpenseApprover,
     SubmitFieldExpenseRequest,
+    VerifiedExpenseDestinationInput,
     submit_field_expense_request_command,
 )
 from app.services.field.note_commands import (
@@ -42,6 +47,7 @@ from app.services.field.note_commands import (
     get_staff_field_note_attachment,
 )
 from app.services.file_storage import build_content_disposition, file_uploads
+from app.services.integrations.erp_capability import capability_client
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
 from app.services.work_order_views import get_work_order_row
@@ -174,6 +180,11 @@ def _expense_form(form: FormData) -> expense_web.WorkOrderExpenseFormInput:
         expense_date=_form_text(form, "expense_date"),
         currency=_form_text(form, "currency"),
         notes=_form_text(form, "notes"),
+        selected_approver_id=_form_text(form, "selected_approver_id"),
+        payment_destination_mode=_form_text(form, "payment_destination_mode"),
+        bank_code=_form_text(form, "bank_code"),
+        account_number=_form_text(form, "account_number"),
+        beneficiary_name=_form_text(form, "beneficiary_name"),
         lines=tuple(lines),
     )
 
@@ -333,6 +344,28 @@ def create_work_order_expense(
         prepared = expense_web.validate_work_order_expense_form(
             form,
             category_rules=panel.categories,
+            approvers=panel.approvers,
+        )
+        requester = db.get(SystemUser, actor_id)
+        if requester is None or not requester.email.strip():
+            raise expense_web.WorkOrderExpenseFormError(
+                message="The requesting staff email is unavailable.",
+                form=form,
+                errors=(
+                    expense_web.ExpenseFieldError(
+                        "form", "Add a staff email before submitting an expense."
+                    ),
+                ),
+            )
+        verified_destination = capability_client(db).verify_expense_destination(
+            VerifyExpenseDestination(
+                requested_by_email=requester.email,
+                source_claim_id=prepared.request_id,
+                mode=prepared.payment_destination_mode,
+                bank_code=prepared.bank_code,
+                account_number=prepared.account_number,
+                beneficiary_name=prepared.beneficiary_name,
+            )
         )
         db_session_adapter.release_read_transaction(db)
         outcome = submit_field_expense_request_command(
@@ -371,11 +404,50 @@ def create_work_order_expense(
                 access_mode=ExpenseRequestAccessMode.STAFF_WORK_ORDER,
                 authorized_work_order_id=panel.work_order_id,
                 category_rules=prepared.category_rules,
+                selected_approver=SelectedExpenseApprover(
+                    erp_employee_id=prepared.selected_approver.erp_employee_id,
+                    system_user_id=prepared.selected_approver.system_user_id,
+                    display_name=prepared.selected_approver.display_name,
+                    email=prepared.selected_approver.email,
+                ),
+                payment_destination=VerifiedExpenseDestinationInput(
+                    mode=verified_destination.mode.value,
+                    destination_token=verified_destination.destination_token,
+                    bank_code=verified_destination.bank_code,
+                    bank_name=verified_destination.bank_name,
+                    masked_account_number=verified_destination.masked_account_number,
+                    verified_beneficiary_name=(
+                        verified_destination.verified_beneficiary_name
+                    ),
+                    verified_at=verified_destination.verified_at,
+                    expires_at=verified_destination.expires_at,
+                ),
             ),
         )
     except expense_web.WorkOrderExpenseFormError as exc:
         redisplay_form, redisplay_errors = expense_web.prepare_form_redisplay(
             exc.form, exc.errors
+        )
+        return _expense_detail_response(
+            request,
+            db,
+            work_order_id=work_order_id,
+            actor_id=actor_id,
+            field_note_access=resolve_staff_field_note_access(db, auth),
+            expense_form=redisplay_form,
+            expense_errors=redisplay_errors,
+            status_code=422,
+        )
+    except DotMacERPError:
+        db_session_adapter.discard_failed_transaction(db)
+        redisplay_form, redisplay_errors = expense_web.prepare_form_redisplay(
+            form,
+            (
+                expense_web.ExpenseFieldError(
+                    "form",
+                    "ERP could not verify the payment details. Check them and try again.",
+                ),
+            ),
         )
         return _expense_detail_response(
             request,

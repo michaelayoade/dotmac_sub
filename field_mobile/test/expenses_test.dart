@@ -19,6 +19,25 @@ import 'package:sqlite3/open.dart';
 import 'helpers/fake_http.dart';
 import 'helpers/secure_store.dart';
 
+const _testFormContext = ExpenseFormContext(
+  approvers: [
+    ExpenseApprover(
+      erpEmployeeId: '00000000-0000-0000-0000-000000000001',
+      systemUserId: '00000000-0000-0000-0000-000000000002',
+      displayName: 'Expense Approver',
+      email: 'approver@example.com',
+    ),
+  ],
+  banks: [ExpenseBank(bankCode: '058', bankName: 'Test Bank')],
+  profileDestination: ExpenseProfileDestination(
+    available: true,
+    bankCode: '058',
+    bankName: 'Test Bank',
+    maskedAccountNumber: '******6789',
+    beneficiaryName: 'Field Technician',
+  ),
+);
+
 void main() {
   late ProviderContainer container;
   late FakeHttpAdapter adapter;
@@ -202,7 +221,6 @@ void main() {
         },
       );
     });
-
     final request = await container
         .read(expensesRepositoryProvider)
         .createRequest(
@@ -517,6 +535,23 @@ void main() {
 
     Map<String, dynamic>? posted;
     var managerExpenseLoads = 0;
+    adapter.on(
+      'POST',
+      '/api/v1/field/expense-requests/payment-destination/verify',
+      (_) => (
+        200,
+        {
+          'destination_token': 'enc:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+          'mode': 'erp_profile',
+          'bank_code': '058',
+          'bank_name': 'Test Bank',
+          'masked_account_number': '******6789',
+          'verified_beneficiary_name': 'Field Technician',
+          'verified_at': '2099-09-10T10:00:00Z',
+          'expires_at': '2099-09-10T10:30:00Z',
+        },
+      ),
+    );
     adapter.on('POST', '/api/v1/field/expense-requests/submit', (options) {
       posted = (options.data as Map).cast<String, dynamic>();
       return (
@@ -563,6 +598,9 @@ void main() {
               ),
             ],
           ),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
           managerExpensesProvider.overrideWith((ref) async {
             managerExpenseLoads += 1;
             return const [];
@@ -582,6 +620,10 @@ void main() {
     expect(find.text('New expense request'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
     expect(find.text('Save draft'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('expense-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expense Approver').last);
+    await tester.pumpAndSettle();
 
     // Pick a category and describe the line, but leave the amount empty.
     await tester.tap(find.byKey(const Key('expense-category')));
@@ -649,10 +691,15 @@ void main() {
       ProviderScope(
         overrides: [
           expenseCategoriesProvider.overrideWith((ref) async => const []),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('expense-category-code')), findsOneWidget);
@@ -682,10 +729,15 @@ void main() {
                 'Dotmac Infrastructure Maintenance and Logistics Limited',
               ],
             ),
+            expenseFormContextProvider.overrideWith(
+              (ref) async => _testFormContext,
+            ),
           ],
           child: const MaterialApp(home: NewExpenseRequestScreen()),
         ),
       );
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView), const Offset(0, -700));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('expense-category')), findsOneWidget);
@@ -711,6 +763,9 @@ void main() {
                 requiresReceipt: true,
               ),
             ],
+          ),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
           ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),

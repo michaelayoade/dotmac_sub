@@ -424,6 +424,41 @@ class DotMacERPClient:
         items = result.get("items")
         return items if isinstance(items, list) else []
 
+    def get_expense_approvers(self, requested_by_email: str) -> list[dict]:
+        result = self.get(
+            "/api/v1/sync/sub/expense-approvers",
+            params={"requested_by_email": requested_by_email},
+            expected_status_codes={200},
+        )
+        items = result.get("items")
+        return items if isinstance(items, list) else []
+
+    def get_expense_banks(self) -> list[dict]:
+        result = self.get("/api/v1/sync/sub/expense-banks", expected_status_codes={200})
+        items = result.get("items")
+        return items if isinstance(items, list) else []
+
+    def get_expense_profile_destination(self, requested_by_email: str) -> dict:
+        return self.get(
+            "/api/v1/sync/sub/expense-payment-destinations/profile",
+            params={"requested_by_email": requested_by_email},
+            expected_status_codes={200},
+        )
+
+    def verify_expense_destination(self, payload: dict) -> dict:
+        return self.post(
+            "/api/v1/sync/sub/expense-payment-destinations/verify",
+            payload,
+            expected_status_codes={200},
+        )
+
+    def inspect_expense_destination(self, payload: dict) -> dict:
+        return self.post(
+            "/api/v1/sync/sub/expense-payment-destinations/inspect",
+            payload,
+            expected_status_codes={200},
+        )
+
     # ============ Material request surface ============
     #
     # Thin flow-specific wrappers over the generic post/get, mirroring the paths
