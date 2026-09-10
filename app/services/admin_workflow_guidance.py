@@ -515,6 +515,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "While AI is handling a conversation or waiting for the customer, review it read-only; normal reply, note, assignment, status, ticket, macro, and bulk actions remain unavailable.",
         "When authorized human intervention is intentional, choose Take Over Conversation and confirm it before replying; an ordinary reply never takes ownership away from AI.",
         "After AI hands the conversation to the human queue, the first eligible reply claims it for that agent. If another agent already owns it, the reply is not sent and the Inbox names the current owner.",
+        "Keep the Inbox visible while available; its authenticated heartbeat refreshes your routing presence but never overrides Away, On break, or Offline.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and long-term inactive-session expiry.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",

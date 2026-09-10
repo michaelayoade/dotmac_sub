@@ -1,13 +1,14 @@
 """Customer portal service-location page and geocode helpers."""
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.subscriber import Subscriber
+from app.models.subscriber import AddressType, Subscriber
 from app.schemas.subscriber import CustomerServiceLocationUpdate
 from app.services import customer_location_requests as location_service
 from app.services import geocoding as geocoding_service
@@ -84,10 +85,11 @@ def customer_location_submit(
     if not subscriber_id:
         return RedirectResponse(url="/portal/location?error=1", status_code=303)
     try:
+        subscriber_uuid = UUID(subscriber_id)
         subscriber_service.update_customer_service_location(
             db=db,
             payload=CustomerServiceLocationUpdate(
-                subscriber_id=subscriber_id,
+                subscriber_id=subscriber_uuid,
                 address_line1=address_line1.strip(),
                 address_line2=address_line2.strip() or None,
                 city=city.strip() or None,
@@ -97,10 +99,10 @@ def customer_location_submit(
                 country_code=country_code.strip().upper() or "NG",
                 latitude=latitude,
                 longitude=longitude,
-                address_type="service",
+                address_type=AddressType.service,
                 label="Primary service",
                 is_primary=True,
-                actor_id=subscriber_id,
+                actor_id=subscriber_uuid,
                 actor_name=str(customer.get("username") or "") or None,
             ),
         )

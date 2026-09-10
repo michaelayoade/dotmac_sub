@@ -432,9 +432,7 @@ def team_inbox_queue(
                 else ()
             ),
             "can_manage_inbox": can_manage_inbox,
-            "can_manage_inbox_capacity": can(
-                request, "system:settings:write"
-            ),
+            "can_manage_inbox_capacity": can(request, "system:settings:write"),
             "can_manage_leads": can(request, "crm:lead:write"),
             "manager_dashboard": manager_dashboard,
             "selected": (
@@ -574,9 +572,7 @@ def team_inbox_manager_dashboard(
     context.update(
         {
             "can_manage_inbox": True,
-            "can_manage_inbox_capacity": can(
-                request, "system:settings:write"
-            ),
+            "can_manage_inbox_capacity": can(request, "system:settings:write"),
             "manager_dashboard": manager_dashboard,
         }
     )
@@ -2481,7 +2477,7 @@ def team_inbox_presence_action(
 
 @router.post(
     "/presence/heartbeat",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_presence_heartbeat(
     request: Request,
