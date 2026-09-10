@@ -73,8 +73,10 @@ from app.services.network_operation_dispatch import (
 )
 from app.services.network_operations import (
     StartOntServiceConfigurationOperation,
+    StartOntServiceConfigurationVerificationOperation,
     network_operations,
     start_ont_service_configuration_operation,
+    start_ont_service_configuration_verification_operation,
 )
 from app.services.network_subscriber_bridge import (
     AssignmentSubscriptionSnapshot,
@@ -115,6 +117,11 @@ _RETRY = OwnerCommandDefinition(
     owner=OWNER,
     concern=_COORDINATION_CONCERN,
     name="retry_ont_service_configuration",
+)
+_VERIFY = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_COORDINATION_CONCERN,
+    name="verify_ont_service_configuration_readback",
 )
 _REPAIR = OwnerCommandDefinition(
     owner=OWNER,
@@ -248,6 +255,24 @@ class RetryOntServiceConfigurationCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class VerifyOntServiceConfigurationReadbackCommand:
+    """Reconcile a terminally failed delivery record against live reality.
+
+    Unlike ``RetryOntServiceConfigurationCommand`` (re-sends the write), this
+    never re-issues ``setParameterValues``/an OLT write. It admits a
+    readback-only re-attempt of exactly the referenced failed operation,
+    linked to it via ``NetworkOperation.redrive_of_id`` — the original
+    failure record is never overwritten or deleted.
+    """
+
+    context: CommandContext
+    ont_unit_id: uuid.UUID
+    expected_head_id: uuid.UUID
+    expected_revision: int
+    failed_operation_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
 class ExecuteOntServiceConfigurationCommand:
     context: CommandContext
     ont_unit_id: uuid.UUID
@@ -256,6 +281,10 @@ class ExecuteOntServiceConfigurationCommand:
     revision: int
     verification_attempt: int = 0
     explicit_repair: bool = False
+    # Set only by the readback-verification worker task. When True the
+    # underlying ``reconcile_ont`` call is unconditionally readback-only,
+    # regardless of ``verification_attempt`` — see ``_execution_locked``.
+    force_readback_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1392,11 +1421,18 @@ def _execution_locked(
     from app.services.network.reconcile.core import reconcile_ont
     from app.services.network.reconcile.lifecycle import ReconcileLifecycleBinding
 
+    wifi_scope = _wifi_delivery_scope(revision)
+    # ``force_readback_only`` is set exclusively by the readback-verification
+    # worker task (``app.tasks.ont_service_configuration.verify_readback``)
+    # and is never derived from anything in the dispatch payload — see that
+    # task and ``_ont_service_config_verify_invocation`` for why no caller
+    # input can flip this back to a write.
+    readback_only = command.verification_attempt > 0 or command.force_readback_only
     result = reconcile_ont(
         db,
         ont.id,
         mode="sweep" if command.explicit_repair else "sync",
-        wifi_delivery_scope=_wifi_delivery_scope(revision),
+        wifi_delivery_scope=wifi_scope,
         force_lan_config=_force_lan_delivery(revision),
         lifecycle_binding=ReconcileLifecycleBinding(
             ont_unit_id=ont.id,
@@ -1405,7 +1441,7 @@ def _execution_locked(
             desired_revision=revision.revision,
             operation_id=operation.id,
         ),
-        readback_only=command.verification_attempt > 0,
+        readback_only=readback_only,
         timeout_sec=SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS,
     )
     delivered_without_readback = (
@@ -1416,6 +1452,20 @@ def _execution_locked(
             (result.sync_status == "synced" and not result.drift_after)
             or _only_ppp_delivery_residual_drift(result)
         )
+    )
+    # TR-069 WiFi passwords are write-only: no observed field ever confirms
+    # the value actually landed, so a readback-only pass that finds "no
+    # drift" has proven everything EXCEPT the password. Reusing the write
+    # path's own success signal (an accepted setParameterValues call) is
+    # fine for a real apply, but a readback-only re-check must not silently
+    # promote that gap to ``verified``.
+    wifi_password_unverifiable_on_readback = (
+        readback_only
+        and result.success
+        and result.sync_status == "synced"
+        and not result.drift_after
+        and wifi_scope is not None
+        and "wifi_password_ref" in wifi_scope.changed_fields
     )
     if delivered_without_readback:
         head.phase = OntServiceConfigurationPhase.delivered_unverified
@@ -1449,6 +1499,42 @@ def _execution_locked(
         )
         phase = OntServiceConfigurationPhase.delivered_unverified
         message = "Configuration delivered; exact LAN readback is unavailable."
+    elif wifi_password_unverifiable_on_readback:
+        head.phase = OntServiceConfigurationPhase.delivered_unverified
+        revision.phase = OntServiceConfigurationPhase.delivered_unverified
+        head.waiting_reason = None
+        head.failure_code = "wifi_password_write_only_unverifiable"
+        head.failure_message = (
+            "WiFi SSID and other readable settings converged, but the WiFi "
+            "password is a write-only TR-069 parameter and cannot be "
+            "confirmed by readback."
+        )
+        network_operations.mark_succeeded(
+            db,
+            str(operation.id),
+            output_payload={
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.delivered_unverified.value,
+                "verification": "password_write_only",
+            },
+        )
+        _record_execution_event(
+            db,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.delivered_unverified,
+            message=head.failure_message,
+            success=True,
+        )
+        phase = OntServiceConfigurationPhase.delivered_unverified
+        message = (
+            "Readable configuration verified; WiFi password cannot be "
+            "confirmed by readback."
+        )
     elif result.success and result.sync_status == "synced" and not result.drift_after:
         now = datetime.now(UTC)
         head.phase = OntServiceConfigurationPhase.verified
@@ -1500,7 +1586,56 @@ def _execution_locked(
             waiting_reason=prior_waiting_reason,
             result=result,
         )
-        if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+        if command.force_readback_only and (readback_pending or lan_cr_pending):
+            # A readback-only verification (``verify_ont_service_configuration_
+            # readback``) must never auto re-dispatch. The retry loop below
+            # re-stages ``ont_service_config_apply_v1`` with a ``verify:N``
+            # dispatch key, which only STAYS readback-only because
+            # ``_ont_service_config_invocation`` parses that key into
+            # ``verification_attempt`` and this function's own
+            # ``readback_only`` check honours it — a flag check deep in
+            # shared dispatch code, exactly the shape this command was built
+            # to avoid relying on structurally. It also carries no
+            # ``explicit_repair`` marker, so that re-entry runs in
+            # ``mode="sync"`` while the ONT is still ``out_of_sync``, gets
+            # refused by the ``BLOCKED_OUT_OF_SYNC`` guard ~30s later, and
+            # overwrites this accurate "still not converged" diagnosis with a
+            # misleading one. Report the mismatch directly instead; an
+            # operator or scheduler re-runs the verify command explicitly.
+            head.phase = OntServiceConfigurationPhase.failed
+            revision.phase = OntServiceConfigurationPhase.failed
+            head.failure_code = "verification_mismatch"
+            head.failure_message = failure_message
+            head.waiting_reason = None
+            network_operations.mark_failed(
+                db,
+                str(operation.id),
+                failure_message,
+                output_payload={
+                    "configuration_head_id": str(head.id),
+                    "configuration_revision": revision.revision,
+                    "phase": OntServiceConfigurationPhase.failed.value,
+                    "failure_code": "verification_mismatch",
+                    "verification": "still_unverified",
+                },
+            )
+            _record_execution_event(
+                db,
+                ont=ont,
+                assignment=assignment,
+                head=head,
+                revision=revision,
+                operation_id=operation.id,
+                phase=OntServiceConfigurationPhase.failed,
+                message=failure_message,
+                success=False,
+            )
+            phase = OntServiceConfigurationPhase.failed
+            message = (
+                "still_unverified: readback did not converge. Re-run "
+                "verification once the device has informed again."
+            )
+        elif readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
             revision.phase = OntServiceConfigurationPhase.readback_pending
@@ -1776,6 +1911,159 @@ def retry_ont_service_configuration(
         definition=_RETRY,
         context=command.context,
         operation=lambda: _retry_locked(db, command),
+    )
+
+
+def _verify_locked(
+    db: Session, command: VerifyOntServiceConfigurationReadbackCommand
+) -> ConfigureOntServiceOutcome:
+    idempotency_key = _require_idempotency(command.context)
+    ont = db.scalar(
+        select(OntUnit).where(OntUnit.id == command.ont_unit_id).with_for_update()
+    )
+    head = db.scalar(
+        select(OntServiceConfigurationHead)
+        .where(OntServiceConfigurationHead.id == command.expected_head_id)
+        .with_for_update()
+    )
+    if ont is None or head is None or head.ont_unit_id != ont.id:
+        raise _error(
+            "configuration_head_not_found",
+            "Current configuration lifecycle was not found.",
+        )
+    assignment = db.scalar(
+        select(OntAssignment)
+        .where(OntAssignment.id == head.assignment_id)
+        .with_for_update()
+    )
+    revision = db.scalar(
+        select(OntServiceConfigurationRevision)
+        .where(
+            OntServiceConfigurationRevision.head_id == head.id,
+            OntServiceConfigurationRevision.revision == command.expected_revision,
+        )
+        .with_for_update()
+    )
+    failed_operation = db.scalar(
+        select(NetworkOperation)
+        .where(NetworkOperation.id == command.failed_operation_id)
+        .with_for_update()
+    )
+    if (
+        assignment is None
+        or not assignment.active
+        or head.current_revision != command.expected_revision
+        or revision is None
+        or failed_operation is None
+    ):
+        raise _error(
+            "stale_configuration",
+            "Configuration lifecycle changed; refresh before verifying.",
+        )
+    if (
+        head.phase is not OntServiceConfigurationPhase.failed
+        or revision.phase is not OntServiceConfigurationPhase.failed
+    ):
+        raise _error(
+            "verification_not_eligible",
+            "Only the owner's current terminally failed revision may be verified.",
+        )
+    if (
+        head.latest_operation_id != failed_operation.id
+        or revision.operation_id != failed_operation.id
+    ):
+        # A caller could otherwise name an unrelated, stale or superseded
+        # operation id and have this command "verify" the wrong attempt.
+        raise _error(
+            "verification_operation_mismatch",
+            "The referenced operation is not this revision's current tracked failure.",
+        )
+    if failed_operation.status is not NetworkOperationStatus.failed:
+        raise _error(
+            "verification_operation_not_failed",
+            "The referenced operation did not terminate in a failed state.",
+        )
+
+    # ── Fresh-Inform gate ────────────────────────────────────────────────
+    # A readback that only reflects the same stale cache the failed attempt
+    # already saw proves nothing. Require positive evidence the device has
+    # contacted ACS again since the failure, rather than trusting that the
+    # desired value happens to already match a cached document. Neither
+    # "still unverified" outcome below mutates the head/revision/operation —
+    # nothing is asserted success or newly failed.
+    failure_at = failed_operation.completed_at
+    last_inform_at = ont.acs_last_inform_at
+    if failure_at is None or last_inform_at is None or last_inform_at <= failure_at:
+        return ConfigureOntServiceOutcome(
+            ont_unit_id=ont.id,
+            assignment_id=assignment.id,
+            configuration_head_id=head.id,
+            revision=head.current_revision,
+            operation_id=failed_operation.id,
+            phase=head.phase,
+            replayed=False,
+            message=(
+                "still_unverified: no fresh ACS Inform has been observed since "
+                "the failed delivery attempt; retry once the device has "
+                "informed again."
+            ),
+        )
+
+    verify_idempotency_key = hashlib.sha256(idempotency_key.encode()).hexdigest()[:24]
+    operation, replayed = start_ont_service_configuration_verification_operation(
+        db,
+        StartOntServiceConfigurationVerificationOperation(
+            ont_unit_id=ont.id,
+            assignment_id=assignment.id,
+            configuration_head_id=head.id,
+            configuration_revision=head.current_revision,
+            source_operation=failed_operation,
+            correlation_key=(
+                f"ont-service-config-verify:{head.id}:{verify_idempotency_key}"
+            ),
+            initiated_by=command.context.actor,
+            reason=command.context.reason,
+            idempotency_key=verify_idempotency_key,
+        ),
+    )
+    if not replayed:
+        # Preserve the original failed operation exactly as it is: only the
+        # pointers (head.latest_operation_id / revision.operation_id) move to
+        # the new redrive-linked attempt, mirroring ``_retry_locked``. The
+        # failed operation row itself is never mutated here.
+        revision.operation_id = operation.id
+        revision.phase = OntServiceConfigurationPhase.queued
+        head.latest_operation_id = operation.id
+        head.phase = OntServiceConfigurationPhase.queued
+        head.waiting_reason = "awaiting_dispatch"
+        stage_dispatch(
+            db, operation, NetworkOperationCommand.ont_service_config_verify_v1
+        )
+        db.flush()
+    return ConfigureOntServiceOutcome(
+        ont_unit_id=ont.id,
+        assignment_id=assignment.id,
+        configuration_head_id=head.id,
+        revision=head.current_revision,
+        operation_id=operation.id,
+        phase=head.phase,
+        replayed=replayed,
+        message=(
+            "Readback verification replayed."
+            if replayed
+            else "Readback verification queued."
+        ),
+    )
+
+
+def verify_ont_service_configuration_readback(
+    db: Session, command: VerifyOntServiceConfigurationReadbackCommand
+) -> ConfigureOntServiceOutcome:
+    return execute_owner_command(
+        db,
+        definition=_VERIFY,
+        context=command.context,
+        operation=lambda: _verify_locked(db, command),
     )
 
 
@@ -2237,6 +2525,7 @@ __all__ = (
     "RepairOntServiceConfigurationDriftCommand",
     "RepairOntServiceConfigurationDriftOutcome",
     "RetryOntServiceConfigurationCommand",
+    "VerifyOntServiceConfigurationReadbackCommand",
     "WanConfigurationChange",
     "WanVlanSource",
     "WifiConfigurationChange",
@@ -2249,4 +2538,5 @@ __all__ = (
     "inspect_ont_service_configuration_drift",
     "repair_ont_service_configuration_drift",
     "retry_ont_service_configuration",
+    "verify_ont_service_configuration_readback",
 )
