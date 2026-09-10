@@ -831,6 +831,71 @@ def test_runbook_keeps_the_delete_branch_on_merge_lesson() -> None:
     assert "not at its own former head" in runbook
 
 
+def test_promotion_and_deploy_refuse_a_rerun_of_the_approval_gated_job() -> None:
+    """A rerun after a partial failure must not re-enter the approval gate.
+
+    `authorize-and-promote` moves GHCR aliases and `deploy` mutates the live
+    production host, both after a human approval -- exactly the shape two
+    other production-gated workflows in this repo
+    (infrastructure-reconcile-apply.yml, legacy-image-pin-bootstrap-apply.yml)
+    already refuse a second attempt of. Neither `release-promotion.yml` nor
+    `production-deploy.yml` had this refusal; this proves it is present and
+    runs before the first mutating action in each job.
+    """
+
+    promotion = _read(".github/workflows/release-promotion.yml")
+    deploy_workflow = _read(".github/workflows/production-deploy.yml")
+
+    refusal_marker = 'process.env.RUN_ATTEMPT !== "1"'
+    assert refusal_marker in promotion
+    assert refusal_marker in deploy_workflow
+    assert "reruns are not admissible" in promotion
+    assert "reruns are not admissible" in deploy_workflow
+
+    # In release-promotion.yml the guard must be the FIRST step of
+    # authorize-and-promote -- before its own checkout, and long before the
+    # GHCR-mutating "Attach production aliases without rebuilding" step.
+    promotion_job = promotion[promotion.index("  authorize-and-promote:\n") :]
+    guard_index = promotion_job.index(refusal_marker)
+    checkout_index = promotion_job.index("Checkout current protected main")
+    alias_index = promotion_job.index("Attach production aliases without rebuilding")
+    assert guard_index < checkout_index < alias_index
+
+    # In production-deploy.yml the guard belongs to `deploy`, not `verify`:
+    # `verify` carries no `environment:` gate and is read-only, so it stays
+    # freely re-runnable. The guard must precede deploy's own checkout and the
+    # actual host-mutating "Deploy authorized digest" step.
+    deploy_job = deploy_workflow[deploy_workflow.index("  deploy:\n") :]
+    guard_index = deploy_job.index(refusal_marker)
+    checkout_index = deploy_job.index("Checkout authorized staged release")
+    deploy_step_index = deploy_job.index("Deploy authorized digest")
+    assert guard_index < checkout_index < deploy_step_index
+
+    verify_job = deploy_workflow[
+        deploy_workflow.index("  verify:\n") : deploy_workflow.index("  deploy:\n")
+    ]
+    assert refusal_marker not in verify_job
+    assert "environment:" not in verify_job
+
+
+def test_release_candidate_stays_reruns_admissible() -> None:
+    """`release-candidate.yml` must NOT gain this guard.
+
+    PR #3048 made a stalled candidate build safely resumable by re-running the
+    same workflow (4-state build/reuse/conflict reconciliation) specifically
+    so a rerun after a flaky post-push verification failure recovers instead
+    of being permanently refused. Copy-pasting the run-attempt guard here
+    would silently defeat that fix, so this is an explicit negative
+    assertion, not merely an absence noticed by accident.
+    """
+
+    workflow = _read(".github/workflows/release-candidate.yml")
+
+    assert 'process.env.RUN_ATTEMPT !== "1"' not in workflow
+    assert "RUN_ATTEMPT" not in workflow
+    assert "reruns are not admissible" not in workflow
+
+
 def test_hotfixes_have_no_pipeline_shortcut_left() -> None:
     """`dev-first:override` was the escape hatch; removing the gate removes it.
 

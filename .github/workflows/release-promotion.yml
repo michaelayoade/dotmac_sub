@@ -35,6 +35,27 @@ jobs:
     environment: production
     timeout-minutes: 20
     steps:
+      # This job mutates GHCR (moves the production version/latest aliases)
+      # after a human approval, so it must never be attempted a second time
+      # under the same run: a rerun after a partial failure would re-enter the
+      # approval gate and re-execute the alias move rather than restaging a
+      # fresh, re-verifiable candidate. Mirrors the same refusal already
+      # enforced by infrastructure-reconcile-apply.yml and
+      # legacy-image-pin-bootstrap-apply.yml's `apply` jobs.
+      - name: Refuse a rerun of this approval-gated promotion
+        uses: actions/github-script@v7
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            if (process.env.RUN_ATTEMPT !== "1") {
+              core.setFailed(
+                "Promotion reruns are not admissible: a partial failure after " +
+                "production approval must be re-dispatched as a new run from " +
+                "candidate build forward, not rerun in place."
+              );
+            }
+
       # The checkout is the AUTHORIZATION identity: protected `main`, whose
       # checked-in workflow and verifier code perform this authorization. It is
       # deliberately NOT the artifact being released.
