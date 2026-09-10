@@ -249,7 +249,8 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' not in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260904a" in INDEX
+    assert "admin-inbox.js?v=20260910a" in INDEX
+    assert "admin-inbox.js?v=20260904a" not in INDEX
     assert "admin-inbox.js?v=20260830a" not in INDEX
     assert "admin-inbox.js?v=20260827a" not in INDEX
     assert "admin-inbox.js?v=20260820a" not in INDEX
@@ -997,6 +998,30 @@ def test_every_list_request_uses_one_latest_request_wins_coordinator():
         'this.refreshSidebar("poll")',
     ):
         assert contract in JAVASCRIPT
+
+
+def test_visible_workspace_refreshes_agent_presence_without_overriding_status():
+    for contract in (
+        "startPresenceHeartbeat()",
+        'document.visibilityState !== "visible"',
+        'fetchWithTimeout("/admin/inbox/presence/heartbeat"',
+        "5 * 60 * 1000",
+    ):
+        assert contract in JAVASCRIPT
+
+
+def test_manager_capacity_links_to_an_explicit_bounded_save_control():
+    manager = Path("templates/admin/inbox/_manager_dashboard.html").read_text()
+    overlays = Path("templates/admin/inbox/_overlays.html").read_text()
+    settings = Path("templates/admin/system/settings.html").read_text()
+
+    for template in (manager, overlays):
+        assert "can_manage_inbox_capacity" in template
+        assert "domain=comms#inbox-agent-capacity" in template
+        assert "Change default capacity" in template
+    assert "inbox_agent_default_max_concurrent_conversations" in settings
+    assert "Enter 1–100. Ten is the default, not the maximum." in settings
+    assert "Save Inbox capacity" in settings
 
 
 def test_stats_filter_header_uses_the_page_scoped_amber_contract():

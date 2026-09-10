@@ -509,14 +509,24 @@ implementation.
 - After AI control has ended, the first eligible human reply to an unassigned
   conversation atomically claims it for that agent and sends in one owner
   transaction. The claim obeys the same team membership, presence, capacity,
-  and FIFO rules as explicit self-assignment. A simultaneous or later reply by
-  another agent sends nothing and returns the conflict message **This
-  conversation is currently assigned to [agent].** The composer presents that
-  message without implying that its draft was sent.
+  and FIFO rules as explicit self-assignment. It may also replace a different
+  owner only when the routing owner's locked presence evidence resolves that
+  owner to `offline`, including missing or stale online evidence. Online,
+  away, and on-break owners remain protected. A simultaneous or later reply
+  against a protected assignment sends nothing and returns the conflict message
+  **This conversation is currently assigned to [agent].** The composer presents
+  that message without implying that its draft was sent.
 - Admin → System → Settings → Comms exposes **Default active Inbox
   conversations per agent** with range 1–100 and default 10. Per-agent backend
   overrides are not presented as though they are editable when no Admin writer
-  exists.
+  exists. The Inbox Manager Dashboard links authorized settings operators to
+  that exact control, which explains that 10 is the default rather than the
+  maximum and provides an adjacent **Save Inbox capacity** action.
+- While the authenticated Inbox workspace is visible, it supplies a
+  best-effort agent-presence heartbeat at five-minute intervals and immediately
+  when visibility resumes. The routing owner may use this only to refresh
+  selected online state; explicit away, on-break, and offline choices remain
+  authoritative.
 - Queue heartbeats are off by default. If enabled in AI intake policy they are
   clearly identified as reassurance, use different copy from a position
   update, and never repeat the current position.
@@ -591,7 +601,13 @@ implementation.
 - While AI owns the thread, Reply, Private Note, assignment, status/workflow,
   ticket, macro, and bulk controls are absent or disabled with an explanation.
   Authorized operators receive one explicit `Take Over Conversation` control
-  with confirmation and expected-session evidence.
+  with confirmation and expected-session evidence. Takeover is available to any
+  active staff actor with the required permissions regardless of team
+  membership, presence, capacity, FIFO position, or an existing human
+  assignment. The control submits the active primary team, defaults the sole
+  active team, or requires an explicit team selection when several are active;
+  team selection supplies routing and audit attribution rather than operator
+  eligibility.
 - UI gating is presentation only. Every mutation rechecks ownership at its
   backend owner and returns the stable AI-owned conflict; a normal reply never
   becomes implicit takeover. Reply auto-claim runs only after the AI-owned check

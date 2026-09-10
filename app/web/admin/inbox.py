@@ -49,6 +49,7 @@ from app.services import (
     settings_api,
     settings_spec,
     team_inbox_agent_introduction,
+    team_inbox_assignment,
     team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_filters,
@@ -431,6 +432,9 @@ def team_inbox_queue(
                 else ()
             ),
             "can_manage_inbox": can_manage_inbox,
+            "can_manage_inbox_capacity": can(
+                request, "system:settings:write"
+            ),
             "can_manage_leads": can(request, "crm:lead:write"),
             "manager_dashboard": manager_dashboard,
             "selected": (
@@ -570,6 +574,9 @@ def team_inbox_manager_dashboard(
     context.update(
         {
             "can_manage_inbox": True,
+            "can_manage_inbox_capacity": can(
+                request, "system:settings:write"
+            ),
             "manager_dashboard": manager_dashboard,
         }
     )
@@ -1076,7 +1083,9 @@ def team_inbox_detail(
             "timeline_entries": projection.timeline_entries,
             "reply_window": projection.reply_window,
             "agent_options": team_inbox_projection.list_agent_options(db),
-            "service_team_options": team_inbox_projection.list_service_team_options(db),
+            "service_team_options": (
+                projection.action_eligibility.takeover_team_options
+            ),
             "can_manage_leads": can(request, "crm:lead:write"),
         }
         if projection is not None
@@ -2467,6 +2476,39 @@ def team_inbox_presence_action(
     return RedirectResponse(
         url=f"/admin/inbox?status=success&message={quote_plus(message)}",
         status_code=303,
+    )
+
+
+@router.post(
+    "/presence/heartbeat",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_presence_heartbeat(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    actor_id = _actor_uuid_from_request(request)
+    if actor_id is None:
+        raise HTTPException(status_code=403, detail="Staff identity is required.")
+    observed_at = datetime.now(UTC)
+    _prepare_mutation(db)
+    outcome = team_inbox_commands.refresh_agent_presence(
+        db,
+        command=team_inbox_assignment.AgentPresenceHeartbeatCommand(
+            context=CommandContext.system(
+                actor=f"system-user:{actor_id}",
+                scope="team-inbox:presence-heartbeat",
+                reason="record authenticated visible Inbox activity",
+            ),
+            system_user_id=actor_id,
+            observed_at=observed_at,
+        ),
+    )
+    return JSONResponse(
+        {
+            "status": outcome.status.value,
+            "disposition": outcome.disposition.value,
+        }
     )
 
 

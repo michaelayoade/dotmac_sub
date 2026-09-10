@@ -118,13 +118,16 @@ provenance is the only exception for AI-authorized routing.
 `TakeOverConversationCommand` is the only ordinary human transition out of AI
 control. It locks and rechecks the expected conversation/session/state, stops
 the session as `stopped_human_takeover`, clears customer wait, records actor,
-reason, timestamps and prior state, acquires the agent through existing Inbox
-assignment rules, suppresses pending AI outbox rows, and stages projection and
-realtime effects in one owner transaction. Assignment failure rolls the whole
-operation back. A stable idempotency key replays the completed takeover; stale
-session or state evidence returns a conflict. Delivery workers independently
-revalidate the referenced active AI session immediately before provider contact
-and cancel stale queued AI messages after takeover.
+reason, timestamps and prior state, and assigns the authorized active staff
+actor. Explicit takeover deliberately bypasses ordinary assignment membership,
+presence, capacity, FIFO, and existing-owner gates; the selected active service
+team remains required as routing and audit attribution, but it is not an
+operator-eligibility gate. The same transaction suppresses pending AI outbox
+rows and stages projection and realtime effects. Assignment failure rolls the
+whole operation back. A stable idempotency key replays the completed takeover;
+stale session or state evidence returns a conflict. Delivery workers
+independently revalidate the referenced active AI session immediately before
+provider contact and cancel stale queued AI messages after takeover.
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the
@@ -249,23 +252,44 @@ The per-agent lock is intentionally not team-scoped because one agent may be a
 member of several teams or channels. Normal manual, self, automation, workqueue
 and promotion assignments use the same membership, presence and capacity gate;
 there is no implicit force override and a queued non-head cannot be selected.
+Reply auto-claim preserves a different owner whose effective presence is
+`online`, `away`, or `on_break`. It may atomically replace that assignment only
+when the routing owner locks the prior owner's presence evidence and resolves it
+to `offline`; missing presence and online evidence older than the freshness
+window fail closed to offline. The replacement is recorded as a distinct
+routing reason in the same transaction as the reply and assignment transition.
 
 An `online` presence is eligible only when its `last_seen_at` evidence is no
 more than 30 minutes old; missing or stale presence fails closed as offline.
+The authenticated Inbox workspace sends a best-effort heartbeat when it opens,
+every five minutes while visible, and when a hidden tab becomes visible again.
+The routing owner accepts that heartbeat only for an active `SystemUser`. It
+creates missing online presence and refreshes selected online presence, but
+never overrides an explicit `away`, `on_break`, or `offline` selection. A
+hidden or closed workspace naturally becomes stale after the same 30-minute
+window.
 The default capacity is the `comms.inbox_agent_default_max_concurrent_conversations`
 setting (default `10`, allowed range `1..100`) unless
 `InboxAgentPresence.max_concurrent_conversations` supplies the existing
 per-agent override. Administrators edit the default at **Admin → System →
 Settings → Comms**, field **Default active Inbox conversations per agent**;
-the canonical settings writer invalidates the cache on commit and subsequent
-assignment decisions consume the new value immediately. There is currently no
-Admin writer for the per-agent override. Capacity counts active human
+the field states its `1..100` range, identifies `10` as the default rather than
+a maximum, and provides an adjacent save action. The Inbox Manager Dashboard
+links authorized settings operators directly to that control. The canonical
+settings writer invalidates the cache on commit and subsequent assignment
+decisions consume the new value immediately. There is currently no Admin writer
+for the per-agent override. Capacity counts active human
 assignments on `open`, human-owned `pending`, and `snoozed` conversations while
 ownership remains active. It excludes resolved and AI-owned conversations even
 if legacy drift left an assignment projection behind. Default/actionable,
 unassigned, pending-response, needs-response, unread-work, and manager workload
 counts apply the same authoritative exclusion; AI Intake has its own count.
-Explicit takeover uses the same membership, presence, FIFO, and capacity gates.
+Explicit takeover is the intentional exception to membership, presence, FIFO,
+capacity, and existing-owner assignment gates. Any active staff actor with both
+takeover permissions may stop AI and acquire the conversation. The routing owner
+still validates an active service team and records current availability as audit
+evidence; bypassed eligibility never becomes the policy for ordinary manual or
+automatic assignment.
 
 Capacity-opening transitions schedule an idempotent promotion task after the
 owning transaction commits. Agent return to eligible online presence,
