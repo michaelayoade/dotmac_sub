@@ -38,6 +38,7 @@ from app.errors import register_error_handlers
 from app.logging import configure_logging
 from app.metrics import APPLICATION_READINESS, WORKER_STARTUP_DURATION
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscriber import Subscriber
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.request_meta import client_ip
@@ -1060,6 +1061,7 @@ async def customer_service_location_gate_middleware(request: Request, call_next)
     location_route = path == "/portal/location" or path.startswith("/portal/location/")
     auth_route = path == "/portal/auth" or path.startswith("/portal/auth/")
     request.state.service_location_required = False
+    request.state.profile_biodata_required = False
     if (
         not is_customer_portal
         or location_route
@@ -1070,9 +1072,7 @@ async def customer_service_location_gate_middleware(request: Request, call_next)
 
     db = SessionLocal()
     try:
-        from starlette.responses import RedirectResponse
-
-        from app.services import location_capture
+        from app.services import location_capture, web_customer_actions
         from app.services.customer_context import optional_customer_subscriber_id
         from app.web.customer.auth import get_current_customer_from_request
 
@@ -1092,8 +1092,25 @@ async def customer_service_location_gate_middleware(request: Request, call_next)
                     "customer service location gate failed for subscriber %s",
                     subscriber_id,
                 )
-            if request.state.service_location_required:
-                return RedirectResponse(url="/portal/location", status_code=303)
+            if (
+                not request.state.service_location_required
+                and not location_route
+                and location_capture.service_location_requirement_enabled(db)
+            ):
+                try:
+                    subscriber = db.get(Subscriber, subscriber_id)
+                    if subscriber is not None:
+                        completion = web_customer_actions.evaluate_individual_biodata(
+                            subscriber
+                        )
+                        request.state.profile_biodata_required = (
+                            completion.applicable and not completion.complete
+                        )
+                except Exception:
+                    logger.exception(
+                        "customer biodata completion gate failed for subscriber %s",
+                        subscriber_id,
+                    )
     finally:
         db.close()
     return await call_next(request)
