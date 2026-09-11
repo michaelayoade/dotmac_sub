@@ -2248,10 +2248,14 @@ SERVICES: tuple[SOTService, ...] = (
             "sole payment timestamp and contracted cadence resolve the WAT "
             "service period; adoption has no economic effect and hands the "
             "resulting financial draft back to the ordinary reconciler. "
-            "A separate reviewed historical repair accepts only one already-"
-            "paid, periodless document whose sole active allocation is fully "
-            "backed by a successful unreturned settlement and whose charge "
-            "matches the current canonical prepaid renewal terms. A same-"
+            "A separate reviewed historical repair accepts one already-paid, "
+            "periodless document whose sole active allocation is fully backed "
+            "by a successful unreturned settlement. Mixed documents require "
+            "an operator-selected positive unlinked service line; automatic "
+            "repair never guesses. The selected line's integral quantity and "
+            "unit price must exactly match one or more current canonical "
+            "prepaid renewal periods, while unrelated lines remain untouched. "
+            "A same-"
             "business-day current anchor may supply the start only when the "
             "invoice due instant exactly matches the next cadence boundary "
             "and no coverage overlaps. It writes only missing document "
@@ -2382,7 +2386,7 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.prepaid_draft_reconciliation",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed invoice identity, exact preview fingerprint, "
+                        "typed invoice and optional reviewed line identity, exact preview fingerprint, "
                         "or exact account, subscription, payment, business "
                         "dates, total, remaining-credit expectation, actor, reason, command, "
                         "correlation, and idempotency evidence"
@@ -2414,8 +2418,9 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "active paid non-proforma invoice with zero balance, "
-                        "one positive unlinked line, missing period identity, "
-                        "exact totals, and no credit-note funding"
+                        "an exact positive unlinked service line selected when "
+                        "the document is mixed, missing period identity, exact "
+                        "undiscounted totals, and no credit-note funding"
                     ),
                 ),
                 AuthorityInput(
