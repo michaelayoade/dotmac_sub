@@ -12,9 +12,18 @@ functions offline, in this repository's own CI, which has no access to
 
 ## What is in it, and how it was produced
 
-For every one of the 95 `packages/*/EXTRACTION.toml` directories present in
-`dotmac_starter_mt` at protected-main revision
-`08a2dae1b1f6510e9d1076ac9dbd6eca0db06137`:
+Originally generated for every one of the 95 `packages/*/EXTRACTION.toml`
+directories present in `dotmac_starter_mt` at protected-main revision
+`08a2dae1b1f6510e9d1076ac9dbd6eca0db06137`, and RE-VERIFIED, not regenerated,
+against the later protected-main revision
+`a9dc45ecd00d5a0163b6544278888220082e2e75` this fixture is now pinned to:
+`git diff 08a2dae1b1f6510e9d1076ac9dbd6eca0db06137
+a9dc45ecd00d5a0163b6544278888220082e2e75 -- packages/` in `dotmac_starter_mt`
+is empty — zero `EXTRACTION.toml` or `manifest.py` byte differs, and the
+package count is unchanged at 95 — so the same fixture bytes remain a
+byte-for-byte verbatim copy at the new pin. A future re-pin where `packages/`
+HAS moved must regenerate per the steps below, not just relabel the
+directory.
 
 - `<distribution>/EXTRACTION.toml` carries exactly the real `package` name
   and `classification` value read from that revision — nothing invented.
@@ -51,21 +60,24 @@ distinction the way manifest.py's comments are.
 
 ## Re-generating this fixture
 
-1. Check out `dotmac_starter_mt` at `08a2dae1b1f6510e9d1076ac9dbd6eca0db06137`
-   (or a later revision, if the pin is deliberately moved forward — that is
-   a reviewed change, not a silent drift).
+1. Check out `dotmac_starter_mt` at the pinned revision (or a later revision,
+   if the pin is deliberately moved forward — that is a reviewed change, not
+   a silent drift).
 2. For each `packages/<dist>/EXTRACTION.toml`, copy its `package` and
    `classification` fields verbatim into
-   `tests/architecture/fixtures/starter_packages_08a2dae1/<dist>/EXTRACTION.toml`.
+   `tests/architecture/fixtures/starter_packages_<short-rev>/<dist>/EXTRACTION.toml`.
 3. For each `optional-module` distribution, copy
    `packages/<dist>/src/<import package>/manifest.py` **byte-for-byte,
    unmodified** into
-   `tests/architecture/fixtures/starter_packages_08a2dae1/<dist>/src/<import package>/manifest.py`.
+   `tests/architecture/fixtures/starter_packages_<short-rev>/<dist>/src/<import package>/manifest.py`.
    Verify with `diff` against the source that zero files differ before
    committing the regenerated fixture.
 4. Update `PINNED_STARTER_REVISION` in
    `tests/architecture/test_kernel_runtime_composition.py` and this file's
-   cited revision together, in the same change.
+   cited revision together, in the same change. If, as in the 08a2dae1 ->
+   a9dc45ec move above, `git diff <old> <new> -- packages/` is empty, re-label
+   (directory rename + revision string update) rather than re-copy — but
+   RUN that diff and record its emptiness here; never assume it.
 
 This directory's *size* (95 today, 80 with a manifest) is never asserted as
 a literal anywhere — `test_catalogue_is_the_full_product_independent_universe`
