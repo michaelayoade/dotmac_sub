@@ -1549,6 +1549,7 @@ def quote_update(
     region: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    response_status = 400
     fields = {
         "lead_id": lead_id,
         "status": status,
@@ -1569,6 +1570,15 @@ def quote_update(
             **fields,
         )
         return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
+    except HTTPException as exc:
+        if (
+            exc.status_code != 409
+            or _error_detail(exc) != "Save the quote changes first, then accept it."
+        ):
+            raise
+        db.rollback()
+        error = _error_detail(exc)
+        response_status = 409
     except (DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         error = _error_detail(exc)
@@ -1581,7 +1591,7 @@ def quote_update(
     )
     context["error"] = error
     return templates.TemplateResponse(
-        "admin/sales/quotes/form.html", context, status_code=400
+        "admin/sales/quotes/form.html", context, status_code=response_status
     )
 
 
