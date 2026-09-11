@@ -73,8 +73,6 @@ class MaterialsRepository {
     String? clientRef,
     String? notes,
     String? workOrderId,
-    String? projectId,
-    String? ticketId,
     String? sourceLocationId,
     String? sourceWarehouseCode,
     String? destinationLocationId,
@@ -97,8 +95,6 @@ class MaterialsRepository {
             clientRef: clientRef,
             notes: notes,
             workOrderId: workOrderId,
-            projectId: projectId,
-            ticketId: ticketId,
             sourceLocationId: sourceLocationId,
             sourceWarehouseCode: sourceWarehouseCode,
             destinationLocationId: destinationLocationId,
@@ -150,8 +146,6 @@ Map<String, dynamic> buildMaterialRequestPayload({
   String? clientRef,
   String? notes,
   String? workOrderId,
-  String? projectId,
-  String? ticketId,
   String? sourceLocationId,
   String? sourceWarehouseCode,
   String? destinationLocationId,
@@ -163,10 +157,6 @@ Map<String, dynamic> buildMaterialRequestPayload({
   if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
   if (workOrderId != null && workOrderId.trim().isNotEmpty)
     'work_order_id': workOrderId.trim(),
-  if (projectId != null && projectId.trim().isNotEmpty)
-    'project_id': projectId.trim(),
-  if (ticketId != null && ticketId.trim().isNotEmpty)
-    'ticket_id': ticketId.trim(),
   if (sourceWarehouseCode != null && sourceWarehouseCode.trim().isNotEmpty)
     'source_warehouse_code': sourceWarehouseCode.trim(),
   'items': items.map((item) => item.toJson()).toList(),
