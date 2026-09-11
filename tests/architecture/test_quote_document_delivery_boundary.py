@@ -116,7 +116,7 @@ def test_quote_delete_rerenders_detail_on_domain_failure():
 
     assert "web_sales_service.deactivate_quote(" in delete_route
     assert "except (DomainError, ValidationError, ValueError) as exc:" in delete_route
-    assert "db.rollback()" in delete_route
+    assert "db_session_adapter.discard_failed_transaction(db)" in delete_route
     assert 'context["error"] = _error_detail(exc)' in delete_route
     assert '"admin/sales/quotes/detail.html", context, status_code=400' in delete_route
 
