@@ -553,6 +553,13 @@ def _admin_request(*, roles: list[str] | None = None) -> SimpleNamespace:
             request_id="",
         ),
         headers={},
+        # `persist_audit_event`'s `request.client.host if request and
+        # request.client else None` null-checks the VALUE but still requires
+        # the ATTRIBUTE to exist -- a bare SimpleNamespace with no `client=`
+        # raises AttributeError rather than reading as falsy. Matches the
+        # established fake-request pattern elsewhere (e.g.
+        # tests/test_admin_material_requests.py).
+        client=None,
     )
 
 
@@ -699,6 +706,7 @@ def test_web_route_wifi_password_refuses_without_network_ont_write_permission(
             request_id="",
         ),
         headers={},
+        client=None,
     )
 
     response = cpe_wifi_password(non_ont_writer_request, str(cpe.id), db=db_session)
