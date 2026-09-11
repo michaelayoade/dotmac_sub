@@ -34,18 +34,22 @@ from app.services.network.reconcile import (
     observed_from_ont_observation,
     upsert_ont_observation,
 )
+from tests.network_fixture_helpers import attach_test_olt_config_pack
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def olt(db_session):
+def olt(db_session, region):
     olt = OLTDevice(
         name="OLT-SPDC",
         mgmt_ip="172.20.100.30",
-        is_active=True,
+        is_active=False,
     )
     db_session.add(olt)
+    db_session.flush()
+    attach_test_olt_config_pack(db_session, olt=olt, region=region)
+    olt.is_active = True
     db_session.commit()
     db_session.refresh(olt)
     return olt

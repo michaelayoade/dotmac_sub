@@ -586,7 +586,7 @@ def network_device(db_session, pop_site):
 
 
 @pytest.fixture()
-def olt_device(db_session):
+def olt_device(db_session, region):
     """OLT device for fiber tests."""
     olt = network_service.olt_devices.create(
         db_session,
@@ -595,6 +595,11 @@ def olt_device(db_session):
             hostname="olt-01.test.local",
         ),
     )
+    from tests.network_fixture_helpers import attach_test_olt_config_pack
+
+    attach_test_olt_config_pack(db_session, olt=olt, region=region)
+    db_session.commit()
+    db_session.refresh(olt)
     return olt
 
 
@@ -628,24 +633,36 @@ def catalog_offer(db_session):
 
 @pytest.fixture()
 def subscription(db_session, subscriber, catalog_offer):
-    """Active subscription for usage tests.
+    """Pending subscription for tests that choose their lifecycle explicitly.
 
     Defaults to POSTPAID (the invoice-eligible mode). The model column default
     is prepaid, but generic invoice-generation tests use postpaid by default.
     Prepaid monthly-invoicing tests override billing_mode explicitly.
     """
-    from app.models.catalog import BillingMode
+    from app.models.catalog import BillingMode, SubscriptionStatus
 
     subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
         ),
     )
     subscription.billing_mode = BillingMode.postpaid
     db_session.commit()
     return subscription
+
+
+@pytest.fixture()
+def active_subscription(db_session, subscription):
+    """Active subscription created through the lifecycle and anchor owners."""
+    from tests.subscription_fixture_helpers import activate_test_subscription
+
+    activated = activate_test_subscription(db_session, subscription)
+    db_session.commit()
+    db_session.refresh(activated)
+    return activated
 
 
 @pytest.fixture()

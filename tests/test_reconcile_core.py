@@ -41,6 +41,8 @@ from app.services.network.reconcile import (
 from app.services.network.reconcile import core as reconcile_core
 from app.services.network.reconcile.applier import ApplyResult
 from app.services.network.reconcile.readers import ReadResult
+from tests.datetime_fixture_helpers import naive_utc
+from tests.network_fixture_helpers import attach_test_olt_config_pack
 
 
 class _PostgresSessionStub:
@@ -383,13 +385,16 @@ class _StubAcsClient:
 
 
 @pytest.fixture
-def olt_device(db_session):
+def olt_device(db_session, region):
     olt = OLTDevice(
         name="OLT-CORE-TEST",
         mgmt_ip="172.20.100.30",
-        is_active=True,
+        is_active=False,
     )
     db_session.add(olt)
+    db_session.flush()
+    attach_test_olt_config_pack(db_session, olt=olt, region=region)
+    olt.is_active = True
     db_session.commit()
     db_session.refresh(olt)
     return olt
@@ -2082,20 +2087,6 @@ def _cached_present_olt(desired: OntDesiredState) -> OltObservedFields:
     )
 
 
-def _naive_utc(value: datetime) -> datetime:
-    """Strip tzinfo for a dialect-agnostic equality comparison.
-
-    SQLite (the fast, non-authoritative unit-test lane) does not round-trip
-    ``tzinfo`` on a stored ``DateTime`` column — it always reads back naive.
-    Real PostgreSQL (the authoritative lane) does round-trip it, returning a
-    timezone-aware value. Both represent the identical instant; comparing an
-    aware value straight against a naive literal fails on dialect alone, with
-    no bearing on whether the code under test is correct. Stripping tzinfo
-    only when present keeps the comparison meaningful under either backend.
-    """
-    return value.replace(tzinfo=None) if value.tzinfo is not None else value
-
-
 def _absent_acs_for_seed() -> AcsObservedFields:
     """Minimal ACS "no evidence" shape for seeding a baseline observation row
     whose OLT half is what these tests actually exercise."""
@@ -2208,7 +2199,7 @@ def test_wifi_only_delivery_does_not_advance_stale_olt_provenance(
         .filter(OntObservation.ont_unit_id == ont.id)
         .one()
     )
-    assert _naive_utc(row.olt_observed_at) == _naive_utc(baseline_seen_at)
+    assert naive_utc(row.olt_observed_at) == naive_utc(baseline_seen_at)
     assert row.olt_read_status == "unavailable"
     # The cached data itself is untouched too — nothing overwrote it with a
     # placeholder.
@@ -2305,7 +2296,7 @@ def test_wifi_only_delivery_full_apply_verify_success_excludes_olt_from_provenan
         .filter(OntObservation.ont_unit_id == ont.id)
         .one()
     )
-    assert _naive_utc(row.olt_observed_at) == _naive_utc(baseline_seen_at)
+    assert naive_utc(row.olt_observed_at) == naive_utc(baseline_seen_at)
     assert row.olt_read_status == "unavailable"
 
 
@@ -2770,7 +2761,7 @@ def test_acs_last_inform_at_is_unchanged_by_a_cached_substitution_pass(
         .filter(OntObservation.ont_unit_id == ont.id)
         .one()
     )
-    assert _naive_utc(observation.acs_last_inform_at) == _naive_utc(genuine_inform_at)
+    assert naive_utc(observation.acs_last_inform_at) == naive_utc(genuine_inform_at)
 
 
 def test_surfaces_observed_excludes_acs_for_a_cached_substitution():

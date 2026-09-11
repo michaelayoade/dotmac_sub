@@ -72,6 +72,7 @@ from app.services.network.reconcile.lifecycle import (
     retire_ont_reconcile_projection_for_inventory,
 )
 from app.services.owner_commands import CommandContext
+from tests.subscription_fixture_helpers import activate_test_subscription
 
 
 def _operation(db_session, ont: OntUnit, suffix: str) -> NetworkOperation:
@@ -97,7 +98,7 @@ def _admission_scope(
     subscription,
     subscriber,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    subscription.status = SubscriptionStatus.active
+    activate_test_subscription(db_session, subscription)
     olt_device.is_active = True
     pon = PonPort(
         olt_id=olt_device.id,
@@ -561,6 +562,7 @@ def test_customer_wifi_admission_names_assignment_inconsistency(
         first_name="Other",
         last_name="Customer",
         email=f"other-{uuid.uuid4().hex[:8]}@example.com",
+        reseller_id=subscriber.reseller_id,
     )
     other_offer = CatalogOffer(
         name="Other Offer",
@@ -575,10 +577,11 @@ def test_customer_wifi_admission_names_assignment_inconsistency(
     other_subscription = Subscription(
         subscriber_id=other_subscriber.id,
         offer_id=other_offer.id,
-        status=SubscriptionStatus.active,
+        status=SubscriptionStatus.pending,
     )
     db_session.add(other_subscription)
     db_session.flush()
+    activate_test_subscription(db_session, other_subscription)
     subscriber_id = subscriber.id
     subscription_id = subscription.id
     other_subscriber_id = other_subscriber.id

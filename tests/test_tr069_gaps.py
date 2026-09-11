@@ -24,6 +24,8 @@ from app.services.auth_dependencies import can
 from app.services.events.types import EventType
 from app.services.network.tr069_job_commands import Tr069CommandError
 from app.web.brand_globals import _app_datetime_filter
+from tests.datetime_fixture_helpers import naive_utc
+from tests.network_fixture_helpers import attach_test_olt_config_pack
 
 # ---------------------------------------------------------------------------
 # 1. TR-069 event types
@@ -735,9 +737,9 @@ class TestAutoLinkOnts:
         # an explicit override, not inherited sync state.
         db_session.refresh(ont)
         assert ont.tr069_acs_server_id is None
-        expected_last_inform = last_inform_at.replace(tzinfo=None)
-        assert ont.acs_last_inform_at == expected_last_inform
-        assert ont.last_seen_at == expected_last_inform
+        expected_last_inform = naive_utc(last_inform_at)
+        assert naive_utc(ont.acs_last_inform_at) == expected_last_inform
+        assert naive_utc(ont.last_seen_at) == expected_last_inform
         linked = (
             db_session.query(Tr069CpeDevice)
             .filter_by(serial_number="AUTOLINK-001")
@@ -804,7 +806,7 @@ class TestAutoLinkOnts:
         assert ont.last_seen_at == device.last_inform_at
 
     def test_olt_ont_acs_sync_and_inform_updates_table_last_seen_e2e(
-        self, db_session
+        self, db_session, region
     ) -> None:
         from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
         from app.services import network as network_service
@@ -826,16 +828,20 @@ class TestAutoLinkOnts:
         )
         olt = OLTDevice(
             name="E2E OLT",
-            is_active=True,
+            is_active=False,
             tr069_acs_server_id=server.id,
         )
+        db_session.add(olt)
+        db_session.flush()
+        attach_test_olt_config_pack(db_session, olt=olt, region=region)
+        olt.is_active = True
         ont = OntUnit(
             serial_number="E2E-OLT-ONT-ACS-001",
             olt_device=olt,
             is_active=True,
             olt_status=OnuOnlineStatus.offline,
         )
-        db_session.add_all([olt, ont])
+        db_session.add(ont)
         db_session.commit()
 
         sync_last_inform = datetime.now(UTC) - timedelta(minutes=2)
@@ -937,8 +943,10 @@ class TestAutoLinkOnts:
         # The live snapshot source was retired: the list resolves persisted
         # native OLT/ACS evidence and marks absent evidence as derived offline.
         signal_data = page_data["signal_data"][str(ont.id)]
-        assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
-        assert signal_data["last_seen_at"] == stale_last_seen.replace(tzinfo=None)
+        assert naive_utc(signal_data["acs_last_inform_at"]) == naive_utc(
+            stale_last_seen
+        )
+        assert naive_utc(signal_data["last_seen_at"]) == naive_utc(stale_last_seen)
         assert signal_data["status_source"] == "derived"
         assert signal_data["status_display"] == "Offline"
 
@@ -1138,7 +1146,7 @@ class TestAutoLinkOnts:
         assert ont.tr069_acs_server_id == server.id
 
     def test_sync_does_not_create_local_tr069_row_for_olt_assigned_offline_ont(
-        self, db_session
+        self, db_session, region
     ) -> None:
         from sqlalchemy import select
 
@@ -1161,10 +1169,12 @@ class TestAutoLinkOnts:
         olt = OLTDevice(
             name="TR069 Offline OLT",
             tr069_acs_server_id=server.id,
-            is_active=True,
+            is_active=False,
         )
         db_session.add(olt)
         db_session.flush()
+        attach_test_olt_config_pack(db_session, olt=olt, region=region)
+        olt.is_active = True
         ont = OntUnit(
             serial_number="OFFLINE-OLT-ACS-001",
             olt_device_id=olt.id,
@@ -1387,7 +1397,7 @@ class TestCreateOntFromTr069Device:
         assert device.ont_unit_id == existing.id
 
     def test_create_ont_from_tr069_device_prefers_assigned_olt_record(
-        self, db_session
+        self, db_session, region
     ) -> None:
         from app.models.network import OLTDevice, OntAssignment, OntUnit
         from app.services.web_network_tr069 import create_ont_from_tr069_device
@@ -1397,9 +1407,11 @@ class TestCreateOntFromTr069Device:
             base_url="http://genieacs:7557",
             is_active=True,
         )
-        olt = OLTDevice(name="Canonical OLT", is_active=True)
+        olt = OLTDevice(name="Canonical OLT", is_active=False)
         db_session.add_all([server, olt])
         db_session.flush()
+        attach_test_olt_config_pack(db_session, olt=olt, region=region)
+        olt.is_active = True
 
         duplicate = OntUnit(
             serial_number="485754431D88FBD1",
@@ -1674,7 +1686,7 @@ class TestDeviceResolution:
         assert discovered.ont_unit_id == ont.id
         assert ont.acs_last_inform_at is not None
         assert discovered.last_inform_at is not None
-        assert ont.acs_last_inform_at.replace(tzinfo=None) == discovered.last_inform_at
+        assert naive_utc(ont.acs_last_inform_at) == naive_utc(discovered.last_inform_at)
 
     def test_targeted_reconcile_creates_and_links_live_genieacs_row(
         self, db_session
@@ -2481,7 +2493,7 @@ class TestAcsPropagation:
         assert called["olt"] is olt
 
     def test_queue_acs_propagation_delegates_to_tracked_reconciliation(
-        self, db_session
+        self, db_session, region
     ) -> None:
         from app.models.network import OLTDevice, OntUnit
         from app.services.web_network_olts import _queue_acs_propagation
@@ -2497,8 +2509,15 @@ class TestAcsPropagation:
         db_session.commit()
         db_session.refresh(server)
 
-        olt = OLTDevice(name="OLT-TR069", tr069_acs_server_id=server.id)
+        olt = OLTDevice(
+            name="OLT-TR069",
+            tr069_acs_server_id=server.id,
+            is_active=False,
+        )
         db_session.add(olt)
+        db_session.flush()
+        attach_test_olt_config_pack(db_session, olt=olt, region=region)
+        olt.is_active = True
         db_session.commit()
         db_session.refresh(olt)
 
