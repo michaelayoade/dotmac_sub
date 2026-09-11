@@ -726,9 +726,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         STATUS,
-        "Routes only expired AI intake waits through the configured fallback; "
-        "locked rows already settled by inbound processing or an earlier sweep "
-        "are skipped on re-run.",
+        "Normalizes legacy AI wait deadlines and hands expired waits to normal "
+        "agent assignment or durable FIFO queue admission; locked rows already "
+        "settled by inbound processing or an earlier sweep are skipped on re-run.",
     ),
     "app.tasks.team_inbox.process_ai_intake_sessions": _c(
         "support",

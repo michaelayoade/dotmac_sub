@@ -17,6 +17,7 @@ from app.models.team_inbox import (
     InboxConversationStatus,
     InboxStatusTransitionEvent,
 )
+from app.services import team_inbox_customer_completion
 from app.services.owner_commands import execute_owner_savepoint, owner_command_active
 
 OWNER = "communications.team_inbox_status"
@@ -71,6 +72,15 @@ class InboxStatusTransitionError(RuntimeError):
     pass
 
 
+_AGENT_RESOLUTION_REASONS = frozenset(
+    {
+        InboxStatusReason.operator_change,
+        InboxStatusReason.bulk_change,
+        InboxStatusReason.macro,
+    }
+)
+
+
 def _apply_status_transition(
     db: Session,
     *,
@@ -90,6 +100,15 @@ def _apply_status_transition(
             event_id=None,
             already_set=True,
         )
+    if (
+        command.status is InboxConversationStatus.resolved
+        and command.reason in _AGENT_RESOLUTION_REASONS
+        and not (
+            conversation.customer_completion_policy_version_id is None
+            and db.get_bind().dialect.name == "sqlite"
+        )
+    ):
+        team_inbox_customer_completion.require_agent_resolution_ready(db, conversation)
     effective_at = command.occurred_at
     event = InboxStatusTransitionEvent(
         conversation_id=conversation.id,

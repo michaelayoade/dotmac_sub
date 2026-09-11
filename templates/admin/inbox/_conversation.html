@@ -97,7 +97,7 @@
                 <div x-show="open" x-cloak class="absolute right-0 z-30 mt-2 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900" role="menu">
                     {% for item in ['open', 'pending', 'snoozed', 'resolved'] %}
                     <form method="post" action="/admin/inbox/{{ timeline.id }}/status">
-                        {% include "components/forms/csrf_input.html" %}<input type="hidden" name="status_value" value="{{ item }}"><button type="submit" class="min-h-10 w-full rounded-md px-3 text-left text-xs font-medium capitalize hover:bg-amber-50 dark:hover:bg-slate-800" role="menuitem">{{ item }}</button></form>
+                        {% include "components/forms/csrf_input.html" %}<input type="hidden" name="status_value" value="{{ item }}"><button type="submit" {% if item == 'resolved' and resolution_readiness and not resolution_readiness.can_agent_resolve %}disabled title="Complete the required Customer information before resolving"{% endif %} class="min-h-10 w-full rounded-md px-3 text-left text-xs font-medium capitalize hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent dark:hover:bg-slate-800" role="menuitem">{{ item }}{% if item == 'resolved' and resolution_readiness and not resolution_readiness.can_agent_resolve %} · Blocked{% endif %}</button></form>
                     {% endfor %}
                 </div>
             </div>
@@ -236,6 +236,16 @@
            class="ml-1 font-semibold underline decoration-amber-400 underline-offset-2 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:text-amber-200">
             Open the earlier conversation
         </a>
+    </div>
+    {% endif %}
+
+    {% if resolution_readiness and not resolution_readiness.can_agent_resolve %}
+    <div class="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+        {% if resolution_readiness.classification.value in ['unresolved', 'ambiguous'] %}
+        <div class="flex flex-wrap items-center justify-between gap-2"><span><strong>Is this a Customer or Lead?</strong> Identify the contact before resolving.</span><button type="button" hx-get="/admin/inbox/{{ timeline.id }}/contact" hx-target="#inbox-contact-content" hx-swap="innerHTML" @click="openContact('{{ timeline.id }}')" class="min-h-9 rounded-lg border border-amber-400 px-3 font-semibold">Identify contact</button></div>
+        {% else %}
+        <div class="flex flex-wrap items-center justify-between gap-2"><span><strong>Customer information incomplete.</strong> {% for field in resolution_readiness.fields if not field.complete %}{{ field.label }}{% if not loop.last %}, {% endif %}{% endfor %} required before Resolve.</span><button type="button" hx-get="/admin/inbox/{{ timeline.id }}/contact" hx-target="#inbox-contact-content" hx-swap="innerHTML" @click="openContact('{{ timeline.id }}')" class="min-h-9 rounded-lg border border-amber-400 px-3 font-semibold">Complete Customer</button></div>
+        {% endif %}
     </div>
     {% endif %}
 

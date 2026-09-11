@@ -662,7 +662,7 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
     handoff = Path("app/services/conversation_ticket_handoff.py").read_text()
 
     assert "stage_audit_event" in handoff
-    assert commands.count("stage_audit_event(") == 3
+    assert commands.count("stage_audit_event(") == 4
     assert 'action="reply_comment"' in commands
     assert 'action="ai_conversation_human_takeover"' in commands
     assert "TRANSCRIPT_AUDIT_ACTION" in commands

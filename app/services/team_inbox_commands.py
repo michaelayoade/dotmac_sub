@@ -63,6 +63,7 @@ from app.services import (
     inbox_sla,
     team_inbox_assignment,
     team_inbox_contact_links,
+    team_inbox_customer_completion_policy,
     team_inbox_field_job,
     team_inbox_filters,
     team_inbox_media,
@@ -1458,7 +1459,31 @@ def bulk_action(
             raise InboxCommandError("Unsupported bulk action.")
         updated = result.get("updated")
         count = len(updated) if isinstance(updated, list) else 0
-        return BulkActionOutcome(message=f"{verb} {count} {noun}.")
+        message = f"{verb} {count} {noun}."
+        blocked = result.get("blocked")
+        if isinstance(blocked, list) and blocked:
+            summaries: list[str] = []
+            for item in blocked:
+                if not isinstance(item, dict):
+                    continue
+                details = item.get("details")
+                missing = (
+                    details.get("missing_fields") if isinstance(details, dict) else None
+                )
+                labels = (
+                    ", ".join(str(field).replace("_", " ").title() for field in missing)
+                    if isinstance(missing, list)
+                    else "identity requirements"
+                )
+                summaries.append(
+                    f"{item.get('conversation_id', 'conversation')} ({labels})"
+                )
+            message += (
+                f" Skipped {len(blocked)} blocked conversation(s): "
+                + "; ".join(summaries)
+                + "."
+            )
+        return BulkActionOutcome(message=message)
 
     return _commit(db, execute)
 
@@ -1937,6 +1962,37 @@ def link_contact(
             reseller_id=selected_reseller,
             linked_by_person_id=actor_person_id,
             note=note,
+        )
+        actor_uuid = coerce_uuid(actor_person_id)
+        selected_customer = (
+            db.get(Subscriber, result.subscriber_id) if result.subscriber_id else None
+        )
+        stage_audit_event(
+            db,
+            action="inbox_contact_identity_selected",
+            entity_type="inbox_conversation",
+            entity_id=str(conversation.id),
+            actor=AuditActor(
+                actor_type=(
+                    AuditActorType.user if actor_uuid else AuditActorType.service
+                ),
+                actor_id=(str(actor_uuid) if actor_uuid else OWNER),
+            ),
+            metadata={
+                "decision_source": "reviewed_inbox_selection",
+                "selected_customer_id": (
+                    str(result.subscriber_id) if result.subscriber_id else None
+                ),
+                "selected_reseller_id": (
+                    str(result.reseller_id) if result.reseller_id else None
+                ),
+                "selected_party_id": (
+                    str(selected_customer.party_id)
+                    if selected_customer is not None
+                    and selected_customer.party_id is not None
+                    else None
+                ),
+            },
         )
         return ContactLinkOutcome(
             conversation_id=str(conversation.id),
@@ -3348,6 +3404,9 @@ def start_conversation(
         if clean_contact_name:
             conversation_metadata["contact_name"] = clean_contact_name[:200]
         conversation = InboxConversation(
+            customer_completion_policy_version_id=team_inbox_customer_completion_policy.snapshot_active_policy_id(
+                db
+            ),
             channel_type=clean_channel,
             subject=(
                 (subject or "").strip()

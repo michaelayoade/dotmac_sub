@@ -2065,6 +2065,7 @@ SERVICES: tuple[SOTService, ...] = (
             "order waiver decision evidence",
         ),
         depends_on=(
+            "financial.billing_tax_resolution",
             "sales.service",
             "sales.lead_lifecycle",
             "sales.fulfillment",
@@ -2076,6 +2077,11 @@ SERVICES: tuple[SOTService, ...] = (
             "(sales_orders.FUNDING_CONTROLLED_FIELDS); only a caller holding "
             "a sales_orders.FundingAuthority can cross the funding edge that "
             "stages sales_order.funding_satisfied. "
+            "Installation invoices ask financial.billing_tax_resolution for the "
+            "single active TaxRate identity that reproduces the order's recorded "
+            "effective tax percentage; the invoice owner snapshots that rate on "
+            "the installation line and derives the gross receivable. Missing or "
+            "ambiguous rate identity blocks issuance rather than understating tax. "
             "An order waiver is a separate decision and NOT a payment: "
             "SalesOrderWaivers in this same module grants and revokes it, "
             "records "
@@ -2092,7 +2098,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ConcernContract(
                     name="sales order lifecycle",
                     role=OwnerRole.AUTHORITATIVE_RECORD,
-                    input_names=("canonical sales order state",),
+                    input_names=(
+                        "canonical sales order state",
+                        "matched active installation tax rate",
+                    ),
                     canonical_writer="sales.orders",
                 ),
                 ConcernContract(
@@ -2113,6 +2122,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "locked SalesOrder identity, lifecycle, currency, and "
                         "commercial terms"
+                    ),
+                ),
+                AuthorityInput(
+                    name="matched active installation tax rate",
+                    owner="financial.billing_tax_resolution",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "an unambiguous active TaxRate identity matching the "
+                        "SalesOrder's recorded effective tax percentage"
                     ),
                 ),
                 AuthorityInput(
@@ -2237,7 +2255,10 @@ SERVICES: tuple[SOTService, ...] = (
             "owner commands so each effect commits atomically with its "
             "unique (consumer, event_id) receipt. Funding completion "
             "also stages the structural Phase 1 shadow-contract input; "
-            "it does not write billing records itself."
+            "it does not write billing records itself. Funding records "
+            "payment and installation settlement only: Subscription, "
+            "recurring-invoice, credential, ServiceOrder, add-on and IP "
+            "creation remain explicit staff-owned service setup actions."
         ),
         contract=ServiceContract(
             concerns=(

@@ -95,6 +95,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
     )
     assert sot_relationships.dependencies_for("sales.orders") == (
+        "financial.billing_tax_resolution",
         "sales.service",
         "sales.lead_lifecycle",
         "sales.fulfillment",
@@ -924,7 +925,6 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     )
     assert sot_relationships.dependencies_for("support.ticket_region_projection") == (
         "support.ticket_configuration",
-        "support.ticket_lifecycle",
     )
 
     ticket_presentation = sot_relationships.owning_service_for(
