@@ -42,6 +42,11 @@ from app.services.field.expense_requests import (
     get_field_expense_form_context,
     list_expense_vendors,
 )
+from app.services.integrations.diagnostics import (
+    DELIVERY_DIAGNOSTIC_KEY,
+    parse_diagnostic_evidence,
+    safe_diagnostic_summary,
+)
 from app.services.status_presentation import (
     StatusPresentation,
     field_expense_status_presentation,
@@ -50,9 +55,11 @@ from app.services.ui_contracts import Action
 
 
 class ExpenseDeliveryState(StrEnum):
+    AWAITING_APPROVAL = "awaiting_approval"
     PENDING = "pending"
     ACCEPTED = "accepted"
     FAILED = "failed"
+    NOT_APPLICABLE = "not_applicable"
     UNAVAILABLE = "unavailable"
 
 
@@ -137,6 +144,7 @@ class WorkOrderExpenseClaimView:
     status: StatusPresentation
     delivery_state: ExpenseDeliveryState
     delivery_label: str
+    delivery_detail: str | None
     erp_claim_number: str | None
     erp_claim_status: str | None
     rejection_reason: str | None
@@ -573,6 +581,7 @@ def _claim_views(
             status=field_expense_status_presentation(row.status),
             delivery_state=_delivery_state(row, event_by_request.get(row.id)),
             delivery_label=_delivery_label(row, event_by_request.get(row.id)),
+            delivery_detail=_delivery_detail(event_by_request.get(row.id)),
             erp_claim_number=row.expense_claim_number,
             erp_claim_status=row.expense_claim_status,
             rejection_reason=row.rejection_reason,
@@ -598,6 +607,10 @@ def _delivery_state(
         FieldErpSyncStatus.sent.value,
     }:
         return ExpenseDeliveryState.PENDING
+    if request.status in {"draft", "submitted"}:
+        return ExpenseDeliveryState.AWAITING_APPROVAL
+    if request.status in {"canceled", "rejected"}:
+        return ExpenseDeliveryState.NOT_APPLICABLE
     return ExpenseDeliveryState.UNAVAILABLE
 
 
@@ -608,11 +621,27 @@ def _delivery_label(
     if event and event.status == FieldErpSyncStatus.sent.value:
         return "Delivered; awaiting ERP acceptance"
     return {
+        ExpenseDeliveryState.AWAITING_APPROVAL: "Awaiting manager approval",
         ExpenseDeliveryState.ACCEPTED: "Accepted by ERP",
         ExpenseDeliveryState.FAILED: "ERP synchronization failed",
         ExpenseDeliveryState.PENDING: "Waiting for ERP delivery",
-        ExpenseDeliveryState.UNAVAILABLE: "ERP delivery is not available",
+        ExpenseDeliveryState.NOT_APPLICABLE: "Not sent to ERP",
+        ExpenseDeliveryState.UNAVAILABLE: "ERP delivery evidence is unavailable",
     }[state]
+
+
+def _delivery_detail(event: FieldErpSyncEvent | None) -> str | None:
+    if (
+        event is None
+        or event.status
+        not in {FieldErpSyncStatus.rejected.value, FieldErpSyncStatus.dead.value}
+        or not isinstance(event.erp_response, dict)
+    ):
+        return None
+    diagnostic = parse_diagnostic_evidence(
+        event.erp_response.get(DELIVERY_DIAGNOSTIC_KEY)
+    )
+    return safe_diagnostic_summary(diagnostic) if diagnostic is not None else None
 
 
 def _empty_line() -> ExpenseLineFormInput:

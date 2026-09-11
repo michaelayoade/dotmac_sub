@@ -783,6 +783,62 @@ def test_panel_isolates_claims_and_does_not_treat_sent_as_accepted(
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "state", "label"),
+    [
+        (
+            "submitted",
+            expense_web.ExpenseDeliveryState.AWAITING_APPROVAL,
+            "Awaiting manager approval",
+        ),
+        (
+            "canceled",
+            expense_web.ExpenseDeliveryState.NOT_APPLICABLE,
+            "Not sent to ERP",
+        ),
+        (
+            "approved",
+            expense_web.ExpenseDeliveryState.UNAVAILABLE,
+            "ERP delivery evidence is unavailable",
+        ),
+    ],
+)
+def test_delivery_label_distinguishes_not_started_from_unavailable(
+    status, state, label
+):
+    request = FieldExpenseRequest(status=status)
+
+    assert expense_web._delivery_state(request, None) is state
+    assert expense_web._delivery_label(request, None) == label
+
+
+def test_failed_delivery_detail_uses_typed_safe_diagnostic():
+    request_id = uuid4()
+    event = FieldErpSyncEvent(
+        flow=FieldErpSyncFlow.expense_claim.value,
+        entity_type="field_expense_request",
+        entity_id=uuid4(),
+        idempotency_key=f"expense:{uuid4()}",
+        payload={},
+        status=FieldErpSyncStatus.dead.value,
+        erp_response={
+            "delivery_diagnostic": {
+                "http_status": 422,
+                "code": "validation_error",
+                "message": "private provider detail",
+                "request_id": str(request_id),
+            }
+        },
+    )
+
+    detail = expense_web._delivery_detail(event)
+
+    assert detail is not None
+    assert "ERP rejected request validation" in detail
+    assert f"request_id={request_id}" in detail
+    assert "private provider detail" not in detail
+
+
 def test_redisplay_preserves_values_and_explicitly_clears_file_input():
     form = _valid_form()
     upload = ExpenseReceiptUploadInput(

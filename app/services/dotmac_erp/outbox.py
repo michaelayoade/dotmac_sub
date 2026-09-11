@@ -49,6 +49,12 @@ from app.services.integrations.backoffice_contracts import (
     ErpExpenseReceiptMimeType,
     ErpExpenseReceiptUploadCommand,
 )
+from app.services.integrations.diagnostics import (
+    DELIVERY_DIAGNOSTIC_KEY,
+    OperationDiagnostic,
+    diagnostic_evidence,
+    safe_diagnostic_summary,
+)
 from app.services.integrations.erp_capability import (
     ErpCapabilityClient,
     capability_client,
@@ -310,20 +316,25 @@ def deliver_pending(
             except DotMacERPTransientError as exc:
                 safe_exc = (
                     DotMacERPTransientError(
-                        "ERP expense release is temporarily unavailable"
+                        "ERP expense release is temporarily unavailable",
+                        diagnostic=exc.diagnostic,
                     )
                     if _is_approved_expense_release(row)
                     else exc
                 )
+                if _is_approved_expense_release(row):
+                    _record_delivery_diagnostic(row, safe_exc.diagnostic)
                 _mark_transient(row, safe_exc, max_attempts=max_attempts, result=result)
                 db.commit()
                 continue
             except DotMacERPError as exc:
                 error = (
-                    "ERP expense release was rejected"
+                    _expense_release_error(exc)
                     if _is_approved_expense_release(row)
                     else str(exc)
                 )
+                if _is_approved_expense_release(row):
+                    _record_delivery_diagnostic(row, exc.diagnostic)
                 _mark_dead(row, error)
                 result.dead += 1
                 result.errors.append(f"{row.id}: {error}")
@@ -695,6 +706,25 @@ def _mark_dead(row: FieldErpSyncEvent, error: str) -> None:
     logger.error(
         "field_erp_sync: event %s dead-lettered (permanent): %s", row.id, error
     )
+
+
+def _expense_release_error(exc: DotMacERPError) -> str:
+    diagnostic = exc.diagnostic
+    if (
+        diagnostic.code == "request_rejected"
+        and diagnostic.http_status is None
+        and diagnostic.request_id is None
+    ):
+        return "ERP expense release was rejected"
+    return safe_diagnostic_summary(diagnostic)
+
+
+def _record_delivery_diagnostic(
+    row: FieldErpSyncEvent, diagnostic: OperationDiagnostic
+) -> None:
+    evidence = dict(row.erp_response or {})
+    evidence[DELIVERY_DIAGNOSTIC_KEY] = diagnostic_evidence(diagnostic)
+    row.erp_response = evidence
 
 
 def _extract_status(response: dict | None) -> str | None:
