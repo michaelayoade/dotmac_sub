@@ -133,6 +133,19 @@ def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:
     assert "verify ai advice" in content
 
 
+def test_smtp_sender_guidance_explains_keyring_and_mailbox_route_mapping() -> None:
+    guide = guidance_for_path("/admin/system/email")
+
+    assert guide is not None
+    assert guide.id == "smtp-senders"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "settings-encryption keyring" in content
+    assert "secret/settings/crypto#settings_encryption_keyring" in content
+    assert "reply sender" in content
+    assert "mailbox route" in content
+    assert "recreate api and celery" in content
+
+
 def test_workflow_change_without_guidance_update_fails_gate() -> None:
     assert validation_errors(
         (__import__("pathlib").PurePosixPath("app/web/admin/reports.py"),)
