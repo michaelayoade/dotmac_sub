@@ -31,6 +31,7 @@ from app.services import (
     inbox_lead_actions,
     projects,
     support,
+    team_inbox_customer_completion,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,11 +85,12 @@ class ContextSection(Generic[T]):
 
 @dataclass(frozen=True, slots=True)
 class PartyProfileSummary:
-    party_id: UUID
+    party_id: UUID | None
     display_name: str
     status: str
     email: str | None
     phone: str | None
+    address: str | None
     subscriber_id: UUID | None
     subscriber_url: str | None
 
@@ -183,6 +185,13 @@ class InboxContactContext:
     project_tasks: ContextSection[ProjectTaskSummary]
     profile_action: inbox_lead_actions.InboxResolvedAction
     lead_action: inbox_lead_actions.InboxResolvedAction
+    resolution_readiness: (
+        team_inbox_customer_completion.InboxCustomerResolutionReadiness
+    )
+    customer_values: dict[
+        team_inbox_customer_completion.CustomerProfileField, str | None
+    ]
+    can_edit_customer_profile: bool
 
 
 def _not_applicable(message: str) -> ContextSection[T]:
@@ -225,11 +234,10 @@ def _profile(
 ) -> ContextSection[PartyProfileSummary]:
     if not permitted:
         return _restricted()
-    if party_id is None:
-        return _not_applicable("No authoritative Party is linked.")
-    party = db.get(Party, party_id)
-    if party is None:
-        return _unavailable()
+    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    party = db.get(Party, party_id) if party_id else None
+    if party is None and subscriber is None:
+        return _not_applicable("No authoritative Customer or Party is linked.")
     points = tuple(
         db.scalars(
             select(PartyContactPoint)
@@ -240,6 +248,8 @@ def _profile(
             )
             .order_by(PartyContactPoint.is_primary.desc(), PartyContactPoint.created_at)
         ).all()
+        if party is not None
+        else ()
     )
     email = next(
         (
@@ -261,11 +271,25 @@ def _profile(
         ContextAvailability.available,
         items=(
             PartyProfileSummary(
-                party.id,
-                party.display_name,
-                party.status,
-                email,
-                phone,
+                party.id
+                if party is not None
+                else subscriber.party_id
+                if subscriber is not None
+                else None,
+                party.display_name
+                if party is not None
+                else (subscriber.display_name or subscriber.full_name)
+                if subscriber is not None
+                else "Unavailable",
+                party.status if party is not None else "active",
+                email or (subscriber.email if subscriber is not None else None),
+                phone or (subscriber.phone if subscriber is not None else None),
+                (
+                    str((party.metadata_ or {}).get("address_line1") or "").strip()
+                    if party is not None and isinstance(party.metadata_, dict)
+                    else None
+                )
+                or (subscriber.address_line1 if subscriber is not None else None),
                 subscriber_id,
                 f"/admin/customers/person/{subscriber_id}"
                 if subscriber_id is not None
@@ -949,4 +973,11 @@ def build_contact_context(
         ),
         profile_action=profile_action,
         lead_action=lead_action,
+        resolution_readiness=team_inbox_customer_completion.resolution_readiness(
+            db, conversation
+        ),
+        customer_values=team_inbox_customer_completion.canonical_customer_values(
+            db, conversation
+        ),
+        can_edit_customer_profile=permissions.can_edit_profile,
     )

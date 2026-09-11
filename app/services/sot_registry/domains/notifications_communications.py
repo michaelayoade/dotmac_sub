@@ -2473,13 +2473,121 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.team_inbox_customer_completion_policy",
+            module="app.services.team_inbox_customer_completion_policy",
+            owns=("immutable Customer resolution-completion policy versions",),
+            depends_on=("auth.permission_gate", "observability.audit_log"),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_customer_completion_policy",
+                concerns=(
+                    (
+                        "immutable Customer resolution-completion policy versions",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="authorized Inbox settings decision",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed administrator-selected Customer fields, actor, "
+                            "decision source, and command provenance."
+                        ),
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                event_types=("team_inbox.customer_completion_policy_created.v1",),
+                design_refs=(
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=("tests/test_inbox_customer_completion.py",),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_customer_completion",
+            module="app.services.team_inbox_customer_completion",
+            owns=(
+                "Customer-only Inbox resolution readiness",
+                "canonical Inbox Customer profile completion coordination",
+            ),
+            depends_on=(
+                "communications.team_inbox_customer_completion_policy",
+                "communications.team_inbox_threads",
+                "communications.conversation_lead_relationships",
+                "customer.accounts",
+                "customer.canonical_profile_patch",
+                "party.registry",
+                "observability.audit_log",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_customer_completion",
+                concerns=(
+                    ("Customer-only Inbox resolution readiness", OwnerRole.RESOLVER),
+                    (
+                        "canonical Inbox Customer profile completion coordination",
+                        OwnerRole.APPLICATION_COORDINATOR,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="snapshotted Customer completion policy",
+                        owner="communications.team_inbox_customer_completion_policy",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Immutable policy version bound to the conversation at creation.",
+                    ),
+                    AuthorityInput(
+                        name="conversation Customer or Lead identity",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active conversation and explicit canonical Customer link.",
+                    ),
+                    AuthorityInput(
+                        name="canonical Lead relationship",
+                        owner="communications.conversation_lead_relationships",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active reviewed conversation-to-Lead link.",
+                    ),
+                    AuthorityInput(
+                        name="canonical Customer profile",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber identity, contact, address, and Party binding.",
+                    ),
+                    AuthorityInput(
+                        name="canonical Party profile",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Party identity, profile metadata, and contact points.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                event_types=("subscriber.updated",),
+                projections=("Customer resolution ActionReadiness verdict",),
+                design_refs=(
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_inbox_customer_completion.py",
+                    "tests/architecture/test_inbox_customer_completion_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_threads",
             module="app.services.team_inbox_receive",
             owns=(
                 "conversation identity and threading",
                 "authoritative conversation and message records",
             ),
-            depends_on=("communications.team_inbox_observations",),
+            depends_on=(
+                "communications.team_inbox_observations",
+                "communications.team_inbox_customer_completion_policy",
+            ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_threads",
                 concerns=(
@@ -2495,6 +2603,12 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_observations",
                         kind=AuthorityKind.OBSERVATION,
                         source="Provider/account/message identity, channel, observed time, references, subject, participant address, and bounded content.",
+                    ),
+                    AuthorityInput(
+                        name="active Customer completion policy",
+                        owner="communications.team_inbox_customer_completion_policy",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Latest immutable policy ID captured only when a conversation is created.",
                     ),
                 ),
                 transaction_mode=TransactionMode.PARTICIPANT,
@@ -2904,6 +3018,7 @@ DOMAIN = DomainSOT(
             owns=("conversation status transitions and immutable evidence",),
             depends_on=(
                 "communications.team_inbox_threads",
+                "communications.team_inbox_customer_completion",
                 "auth.permission_gate",
             ),
             contract=_team_inbox_contract(
@@ -2927,12 +3042,26 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Actor, target status, typed reason, occurrence time and idempotency identity.",
                     ),
+                    AuthorityInput(
+                        name="Customer resolution readiness",
+                        owner="communications.team_inbox_customer_completion",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Transaction-current Customer-only ActionReadiness verdict for agent resolution.",
+                    ),
                 ),
                 transaction_mode=TransactionMode.PARTICIPANT,
                 event_types=("team_inbox.status_changed.v1",),
                 projections=("current conversation status",),
+                design_refs=(
+                    "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
                 test_refs=(
                     "tests/test_team_inbox_lifecycle_audit.py",
+                    "tests/test_inbox_customer_completion.py",
+                    "tests/architecture/test_inbox_customer_completion_boundary.py",
                     "tests/architecture/test_team_inbox_lifecycle_audit_boundary.py",
                 ),
             ),
@@ -3536,6 +3665,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "communications.team_inbox_participants",
                 "communications.team_inbox_contact_resolution",
+                "communications.team_inbox_customer_completion",
                 "party.registry",
                 "customer.identity_scope",
                 "sales.lead_lifecycle",
@@ -3628,6 +3758,15 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
+                        name="Customer resolution readiness",
+                        owner="communications.team_inbox_customer_completion",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Customer-only resolution verdict and canonical values; "
+                            "Lead profile gaps remain advisory."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="operator authorization",
                         owner="auth.permission_gate",
                         kind=AuthorityKind.CONTROL_INPUT,
@@ -3644,12 +3783,14 @@ DOMAIN = DomainSOT(
                 ),
                 design_refs=(
                     "docs/designs/INBOX_CUSTOMER_CONTEXT_AND_LEAD_ACTIONS.md",
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
                     "docs/designs/ADMIN_INBOX_WORKSPACE.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
                     "tests/test_inbox_contact_context.py",
+                    "tests/test_inbox_customer_completion.py",
                     "tests/test_admin_inbox_workspace_integrity.py",
                 ),
             ),

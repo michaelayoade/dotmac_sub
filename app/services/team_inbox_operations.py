@@ -39,6 +39,7 @@ from app.services import (
     team_inbox_status,
 )
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 
 _ALLOWED_LABEL_COLORS = {
     "slate",
@@ -688,6 +689,7 @@ def bulk_update_status(
     actor_uuid = coerce_uuid(actor_person_id)
     updated: list[str] = []
     skipped: list[str] = []
+    blocked: list[dict[str, object]] = []
     for raw_id in conversation_ids:
         conversation = db.get(InboxConversation, coerce_uuid(raw_id))
         if conversation is None or not conversation.is_active:
@@ -696,21 +698,41 @@ def bulk_update_status(
         if conversation.status == clean_status:
             skipped.append(str(conversation.id))
             continue
-        team_inbox_status.apply_status_transition(
-            db,
-            conversation=conversation,
-            status=InboxConversationStatus(clean_status),
-            actor_person_id=actor_uuid,
-            reason=team_inbox_status.InboxStatusReason.bulk_change,
-            source_id=f"bulk-status:{conversation.id}:{uuid4()}",
-        )
+        try:
+            team_inbox_status.apply_status_transition(
+                db,
+                conversation=conversation,
+                status=InboxConversationStatus(clean_status),
+                actor_person_id=actor_uuid,
+                reason=team_inbox_status.InboxStatusReason.bulk_change,
+                source_id=f"bulk-status:{conversation.id}:{uuid4()}",
+            )
+        except DomainError as exc:
+            if exc.code != (
+                "communications.team_inbox_customer_completion.resolution_blocked"
+            ):
+                raise
+            skipped.append(str(conversation.id))
+            blocked.append(
+                {
+                    "conversation_id": str(conversation.id),
+                    "message": exc.message,
+                    "details": dict(exc.details),
+                }
+            )
+            continue
         updated.append(str(conversation.id))
     db.flush()
     for conversation_id in updated:
         conversation = db.get(InboxConversation, coerce_uuid(conversation_id))
         if conversation is not None:
             inbox_sla.update_status(db, conversation, clean_status)
-    return {"updated": updated, "skipped": skipped, "status": clean_status}
+    return {
+        "updated": updated,
+        "skipped": skipped,
+        "blocked": blocked,
+        "status": clean_status,
+    }
 
 
 def bulk_update_priority(
