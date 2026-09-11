@@ -434,6 +434,248 @@ class TestInformWebhook:
 
 
 # ---------------------------------------------------------------------------
+# 3b. Automatic acs_cr_failed readback verification after a fresh Inform
+# ---------------------------------------------------------------------------
+
+
+def _make_inform_linked_ont_with_cr_failed_head(
+    db_session,
+    *,
+    suffix: str,
+    section,
+    head_phase,
+    failure_code,
+    failed_completed_at,
+):
+    """Build an ONT wired to an ACS server/device plus an
+    ``OntServiceConfigurationHead``/revision/operation lifecycle, for proving
+    the Inform-handler's automatic acs_cr_failed readback trigger.
+    """
+    from app.models.network import OntAssignment, OntUnit
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.models.ont_service_configuration import (
+        OntServiceConfigurationHead,
+        OntServiceConfigurationRevision,
+    )
+
+    server = Tr069AcsServer(
+        name=f"CR-Failed ACS {suffix}",
+        base_url="http://genieacs:7557",
+        is_active=True,
+    )
+    ont = OntUnit(serial_number=f"CRFAIL-{suffix}", is_active=True)
+    db_session.add_all([server, ont])
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        genieacs_device_id=f"00D09E-TestProduct-CRFAIL-{suffix}",
+        is_active=True,
+    )
+    db_session.add(device)
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+
+    operation = NetworkOperation(
+        operation_type=NetworkOperationType.ont_service_config,
+        target_type=NetworkOperationTargetType.ont,
+        target_id=ont.id,
+        status=NetworkOperationStatus.failed,
+        correlation_key=f"ont-config-crfail-test:{suffix}:{uuid4()}",
+        input_payload={},
+        initiated_by="test",
+        completed_at=failed_completed_at,
+    )
+    db_session.add(operation)
+    db_session.flush()
+
+    head = OntServiceConfigurationHead(
+        ont_unit_id=ont.id,
+        assignment_id=assignment.id,
+        current_revision=1,
+        latest_operation_id=operation.id,
+        phase=head_phase,
+        failure_code=failure_code,
+        failure_message="setParameterValues queued but Connection Request failed.",
+    )
+    db_session.add(head)
+    db_session.flush()
+    revision = OntServiceConfigurationRevision(
+        head_id=head.id,
+        assignment_id=assignment.id,
+        revision=1,
+        section=section.value,
+        command_fingerprint=suffix.ljust(64, "0")[:64],
+        idempotency_key=f"key-{suffix}",
+        desired_change_evidence={},
+        operation_id=operation.id,
+        phase=head_phase,
+    )
+    db_session.add(revision)
+    db_session.commit()
+    return ont, device, server, head, operation
+
+
+class TestAcsCrFailureReadbackAfterInform:
+    def test_fresh_inform_long_after_short_retry_exhaustion_triggers_verification(
+        self, db_session
+    ) -> None:
+        """Mirrors Jabi's real timeline: ~21 hours between the terminal
+        ``acs_cr_failed`` failure and the device's actual next Inform, long
+        past the short internal retry loop's ~90-second window. The fresh
+        Inform must automatically queue
+        ``verify_ont_service_configuration_readback`` for a NON-LAN section
+        (WiFi here), proving the trigger is section-agnostic.
+        """
+        from sqlalchemy import select
+
+        from app.models.network_operation import NetworkOperationDispatch
+        from app.models.ont_service_configuration import (
+            OntServiceConfigurationHead,
+            OntServiceConfigurationPhase,
+        )
+        from app.services import tr069 as tr069_service
+        from app.services.network.ont_service_configuration import (
+            OntConfigurationSection,
+        )
+
+        failed_completed_at = datetime.now(UTC) - timedelta(hours=21)
+        ont, device, server, head, failed_operation = (
+            _make_inform_linked_ont_with_cr_failed_head(
+                db_session,
+                suffix="wifi-stale",
+                section=OntConfigurationSection.wifi,
+                head_phase=OntServiceConfigurationPhase.failed,
+                failure_code="acs_cr_failed",
+                failed_completed_at=failed_completed_at,
+            )
+        )
+        head_id = head.id
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        assert result["cr_failure_readback_triggered"] is True
+
+        refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
+        assert refreshed_head is not None
+        assert refreshed_head.phase is OntServiceConfigurationPhase.queued
+        assert refreshed_head.waiting_reason == "awaiting_dispatch"
+        assert refreshed_head.latest_operation_id != failed_operation.id
+
+        dispatch = db_session.scalar(
+            select(NetworkOperationDispatch).where(
+                NetworkOperationDispatch.operation_id
+                == refreshed_head.latest_operation_id
+            )
+        )
+        assert dispatch is not None
+        assert dispatch.command_name == "ont_service_config_verify.v1"
+
+    def test_second_inform_after_convergence_does_not_retrigger(
+        self, db_session
+    ) -> None:
+        """Once the head has moved off ``failed`` (e.g. ``verified``), a
+        later Inform must not re-run the verification trigger.
+        """
+        from app.models.network_operation import NetworkOperationStatus
+        from app.models.ont_service_configuration import (
+            OntServiceConfigurationHead,
+            OntServiceConfigurationPhase,
+        )
+        from app.services import tr069 as tr069_service
+        from app.services.network.ont_service_configuration import (
+            OntConfigurationSection,
+        )
+
+        failed_completed_at = datetime.now(UTC) - timedelta(hours=21)
+        ont, device, server, head, failed_operation = (
+            _make_inform_linked_ont_with_cr_failed_head(
+                db_session,
+                suffix="wifi-converged",
+                section=OntConfigurationSection.wifi,
+                head_phase=OntServiceConfigurationPhase.verified,
+                failure_code=None,
+                failed_completed_at=failed_completed_at,
+            )
+        )
+        failed_operation.status = NetworkOperationStatus.succeeded
+        db_session.commit()
+        head_id = head.id
+        latest_operation_id_before = head.latest_operation_id
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        assert result["cr_failure_readback_triggered"] is False
+
+        refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
+        assert refreshed_head is not None
+        assert refreshed_head.phase is OntServiceConfigurationPhase.verified
+        assert refreshed_head.latest_operation_id == latest_operation_id_before
+
+    def test_inform_for_ont_with_no_configuration_head_does_not_trigger(
+        self, db_session
+    ) -> None:
+        """No ``OntServiceConfigurationHead`` at all for this ONT -- the
+        cheap early-exit query must find nothing and take no action.
+        """
+        from app.models.network import OntUnit
+        from app.services import tr069 as tr069_service
+
+        server = Tr069AcsServer(
+            name="No Head ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(serial_number="CRFAIL-NOHEAD-001", is_active=True)
+        db_session.add_all([server, ont])
+        db_session.flush()
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="00D09E-TestProduct-CRFAIL-NOHEAD-001",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        assert result["cr_failure_readback_triggered"] is False
+
+
+# ---------------------------------------------------------------------------
 # 4. Auto-link ONTs during sync
 # ---------------------------------------------------------------------------
 
