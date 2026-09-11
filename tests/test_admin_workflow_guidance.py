@@ -198,13 +198,13 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     billing = Path("templates/admin/billing/index.html").read_text(encoding="utf-8")
 
     assert "{% block workflow_guidance %}" in layout
-    assert 'data-admin-workflow-help-staging' in layout
-    assert 'admin-workflow-help.js' in layout
-    assert 'data-admin-workflow-help-control' in control
+    assert "data-admin-workflow-help-staging" in layout
+    assert "admin-workflow-help.js" in layout
+    assert "data-admin-workflow-help-control" in control
     assert 'document.querySelectorAll("main h1")' in placement
     assert '[role="dialog"], [hidden], [x-cloak]' in placement
-    assert 'data-admin-workflow-title-group' in placement
-    assert 'htmx:afterSwap' in placement
+    assert "data-admin-workflow-title-group" in placement
+    assert "htmx:afterSwap" in placement
     assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in control
     assert 'aria-haspopup="dialog"' in control
     assert 'aria-modal="true"' in control
