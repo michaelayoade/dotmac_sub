@@ -213,7 +213,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify Kernel composition observations
-        uses: michaelayoade/dotmac_starter_mt/.github/actions/verify-composition-observations@fff94e88c792573adbc58b7e632174a455d1c67c
+        uses: michaelayoade/dotmac_starter_mt/.github/actions/verify-composition-observations@8b4b6d4b42e650c47fe4c04a679a5ccb51c4b2cd
         with:
           product: sub
 
