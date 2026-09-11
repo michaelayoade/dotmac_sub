@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.celery_app import celery_app
@@ -239,6 +240,7 @@ def reconcile_erp_staff_access(self) -> dict[str, object]:
     """Repair Selfcare staff-access projections from ERP's authoritative feed."""
 
     from app.schemas.erp_staff_access_webhook import (
+        ErpStaffAccessProjectionRecord,
         ErpStaffAccountStatusProjection,
         ErpStaffLeaveRestrictionProjection,
     )
@@ -252,40 +254,63 @@ def reconcile_erp_staff_access(self) -> dict[str, object]:
     from app.services.owner_commands import CommandContext
 
     page_limit = 500
+    max_pages_per_entity = 100
+
+    def _fetch_projection_items(
+        client: ErpCapabilityClient,
+        *,
+        entity: Literal["leave_restriction", "account_status"],
+    ) -> tuple[ErpStaffAccessProjectionRecord, ...]:
+        items: list[ErpStaffAccessProjectionRecord] = []
+        updated_after = None
+        for _page_number in range(max_pages_per_entity):
+            page = client.get_staff_access_projection(
+                entity=entity,
+                updated_after=updated_after,
+                limit=page_limit,
+            )
+            items.extend(page.items)
+            if len(page.items) < page_limit:
+                return tuple(items)
+
+            next_updated_after = max(item.updated_at for item in page.items)
+            if updated_after is not None and next_updated_after <= updated_after:
+                raise RuntimeError(
+                    "ERP staff access projection pagination cursor did not advance"
+                )
+            updated_after = next_updated_after
+
+        raise RuntimeError(
+            "ERP staff access projection exceeded the bounded pagination limit"
+        )
+
     try:
         with db_session_adapter.session() as db:
             client = ErpCapabilityClient(db)
-            leave_page = client.get_staff_access_projection(
+            leave_items = _fetch_projection_items(
+                client,
                 entity="leave_restriction",
-                limit=page_limit,
             )
-            account_page = client.get_staff_access_projection(
+            account_items = _fetch_projection_items(
+                client,
                 entity="account_status",
-                limit=page_limit,
             )
-            if (
-                len(leave_page.items) >= page_limit
-                or len(account_page.items) >= page_limit
-            ):
-                raise RuntimeError(
-                    "ERP staff access projection reached the bounded page limit"
-                )
 
             leave_events = tuple(
                 leave_event
-                for item in leave_page.items
+                for item in leave_items
                 if isinstance(item, ErpStaffLeaveRestrictionProjection)
                 if (leave_event := item.to_owner_event()) is not None
             )
             account_events = tuple(
                 account_event
-                for item in account_page.items
+                for item in account_items
                 if isinstance(item, ErpStaffAccountStatusProjection)
                 if (account_event := item.to_owner_event()) is not None
             )
             unmapped = (
-                len(leave_page.items)
-                + len(account_page.items)
+                len(leave_items)
+                + len(account_items)
                 - len(leave_events)
                 - len(account_events)
             )
