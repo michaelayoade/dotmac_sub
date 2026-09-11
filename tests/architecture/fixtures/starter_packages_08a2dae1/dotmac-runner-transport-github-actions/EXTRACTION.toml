@@ -1,2 +1,0 @@
-package = "dotmac-runner-transport-github-actions"
-classification = "stateless-protocol-adapter"
