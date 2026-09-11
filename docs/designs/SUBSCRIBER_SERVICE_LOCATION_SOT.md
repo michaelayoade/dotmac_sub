@@ -129,7 +129,18 @@ the stored values before submission.
 The subscriber setting `service_location_required` is the operator-controlled,
 default-off switch for mandatory portal completion. When enabled, the portal
 policy checks the canonical service Address for valid latitude and longitude.
-Incomplete customers receive a banner and are redirected to `/portal/location`
-until the direct address-and-pin save succeeds. Authentication, location
+Incomplete customers first receive a blocking portal dialog with an explicit
+button to open `/portal/location`; the direct address-and-pin save succeeds
+there before the dialog is shown again. Authentication, location
 editing/geocoding routes, and operator impersonation remain reachable so the
 customer can complete the action and support staff can recover accounts.
+
+## Individual customer biodata completion
+
+After the canonical service location is saved, residential customers are checked
+for date of birth, gender, and NIN. If any value is missing or invalid, the
+portal presents a blocking biodata dialog with a button to /portal/profile.
+The profile owner validates the values server-side: DOB must be a valid
+non-future date, gender cannot be unknown, and NIN must contain exactly 11
+ASCII digits. Business, government, and NGO subscriber categories are not
+subject to this individual biodata gate.

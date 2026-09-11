@@ -13,6 +13,7 @@ from app.services import customer_location_requests as location_service
 from app.services import geocoding as geocoding_service
 from app.services import location_capture
 from app.services import subscriber as subscriber_service
+from app.services import web_customer_actions as customer_profile_service
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -105,6 +106,19 @@ def customer_location_submit(
             ),
         )
         db.commit()
+        subscriber = db.get(Subscriber, subscriber_id)
+        if subscriber is not None:
+            completion = customer_profile_service.evaluate_individual_biodata(
+                subscriber
+            )
+            if (
+                location_capture.service_location_requirement_enabled(db)
+                and completion.applicable
+                and not completion.complete
+            ):
+                return RedirectResponse(
+                    url="/portal/profile?biodata_required=1", status_code=303
+                )
     except Exception as exc:
         db.rollback()
         detail = (
