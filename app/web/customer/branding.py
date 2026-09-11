@@ -175,6 +175,9 @@ def customer_branding_context(request: Request) -> dict[str, object]:
     service_location_required = (
         getattr(request.state, "service_location_required", False) is True
     )
+    profile_biodata_required = (
+        getattr(request.state, "profile_biodata_required", False) is True
+    )
     cached_brand = stats.get("brand") if isinstance(stats, dict) else None
     resolved_brand: dict[str, object] | None = (
         dict(cached_brand) if isinstance(cached_brand, dict) else None
@@ -225,6 +228,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         **({"brand": resolved_brand} if resolved_brand else {}),
         "restricted": restricted,
         "service_location_required": service_location_required,
+        "profile_biodata_required": profile_biodata_required,
         **notification_preview,
     }
 

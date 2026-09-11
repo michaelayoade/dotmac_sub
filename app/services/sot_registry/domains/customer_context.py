@@ -46,6 +46,120 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.canonical_profile_patch",
+            module="app.services.customer_canonical_profile_patch",
+            owns=("typed transaction-neutral canonical Customer profile patches",),
+            depends_on=(
+                "customer.accounts",
+                "events.dispatcher",
+            ),
+            notes=(
+                "Registered coordinators use this participant to update an existing "
+                "Subscriber and its service address. It cannot create a Customer, "
+                "and it flushes without committing or rolling back."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "typed transaction-neutral canonical Customer profile patches"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "typed canonical Customer profile patch",
+                            "locked canonical Customer account",
+                        ),
+                        canonical_writer="customer.canonical_profile_patch",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed canonical Customer profile patch",
+                        owner="customer.canonical_profile_patch",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "explicit submitted field set, typed values, source, "
+                            "and actor identifier from a registered coordinator"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="locked canonical Customer account",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "existing Subscriber and primary service Address selected "
+                            "FOR UPDATE"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Runs inside the calling owner's transaction, updates only "
+                        "explicit fields, stages subscriber.updated, flushes, and "
+                        "never commits or rolls back."
+                    ),
+                    locking=(
+                        "The existing Subscriber and service Address are selected "
+                        "FOR UPDATE before mutation. Canonical uniqueness constraints "
+                        "arbitrate concurrent writes."
+                    ),
+                    idempotency=(
+                        "Reapplying the same explicit values produces the same "
+                        "canonical profile; the coordinator owns command replay."
+                    ),
+                    retries=(
+                        "Retry only through the calling owner with the same command "
+                        "context after a rolled-back transient failure."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "customer.accounts.customer_not_found",
+                        "customer.accounts.invalid_email",
+                        "customer.accounts.invalid_name",
+                        "customer.accounts.verified_nin_locked",
+                    ),
+                    mapping_owner="the registered calling coordinator",
+                    fail_closed_on=(
+                        "missing Customer",
+                        "invalid Customer profile data",
+                        "attempted replacement of a verified NIN",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("subscriber.updated",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "The event contains only Subscriber ID, explicit changed-field "
+                        "names, and decision source; profile values remain canonical."
+                    ),
+                    replay=(
+                        "The calling owner prevents duplicate command replay; an "
+                        "entire rolled-back transaction leaves no outbox event."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.canonical_profile_patch",
+                    verification=(
+                        "Inbox completion tests assert canonical Subscriber and "
+                        "service Address persistence through this participant."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_inbox_customer_completion.py",
+                    "tests/architecture/test_inbox_customer_completion_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.account_visibility",
             module="app.services.customer_account_visibility",
             owns=("legacy imported Subscriber deletion classification",),

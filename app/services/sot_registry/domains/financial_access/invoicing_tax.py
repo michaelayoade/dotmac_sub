@@ -1198,6 +1198,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "compatibility subscription VAT treatment policy",
             "bounded subscription VAT treatment resolution",
+            "recorded-percent active tax-rate identity resolution",
         ),
         depends_on=(
             "access.subscription_lifecycle",
@@ -1215,6 +1216,8 @@ SERVICES: tuple[SOTService, ...] = (
             "come only from owned records and settings; no VAT code or percentage "
             "is built into a caller. It owns neither statutory tax policy nor "
             "custom-tax determination and is retired when dotmac-tax cuts over."
+            " Its recorded-percent adapter returns an identity only when exactly "
+            "one active TaxRate reproduces the supplied commercial percentage."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1239,6 +1242,11 @@ SERVICES: tuple[SOTService, ...] = (
                         "catalog compatibility VAT fields",
                         "configured compatibility VAT defaults",
                     ),
+                ),
+                ConcernContract(
+                    name="recorded-percent active tax-rate identity resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("active legacy tax-rate records",),
                 ),
             ),
             authoritative_inputs=(

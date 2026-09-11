@@ -7,6 +7,7 @@ connector can implement the same contracts without changing Sub domain callers.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
@@ -408,12 +409,16 @@ class ErpCapabilityClient:
         self,
         *,
         entity: Literal["leave_restriction", "account_status"],
+        updated_after: datetime | None = None,
         limit: int = 500,
     ) -> ErpStaffAccessProjectionPage:
+        params: dict[str, object] = {"entity": entity, "limit": limit}
+        if updated_after is not None:
+            params["updated_after"] = updated_after.isoformat()
         response = self._execute(
             ERP_STAFF_ACCESS_RECONCILE_CAPABILITY,
             "read_staff_access_projection",
-            {"entity": entity, "limit": limit},
+            params,
             trigger=OperationTrigger.reconcile,
             correlation_id=f"erp-staff-access:{entity}",
         )

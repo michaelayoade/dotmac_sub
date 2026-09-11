@@ -14,6 +14,7 @@ from app.services import customer_location_requests as location_service
 from app.services import customer_portal_location_commands as location_commands
 from app.services import geocoding as geocoding_service
 from app.services import location_capture
+from app.services import web_customer_actions as customer_profile_service
 from app.services.customer_context import optional_customer_subscriber_id
 from app.services.owner_commands import CommandContext
 from app.web.customer.auth import get_current_customer_from_request
@@ -26,7 +27,9 @@ logger = logging.getLogger(__name__)
 READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
 
 
-def _page_context(request: Request, db: Session, customer: dict) -> dict:
+def _page_context(
+    request: Request, db: Session, customer: dict, *, biodata_required: bool = False
+) -> dict:
     context = location_service.get_customer_location_page_context(db, customer)
     context.update(
         {
@@ -35,6 +38,7 @@ def _page_context(request: Request, db: Session, customer: dict) -> dict:
             "active_page": "location",
             "form_error": None,
             "form_note": "",
+            "biodata_required": biodata_required,
         }
     )
     return context
@@ -50,7 +54,12 @@ def customer_location_page(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/location", status_code=303
         )
-    context = _page_context(request, db, customer)
+    context = _page_context(
+        request,
+        db,
+        customer,
+        biodata_required=request.query_params.get("biodata_required") == "1",
+    )
     return templates.TemplateResponse("customer/location/index.html", context)
 
 
@@ -115,6 +124,19 @@ def customer_location_submit(
                 ),
             ),
         )
+        subscriber = db.get(Subscriber, subscriber_uuid)
+        if subscriber is not None:
+            completion = customer_profile_service.evaluate_individual_biodata(
+                subscriber
+            )
+            if (
+                location_capture.service_location_requirement_enabled(db)
+                and completion.applicable
+                and not completion.complete
+            ):
+                return RedirectResponse(
+                    url="/portal/location?saved=1&biodata_required=1", status_code=303
+                )
     except Exception as exc:
         detail = (
             getattr(exc, "detail", None) or str(exc) or "Unable to save your location."
