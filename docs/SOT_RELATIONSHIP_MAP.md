@@ -5050,6 +5050,12 @@ a separate bounded classifier that may select only a destination service team.
    WhatsApp or Meta direct-message delivery. The same config row also supplies
    the exact Support-team UUID for the dialogue-free data-cleaning eligibility
    scaffold; the scope-key uniqueness tension is documented in `AI_SOT.md`.
+   DeepSeek's known `null`-for-default structured-output variation is normalized
+   into the existing strict typed contract; other schema violations fail closed
+   with sanitized structural evidence. Greeting-only first turns wait after the
+   welcome, while bounded deterministic connectivity and duration facts survive
+   classifier failure and may drive the adaptive inquiry plan. Category-menu
+   clarification is never the default and requires explicit policy opt-in.
 5. `communications.team_inbox_routing` owns destination-team resolution from
    that metadata. The Team Inbox queue owner retains enqueueing and permanent
    queue numbers; the FIFO dispatcher retains individual assignment. Email AI
