@@ -43,6 +43,7 @@ from app.models.ont_service_configuration import (
     OntServiceConfigurationPhase,
     OntServiceConfigurationRevision,
 )
+from app.models.tr069 import Tr069CpeDevice
 from app.services.audit_adapter import stage_audit_event
 from app.services.credential_crypto import encrypt_credential, get_encryption_key
 from app.services.domain_errors import DomainError
@@ -873,6 +874,122 @@ def _load_customer_wifi_admission_scope(
             "Self-service device commands are not supported for this device.",
         )
     return ont, assignment, subscription, olt, pon
+
+
+@dataclass(frozen=True, slots=True)
+class CpeWifiAdmissionScope:
+    """The exact, unambiguous ONT this admin CPE-detail WiFi action may touch.
+
+    Resolved by ``resolve_cpe_wifi_admission_scope`` from the CPE side of the
+    TR-069 identity chain (``cpe_device_id`` -> ``Tr069CpeDevice`` ->
+    ``OntUnit`` -> active ``OntAssignment``) so the admin CPE-detail WiFi
+    routes can delegate to ``configure_ont_service`` — the same owner-command
+    path used by the customer self-care WiFi flow — instead of writing to
+    GenieACS directly. This never falls back to serial-number matching or a
+    default ACS server (``resolve_genieacs_for_cpe_with_reason`` tiers 2/3):
+    an admin mutation targets one exact device or it is refused.
+    """
+
+    ont_unit_id: uuid.UUID
+    tr069_device_id: uuid.UUID
+    assignment_id: uuid.UUID
+
+
+def resolve_cpe_wifi_admission_scope(
+    db: Session, cpe_device_id: uuid.UUID
+) -> CpeWifiAdmissionScope:
+    """Resolve exactly one active TR-069 CPE row to its eligible owning ONT.
+
+    Refuses, with a distinct typed ``OntServiceConfigurationError`` code per
+    cause, rather than falling through to a looser resolution strategy:
+
+    - ``cpe_device_not_found``: no active ``Tr069CpeDevice`` row is keyed to
+      this exact ``cpe_device_id``.
+    - ``cpe_device_ambiguous``: more than one active ``Tr069CpeDevice`` row is
+      keyed to this exact ``cpe_device_id``.
+    - ``cpe_ont_not_linked``: the resolved TR-069 row has no ``ont_unit_id``.
+    - ``cpe_ont_missing``: ``ont_unit_id`` is set but the referenced
+      ``OntUnit`` row cannot be found.
+    - ``cpe_assignment_inactive``: the linked ONT has no active
+      ``OntAssignment``.
+    - ``cpe_assignment_ambiguous``: the linked ONT has more than one active
+      ``OntAssignment``.
+
+    This performs only read-only lookups; final admission (single active
+    assignment cross-checked against subscription/PON/OLT/authorization
+    state) is re-verified, under row locks, by ``_load_admission_scope`` when
+    the caller subsequently delegates to ``configure_ont_service``.
+    """
+    candidates = list(
+        db.scalars(
+            select(Tr069CpeDevice)
+            .where(
+                Tr069CpeDevice.cpe_device_id == cpe_device_id,
+                Tr069CpeDevice.is_active.is_(True),
+            )
+            .order_by(Tr069CpeDevice.id)
+        )
+    )
+    if not candidates:
+        raise _error(
+            "cpe_device_not_found",
+            "No active TR-069 device is linked to this CPE.",
+            cpe_device_id=str(cpe_device_id),
+        )
+    if len(candidates) > 1:
+        raise _error(
+            "cpe_device_ambiguous",
+            "Multiple active TR-069 devices are linked to this CPE; contact support.",
+            cpe_device_id=str(cpe_device_id),
+            candidate_count=len(candidates),
+            candidate_tr069_device_ids=[str(item.id) for item in candidates],
+        )
+    tr069_device = candidates[0]
+    if tr069_device.ont_unit_id is None:
+        raise _error(
+            "cpe_ont_not_linked",
+            "This CPE is not linked to an ONT.",
+            cpe_device_id=str(cpe_device_id),
+            tr069_device_id=str(tr069_device.id),
+        )
+    ont = db.scalar(select(OntUnit).where(OntUnit.id == tr069_device.ont_unit_id))
+    if ont is None:
+        raise _error(
+            "cpe_ont_missing",
+            "The ONT linked to this CPE could not be found.",
+            cpe_device_id=str(cpe_device_id),
+            tr069_device_id=str(tr069_device.id),
+            ont_unit_id=str(tr069_device.ont_unit_id),
+        )
+    assignments = list(
+        db.scalars(
+            select(OntAssignment).where(
+                OntAssignment.ont_unit_id == ont.id,
+                OntAssignment.active.is_(True),
+            )
+        )
+    )
+    if not assignments:
+        raise _error(
+            "cpe_assignment_inactive",
+            "The ONT linked to this CPE has no active assignment.",
+            cpe_device_id=str(cpe_device_id),
+            ont_unit_id=str(ont.id),
+        )
+    if len(assignments) > 1:
+        raise _error(
+            "cpe_assignment_ambiguous",
+            "The ONT linked to this CPE has multiple active assignments; "
+            "contact support.",
+            cpe_device_id=str(cpe_device_id),
+            ont_unit_id=str(ont.id),
+            candidate_assignment_ids=[str(item.id) for item in assignments],
+        )
+    return CpeWifiAdmissionScope(
+        ont_unit_id=ont.id,
+        tr069_device_id=tr069_device.id,
+        assignment_id=assignments[0].id,
+    )
 
 
 def _head_for_assignment(
