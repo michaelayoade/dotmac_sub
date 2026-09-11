@@ -91,6 +91,7 @@ def upgrade() -> None:
         sa.column("version", sa.Integer()),
         sa.column("required_fields", sa.JSON()),
         sa.column("decision_source", sa.String()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
     )
     bind.execute(
         postgresql.insert(policy_versions)
@@ -99,6 +100,7 @@ def upgrade() -> None:
             version=1,
             required_fields=["name", "phone", "address"],
             decision_source="migration_initial_policy",
+            created_at=sa.func.now(),
         )
         .on_conflict_do_nothing(index_elements=["version"])
     )
