@@ -1,7 +1,7 @@
 """Add immutable Inbox Customer completion-policy snapshots.
 
-Revision ID: 594_inbox_customer_completion_policy
-Revises: 593_field_location_ping_client_observation_id
+Revision ID: 596_inbox_customer_completion_policy
+Revises: 595_active_cpe_identity
 Create Date: 2026-09-11
 """
 
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "594_inbox_customer_completion_policy"
-down_revision = "593_field_location_ping_client_observation_id"
+revision = "596_inbox_customer_completion_policy"
+down_revision = "595_active_cpe_identity"
 branch_labels = None
 depends_on = None
 

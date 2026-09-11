@@ -2084,6 +2084,8 @@ class SalesOrderLines(ListResponseMixin):
         data = payload.model_dump(exclude_unset=True)
         assert_no_active_waiver(db, line.sales_order_id, data, COMMERCIAL_LINE_FIELDS)
         sales_order = db.get(SalesOrder, line.sales_order_id)
+        if sales_order is None:
+            raise HTTPException(status_code=404, detail="Sales order not found")
         assert_unreceipted_commercial_document(
             sales_order, data, COMMERCIAL_LINE_FIELDS
         )
