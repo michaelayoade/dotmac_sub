@@ -34,6 +34,12 @@ def test_subscription_lifecycle_guide_includes_plan_changes() -> None:
     assert "Subscriptions" in guidance_categories()
 
 
+def test_getting_started_is_the_first_help_category() -> None:
+    categories = guidance_categories()
+
+    assert categories[:2] == ("Getting started", "Billing")
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
@@ -185,17 +191,37 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
 
 def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
+    control = Path("templates/components/ui/workflow_help.html").read_text(
+        encoding="utf-8"
+    )
+    placement = Path("static/js/admin-workflow-help.js").read_text(encoding="utf-8")
     billing = Path("templates/admin/billing/index.html").read_text(encoding="utf-8")
 
     assert "{% block workflow_guidance %}" in layout
-    assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in layout
-    assert 'aria-haspopup="dialog"' in layout
-    assert 'aria-modal="true"' in layout
-    assert 'x-trap.inert.noscroll="workflowHelpOpen"' in layout
-    assert "items-center justify-center" in layout
-    assert "{{ workflow_guide.purpose }}" in layout
-    assert "{% for step in workflow_guide.steps %}" in layout
+    assert "data-admin-workflow-help-staging" in layout
+    assert "admin-workflow-help.js" in layout
+    assert "data-admin-workflow-help-control" in control
+    assert 'document.querySelectorAll("main h1")' in placement
+    assert '[role="dialog"], [hidden], [x-cloak]' in placement
+    assert "data-admin-workflow-title-group" in placement
+    assert "htmx:afterSwap" in placement
+    assert 'aria-label="How this page works: {{ workflow_guide.title }}"' in control
+    assert 'aria-haspopup="dialog"' in control
+    assert 'aria-modal="true"' in control
+    assert 'x-trap.inert.noscroll="workflowHelpOpen"' in control
+    assert "items-center justify-center" in control
+    assert "{{ workflow_guide.purpose }}" in control
+    assert "{% for step in workflow_guide.steps %}" in control
     assert "billingHelpOpen" not in billing
+
+
+def test_customer_list_uses_shared_workflow_help_placement() -> None:
+    customer_list = Path("templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_guidance" not in customer_list
+    assert "workflow_help_control" not in customer_list
 
 
 def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None:

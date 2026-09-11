@@ -2,6 +2,7 @@ import 'dart:ffi' hide Size;
 import 'dart:io' as io;
 
 import 'package:dio/dio.dart';
+import 'package:dotmac_field/app/widgets/primary_action_button.dart';
 import 'package:dotmac_field/core/api/api_client.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/draft_store.dart';
@@ -9,6 +10,8 @@ import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
+import 'package:dotmac_field/features/jobs/job_models.dart';
+import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,6 +40,23 @@ const _testFormContext = ExpenseFormContext(
     beneficiaryName: 'Field Technician',
   ),
 );
+
+JobList _testAssignedJobs() => JobList([
+  JobSummary(
+    id: 'wo-1',
+    title: 'Campus fiber repair',
+    status: 'dispatched',
+    workType: 'repair',
+    priority: 'normal',
+  ),
+  JobSummary(
+    id: 'wo-2',
+    title: 'Library router installation',
+    status: 'scheduled',
+    workType: 'install',
+    priority: 'normal',
+  ),
+]);
 
 void main() {
   late ProviderContainer container;
@@ -336,7 +356,7 @@ void main() {
   });
 
   test(
-    'uploadReceipt posts multipart receipt and returns download path',
+    'uploadReceipt posts multipart receipt and returns its typed result',
     () async {
       final dir = await io.Directory.systemTemp.createTemp('receipt-test');
       final file = io.File('${dir.path}/receipt.jpg');
@@ -367,7 +387,7 @@ void main() {
         );
       });
 
-      final path = await container
+      final result = await container
           .read(expensesRepositoryProvider)
           .uploadReceipt(
             workOrderId: 'wo-1',
@@ -376,9 +396,87 @@ void main() {
             clientRef: 'ref-1',
           );
 
-      expect(path, '/api/v1/field/attachments/attachment-1/content');
+      expect(result.attachmentId, 'attachment-1');
+      expect(
+        result.downloadPath,
+        '/api/v1/field/attachments/attachment-1/content',
+      );
     },
   );
+
+  test('receipt upload attachment ID is used to submit the expense', () async {
+    final dir = await io.Directory.systemTemp.createTemp('receipt-contract');
+    final file = io.File('${dir.path}/receipt.jpg');
+    await file.writeAsBytes([0xff, 0xd8, 0xff, 0xd9]);
+    addTearDown(() => dir.delete(recursive: true));
+
+    adapter.on('POST', '/api/v1/field/expense-requests/receipts', (_) {
+      return (
+        201,
+        {
+          'id': 'attachment-9',
+          'download_path': '/api/v1/field/attachments/attachment-9/content',
+        },
+      );
+    });
+    adapter.on('POST', '/api/v1/field/expense-requests/submit', (options) {
+      final data = (options.data as Map).cast<String, dynamic>();
+      final item = ((data['items'] as List).single as Map)
+          .cast<String, dynamic>();
+      expect(item['receipt_attachment_id'], 'attachment-9');
+      expect(item.containsKey('receipt_url'), isFalse);
+      return (
+        201,
+        {
+          'id': 'expense-9',
+          'number': 'EXP-0009',
+          'status': 'submitted',
+          'purpose': 'Generator fuel',
+        },
+      );
+    });
+
+    final upload = await container
+        .read(expensesRepositoryProvider)
+        .uploadReceipt(
+          workOrderId: 'wo-9',
+          filePath: file.path,
+          fileName: 'receipt.jpg',
+        );
+    final request = await container
+        .read(expensesRepositoryProvider)
+        .createRequest(
+          purpose: 'Generator fuel',
+          clientRef: 'expense-client-ref-9',
+          workOrderId: 'wo-9',
+          items: [
+            ExpenseItemDraft(
+              categoryCode: 'FUEL',
+              description: 'Diesel',
+              amount: 5000,
+              receiptAttachmentId: upload.attachmentId,
+            ),
+          ],
+        );
+
+    expect(request.id, 'expense-9');
+    expect(upload.downloadPath, contains('attachment-9/content'));
+  });
+
+  test('expense draft round trip preserves receipt attachment ID', () {
+    const item = ExpenseItemDraft(
+      categoryCode: 'FUEL',
+      description: 'Diesel',
+      amount: 5000,
+      receiptAttachmentId: 'attachment-11',
+    );
+
+    final restored = ExpenseItemDraft.fromDraftJson(item.toDraftJson());
+
+    expect(restored.receiptAttachmentId, 'attachment-11');
+    expect(restored.toJson()['receipt_attachment_id'], 'attachment-11');
+    expect(restored.toJson().containsKey('receipt_url'), isFalse);
+  });
 
   test('ExpenseRequest parses status, ERP fields and items', () {
     final request = ExpenseRequest.fromJson({
@@ -444,6 +542,9 @@ void main() {
   testWidgets('expenses screen lists submitted and rejected requests', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -469,12 +570,21 @@ void main() {
             ],
           ),
         ],
-        child: const MaterialApp(home: ExpensesScreen()),
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const ExpensesScreen(),
+        ),
       ),
     );
     await tester.pump();
 
     expect(find.text('Expense requests'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Request'), findsNothing);
     expect(find.text('Fuel for generator'), findsOneWidget);
     expect(find.text('Taxi to site'), findsOneWidget);
     expect(find.text('submitted'), findsOneWidget);
@@ -527,7 +637,7 @@ void main() {
     expect(find.text('12345678'), findsNothing);
   });
 
-  testWidgets('new expense request validates lines and purpose then submits', (
+  testWidgets('new expense request requires a selected work order', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
@@ -601,6 +711,9 @@ void main() {
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
           ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
           managerExpensesProvider.overrideWith((ref) async {
             managerExpenseLoads += 1;
             return const [];
@@ -620,11 +733,7 @@ void main() {
     expect(find.text('New expense request'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
     expect(find.text('Save draft'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('expense-approver')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Expense Approver').last);
-    await tester.pumpAndSettle();
-
+    expect(find.text('Work order ID'), findsNothing);
     // Pick a category and describe the line, but leave the amount empty.
     await tester.tap(find.byKey(const Key('expense-category')));
     await tester.pumpAndSettle();
@@ -654,17 +763,49 @@ void main() {
     expect(find.text('Purpose is required.'), findsOneWidget);
     expect(posted, isNull);
 
-    // With a purpose the request posts and navigates back to the list.
+    // A purpose is not enough without a selected assigned work order.
     await tester.enterText(
       find.byKey(const Key('expense-purpose')),
       'Site logistics',
     );
     await tester.tap(find.text('Submit request'));
+    await tester.pump();
+    expect(find.text('Select a work order.'), findsOneWidget);
+    expect(posted, isNull);
+
+    // Search the assigned-work list and select the matching job.
+    await tester.ensureVisible(find.byKey(const Key('expense-work-order')));
+    await tester.tap(find.byKey(const Key('expense-work-order')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('expense-work-order-search')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('expense-work-order-search')),
+      'fiber',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Campus fiber repair'), findsOneWidget);
+    expect(find.text('Library router installation'), findsNothing);
+    await tester.tap(find.byKey(const Key('expense-work-order-option-wo-1')));
+    await tester.pumpAndSettle();
+
+    // The required approver error is shown beside the visible selector.
+    await tester.tap(find.text('Submit request'));
+    await tester.pumpAndSettle();
+    expect(find.text('Select an expense approver.'), findsWidgets);
+    expect(find.byKey(const Key('expense-approver')), findsOneWidget);
+    expect(posted, isNull);
+
+    await tester.tap(find.byKey(const Key('expense-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expense Approver').last);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Submit request'));
+    await tester.tap(find.text('Submit request'));
     await tester.pumpAndSettle();
 
     expect(posted, isNotNull);
     expect(posted!['purpose'], 'Site logistics');
-    expect(posted!['work_order_id'], isNull);
+    expect(posted!['work_order_id'], 'wo-1');
     expect(posted!['items'], [
       {
         'category_code': 'TRANSPORT',
@@ -681,7 +822,95 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('new expense request falls back to a category code field', (
+  testWidgets('new expense request displays a structured safe server message', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    var submitted = false;
+    adapter.on(
+      'POST',
+      '/api/v1/field/expense-requests/payment-destination/verify',
+      (_) => (
+        409,
+        {
+          'detail': {
+            'code': 'operations.expense_requests.destination_expired',
+            'message': 'Verify the payment destination again.',
+            'context': {'internal_reason': 'expired-token'},
+          },
+        },
+      ),
+    );
+    adapter.on('POST', '/api/v1/field/expense-requests/submit', (_) {
+      submitted = true;
+      return (500, {'detail': 'must not submit'});
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(client),
+          expenseCategoriesProvider.overrideWith(
+            (ref) async => const [
+              ExpenseCategory(
+                categoryCode: 'FUEL',
+                categoryName: 'Fuel',
+                requiresReceipt: true,
+              ),
+            ],
+          ),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
+        ],
+        child: const MaterialApp(
+          home: NewExpenseRequestScreen(
+            initialWorkOrderId: 'wo-1',
+            initialWorkOrderLabel: 'WO-1',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('expense-purpose')),
+      'Generator fuel',
+    );
+    await tester.tap(find.byKey(const Key('expense-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expense Approver').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('expense-category')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuel').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('expense-description')),
+      'Diesel',
+    );
+    await tester.enterText(find.byKey(const Key('expense-amount')), '5000');
+    await tester.enterText(
+      find.byKey(const Key('expense-receipt-url')),
+      'https://receipts.test/fuel.jpg',
+    );
+    await tester.tap(find.byKey(const Key('add-expense-line')));
+    await tester.pump();
+    await tester.ensureVisible(find.text('Submit request'));
+    await tester.tap(find.text('Submit request'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Verify the payment destination again.'),
+      findsAtLeastNWidgets(1),
+    );
+    expect(find.textContaining('expired-token'), findsNothing);
+    expect(submitted, isFalse);
+  });
+
+  testWidgets('new expense request blocks an empty ERP category list', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(360, 640));
@@ -694,16 +923,199 @@ void main() {
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
           ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),
       ),
     );
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('expense-category-retry')),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('expense-category-code')), findsOneWidget);
+    expect(find.byKey(const Key('expense-category-code')), findsNothing);
     expect(find.byKey(const Key('expense-category')), findsNothing);
+    expect(
+      find.textContaining('No expense categories are available.'),
+      findsOneWidget,
+    );
+    final addExpense = tester.widget<OutlinedButton>(
+      find.byKey(const Key('add-expense-line')),
+    );
+    expect(addExpense.onPressed, isNull);
+  });
+
+  testWidgets('new expense request retries unavailable categories', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var categoryLoads = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          expenseCategoriesProvider.overrideWith((ref) async {
+            categoryLoads += 1;
+            if (categoryLoads == 1) {
+              throw StateError('ERP unavailable');
+            }
+            return const [
+              ExpenseCategory(categoryCode: 'FUEL', categoryName: 'Fuel'),
+            ];
+          }),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
+        ],
+        child: const MaterialApp(home: NewExpenseRequestScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Could not load expense categories.'), findsOneWidget);
+    expect(find.byKey(const Key('expense-category')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('expense-category-retry')));
+    await tester.pumpAndSettle();
+
+    expect(categoryLoads, 2);
+    expect(find.byKey(const Key('expense-category')), findsOneWidget);
+    expect(find.text('Could not load expense categories.'), findsNothing);
+  });
+
+  testWidgets('new expense request retries unavailable approver context', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var contextLoads = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          expenseCategoriesProvider.overrideWith(
+            (ref) async => const [
+              ExpenseCategory(categoryCode: 'FUEL', categoryName: 'Fuel'),
+            ],
+          ),
+          expenseFormContextProvider.overrideWith((ref) async {
+            contextLoads += 1;
+            if (contextLoads == 1) {
+              throw StateError('ERP unavailable');
+            }
+            return _testFormContext;
+          }),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
+        ],
+        child: const MaterialApp(home: NewExpenseRequestScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Could not load expense approvers and payment details.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('expense-approver')), findsNothing);
+
+    await tester.ensureVisible(find.byKey(const Key('expense-category')));
+    await tester.tap(find.byKey(const Key('expense-category')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuel').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('expense-description')),
+      'Generator fuel',
+    );
+    await tester.enterText(find.byKey(const Key('expense-amount')), '5000');
+    await tester.tap(find.byKey(const Key('add-expense-line')));
+    await tester.pump();
+    expect(find.text('Total NGN 5000.00'), findsOneWidget);
+
+    expect(
+      tester
+          .widget<PrimaryActionButton>(
+            find.byKey(const Key('submit-expense-request')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('save-expense-draft')))
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(find.byKey(const Key('expense-form-context-retry')));
+    await tester.pumpAndSettle();
+
+    expect(contextLoads, 2);
+    expect(find.byKey(const Key('expense-approver')), findsOneWidget);
+    expect(
+      find.text('Could not load expense approvers and payment details.'),
+      findsNothing,
+    );
+  });
+
+  testWidgets('new expense request explains when no approver is eligible', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          expenseCategoriesProvider.overrideWith(
+            (ref) async => const [
+              ExpenseCategory(categoryCode: 'FUEL', categoryName: 'Fuel'),
+            ],
+          ),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => const ExpenseFormContext(
+              approvers: [],
+              banks: [],
+              profileDestination: ExpenseProfileDestination(available: false),
+            ),
+          ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
+        ],
+        child: const MaterialApp(home: NewExpenseRequestScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('No eligible expense approvers are available.'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('No payment destination is available.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('expense-approver')), findsNothing);
+    expect(
+      tester
+          .widget<PrimaryActionButton>(
+            find.byKey(const Key('submit-expense-request')),
+          )
+          .onPressed,
+      isNull,
+    );
   });
 
   testWidgets(
@@ -732,10 +1144,22 @@ void main() {
             expenseFormContextProvider.overrideWith(
               (ref) async => _testFormContext,
             ),
+            allAssignedJobsProvider.overrideWith(
+              (ref) async => _testAssignedJobs(),
+            ),
           ],
           child: const MaterialApp(home: NewExpenseRequestScreen()),
         ),
       );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('expense-work-order')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('expense-work-order-search')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView), const Offset(0, -700));
       await tester.pumpAndSettle();
@@ -767,6 +1191,9 @@ void main() {
           expenseFormContextProvider.overrideWith(
             (ref) async => _testFormContext,
           ),
+          allAssignedJobsProvider.overrideWith(
+            (ref) async => _testAssignedJobs(),
+          ),
         ],
         child: const MaterialApp(home: NewExpenseRequestScreen()),
       ),
@@ -782,6 +1209,7 @@ void main() {
       'Diesel',
     );
     await tester.enterText(find.byKey(const Key('expense-amount')), '5000');
+    await tester.ensureVisible(find.byKey(const Key('add-expense-line')));
     await tester.tap(find.byKey(const Key('add-expense-line')));
     await tester.pump();
 
@@ -791,6 +1219,7 @@ void main() {
       find.byKey(const Key('expense-receipt-url')),
       'https://receipts.test/fuel.jpg',
     );
+    await tester.ensureVisible(find.byKey(const Key('add-expense-line')));
     await tester.tap(find.byKey(const Key('add-expense-line')));
     await tester.pump();
 

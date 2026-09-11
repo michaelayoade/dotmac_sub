@@ -564,7 +564,13 @@ def search_guidance(
 
 
 def guidance_categories() -> tuple[str, ...]:
-    return tuple(sorted({guide.category for guide in WORKFLOW_GUIDANCE}))
+    categories = {guide.category for guide in WORKFLOW_GUIDANCE}
+    return tuple(
+        sorted(
+            categories,
+            key=lambda category: (category != "Getting started", category.casefold()),
+        )
+    )
 
 
 def all_guidance() -> Iterable[AdminWorkflowGuidance]:
