@@ -86,7 +86,7 @@ def test_a_trailing_comma_document_is_refused_by_this_validator() -> None:
     A synthetic document shaped exactly like ruff-format's known output
     (a trailing comma before the closing brace) must fail json.load."""
     trailing_comma_pseudo_json = (
-        '{\n  "schema_version": "dimensional-composition.v2",\n}\n'
+        '{\n  "schema_version": "dimensional-composition.v3",\n}\n'
     )
     with pytest.raises(json.JSONDecodeError):
         json.loads(trailing_comma_pseudo_json)
