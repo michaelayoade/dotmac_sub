@@ -212,6 +212,11 @@ jobs:
       # leave that step with no files to open at all.
       - uses: actions/checkout@v4
 
+      - name: Verify Kernel composition observations
+        uses: michaelayoade/dotmac_starter_mt/.github/actions/verify-composition-observations@fff94e88c792573adbc58b7e632174a455d1c67c
+        with:
+          product: sub
+
       - uses: ./.github/actions/setup-ci-python
         if: needs.changes.outputs.docs-only != 'true'
         with:
