@@ -45,7 +45,12 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: `sessionmaker`, mirroring the file's existing test fixture pattern.
 #: +2 from tests/integration/test_auth_session_refresh_concurrency.py: the
 #: setup/verification factory and two concurrent owner-command sessions.
-TEST_FIXTURE_BASELINE_TOTAL = 119
+#: +1 from tests/integration/test_tr069_active_cpe_identity_concurrency.py:
+#: a concurrent-write proof for migration 595_active_cpe_identity's new
+#: partial unique index (two sessions racing to activate the same
+#: cpe_device_id), reviewed test-fixture authorship for the CPE identity
+#: cardinality program.
+TEST_FIXTURE_BASELINE_TOTAL = 120
 
 
 def _baseline() -> dict[str, int]:

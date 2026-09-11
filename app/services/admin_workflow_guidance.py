@@ -276,6 +276,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "cpe-detail-wifi-actions",
+        "Network and access",
+        "Change WiFi SSID or password from a CPE's detail page",
+        "NOC, field operations",
+        "Update the WiFi SSID or password for the ONT behind a specific CPE inventory record, from that CPE's own detail page.",
+        ("/admin/network/cpes",),
+        "This action resolves the exact, currently active TR-069 identity for this one CPE record, then routes the change through the same owner as the ONT Configure tab — it never writes to the device directly.",
+        "It will refuse, with a specific reason, if the CPE has no linked ONT, the ONT has no active service assignment, or more than one TR-069 identity or assignment is active for it at once — do not treat that as a bug; it means the identity is ambiguous and needs review before a WiFi change can be trusted.",
+        "You need both network:cpe:write and network:ont:write to use this action — it exists because the change is actually applied by the ONT owner, not the CPE record itself.",
+        "Unchanged WiFi fields (channel, security mode, on/off) are carried forward from the ONT's current settings automatically; you do not need to re-enter them.",
+        notes=(
+            "A refusal naming a missing or ambiguous identity is not something to retry blindly — check Network Explorer's assignment-drift review queue and the CPE's TR-069 link before trying again.",
+            "This is the same durable, tracked delivery path as the ONT Configure tab's WiFi actions: the change is saved and applied at the device's next check-in through the normal reconcile lifecycle, not written to the device from this page directly.",
+        ),
+    ),
+    _guide(
         "work-order-expenses",
         "Operations",
         "Record a work-order expense",
