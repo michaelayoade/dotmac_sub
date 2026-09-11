@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
 
 
-def _page_context(request: Request, db: Session, customer: dict) -> dict:
+def _page_context(
+    request: Request, db: Session, customer: dict, *, biodata_required: bool = False
+) -> dict:
     context = location_service.get_customer_location_page_context(db, customer)
     context.update(
         {
@@ -34,6 +36,7 @@ def _page_context(request: Request, db: Session, customer: dict) -> dict:
             "active_page": "location",
             "form_error": None,
             "form_note": "",
+            "biodata_required": biodata_required,
         }
     )
     return context
@@ -49,7 +52,12 @@ def customer_location_page(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/location", status_code=303
         )
-    context = _page_context(request, db, customer)
+    context = _page_context(
+        request,
+        db,
+        customer,
+        biodata_required=request.query_params.get("biodata_required") == "1",
+    )
     return templates.TemplateResponse("customer/location/index.html", context)
 
 
@@ -117,7 +125,7 @@ def customer_location_submit(
                 and not completion.complete
             ):
                 return RedirectResponse(
-                    url="/portal/profile?biodata_required=1", status_code=303
+                    url="/portal/location?saved=1&biodata_required=1", status_code=303
                 )
     except Exception as exc:
         db.rollback()

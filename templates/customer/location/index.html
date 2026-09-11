@@ -16,6 +16,15 @@
     {% set success = "Your service address and map pin were saved." %}
     {% include "components/feedback/form_success.html" %}
     {% endif %}
+    {% if biodata_required %}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="location-biodata-dialog-title" aria-describedby="location-biodata-dialog-description">
+        <div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-stone-900 sm:p-8">
+            <h2 id="location-biodata-dialog-title" class="text-xl font-bold text-stone-900 dark:text-white">Your biodata is incomplete</h2>
+            <p id="location-biodata-dialog-description" class="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-300">Your service location was saved. Please complete your date of birth, gender, and 11-digit NIN before continuing.</p>
+            <a href="/portal/profile?biodata_required=1" class="mt-7 inline-flex w-full items-center justify-center rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900">Complete biodata</a>
+        </div>
+    </div>
+    {% endif %}
     {% if form_error %}
     {% set error = form_error %}
     {% include "components/feedback/form_error.html" %}

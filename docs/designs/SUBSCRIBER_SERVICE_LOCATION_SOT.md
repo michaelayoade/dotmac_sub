@@ -139,7 +139,7 @@ customer can complete the action and support staff can recover accounts.
 
 After the canonical service location is saved, residential customers are checked
 for date of birth, gender, and NIN. If any value is missing or invalid, the
-portal presents a blocking biodata dialog with a button to /portal/profile.
+portal returns to the location page with a blocking biodata dialog and a button to /portal/profile.
 The profile owner validates the values server-side: DOB must be a valid
 non-future date, gender cannot be unknown, and NIN must contain exactly 11
 ASCII digits. Business, government, and NGO subscriber categories are not
