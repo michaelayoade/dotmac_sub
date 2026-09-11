@@ -119,16 +119,23 @@ adoption remains blocked until the opening is captured; deployment alone never
 repairs the invoice.
 
 The owner separately repairs an already-paid unlinked document only when the
-operator supplies the exact invoice/subscription pair and the current snapshot
-proves one positive line, one active full-value allocation, one successful
-unreturned settlement, canonical taxed contract-charge equality, no credit-note
-funding, and no overlapping entitlement or competing document. The Payment may
-fund other invoices; the selected allocation alone must exactly equal this
-invoice total. The settlement instant determines the WAT service period. If an
-older subscription anchor is one boundary later on that same WAT service-start
-business date, the repair may use that anchor only when the invoice due instant
-exactly matches the next cadence boundary; otherwise the anchor remains manual
-review.
+operator supplies the exact invoice/subscription pair. A mixed invoice also
+requires the exact positive unlinked service-line identifier; omission keeps
+mixed documents in manual review and automatic repair never guesses a line.
+The current snapshot must prove one active full-value allocation, one successful
+unreturned settlement, canonical taxed contract-charge equality for every
+integer service period represented by the selected line quantity, internally
+exact undiscounted document totals, no credit-note funding, and no overlapping
+entitlement or competing document. Unselected installation or other
+non-subscription lines remain untouched. The Payment may fund other invoices;
+the selected allocation alone must exactly equal this invoice total. The
+settlement instant determines the WAT service-period start, and the selected
+line quantity advances the contracted cadence to the coverage end. An anchor
+inside proven multi-period coverage is stale and may be advanced to that end.
+For a single-period repair, an older anchor one boundary later on the same WAT
+service-start business date remains acceptable only when the invoice due
+instant exactly matches the next cadence boundary; otherwise the anchor remains
+manual review.
 
 Confirmation posts no money and never changes invoice status, balance, total,
 or allocation. A flush-only invoice participant writes missing line and period
@@ -305,18 +312,24 @@ operator-chosen service date:
 poetry run python -m scripts.billing.reconcile_prepaid_drafts \
   --repair-paid-invoice \
   --invoice-id INVOICE_UUID \
-  --subscription-id SUBSCRIPTION_UUID
+  --subscription-id SUBSCRIPTION_UUID \
+  --line-id SERVICE_LINE_UUID
 
 poetry run python -m scripts.billing.reconcile_prepaid_drafts \
   --repair-paid-invoice \
   --apply \
   --invoice-id INVOICE_UUID \
   --subscription-id SUBSCRIPTION_UUID \
+  --line-id SERVICE_LINE_UUID \
   --fingerprint REVIEWED_SHA256 \
   --idempotency-key paid-prepaid-invoice-INVOICE_UUID-v1 \
   --actor operator@example.com \
   --reason "Reviewed exact paid invoice, allocation, and settlement evidence"
 ```
+
+`--line-id` is optional for the legacy one-positive-line shape and mandatory in
+practice for a mixed invoice. The dry-run response reports
+`service_period_count`; review its WAT start/end before applying.
 
 For a completely missing document, preview the exact entity and reviewed
 outcome first. Apply repeats every argument and requires the returned

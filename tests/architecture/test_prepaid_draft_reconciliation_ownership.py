@@ -162,6 +162,7 @@ def test_reconciliation_cli_is_dry_run_first():
     assert "read_session()" in source
     assert 'parser.add_argument("--adopt-proforma", action="store_true")' in source
     assert 'parser.add_argument("--subscription-id", type=_uuid)' in source
+    assert 'parser.add_argument("--line-id", type=_uuid)' in source
     assert 'parser.add_argument("--repair-paid-invoice", action="store_true")' in source
     assert (
         'parser.add_argument("--repair-missing-paid-invoice", action="store_true")'

@@ -2282,6 +2282,18 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   prepaid settlement path may still correct the documentary period from the typed WAT
   resolver, but its resulting anchor now goes through the canonical locked
   writer and cannot become a parallel mutation path.
+- Historical paid prepaid document repair boundary:
+  `financial.prepaid_draft_reconciliation` accepts an operator-selected invoice,
+  subscription, and, for a mixed document, exact positive unlinked service line.
+  Automatic repair never selects among mixed lines. The chosen line's integral
+  quantity is the number of contracted billing periods funded from the sole
+  full-value settlement allocation; its unit price, tax identity, currency, and
+  undiscounted document totals must match canonical renewal evidence exactly.
+  The WAT settlement date owns the coverage start and the multiplied contracted
+  cadence owns the end. The invoice participant links only that service line,
+  leaving installation and other unrelated lines unchanged, and the entitlement
+  projection advances an anchor inside proven multi-period coverage to the
+  coverage end with zero economic delta.
 - Prepaid-draft duplicate boundary:
   `financial.prepaid_draft_reconciliation` remains the only classifier when a
   draft cycle overlaps funded entitlement. Besides the existing strict

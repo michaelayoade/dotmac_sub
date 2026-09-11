@@ -178,6 +178,7 @@ def _paid_invoice_repair_preview_payload(preview) -> dict[str, object]:
         "currency": preview.currency,
         "invoice_total": str(preview.invoice_total),
         "allocated_amount": str(preview.allocated_amount),
+        "service_period_count": preview.service_period_count,
         "actionable": preview.actionable,
         "reason": preview.reason,
         "fingerprint": preview.fingerprint,
@@ -254,6 +255,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--invoice-id", type=_uuid)
     parser.add_argument("--subscription-id", type=_uuid)
+    parser.add_argument("--line-id", type=_uuid)
     parser.add_argument("--account-id", type=_uuid)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--adopt-proforma", action="store_true")
@@ -311,6 +313,10 @@ def main() -> int:
             "--allocation-id and --expected-confirmed-balance require "
             "--repair-opening-settlement"
         )
+    if args.line_id is not None and not args.repair_paid_invoice:
+        parser.error("--line-id requires --repair-paid-invoice")
+    if args.line_id is not None and args.invoice_id is None:
+        parser.error("--line-id requires a single --invoice-id")
     if args.repair_opening_settlement and (
         args.invoice_id is None
         or args.allocation_id is None
@@ -462,6 +468,7 @@ def main() -> int:
                         invoice_id=args.invoice_id,
                         subscription_id=args.subscription_id,
                         preview_fingerprint=args.fingerprint,
+                        line_id=args.line_id,
                     ),
                 )
             else:
@@ -683,6 +690,7 @@ def main() -> int:
                 PaidPrepaidInvoiceRepairQuery(
                     invoice_id=args.invoice_id,
                     subscription_id=args.subscription_id,
+                    line_id=args.line_id,
                 ),
             )
             payload = {

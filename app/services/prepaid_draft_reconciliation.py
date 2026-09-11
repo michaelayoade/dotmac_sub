@@ -15,8 +15,8 @@ repair:
   charging the customer again.
 
 Automatic mixed-source discovery creates a durable operator exception.
-Insufficient funding, legacy/unbacked credit, multiple drafts, mixed invoices,
-and ambiguous coverage otherwise remain unchanged and fail closed.
+Insufficient funding, legacy/unbacked credit, multiple drafts, unreviewed mixed
+invoices, and ambiguous coverage otherwise remain unchanged and fail closed.
 """
 
 from __future__ import annotations
@@ -410,6 +410,7 @@ class PrepaidProformaAdoptionResult:
 class PaidPrepaidInvoiceRepairQuery:
     invoice_id: UUID
     subscription_id: UUID
+    line_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,6 +436,7 @@ class PaidPrepaidInvoiceRepairPreview:
     currency: str
     invoice_total: Decimal
     allocated_amount: Decimal
+    service_period_count: int | None
     reason: str
     fingerprint: str
 
@@ -452,6 +454,7 @@ class RepairHistoricalPaidPrepaidInvoiceCommand:
     invoice_id: UUID
     subscription_id: UUID
     preview_fingerprint: str
+    line_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +469,7 @@ class PaidPrepaidInvoiceRepairResult:
     access_consequence_id: UUID
     billing_period_start: datetime
     billing_period_end: datetime
+    service_period_count: int
     preview_fingerprint: str
     subscriptions_restored: int
     replayed: bool
@@ -1196,6 +1200,7 @@ def _build_paid_invoice_repair_preview(
     payment: Payment | None = None,
     period_start: datetime | None = None,
     period_end: datetime | None = None,
+    service_period_count: int | None = None,
 ) -> PaidPrepaidInvoiceRepairPreview:
     payload = {
         "invoice_id": invoice.id,
@@ -1249,6 +1254,7 @@ def _build_paid_invoice_repair_preview(
         "payment_updated_at": payment.updated_at if payment is not None else None,
         "period_start": period_start,
         "period_end": period_end,
+        "service_period_count": service_period_count,
         "disposition": disposition,
         "reason": reason,
     }
@@ -1276,6 +1282,7 @@ def _build_paid_invoice_repair_preview(
             if allocation is not None
             else Decimal("0.00")
         ),
+        service_period_count=service_period_count,
         reason=reason,
         fingerprint=_hash(payload),
     )
@@ -1293,13 +1300,19 @@ def _paid_invoice_repair_structural_evidence(
     *,
     invoice: Invoice,
     subscription_id: UUID,
+    line_id: UUID | None = None,
 ) -> _PaidPrepaidInvoiceRepairEvidence | None:
     """Resolve completed repair identity only through typed relationships."""
 
     if invoice.billing_period_start is None or invoice.billing_period_end is None:
         return None
-    lines = _active_positive_lines(db, invoice.id)
-    if len(lines) != 1 or lines[0].subscription_id != subscription_id:
+    lines = tuple(
+        line
+        for line in _active_positive_lines(db, invoice.id)
+        if subscription_id == line.subscription_id
+        and (line_id is None or line.id == line_id)
+    )
+    if len(lines) != 1:
         return None
     line = lines[0]
     allocations = tuple(
@@ -1366,6 +1379,7 @@ def preview_historical_paid_prepaid_invoice_repair(
         db,
         invoice=invoice,
         subscription_id=query.subscription_id,
+        line_id=query.line_id,
     )
     if repair_evidence is not None:
         return _build_paid_invoice_repair_preview(
@@ -1379,6 +1393,9 @@ def preview_historical_paid_prepaid_invoice_repair(
             payment=repair_evidence.payment,
             period_start=_utc(repair_evidence.entitlement.starts_at),
             period_end=_utc(repair_evidence.entitlement.ends_at),
+            service_period_count=_paid_invoice_repair_period_count(
+                repair_evidence.line.quantity
+            ),
         )
 
     if (
@@ -1399,13 +1416,20 @@ def preview_historical_paid_prepaid_invoice_repair(
         )
 
     lines = _active_positive_lines(db, invoice.id)
-    line = lines[0] if len(lines) == 1 else None
+    line = (
+        next((item for item in lines if item.id == query.line_id), None)
+        if query.line_id is not None
+        else (lines[0] if len(lines) == 1 else None)
+    )
     if line is None or line.subscription_id is not None:
         return _build_paid_invoice_repair_preview(
             invoice=invoice,
             subscription_id=query.subscription_id,
             disposition=PaidPrepaidInvoiceRepairDisposition.manual_review,
-            reason="repair requires one exact positive unlinked invoice line",
+            reason=(
+                "repair requires the exact positive unlinked invoice line; "
+                "mixed invoices require an explicit line_id"
+            ),
             line=line,
         )
 
@@ -1500,26 +1524,54 @@ def preview_historical_paid_prepaid_invoice_repair(
 
     from app.services.prepaid_service_renewals import (
         PrepaidSettlementPeriodQuery,
-        resolve_prepaid_monthly_charge,
+        resolve_prepaid_monthly_charge_detail,
         resolve_prepaid_settlement_period,
     )
 
-    resolved_charge = resolve_prepaid_monthly_charge(db, subscription, payment.paid_at)
+    resolved_charge = resolve_prepaid_monthly_charge_detail(
+        db, subscription, payment.paid_at
+    )
+    service_period_count = _paid_invoice_repair_period_count(line.quantity)
     contracted_price = round_money(to_decimal(subscription.unit_price))
     line_amount = round_money(to_decimal(line.amount))
     invoice_subtotal = round_money(to_decimal(invoice.subtotal))
     invoice_tax = round_money(to_decimal(invoice.tax_total))
+    active_line_total = round_money(
+        sum((to_decimal(item.amount) for item in lines), Decimal("0.00"))
+    )
+    expected_line_amount = (
+        round_money(resolved_charge.unit_price * service_period_count)
+        if resolved_charge is not None and service_period_count is not None
+        else Decimal("0.00")
+    )
+    expected_line_tax = (
+        round_money(resolved_charge.tax_total * service_period_count)
+        if resolved_charge is not None and service_period_count is not None
+        else Decimal("0.00")
+    )
+    line_tax_matches = bool(
+        resolved_charge is not None
+        and line.tax_application is resolved_charge.tax_application
+        and (
+            line.tax_rate_id == resolved_charge.tax_rate_id
+            or (len(lines) == 1 and line.tax_rate_id is None)
+        )
+    )
     if (
         resolved_charge is None
-        or resolved_charge[0] != invoice_total
-        or resolved_charge[1].upper() != invoice_currency
+        or service_period_count is None
+        or resolved_charge.currency.upper() != invoice_currency
         or contracted_price <= Decimal("0.00")
-        or round_money(to_decimal(line.quantity)) != Decimal("1.00")
         or round_money(to_decimal(line.unit_price)) != contracted_price
-        or line_amount != contracted_price
-        or invoice_subtotal != line_amount
-        or invoice_tax < Decimal("0.00")
+        or resolved_charge.unit_price != contracted_price
+        or line_amount != expected_line_amount
+        or not line_tax_matches
+        or round_money(to_decimal(invoice.discount_amount)) != Decimal("0.00")
+        or active_line_total != invoice_subtotal
+        or invoice_subtotal < resolved_charge.subtotal * service_period_count
+        or invoice_tax < expected_line_tax
         or round_money(invoice_subtotal + invoice_tax) != invoice_total
+        or invoice_total < round_money(resolved_charge.total * service_period_count)
     ):
         return _build_paid_invoice_repair_preview(
             invoice=invoice,
@@ -1532,12 +1584,17 @@ def preview_historical_paid_prepaid_invoice_repair(
             payment=payment,
         )
 
-    cycle = resolved_charge[2]
+    cycle = resolved_charge.billing_cycle
     period = resolve_prepaid_settlement_period(
         PrepaidSettlementPeriodQuery(
             effective_at=payment.paid_at,
             billing_cycle=cycle,
         )
+    )
+    period = _paid_invoice_repair_period_for_count(
+        settlement_period=period,
+        billing_cycle=cycle,
+        service_period_count=service_period_count,
     )
     current_anchor = (
         _utc(subscription.next_billing_at)
@@ -1552,7 +1609,11 @@ def preview_historical_paid_prepaid_invoice_repair(
     )
     if anchor_period is not None:
         period = anchor_period
-    stale_anchor = current_anchor is None or current_anchor <= period.starts_at
+    stale_anchor = (
+        current_anchor is None
+        or current_anchor <= period.starts_at
+        or (service_period_count > 1 and current_anchor < period.ends_at)
+    )
     if not stale_anchor:
         return _build_paid_invoice_repair_preview(
             invoice=invoice,
@@ -1568,6 +1629,7 @@ def preview_historical_paid_prepaid_invoice_repair(
             payment=payment,
             period_start=period.starts_at,
             period_end=period.ends_at,
+            service_period_count=service_period_count,
         )
 
     existing_entitlements = tuple(
@@ -1615,6 +1677,7 @@ def preview_historical_paid_prepaid_invoice_repair(
             payment=payment,
             period_start=period.starts_at,
             period_end=period.ends_at,
+            service_period_count=service_period_count,
         )
 
     return _build_paid_invoice_repair_preview(
@@ -1630,6 +1693,7 @@ def preview_historical_paid_prepaid_invoice_repair(
         payment=payment,
         period_start=period.starts_at,
         period_end=period.ends_at,
+        service_period_count=service_period_count,
     )
 
 
@@ -1648,6 +1712,61 @@ _PAID_INVOICE_REPAIR_CYCLE_INTERVALS: dict[BillingCycle, tuple[IntervalUnit, int
     BillingCycle.quarterly: (IntervalUnit.month, 3),
     BillingCycle.annual: (IntervalUnit.year, 1),
 }
+_MAX_REVIEWED_PAID_INVOICE_PERIODS = 120
+
+
+def _paid_invoice_repair_period_count(quantity: Decimal) -> int | None:
+    normalized = to_decimal(quantity)
+    integral = normalized.to_integral_value()
+    if (
+        normalized != integral
+        or integral < 1
+        or integral > _MAX_REVIEWED_PAID_INVOICE_PERIODS
+    ):
+        return None
+    return int(integral)
+
+
+def _paid_invoice_repair_period_for_count(
+    *,
+    settlement_period: PrepaidSettlementPeriod,
+    billing_cycle: BillingCycle,
+    service_period_count: int,
+) -> PrepaidSettlementPeriod:
+    if service_period_count == 1:
+        return settlement_period
+    interval_spec = _PAID_INVOICE_REPAIR_CYCLE_INTERVALS.get(billing_cycle)
+    if interval_spec is None:
+        return settlement_period
+    interval_unit, interval_count = interval_spec
+    cadence = BillingCadence(
+        rate_basis=RateBasis.fixed_per_service_period,
+        rate_unit=interval_unit,
+        rate_quantity=Decimal("1"),
+        service_interval_unit=interval_unit,
+        service_interval_count=interval_count * service_period_count,
+        invoice_interval_unit=interval_unit,
+        invoice_interval_count=interval_count * service_period_count,
+        collection_timing=CollectionTiming.advance,
+        alignment=CadenceAlignment.contract_anniversary,
+        timezone_name=settlement_period.timezone_name,
+        end_of_month_rule=EndOfMonthRule.clamp_to_month_end,
+        proration_policy=ProrationPolicy.none,
+    )
+    interval = service_period(
+        cadence=cadence,
+        contract_start=settlement_period.starts_at,
+    )
+    zone = ZoneInfo(settlement_period.timezone_name)
+    starts_at = interval.starts_at.astimezone(UTC)
+    ends_at = interval.ends_at.astimezone(UTC)
+    return replace(
+        settlement_period,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        starts_on=starts_at.astimezone(zone).date(),
+        ends_on=ends_at.astimezone(zone).date(),
+    )
 
 
 def _paid_invoice_repair_period_from_current_anchor(
@@ -4017,6 +4136,7 @@ def _replay_paid_invoice_repair_result(
         db,
         invoice=invoice,
         subscription_id=command.subscription_id,
+        line_id=command.line_id,
     )
     consequence = db.scalar(
         select(FinancialAccessConsequence).where(
@@ -4056,6 +4176,9 @@ def _replay_paid_invoice_repair_result(
         access_consequence_id=consequence.id,
         billing_period_start=_utc(invoice.billing_period_start),
         billing_period_end=_utc(invoice.billing_period_end),
+        service_period_count=(
+            _paid_invoice_repair_period_count(evidence.line.quantity) or 1
+        ),
         preview_fingerprint=original_fingerprint,
         subscriptions_restored=subscriptions_restored,
         replayed=True,
@@ -4187,6 +4310,7 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
         "settlement_effective_at": current.settlement_effective_at.isoformat(),
         "billing_period_start": current.billing_period_start.isoformat(),
         "billing_period_end": current.billing_period_end.isoformat(),
+        "service_period_count": current.service_period_count,
         "preview_fingerprint": current.fingerprint,
         "idempotency_key": idempotency_key,
         "repaired_at": datetime.now(UTC).isoformat(),
@@ -4214,6 +4338,7 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
                 "subscriptions_restored": restoration.subscriptions_changed,
                 "billing_period_start": current.billing_period_start.isoformat(),
                 "billing_period_end": current.billing_period_end.isoformat(),
+                "service_period_count": current.service_period_count,
                 "preview_fingerprint": current.fingerprint,
                 "economic_delta": "0.00",
             },
@@ -4235,6 +4360,7 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
             "subscriptions_restored": restoration.subscriptions_changed,
             "billing_period_start": current.billing_period_start.isoformat(),
             "billing_period_end": current.billing_period_end.isoformat(),
+            "service_period_count": current.service_period_count,
             "currency": current.currency,
             "invoice_total": str(current.invoice_total),
             "economic_delta": "0.00",
@@ -4255,6 +4381,7 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
         access_consequence_id=restoration.consequence.id,
         billing_period_start=current.billing_period_start,
         billing_period_end=current.billing_period_end,
+        service_period_count=current.service_period_count or 1,
         preview_fingerprint=current.fingerprint,
         subscriptions_restored=restoration.subscriptions_changed,
         replayed=False,
@@ -4574,6 +4701,7 @@ def repair_historical_paid_prepaid_invoice(
             PaidPrepaidInvoiceRepairQuery(
                 invoice_id=command.invoice_id,
                 subscription_id=command.subscription_id,
+                line_id=command.line_id,
             ),
         )
         if current.fingerprint != command.preview_fingerprint:
