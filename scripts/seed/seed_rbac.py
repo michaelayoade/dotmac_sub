@@ -120,6 +120,11 @@ DEFAULT_PERMISSIONS = [
         "billing:reconciliation:write",
         "Confirm reviewed billing reconciliation corrections",
     ),
+    (
+        "billing:prepaid_reconciliation:repair",
+        "Repair one exact already-paid prepaid invoice's identity and coverage "
+        "after reviewed evidence",
+    ),
     # Billing - Credit Notes
     ("billing:extension:read", "View service extensions"),
     ("billing:extension:create", "Create service extensions"),

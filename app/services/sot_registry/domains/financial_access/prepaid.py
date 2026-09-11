@@ -2204,6 +2204,7 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         depends_on=(
             "access.subscription_lifecycle",
+            "auth.permission_gate",
             "financial.account_credit_applications",
             "financial.dunning",
             "financial.invoices",
@@ -2299,6 +2300,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RECONCILER,
                     input_names=(
                         "reviewed reconciliation command",
+                        "reviewed historical paid-invoice repair command",
                         "canonical paid prepaid document gap",
                         "canonical prepaid subscription contract",
                         "canonical paid invoice allocation evidence",
@@ -2390,6 +2392,18 @@ SERVICES: tuple[SOTService, ...] = (
                         "or exact account, subscription, payment, business "
                         "dates, total, remaining-credit expectation, actor, reason, command, "
                         "correlation, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed historical paid-invoice repair command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against a named staff principal's granted roles, exact "
+                        "preview fingerprint, invoice, subscription, and optional "
+                        "line identity, actor, reason, command, correlation, and "
+                        "idempotency evidence"
                     ),
                 ),
                 AuthorityInput(
@@ -2602,6 +2616,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_draft_reconciliation.idempotency_conflict",
                     "financial.prepaid_draft_reconciliation.stale_preview",
                     "financial.prepaid_draft_reconciliation.not_actionable",
+                    "financial.prepaid_draft_reconciliation.permission_denied",
                     "financial.prepaid_draft_reconciliation.participant_rejected",
                     "financial.prepaid_draft_reconciliation.incomplete_repair",
                     "financial.prepaid_draft_reconciliation.opening_funding_unavailable",
@@ -2619,6 +2634,13 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 retryable_codes=(),
                 fail_closed_on=(
+                    "specifically the historical paid-invoice repair command "
+                    "(not the sibling proforma-adoption, missing-invoice-repair, "
+                    "opening-settlement-correction, or stranded-draft "
+                    "reconciliation commands, which remain ungated) when its "
+                    "caller-checked billing:prepaid_reconciliation:repair "
+                    "permission evidence is missing or its declared scope does "
+                    "not match it",
                     "any funding shortfall including NGN 0.50",
                     "unbacked account credit crossing the active reviewed "
                     "opening-position boundary, or any unbacked account "

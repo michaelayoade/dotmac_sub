@@ -148,6 +148,15 @@ from app.timezone import APP_TIMEZONE_NAME
 if TYPE_CHECKING:
     from app.services.prepaid_service_renewals import PrepaidSettlementPeriod
 
+# The permission an operator must hold before the CLI may repair one exact
+# already-paid, periodless prepaid invoice. Real access control lives at the
+# actual invocation boundary (the operator CLI resolves a named staff
+# principal's granted roles via ``has_permission`` and passes the result as
+# ``RepairHistoricalPaidPrepaidInvoiceCommand.permission_granted``); this
+# owner only refuses when that caller-checked evidence is missing, matching
+# ``network.ont_service_configuration``'s ``permission_granted`` contract.
+REPAIR_SCOPE = "billing:prepaid_reconciliation:repair"
+
 _OWNER = "financial.prepaid_draft_reconciliation"
 _CONCERN = "stranded prepaid draft invoice reconciliation"
 _COMMAND = OwnerCommandDefinition(
@@ -454,7 +463,13 @@ class RepairHistoricalPaidPrepaidInvoiceCommand:
     invoice_id: UUID
     subscription_id: UUID
     preview_fingerprint: str
+    permission_granted: bool
     line_id: UUID | None = None
+    # The real staff principal whose granted role authorized
+    # ``permission_granted``. ``context.actor`` stays a free-text audit
+    # label; this is the only identifier with actual RBAC meaning, so it is
+    # recorded alongside it in the invoice metadata and audit event.
+    actor_system_user_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -4192,6 +4207,7 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
     actor: str,
     idempotency_key: str,
     command_context: CommandContext | None,
+    actor_system_user_id: UUID | None = None,
 ) -> PaidPrepaidInvoiceRepairResult:
     if (
         current.line_id is None
@@ -4315,6 +4331,9 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
         "idempotency_key": idempotency_key,
         "repaired_at": datetime.now(UTC).isoformat(),
         "actor": actor,
+        "actor_system_user_id": (
+            str(actor_system_user_id) if actor_system_user_id is not None else None
+        ),
     }
     if command_context is not None:
         metadata[_PAID_INVOICE_REPAIR_METADATA_KEY]["command_id"] = str(
@@ -4341,6 +4360,11 @@ def _stage_paid_prepaid_invoice_repair_from_preview(
                 "service_period_count": current.service_period_count,
                 "preview_fingerprint": current.fingerprint,
                 "economic_delta": "0.00",
+                "actor_system_user_id": (
+                    str(actor_system_user_id)
+                    if actor_system_user_id is not None
+                    else None
+                ),
             },
         ),
     )
@@ -4620,6 +4644,11 @@ def repair_historical_paid_prepaid_invoice(
     """Repair one exact already-paid prepaid invoice and its access projection."""
 
     def operation() -> PaidPrepaidInvoiceRepairResult:
+        if command.context.scope != REPAIR_SCOPE or not command.permission_granted:
+            _error(
+                "permission_denied",
+                f"Historical paid-invoice repair requires {REPAIR_SCOPE}.",
+            )
         key = (command.context.idempotency_key or "").strip()
         if not key or len(key) > 120:
             _error("missing_idempotency_key", "A bounded idempotency key is required.")
@@ -4738,6 +4767,7 @@ def repair_historical_paid_prepaid_invoice(
             actor=command.context.actor,
             idempotency_key=key,
             command_context=command.context,
+            actor_system_user_id=command.actor_system_user_id,
         )
 
     return execute_owner_command(
@@ -5607,6 +5637,7 @@ __all__ = [
     "PrepaidProformaAdoptionPreview",
     "PrepaidProformaAdoptionQuery",
     "PrepaidProformaAdoptionResult",
+    "REPAIR_SCOPE",
     "ReconcilePrepaidDraftCommand",
     "ReconcileOpeningSettlementCorrectionCommand",
     "RepairHistoricalPaidPrepaidInvoiceCommand",
