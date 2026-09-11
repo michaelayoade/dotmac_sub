@@ -12,6 +12,7 @@
 {% set usage_notifications_enabled = notification_meta.get('usage_notifications', True) %}
 {% set general_notifications_enabled = notification_meta.get('general_notifications', True) %}
 {% set nin_locked = subscriber and subscriber.metadata_ and subscriber.metadata_.get('nin_verified') %}
+{% set individual_customer = subscriber and subscriber.category and subscriber.category.value == 'residential' %}
 {% set masked_nin = (subscriber.nin[:6] ~ ('*' * (subscriber.nin|length - 6))) if subscriber and subscriber.nin and subscriber.nin|length > 6 else (subscriber.nin if subscriber and subscriber.nin else '') %}
 <div class="space-y-8">
     <!-- Page Header -->
@@ -154,7 +155,7 @@
                     </div>
                     <div>
                         <label class="{{ _lbl }}">National Identification Number</label>
-                        <input type="text" name="nin" inputmode="numeric" minlength="11" maxlength="11" pattern="[0-9]{11}"{% if not nin_locked %} required{% endif %}
+                        <input type="text" name="nin" inputmode="numeric" minlength="11" maxlength="11" pattern="[0-9]{11}"{% if individual_customer and not nin_locked %} required{% endif %}
                                value="{{ '' if nin_locked else (subscriber.nin if subscriber and subscriber.nin else '') }}"
                                {% if nin_locked %}placeholder="{{ masked_nin }}" readonly{% endif %}
                                class="{{ _inp }}">
@@ -168,13 +169,13 @@
                     </div>
                     <div>
                         <label class="{{ _lbl }}">Date of Birth</label>
-                        <input type="date" name="date_of_birth" required
+                        <input type="date" name="date_of_birth"{% if individual_customer %} required{% endif %}
                                value="{{ subscriber.date_of_birth.isoformat() if subscriber and subscriber.date_of_birth else '' }}" class="{{ _inp }}">
                     </div>
                     <div>
                         <label class="{{ _lbl }}">Gender</label>
                         {% set _g = subscriber.gender.value if subscriber and subscriber.gender else 'unknown' %}
-                        <select name="gender" required class="{{ _inp }}">
+                        <select name="gender"{% if individual_customer %} required{% endif %} class="{{ _inp }}">
                             <option value="unknown" {{ 'selected' if _g == 'unknown' }}>Prefer not to say</option>
                             <option value="female" {{ 'selected' if _g == 'female' }}>Female</option>
                             <option value="male" {{ 'selected' if _g == 'male' }}>Male</option>
