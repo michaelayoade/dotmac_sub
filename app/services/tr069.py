@@ -524,7 +524,7 @@ def _trigger_acs_cr_failure_readback_after_inform(
             VerifyOntServiceConfigurationReadbackCommand(
                 context=CommandContext.system(
                     actor="system:tr069_inform_handler",
-                    scope="network:ont:execute",
+                    scope="network:ont:write",
                     reason=(
                         "Automatic readback verification after a fresh ACS "
                         "Inform following a queued-but-CR-failed delivery"
