@@ -95,6 +95,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
     )
     assert sot_relationships.dependencies_for("sales.orders") == (
+        "financial.billing_tax_resolution",
         "sales.service",
         "sales.lead_lifecycle",
         "sales.fulfillment",

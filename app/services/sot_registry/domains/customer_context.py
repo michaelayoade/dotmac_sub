@@ -47,7 +47,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="customer.canonical_profile_patch",
-            module="app.services.subscriber",
+            module="app.services.customer_canonical_profile_patch",
             owns=("typed transaction-neutral canonical Customer profile patches",),
             depends_on=(
                 "customer.accounts",

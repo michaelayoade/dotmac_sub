@@ -67,6 +67,9 @@ def _staff_member(db_session, team: ServiceTeam) -> SystemUser:
         email=f"ticket-staff-{uuid.uuid4().hex}@example.com",
         is_active=True,
         person_party_id=party.id,
+        party_bound_at=datetime.now(UTC),
+        party_binding_source="pytest",
+        party_binding_reason="Explicit service-team filter staff fixture",
     )
     db_session.add(user)
     db_session.flush()
@@ -505,14 +508,19 @@ def test_admin_list_context_filters_service_team_with_search_and_pagination(
 ):
     field_team = _service_team(db_session, "Field Ops")
     support_team = _service_team(db_session, "Support Ops")
-    first = _ticket(title="Fiber team filter one", service_team_id=field_team.id)
-    second = _ticket(title="Fiber team filter two", service_team_id=field_team.id)
+    field_tickets = [
+        _ticket(
+            title=f"Fiber team filter {index}",
+            service_team_id=field_team.id,
+        )
+        for index in range(11)
+    ]
     other_team = _ticket(
         title="Fiber team filter other",
         service_team_id=support_team.id,
     )
     other_search = _ticket(title="Unrelated", service_team_id=field_team.id)
-    db_session.add_all([first, second, other_team, other_search])
+    db_session.add_all([*field_tickets, other_team, other_search])
     db_session.commit()
 
     context = web_support_tickets_service.build_tickets_list_context(
@@ -530,15 +538,15 @@ def test_admin_list_context_filters_service_team_with_search_and_pagination(
         order_by="created_at",
         order_dir="desc",
         page=2,
-        per_page=1,
+        per_page=10,
         visible_columns_cookie=None,
         filters=None,
     )
 
     returned_ids = {ticket.id for ticket in context["tickets"]}
-    assert context["total"] == 2
+    assert context["total"] == 11
     assert len(returned_ids) == 1
-    assert returned_ids <= {first.id, second.id}
+    assert returned_ids <= {ticket.id for ticket in field_tickets}
     assert other_team.id not in returned_ids
     assert other_search.id not in returned_ids
     assert context["service_team_id"] == str(field_team.id)

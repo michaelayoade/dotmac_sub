@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from app.db import finish_read_transaction, get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
-from app.models.team_inbox import InboxChannelType, InboxConversation
+from app.models.team_inbox import InboxChannelType
 from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogueQuery
 from app.schemas.settings import DomainSettingUpdate
 from app.services import (
@@ -264,10 +264,9 @@ def _resolution_readiness(
     resolved_id = coerce_uuid(conversation_id)
     if resolved_id is None:
         return None
-    conversation = db.get(InboxConversation, resolved_id)
-    if conversation is None:
-        return None
-    return team_inbox_customer_completion.resolution_readiness(db, conversation)
+    return team_inbox_customer_completion.resolution_readiness_for_conversation(
+        db, resolved_id
+    )
 
 
 def _manager_ai_scope(request: Request, db: Session):

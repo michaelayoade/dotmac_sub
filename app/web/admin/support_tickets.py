@@ -145,7 +145,9 @@ def tickets_list(
             status=status,
             ticket_type=ticket_type,
             region=region,
-            service_team_id=service_team_id,
+            service_team_id=(
+                service_team_id if isinstance(service_team_id, str) else None
+            ),
             assigned_to_me=assigned_to_me,
             project_manager_person_id=project_manager_person_id,
             site_coordinator_person_id=site_coordinator_person_id,

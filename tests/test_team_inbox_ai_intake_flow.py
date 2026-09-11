@@ -1517,6 +1517,7 @@ def test_composable_engine_greeting_only_waits_after_welcome(db_session, monkeyp
     draft_version = db_session.get(AiIntakePolicyVersion, draft.version_id)
     assert draft_version.escalation_rules["customer_wait_handoff_minutes"] == 10
     assert "customer_wait_expiry_hours" not in draft_version.escalation_rules
+    db_session_adapter.release_read_transaction(db_session)
     ai_conversation_intake.activate_policy_version(
         db_session,
         ai_conversation_intake.AiPolicyVersionActivateCommand(
@@ -2616,7 +2617,7 @@ def test_customer_silence_handoff_respects_existing_fifo_head(db_session, monkey
     assert outcome.changed == 1
     assert [entry.conversation_id for entry in entries] == [
         older.id,
-        received.conversation_id,
+        UUID(str(received.conversation_id)),
     ]
     assert [entry.queue_position for entry in entries] == [1, 2]
     assert (

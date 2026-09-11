@@ -1972,8 +1972,12 @@ def link_contact(
             action="inbox_contact_identity_selected",
             entity_type="inbox_conversation",
             entity_id=str(conversation.id),
-            actor_type=AuditActorType.user if actor_uuid else AuditActorType.service,
-            actor_id=str(actor_uuid) if actor_uuid else None,
+            actor=AuditActor(
+                actor_type=(
+                    AuditActorType.user if actor_uuid else AuditActorType.service
+                ),
+                actor_id=(str(actor_uuid) if actor_uuid else OWNER),
+            ),
             metadata={
                 "decision_source": "reviewed_inbox_selection",
                 "selected_customer_id": (

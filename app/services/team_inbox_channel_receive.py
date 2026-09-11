@@ -50,7 +50,7 @@ from app.services import (
     team_inbox_routing,
     team_inbox_status,
 )
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
     default_country_code,
@@ -958,8 +958,10 @@ def receive_inbound_channel(
             action="inbox_contact_identity_decided",
             entity_type="inbox_conversation",
             entity_id=str(conversation.id),
-            actor_type=AuditActorType.service,
-            actor_id="communications.team_inbox_contact_resolution",
+            actor=AuditActor(
+                actor_type=AuditActorType.service,
+                actor_id="communications.team_inbox_contact_resolution",
+            ),
             metadata={
                 "decision_source": (
                     "exact_name_and_phone"
@@ -997,8 +999,10 @@ def receive_inbound_channel(
                 action="inbox_contact_identity_decided",
                 entity_type="inbox_conversation",
                 entity_id=str(conversation.id),
-                actor_type=AuditActorType.service,
-                actor_id="communications.team_inbox_contact_resolution",
+                actor=AuditActor(
+                    actor_type=AuditActorType.service,
+                    actor_id="communications.team_inbox_contact_resolution",
+                ),
                 metadata={
                     "decision_source": (
                         "exact_name_and_phone"

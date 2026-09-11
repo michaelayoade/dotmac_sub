@@ -860,7 +860,7 @@ def pipeline_create(
             status_code=303,
         )
     except (DomainError, ValidationError, ValueError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         error = _error_detail(exc)
 
     context = _ctx(request, db, "sales-pipelines")
@@ -929,7 +929,7 @@ def pipeline_update(
         )
         return _pipeline_settings_redirect("pipeline_updated")
     except (ValidationError, ValueError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         error = _error_detail(exc)
 
     context = _ctx(request, db, "sales-pipelines")
@@ -1576,11 +1576,11 @@ def quote_update(
             or _error_detail(exc) != "Save the quote changes first, then accept it."
         ):
             raise
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         error = _error_detail(exc)
         response_status = 409
     except (DomainError, ValidationError, ValueError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         error = _error_detail(exc)
 
     context = _ctx(request, db, "sales-quotes")
@@ -1617,7 +1617,7 @@ def quote_line_item_add(
             context=_quote_command_context(request, quote_id, action="line-add"),
         )
     except (DomainError, ValidationError, ValueError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
@@ -1734,7 +1734,7 @@ def quote_set_status(
     except (DomainError, ValidationError, ValueError) as exc:
         # Sending or accepting a quote with no line items is refused by the
         # sales service. Surface that to the operator instead of 500ing.
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
@@ -1762,7 +1762,7 @@ def quote_delete(
             context=_quote_command_context(request, quote_id, action="deactivate"),
         )
     except (DomainError, ValidationError, ValueError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)

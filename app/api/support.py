@@ -139,7 +139,7 @@ def list_tickets(
         ticket_type=ticket_type,
         priority=priority,
         channel=channel,
-        service_team_id=service_team_id,
+        service_team_id=(service_team_id if isinstance(service_team_id, str) else None),
         assigned_to_person_id=assigned_to_person_id,
         created_by_person_id=created_by_person_id,
         project_manager_person_id=project_manager_person_id,
