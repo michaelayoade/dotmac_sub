@@ -13,8 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RECORD = ROOT / "docs" / "kernel-runtime-composition.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 ACTION = (
-    "michaelayoade/dotmac_starter_mt/"
-    ".github/actions/verify-composition-observations"
+    "michaelayoade/dotmac_starter_mt/.github/actions/verify-composition-observations"
 )
 PRODUCT = "sub"
 
