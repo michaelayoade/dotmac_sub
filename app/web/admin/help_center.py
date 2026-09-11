@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import admin_workflow_guidance
-from app.services.auth_dependencies import require_permission
 from app.web.templates import templates
 
 router = APIRouter(prefix="/help", tags=["web-admin-help"])
@@ -155,7 +154,6 @@ ARTICLES = tuple(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def help_center(
     request: Request,

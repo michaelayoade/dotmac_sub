@@ -6,8 +6,8 @@ Help Center and supplies contextual explanations to Admin templates.
 
 Workflow and domain owners continue to own facts, permissions, eligibility,
 state transitions, and outcomes. Guidance never enables an action or changes
-state. The Help Center route remains an adapter with its existing permission
-guard.
+state. The Help Center route remains an adapter protected by the shared Admin
+staff-authentication gate; it requires no additional feature permission.
 
 The authoritative input is the typed `WORKFLOW_GUIDANCE` registry. It is fresh
 at the deployed application revision; there is no cache or external fallback.
