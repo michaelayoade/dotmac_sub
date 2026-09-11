@@ -21,6 +21,8 @@ segments, and may end in `**` for descendants. A matching route template is
 more specific than a section prefix. Broad prefixes must not attach one
 workflow's instructions to unrelated child pages; explicit exclusions protect
 reserved child sections when an identifier-shaped route would otherwise match.
+The Help Center presents Getting started first, followed by the remaining
+categories alphabetically.
 
 Guided Admin pages use one shared circular help control immediately beside the
 main page title. The shared layout attaches the control to the first main

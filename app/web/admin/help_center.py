@@ -44,7 +44,7 @@ def _article_matches(article: HelpArticle, *, query: str, category: str) -> bool
 
 def _group_articles(articles: list[HelpArticle]) -> list[dict[str, object]]:
     categories: list[dict[str, object]] = []
-    for category in sorted({article.category for article in ARTICLES}):
+    for category in admin_workflow_guidance.guidance_categories():
         category_articles = [
             article for article in articles if article.category == category
         ]
@@ -184,7 +184,7 @@ def help_center(
         "articles": articles,
         "grouped_articles": _group_articles(articles),
         "selected_article": selected_article,
-        "categories": sorted({article.category for article in ARTICLES}),
+        "categories": admin_workflow_guidance.guidance_categories(),
         "query": q,
         "selected_category": selected,
     }

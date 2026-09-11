@@ -34,6 +34,12 @@ def test_subscription_lifecycle_guide_includes_plan_changes() -> None:
     assert "Subscriptions" in guidance_categories()
 
 
+def test_getting_started_is_the_first_help_category() -> None:
+    categories = guidance_categories()
+
+    assert categories[:2] == ("Getting started", "Billing")
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
