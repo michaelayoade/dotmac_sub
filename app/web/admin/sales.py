@@ -1755,11 +1755,22 @@ def quote_delete(
     quote_id: str,
     db: Session = Depends(get_db),
 ):
-    web_sales_service.deactivate_quote(
-        db,
-        quote_id,
-        context=_quote_command_context(request, quote_id, action="deactivate"),
-    )
+    try:
+        web_sales_service.deactivate_quote(
+            db,
+            quote_id,
+            context=_quote_command_context(request, quote_id, action="deactivate"),
+        )
+    except (DomainError, ValidationError, ValueError) as exc:
+        db.rollback()
+        context = _ctx(request, db, "sales-quotes")
+        context.update(
+            web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
+        )
+        context["error"] = _error_detail(exc)
+        return templates.TemplateResponse(
+            "admin/sales/quotes/detail.html", context, status_code=400
+        )
     return RedirectResponse(url="/admin/sales/quotes", status_code=303)
 
 
