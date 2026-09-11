@@ -51,6 +51,8 @@ combined Inbox/Support workspace.
 | Conversation-to-Lead provenance | `communications.conversation_lead_relationships` | Owns the durable, auditable, one-active-Lead-per-conversation relationship |
 | Customer context drawer | `communications.team_inbox_contact_context` | Composes permission-scoped Party, Lead, Ticket, conversation, Project, and Task sections with typed availability |
 | Profile and Lead action resolution | `communications.inbox_lead_actions` | Resolves and coordinates identity-aware actions without owning Party or Lead fields |
+| Customer completion policy | `communications.team_inbox_customer_completion_policy` | Creates immutable Customer-only required-field versions snapshotted by new conversations |
+| Customer resolution readiness and Inbox profile completion | `communications.team_inbox_customer_completion` | Computes the central Customer-only gate and coordinates `customer.canonical_profile_patch` plus `party.registry`; Lead completeness is advisory |
 | Routing, assignment, escalation, and FIFO queue | `communications.team_inbox_routing` | Applies configured team, availability, permission, SLA, durable queue admission, and promotion policy |
 | Inbox automation | `communications.team_inbox_automation` | Matches Inbox-scoped conversation triggers and coordinates ordered assign, auto-assign, and tag actions |
 | Reply reminders | `communications.team_inbox_reply_reminders` | Owns configured first/repeat due times and queues internal agent notifications until a reply settles the schedule |
@@ -97,12 +99,17 @@ conversation and rechecks assignment and message evidence in the owner
 transaction before applying the audited status transition.
 
 AI customer waiting is not an escalation signal. The AI session owns
-`awaiting_customer`, the wait start, and a separate long-term `expires_at` based
-on `customer_wait_expiry_hours`. Team Inbox maintenance locks only sessions past
-that long-term expiry, rejects races with a newer customer reply or human
-takeover, and closes the inactive session/conversation without creating a note,
-assignment, or FIFO queue entry. Legacy five-minute wait rows are extended onto
-the long-term lifecycle before any consequence. Human routing still occurs only
+`awaiting_customer`, the wait start, and a separate `expires_at` based on
+`customer_wait_handoff_minutes` (10 minutes by default). Team Inbox maintenance
+selects due sessions plus waits carrying a retired hours/expiry marker,
+normalizes those deadlines from their authoritative wait start, and rejects
+races with a newer customer reply or human takeover. At the deadline it records
+a handoff summary, ends AI ownership, and enters the same authoritative routing
+path used by other human work: FIFO order and available capacity decide whether
+an eligible agent is assigned immediately or the conversation receives a durable
+entry in the team's regular FIFO queue. A legacy row with no trustworthy wait
+start receives a fresh 10-minute window before any consequence. Human routing
+also occurs earlier
 for a recorded explicit handoff reason such as a human request, unsupported
 issue, policy boundary, required tool failure, or exhausted troubleshooting.
 
@@ -182,8 +189,16 @@ explicit identity decision. A reviewed manual contact link also repairs every
 other active, unlinked conversation with the same normalized channel address;
 it never overwrites a different Subscriber relationship. This makes the
 customer conversation-history projection converge without matching names or
-shared addresses in the browser. Historical rows without reviewed or uniquely
+shared addresses in the browser. Before a reviewed link exists, the server may
+narrow an exact normalized phone match with an exact normalized observed name;
+a name mismatch remains ambiguous. Historical rows without reviewed or uniquely
 resolved contact evidence remain unlinked for explicit reconciliation.
+
+Agent resolution uses the Customer-only completion gate defined in
+`docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md`. Customer conversations must
+satisfy their immutable snapshotted policy on canonical Customer/Party facts.
+Lead profile gaps never participate in resolution readiness. Direct, bulk, and
+macro resolution all enter the status owner and consume the same verdict.
 
 The fiber website uses the same boundary through the signed
 `communications.fiber_inquiry.receive.v1` Integration Platform capability.

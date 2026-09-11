@@ -24,6 +24,7 @@ from app.services import (
     team_inbox_assignment,
     team_inbox_automation,
     team_inbox_channel_receive,
+    team_inbox_customer_completion_policy,
     team_inbox_fiber_receive,
     team_inbox_operations,
     team_inbox_participants,
@@ -196,6 +197,9 @@ def receive_fiber_inquiry(
         metadata["party_id"] = str(lead_result.party_id)
 
     conversation = InboxConversation(
+        customer_completion_policy_version_id=team_inbox_customer_completion_policy.snapshot_active_policy_id(
+            db
+        ),
         subscriber_id=identity.subscriber_id,
         channel_type=channel.value,
         status=InboxConversationStatus.open.value,
@@ -574,6 +578,9 @@ def receive_inbound_email(
 
     if conversation is None:
         conversation = InboxConversation(
+            customer_completion_policy_version_id=team_inbox_customer_completion_policy.snapshot_active_policy_id(
+                db
+            ),
             subscriber_id=resolution.subscriber_id,
             channel_type=InboxChannelType.email.value,
             status=InboxConversationStatus.open.value,

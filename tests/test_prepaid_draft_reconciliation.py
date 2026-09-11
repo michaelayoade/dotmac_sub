@@ -23,6 +23,7 @@ from app.models.billing import (
     PaymentStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    TaxApplication,
     TaxRate,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
@@ -278,6 +279,73 @@ def _historical_paid_unlinked_invoice(db, account, subscription):
     return invoice, payment, allocation
 
 
+def _historical_paid_mixed_annual_invoice(db, account, subscription):
+    account.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = datetime(2026, 9, 17, tzinfo=UTC)
+    ensure_test_prepaid_contract(db, subscription, Decimal("70000.00"))
+    tax_rate = TaxRate(name=f"VAT-{uuid4().hex[:8]}", rate=Decimal("7.5000"))
+    db.add(tax_rate)
+    db.flush()
+    account.tax_rate_id = tax_rate.id
+    paid_at = datetime(2026, 8, 5, 15, 56, 17, tzinfo=UTC)
+    invoice = Invoice(
+        account_id=account.id,
+        invoice_number=f"INV-ANNUAL-{uuid4().hex[:8]}",
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("1140000.00"),
+        tax_total=Decimal("85500.00"),
+        total=Decimal("1225500.00"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=None,
+        billing_period_end=None,
+        issued_at=datetime(2026, 8, 5, tzinfo=UTC),
+        due_at=datetime(2026, 9, 4, tzinfo=UTC),
+        paid_at=paid_at,
+        is_proforma=False,
+        is_active=True,
+    )
+    db.add(invoice)
+    db.flush()
+    installation_line = InvoiceLine(
+        invoice_id=invoice.id,
+        subscription_id=None,
+        description="Fiber Installation Service",
+        quantity=Decimal("1.000"),
+        unit_price=Decimal("300000.00"),
+        amount=Decimal("300000.00"),
+        tax_rate_id=tax_rate.id,
+        tax_application=TaxApplication.exclusive,
+        is_active=True,
+    )
+    service_line = InvoiceLine(
+        invoice_id=invoice.id,
+        subscription_id=None,
+        description="Unlimited Elite",
+        quantity=Decimal("12.000"),
+        unit_price=Decimal("70000.00"),
+        amount=Decimal("840000.00"),
+        tax_rate_id=tax_rate.id,
+        tax_application=TaxApplication.exclusive,
+        is_active=True,
+    )
+    db.add_all([installation_line, service_line])
+    payment = _payment(db, account, amount=invoice.total, paid_at=paid_at)
+    allocation = PaymentAllocation(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=invoice.total,
+        memo="Annual service and installation settlement",
+        is_active=True,
+    )
+    db.add(allocation)
+    payment.settlement.unallocated_amount = Decimal("0.00")
+    db.commit()
+    return invoice, payment, allocation, installation_line, service_line
+
+
 def _stage_stale_prepaid_lock(db, account, subscription) -> None:
     account.status = SubscriberStatus.suspended
     subscription.status = SubscriptionStatus.suspended
@@ -380,6 +448,151 @@ def test_historical_paid_unlinked_invoice_repairs_coverage_and_requests_access(
     assert allocation.amount == Decimal("18812.50")
     assert db_session.query(PaymentAllocation).count() == 1
     assert db_session.query(ServiceEntitlement).count() == 1
+
+
+def test_historical_paid_mixed_invoice_requires_explicit_service_line(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, _payment_row, _allocation, _installation_line, _service_line = (
+        _historical_paid_mixed_annual_invoice(
+            db_session,
+            subscriber,
+            subscription,
+        )
+    )
+
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+
+    assert preview.disposition is PaidPrepaidInvoiceRepairDisposition.manual_review
+    assert preview.actionable is False
+    assert preview.line_id is None
+    assert preview.reason == (
+        "repair requires the exact positive unlinked invoice line; "
+        "mixed invoices require an explicit line_id"
+    )
+
+
+def test_historical_paid_mixed_invoice_rejects_selected_installation_line(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, _payment_row, _allocation, installation_line, _service_line = (
+        _historical_paid_mixed_annual_invoice(
+            db_session,
+            subscriber,
+            subscription,
+        )
+    )
+
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            line_id=installation_line.id,
+        ),
+    )
+
+    assert preview.disposition is PaidPrepaidInvoiceRepairDisposition.manual_review
+    assert preview.actionable is False
+    assert preview.line_id == installation_line.id
+    assert preview.reason == (
+        "paid invoice charge does not match canonical prepaid renewal terms"
+    )
+
+
+def test_historical_paid_mixed_annual_invoice_repairs_selected_service_line(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice, payment, allocation, installation_line, service_line = (
+        _historical_paid_mixed_annual_invoice(
+            db_session,
+            subscriber,
+            subscription,
+        )
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+    query = PaidPrepaidInvoiceRepairQuery(
+        invoice_id=invoice.id,
+        subscription_id=subscription.id,
+        line_id=service_line.id,
+    )
+    preview = preview_historical_paid_prepaid_invoice_repair(db_session, query)
+
+    assert preview.disposition is (
+        PaidPrepaidInvoiceRepairDisposition.exact_paid_unlinked_invoice
+    )
+    assert preview.actionable is True
+    assert preview.line_id == service_line.id
+    assert preview.allocation_id == allocation.id
+    assert preview.payment_id == payment.id
+    assert preview.service_period_count == 12
+    assert preview.billing_period_start == datetime(2026, 8, 4, 23, tzinfo=UTC)
+    assert preview.billing_period_end == datetime(2027, 8, 4, 23, tzinfo=UTC)
+    fingerprint = preview.fingerprint
+    invoice_id = invoice.id
+    subscription_id = subscription.id
+    service_line_id = service_line.id
+    db_session.commit()
+
+    command = RepairHistoricalPaidPrepaidInvoiceCommand(
+        context=CommandContext.system(
+            actor="pytest:billing-operator",
+            scope="prepaid_draft_reconciliation",
+            reason="Reviewed annual prepaid service line in settled mixed invoice",
+            idempotency_key=f"pytest-mixed-annual-repair-{invoice_id}",
+        ),
+        invoice_id=invoice_id,
+        subscription_id=subscription_id,
+        preview_fingerprint=fingerprint,
+        line_id=service_line_id,
+    )
+    result = repair_historical_paid_prepaid_invoice(db_session, command)
+    replay = repair_historical_paid_prepaid_invoice(db_session, command)
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscription)
+    db_session.refresh(installation_line)
+    db_session.refresh(service_line)
+    db_session.refresh(allocation)
+    entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .one()
+    )
+    assert result.replayed is False
+    assert replay.replayed is True
+    assert result.service_period_count == 12
+    assert replay.service_period_count == 12
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.total == Decimal("1225500.00")
+    assert invoice.balance_due == Decimal("0.00")
+    assert installation_line.subscription_id is None
+    assert installation_line.description == "Fiber Installation Service"
+    assert service_line.subscription_id == subscription.id
+    assert service_line.amount == Decimal("840000.00")
+    assert entitlement.source_invoice_line_id == service_line.id
+    assert entitlement.amount_funded == Decimal("840000.00")
+    assert entitlement.starts_at == datetime(2026, 8, 4, 23)
+    assert entitlement.ends_at == datetime(2027, 8, 4, 23)
+    assert subscription.next_billing_at == datetime(2027, 8, 4, 23)
+    assert allocation.is_active is True
+    assert allocation.amount == Decimal("1225500.00")
 
 
 def test_historical_paid_invoice_repair_rejects_allocation_ambiguity(

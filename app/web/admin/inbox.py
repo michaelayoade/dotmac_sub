@@ -52,6 +52,8 @@ from app.services import (
     team_inbox_assignment,
     team_inbox_commands,
     team_inbox_contact_links,
+    team_inbox_customer_completion,
+    team_inbox_customer_completion_policy,
     team_inbox_filters,
     team_inbox_manager_ai_chat,
     team_inbox_media,
@@ -254,6 +256,17 @@ def _ctx(request: Request, db: Session) -> dict:
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _resolution_readiness(
+    db: Session, conversation_id: UUID | str
+) -> team_inbox_customer_completion.InboxCustomerResolutionReadiness | None:
+    resolved_id = coerce_uuid(conversation_id)
+    if resolved_id is None:
+        return None
+    return team_inbox_customer_completion.resolution_readiness_for_conversation(
+        db, resolved_id
+    )
 
 
 def _manager_ai_scope(request: Request, db: Session):
@@ -465,6 +478,9 @@ def team_inbox_queue(
                 "activity_events": projection.selected.activity_events,
                 "timeline_entries": projection.selected.timeline_entries,
                 "reply_window": projection.selected.reply_window,
+                "resolution_readiness": (
+                    _resolution_readiness(db, projection.selected.timeline.id)
+                ),
             }
         )
     if is_list_fragment_request:
@@ -1083,6 +1099,7 @@ def team_inbox_detail(
                 projection.action_eligibility.takeover_team_options
             ),
             "can_manage_leads": can(request, "crm:lead:write"),
+            "resolution_readiness": _resolution_readiness(db, projection.timeline.id),
         }
         if projection is not None
         else None
@@ -1169,6 +1186,117 @@ def team_inbox_contact_context(
         }
     )
     return templates.TemplateResponse("admin/inbox/_contact_drawer.html", context)
+
+
+@router.post(
+    "/{conversation_id}/customer-profile",
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("customer:write")),
+    ],
+)
+def team_inbox_customer_profile_update(
+    conversation_id: UUID,
+    request: Request,
+    customer_id: UUID = Form(...),
+    name: str | None = Form(default=None),
+    phone: str | None = Form(default=None),
+    address: str | None = Form(default=None),
+    email: str | None = Form(default=None),
+    whatsapp: str | None = Form(default=None),
+    organization: str | None = Form(default=None),
+    city_region: str | None = Form(default=None),
+    country: str | None = Form(default=None),
+    date_of_birth: str | None = Form(default=None),
+    gender: str | None = Form(default=None),
+    nin: str | None = Form(default=None),
+    submitted_fields: list[str] = Form(...),
+    confirmed_replacements: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    try:
+        submitted = frozenset(
+            team_inbox_customer_completion.CustomerProfileField(value)
+            for value in submitted_fields
+        )
+        confirmed = frozenset(
+            team_inbox_customer_completion.CustomerProfileField(value)
+            for value in confirmed_replacements
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=(
+                f"/admin/inbox?c={conversation_id}&status=error&"
+                "message=Unsupported%20Customer%20profile%20field"
+            ),
+            status_code=303,
+        )
+    _prepare_mutation(db)
+    try:
+        team_inbox_customer_completion.complete_customer_profile(
+            db,
+            team_inbox_customer_completion.CompleteInboxCustomerProfileCommand(
+                context=CommandContext.system(
+                    actor=(
+                        f"person:{actor_person_id}"
+                        if actor_person_id
+                        else "service:team_inbox"
+                    ),
+                    scope="team-inbox:customer-profile-completion",
+                    reason="complete linked Customer profile from Inbox",
+                ),
+                conversation_id=conversation_id,
+                customer_id=customer_id,
+                values=team_inbox_customer_completion.CustomerProfileValues(
+                    name=name,
+                    phone=phone,
+                    address=address,
+                    email=email,
+                    whatsapp=whatsapp,
+                    organization=organization,
+                    city_region=city_region,
+                    country=country,
+                    date_of_birth=date_of_birth,
+                    gender=gender,
+                    nin=nin,
+                ),
+                submitted_fields=submitted,
+                confirmed_replacements=confirmed,
+                actor_person_id=actor_person_id,
+                actor_type=(
+                    AuditActorType.user if actor_person_id else AuditActorType.service
+                ),
+                decision_source="inbox_customer_drawer",
+            ),
+        )
+    except DomainError as exc:
+        if _is_htmx_request(request):
+            return Response(
+                status_code=409,
+                headers={
+                    "HX-Redirect": (
+                        f"/admin/inbox?c={conversation_id}&status=error&"
+                        f"message={quote_plus(exc.message)}"
+                    )
+                },
+            )
+        return RedirectResponse(
+            url=(
+                f"/admin/inbox?c={conversation_id}&status=error&"
+                f"message={quote_plus(exc.message)}"
+            ),
+            status_code=303,
+        )
+    if _is_htmx_request(request):
+        return team_inbox_contact_context(conversation_id, request, db)
+    return RedirectResponse(
+        url=(
+            f"/admin/inbox?c={conversation_id}&status=success&"
+            "message=Customer%20information%20saved"
+        ),
+        status_code=303,
+    )
 
 
 @router.get(
@@ -2767,6 +2895,12 @@ def team_inbox_status_action(
             status="error",
             message=str(exc),
         )
+    except DomainError as exc:
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=exc.message,
+        )
     if outcome.already_set:
         return _detail_redirect(
             conversation_id,
@@ -2936,7 +3070,27 @@ def team_inbox_run_macro(
         team_inbox_operations.InboxOperationError,
     ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    executed = result.get("executed") if isinstance(result, dict) else None
+    failed = result.get("actions_failed") if isinstance(result, dict) else None
+    if isinstance(failed, int) and failed:
+        results = result.get("results")
+        first_error = (
+            next(
+                (
+                    item.get("error")
+                    for item in results
+                    if isinstance(item, dict) and not item.get("ok")
+                ),
+                None,
+            )
+            if isinstance(results, list)
+            else None
+        )
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=str(first_error or f"Macro had {failed} blocked action(s)."),
+        )
+    executed = result.get("actions_executed") if isinstance(result, dict) else None
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -3000,6 +3154,7 @@ def _settings_context(
         else None
     )
     ai_policy_context = ai_conversation_intake.admin_policy_context(db)
+    customer_completion_policy = team_inbox_customer_completion_policy.active_policy(db)
     context.update(
         {
             "email_routes": team_inbox_routing.list_email_routes(db),
@@ -3030,11 +3185,70 @@ def _settings_context(
             "notice_message": _query_text(message),
             "ai_intake_preview_result": ai_intake_preview_result,
             "introduction_preference": introduction_preference,
+            "customer_completion_policy": customer_completion_policy,
+            "customer_completion_fields": tuple(
+                {
+                    "value": field.value,
+                    "label": team_inbox_customer_completion.FIELD_LABELS[
+                        team_inbox_customer_completion.CustomerProfileField(field.value)
+                    ],
+                }
+                for field in team_inbox_customer_completion_policy.CustomerCompletionField
+            ),
         }
     )
     context.update(ai_policy_context)
     context.update(_polish_settings_context(db))
     return context
+
+
+@settings_router.post(
+    "/customer-completion-policy",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def team_inbox_customer_completion_policy_update(
+    request: Request,
+    required_fields: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    try:
+        fields = tuple(
+            team_inbox_customer_completion_policy.CustomerCompletionField(value)
+            for value in required_fields
+        )
+    except ValueError:
+        return _routes_redirect(
+            status="error", message="Select only supported Customer fields."
+        )
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_customer_completion_policy.create_policy_version(
+            db,
+            team_inbox_customer_completion_policy.CreateCustomerCompletionPolicyCommand(
+                context=CommandContext.system(
+                    actor=(
+                        f"person:{actor_person_id}"
+                        if actor_person_id
+                        else "service:inbox_settings"
+                    ),
+                    scope="team-inbox:customer-completion-policy",
+                    reason="update Customer resolution requirements",
+                ),
+                required_fields=fields,
+                actor_person_id=actor_person_id,
+                actor_type=(
+                    AuditActorType.user if actor_person_id else AuditActorType.service
+                ),
+                decision_source="inbox_settings",
+            ),
+        )
+    except DomainError as exc:
+        return _routes_redirect(status="error", message=exc.message)
+    return _routes_redirect(
+        status="success",
+        message=f"Customer completion policy v{outcome.version} is active.",
+    )
 
 
 @settings_router.post(
@@ -3113,7 +3327,7 @@ def team_inbox_ai_intake_policy_draft_update(
     max_clarification_turns: int = Form(default=1),
     escalate_after_minutes: int = Form(default=5),
     customer_response_timeout_minutes: int | None = Form(default=None),
-    customer_wait_expiry_hours: int = Form(default=72),
+    customer_wait_handoff_minutes: int = Form(default=10),
     exclude_campaign_attribution: bool = Form(default=True),
     conversational_engine_enabled: bool = Form(default=False),
     conversation_engine_mode: str = Form(default="custom_v1"),
@@ -3305,9 +3519,6 @@ def team_inbox_ai_intake_policy_draft_update(
             "max_clarification_turns": max(0, min(int(max_clarification_turns), 5)),
             "escalate_after_minutes": clean_escalate_after_minutes,
             "customer_response_timeout_minutes": clean_customer_response_timeout_minutes,
-            "customer_wait_expiry_hours": max(
-                24, min(int(customer_wait_expiry_hours), 720)
-            ),
             "exclude_campaign_attribution": bool(exclude_campaign_attribution),
         }
         data_cleanup_policy = {
@@ -3472,6 +3683,13 @@ def team_inbox_ai_intake_policy_draft_update(
                 intent_team_mappings=intent_mappings,
                 queue_templates=queue_templates,
                 escalation_rules=escalation_rules,
+                customer_wait_handoff_policy=(
+                    ai_conversation_intake.CustomerWaitHandoffPolicy(
+                        handoff_minutes=max(
+                            1, min(int(customer_wait_handoff_minutes), 1440)
+                        )
+                    )
+                ),
                 data_cleanup_policy=data_cleanup_policy,
                 conversational_engine_enabled=conversational_engine_enabled,
                 conversation_engine_mode=conversation_engine_mode,
