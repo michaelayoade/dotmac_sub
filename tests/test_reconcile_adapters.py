@@ -674,6 +674,72 @@ def test_upsert_updates_existing_row_on_subsequent_call(db_session, ont):
     assert rows[0].acs_observed_ssid == "NEW"
 
 
+def test_upsert_olt_read_status_none_leaves_the_prior_value_untouched(db_session, ont):
+    """``olt_read_status=None`` means "no OLT read was attempted this pass"
+    (the reconcile core's WiFi-only delivery path, substituting cached data
+    instead of a live SSH read) — it must not overwrite the freshness signal
+    left by the last genuine attempt. Distinct from ``observed_surfaces``
+    excluding ``"olt"``, which already protects the OLT VALUE columns; this
+    protects the ``olt_read_status`` column specifically, which the row
+    docstring stamps "whenever this pass genuinely attempted an OLT read" —
+    ``None`` is exactly "this pass did not."
+    """
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="unavailable",
+    )
+    db_session.commit()
+
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(ssid="NEW"),
+        observed_surfaces=frozenset({"acs"}),
+        olt_read_status=None,
+    )
+    db_session.commit()
+
+    row = db_session.get(OntObservation, _only_obs_id(db_session, ont.id))
+    assert row.olt_read_status == "unavailable"
+    # The surface exclusion still protects the OLT value columns too.
+    assert row.olt_present is True
+    # The unrelated ACS surface still updates normally.
+    assert row.acs_observed_ssid == "NEW"
+
+
+def test_upsert_olt_read_status_a_real_value_still_overwrites(db_session, ont):
+    """Near-miss for the test above: ``olt_read_status`` is NOT a
+    write-once/sticky field in general — a genuine subsequent attempt (any
+    non-``None`` value) still overwrites the prior one, even when the OLT
+    surface itself was not re-observed this pass (e.g. a genuinely failed
+    read leaves the OLT VALUE columns alone but must still record that the
+    attempt happened and what it found).
+    """
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(),
+        observed_surfaces=frozenset({"olt", "acs"}),
+        olt_read_status="present",
+    )
+    db_session.commit()
+
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        _minimal_observed(),
+        observed_surfaces=frozenset({"acs"}),
+        olt_read_status="unavailable",
+    )
+    db_session.commit()
+
+    row = db_session.get(OntObservation, _only_obs_id(db_session, ont.id))
+    assert row.olt_read_status == "unavailable"
+
+
 def test_upsert_accepts_string_ont_unit_id(db_session, ont):
     """The reconcile loop may pass str(ont.id); the adapter coerces."""
     upsert_ont_observation(

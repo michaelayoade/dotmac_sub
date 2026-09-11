@@ -740,12 +740,16 @@ def upsert_ont_observation(
     overwrite the previous, genuine observation on the row. A surface absent
     from ``observed_surfaces`` leaves its columns exactly as they were.
 
-    ``olt_read_status`` is stamped unconditionally (present/absent/unavailable
-    or ``None`` when no read was even attempted this pass) so the row always
-    carries an honest freshness signal, independent of whether the OLT columns
-    themselves were touched. ``olt_observed_at`` only advances when ``"olt"``
-    is in ``observed_surfaces`` — it marks the last time we actually saw
-    something, not the last time we merely tried.
+    ``olt_read_status`` is stamped with ``present``/``absent``/``unavailable``
+    whenever this pass genuinely attempted an OLT read, independent of
+    whether the OLT columns themselves were touched — so the row always
+    carries an honest freshness signal for a real attempt. ``None`` means no
+    read was even attempted this pass (e.g. a WiFi-only delivery pass
+    substituting cached data): the column is left exactly as it already was,
+    not cleared, since there is nothing new to report about the last attempt.
+    ``olt_observed_at`` only advances when ``"olt"`` is in
+    ``observed_surfaces`` — it marks the last time we actually saw something,
+    not the last time we merely tried.
 
     The caller is responsible for ``db.commit()``. Returns the persisted ORM
     instance so callers can inspect the assigned UUID / timestamps.
@@ -765,7 +769,8 @@ def upsert_ont_observation(
     row.last_reconcile_duration_ms = observed.last_reconcile_duration_ms
     row.mgmt_ip_pingable = observed.mgmt_ip_pingable
 
-    row.olt_read_status = olt_read_status
+    if olt_read_status is not None:
+        row.olt_read_status = olt_read_status
     if "olt" in observed_surfaces:
         row.olt_observed_at = observed.last_reconciled_at
         row.olt_present = observed.olt.olt_present

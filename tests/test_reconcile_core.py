@@ -25,16 +25,21 @@ from app.services.credential_crypto import (
     encrypt_credential_with_key,
 )
 from app.services.network.reconcile import (
+    AcsObservedFields,
     AppliedAction,
     Drift,
+    OltObservedFields,
     OntDesiredState,
+    OntObservedState,
     OntWanProposedChange,
     OntWifiDeliveryScope,
     ReconcileFailureReason,
     reconcile_ont,
+    upsert_ont_observation,
 )
 from app.services.network.reconcile import core as reconcile_core
 from app.services.network.reconcile.applier import ApplyResult
+from app.services.network.reconcile.readers import ReadResult
 
 
 class _PostgresSessionStub:
@@ -2017,3 +2022,427 @@ def test_an_authorized_ppp_readback_failure_still_hard_fails(
     assert ont.sync_status == OntSyncStatus.out_of_sync
     # A hard failure records an error, which is what makes it block sync.
     assert ont.last_error is not None
+
+
+# ── WiFi-only delivery: a cached OLT substitution is not a real observation ─
+#
+# ``wifi_only_delivery`` (``core.py``) never builds an OLT adapter — it
+# substitutes the last cached ``OntObservation`` row instead of paying for a
+# live SSH read. Before the fix, that substitution was classified exactly
+# like a real read: ``"olt"`` was always added to ``observed_surfaces`` and
+# ``olt_read_status`` was always stamped with the substituted present/absent
+# verdict, so a WiFi-only push silently re-stamped ``olt_observed_at`` off
+# stale cached data on every pass — the row could go arbitrarily stale while
+# claiming to have just been checked. The fix threads an explicit
+# ``olt_read_attempted`` flag (``reconcile_ont`` computes it once from
+# ``olt_adapter is None``) through ``_surfaces_observed`` and
+# ``_observed_olt_read_status`` so a cached substitution is still usable for
+# planning but is never recorded as a fresh observation.
+
+
+def _cached_present_olt(desired: OntDesiredState) -> OltObservedFields:
+    """OLT evidence matching the fixture's desired state — standing in for a
+    genuine prior read that a WiFi-only pass will substitute rather than
+    re-observe live."""
+    return OltObservedFields(
+        olt_present=True,
+        olt_match_state="match",
+        olt_run_state="online",
+        olt_distance_m=4000,
+        olt_rx_dbm=-28.0,
+        olt_tx_dbm=2.0,
+        olt_temperature_c=40,
+        olt_description=desired.description,
+        olt_mgmt_ip=desired.mgmt_ip,
+        olt_mgmt_vlan=desired.mgmt_vlan,
+        olt_line_profile_id=desired.line_profile_id,
+        olt_service_profile_id=desired.service_profile_id,
+        olt_service_ports=(
+            {
+                "index": desired.mgmt_service_port_index,
+                "vlan_id": desired.mgmt_vlan,
+                "gem_index": 2,
+                "state": "up",
+            },
+            {
+                "index": desired.wan_service_port_index,
+                "vlan_id": desired.wan_vlan,
+                "gem_index": desired.wan_gem_index,
+                "state": "up",
+            },
+        ),
+    )
+
+
+def _absent_acs_for_seed() -> AcsObservedFields:
+    """Minimal ACS "no evidence" shape for seeding a baseline observation row
+    whose OLT half is what these tests actually exercise."""
+    return AcsObservedFields(
+        acs_present=False,
+        acs_last_inform_at=None,
+        acs_last_boot_at=None,
+        acs_last_bootstrap_at=None,
+        acs_observed_software_version=None,
+        acs_observed_pppoe_username=None,
+        acs_observed_pppoe_enable=None,
+        acs_observed_wan_vlan=None,
+        acs_observed_wan_external_ip=None,
+        acs_observed_wan_connection_status=None,
+        acs_observed_nat_enabled=None,
+        acs_observed_dhcp_enabled=None,
+        acs_observed_ssid=None,
+        acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username=None,
+        acs_observed_cr_username_set=None,
+        acs_observed_cr_password_set=None,
+        acs_observed_wan_wcd_index=None,
+        acs_observed_wan_instance_index=None,
+        acs_observed_wan_ppp_locations=(),
+    )
+
+
+def _seed_observation_row(
+    db_session, ont, *, olt: OltObservedFields, olt_read_status: str, at
+) -> None:
+    """Write a baseline ``OntObservation`` row directly through the adapter,
+    as if a real prior reconcile pass had produced it — bypassing
+    ``reconcile_ont`` so the test controls the exact prior provenance."""
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        OntObservedState(
+            last_reconciled_at=at,
+            last_reconcile_duration_ms=100,
+            mgmt_ip_pingable=True,
+            consecutive_sweep_unreachable=0,
+            olt=olt,
+            acs=_absent_acs_for_seed(),
+        ),
+        observed_surfaces=frozenset({"olt"}),
+        olt_read_status=olt_read_status,
+    )
+    db_session.commit()
+
+
+def test_wifi_only_delivery_does_not_advance_stale_olt_provenance(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """A WiFi-only pass substitutes cached OLT data for planning but must not
+    record it as a fresh observation: ``olt_observed_at`` stays at the last
+    GENUINE read, and ``olt_read_status`` keeps reporting that the last
+    ATTEMPT was unavailable — even though the cached present/absent data
+    itself is older and unrelated. Before the fix, both columns were
+    unconditionally re-stamped from the substituted data on every WiFi-only
+    pass.
+    """
+    desired = stub_desired
+    baseline_seen_at = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_observation_row(
+        db_session,
+        ont,
+        olt=_cached_present_olt(desired),
+        olt_read_status="unavailable",
+        at=baseline_seen_at,
+    )
+
+    captured_observed_surfaces: list[frozenset[str]] = []
+    real_upsert = reconcile_core.upsert_ont_observation
+
+    def _spy_upsert(db, ont_unit_id, observed, *, observed_surfaces, olt_read_status):
+        captured_observed_surfaces.append(observed_surfaces)
+        return real_upsert(
+            db,
+            ont_unit_id,
+            observed,
+            observed_surfaces=observed_surfaces,
+            olt_read_status=olt_read_status,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.upsert_ont_observation", _spy_upsert
+    )
+
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        mode="sync",
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert result.success is True
+    assert result.failure is None
+    assert captured_observed_surfaces
+    assert "olt" not in captured_observed_surfaces[-1]
+
+    db_session.commit()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # SQLite (the test DB) does not round-trip tzinfo — compare naive.
+    assert row.olt_observed_at == baseline_seen_at.replace(tzinfo=None)
+    assert row.olt_read_status == "unavailable"
+    # The cached data itself is untouched too — nothing overwrote it with a
+    # placeholder.
+    assert row.olt_present is True
+
+
+def test_wifi_only_delivery_full_apply_verify_success_excludes_olt_from_provenance(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """Same property as the readback-only test above, exercised through the
+    OTHER success exit of ``reconcile_ont``: the full apply-then-verify path
+    (``readback_only=False``, the default) that actually converges a genuine
+    WiFi drift and confirms it on the post-apply re-read. This ``_finalise``
+    call site is the LAST one in the function, on a separate code path from
+    every earlier success/failure return above it — a per-call-site sweep
+    missed exactly this one during development of this fix (it kept calling
+    ``_surfaces_observed(verify_olt_result, verify_acs_result)`` without the
+    ``olt_read_attempted`` override), so this pins it directly rather than
+    relying on the readback-only test to stand in for every exit.
+    """
+    desired = stub_desired
+    baseline_seen_at = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_observation_row(
+        db_session,
+        ont,
+        olt=_cached_present_olt(desired),
+        olt_read_status="unavailable",
+        at=baseline_seen_at,
+    )
+
+    device = _synced_acs_device(ont)
+    device["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]["1"][
+        "SSID"
+    ] = {"_value": "OLD-SSID", "_object": False, "_writable": True}
+
+    class _WifiConvergingAcs(_StubAcsClient):
+        """Mutates its own device document on the matching SPV write, so the
+        post-apply verify re-read observes the converged value — unlike the
+        plain stub, which always returns the same static document."""
+
+        def set_parameter_values(self, device_id, params, **kwargs):
+            result = super().set_parameter_values(device_id, params, **kwargs)
+            key = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"
+            if key in params:
+                self._device["InternetGatewayDevice"]["LANDevice"]["1"][
+                    "WLANConfiguration"
+                ]["1"]["SSID"] = {
+                    "_value": params[key],
+                    "_object": False,
+                    "_writable": True,
+                }
+            return result
+
+    acs = _WifiConvergingAcs(device=device)
+
+    captured_observed_surfaces: list[frozenset[str]] = []
+    real_upsert = reconcile_core.upsert_ont_observation
+
+    def _spy_upsert(db, ont_unit_id, observed, *, observed_surfaces, olt_read_status):
+        captured_observed_surfaces.append(observed_surfaces)
+        return real_upsert(
+            db,
+            ont_unit_id,
+            observed,
+            observed_surfaces=observed_surfaces,
+            olt_read_status=olt_read_status,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.upsert_ont_observation", _spy_upsert
+    )
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        mode="sync",
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert result.failure is None
+    # Real convergence happened (not the readback-pending shortcut): exactly
+    # one WiFi write reached the ACS.
+    assert len(acs.spv_calls) == 1
+    assert captured_observed_surfaces
+    assert "olt" not in captured_observed_surfaces[-1]
+
+    db_session.commit()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_observed_at == baseline_seen_at.replace(tzinfo=None)
+    assert row.olt_read_status == "unavailable"
+
+
+def test_wifi_only_delivery_with_cached_olt_data_does_not_trigger_the_unavailable_refusal(
+    db_session, ont, stub_desired
+):
+    """Regression test for the ``core.py`` refusal gate that returns
+    ``OLT_UNREACHABLE``/``OLT_OBSERVATION_UNAVAILABLE`` when
+    ``olt_result.status == "unavailable"``. A cached substitution is always
+    classified ``"present"``/``"absent"`` (never ``"unavailable"``), so
+    introducing the ``olt_read_attempted`` provenance flag must not make that
+    gate fire where it previously did not: the flag only feeds
+    ``_surfaces_observed``/``_observed_olt_read_status``, never the status
+    comparison the gate itself makes. This pass also exercises the exact
+    scenario ``_should_push_wifi_password`` uses cached OLT data for during
+    planning (``mode == "sync" and not observed.olt.olt_present`` forces a
+    password re-push): if the substitution's ``olt_present=True`` failed to
+    reach the plan, this would regress to a spurious ``PreSharedKey`` write
+    and readback-pending failure instead of the success asserted below.
+    """
+    desired = stub_desired
+    _seed_observation_row(
+        db_session,
+        ont,
+        olt=_cached_present_olt(desired),
+        olt_read_status="present",
+        at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        mode="sync",
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert result.success is True
+    assert result.failure is None
+    assert result.failure is None or result.failure.reason not in (
+        ReconcileFailureReason.OLT_UNREACHABLE,
+        ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE,
+    )
+    # No PSK re-push: the cached ``olt_present=True`` correctly reached
+    # ``_should_push_wifi_password`` and suppressed the "device might be a
+    # fresh bring-up" trigger.
+    assert acs.spv_calls == []
+
+
+def test_genuine_olt_unavailable_refusal_still_stamps_the_failed_attempt(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """Sensitivity companion for the two WiFi-only tests above, and an
+    extension of the existing ``test_unusable_olt_reply_does_not_authorize``
+    fast-fail coverage: a REAL adapter is provided (this is not a WiFi-only,
+    cached-substitution pass), the OLT read genuinely fails, and the
+    pre-plan refusal at ``core.py``'s ``olt_result.status == "unavailable"``
+    gate must still fire exactly as before — proving the new
+    ``olt_read_attempted`` bookkeeping did not change that gate's condition.
+    Unlike the cached-substitution case, the observation row's
+    ``olt_read_status`` DOES advance here (to ``"unavailable"``): a genuine
+    failed attempt is exactly the freshness signal that column exists to
+    record.
+    """
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_unusable_olt_read,
+    )
+    olt = _StubOltAdapter()
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.OLT_OBSERVATION_UNAVAILABLE
+
+    db_session.commit()
+    row = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert row.olt_read_status == "unavailable"
+    assert row.olt_observed_at is None  # never a genuine "olt" observation yet
+
+
+def test_surfaces_observed_excludes_olt_for_a_cached_substitution(monkeypatch):
+    """Unit-level pin for ``_surfaces_observed``'s new ``olt_read_attempted``
+    parameter: a substituted present/absent OLT result is excluded from
+    ``observed_surfaces`` when the read was never attempted, and included
+    (the near-miss / prior behaviour) when it was."""
+    olt_present_result = ReadResult(
+        status="present",
+        observed=OltObservedFields(
+            olt_present=True,
+            olt_match_state="match",
+            olt_run_state="online",
+            olt_distance_m=None,
+            olt_rx_dbm=None,
+            olt_tx_dbm=None,
+            olt_temperature_c=None,
+            olt_description=None,
+            olt_mgmt_ip=None,
+            olt_mgmt_vlan=None,
+            olt_line_profile_id=None,
+            olt_service_profile_id=None,
+            olt_service_ports=(),
+        ),
+        error=None,
+    )
+    acs_present_result = ReadResult(
+        status="present", observed=_absent_acs_for_seed(), error=None
+    )
+
+    substituted = reconcile_core._surfaces_observed(
+        olt_present_result, acs_present_result, olt_read_attempted=False
+    )
+    assert substituted == frozenset({"acs"})
+
+    real_read = reconcile_core._surfaces_observed(
+        olt_present_result, acs_present_result, olt_read_attempted=True
+    )
+    assert real_read == frozenset({"olt", "acs"})
+
+    # Default (no override) matches every non-WiFi-only call site, which
+    # never skips OLT I/O.
+    default = reconcile_core._surfaces_observed(olt_present_result, acs_present_result)
+    assert default == frozenset({"olt", "acs"})
+
+
+def test_observed_olt_read_status_is_none_only_when_not_attempted():
+    """Unit-level pin for ``_observed_olt_read_status``: ``None`` (leave the
+    column untouched) exactly when no OLT I/O was attempted, otherwise the
+    real classification — including ``"unavailable"``, which is a genuine
+    attempt that failed, not a skipped one."""
+    present = ReadResult(status="present", observed=object(), error=None)
+    unavailable = ReadResult(status="unavailable", observed=None, error="boom")
+
+    assert (
+        reconcile_core._observed_olt_read_status(present, read_attempted=False) is None
+    )
+    assert (
+        reconcile_core._observed_olt_read_status(present, read_attempted=True)
+        == "present"
+    )
+    assert (
+        reconcile_core._observed_olt_read_status(unavailable, read_attempted=True)
+        == "unavailable"
+    )
+    # Default matches every existing (non-WiFi-only) call site.
+    assert reconcile_core._observed_olt_read_status(present) == "present"
