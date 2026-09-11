@@ -52,6 +52,7 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         "/admin/network": "network-access",
         "/admin/dispatch/work-orders/work-order-id": "work-order-expenses",
         "/admin/projects/project-id/edit": "project-authoring",
+        "/admin/sales/sales-order/order-id": "sales-orders",
         "/admin/billing": "billing-overview",
         "/admin/billing/payments/reconciliation": "payment-reconciliation",
         "/admin/support/tickets/ticket-id": "support-tickets",
@@ -118,6 +119,20 @@ def test_sales_quote_guidance_explains_direct_customer_subject() -> None:
     assert "reuses the existing active subscriber" in content
     assert "approve for payment" in content
     assert "material quote changes require a new review" in content
+
+
+def test_sales_order_guidance_separates_funding_from_service_setup() -> None:
+    guide = guidance_for_path("/admin/sales/sales-order/order-id")
+
+    assert guide is not None
+    assert guide.id == "sales-orders"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "record payment" in content
+    assert "customer account credit" in content
+    assert "does not create a subscription" in content
+    assert "ip assignment" in content
+    assert "create the subscription" in content
+    assert "initial invoice only when billing should begin" in content
 
 
 def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:
