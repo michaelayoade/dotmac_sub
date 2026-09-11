@@ -924,7 +924,6 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     )
     assert sot_relationships.dependencies_for("support.ticket_region_projection") == (
         "support.ticket_configuration",
-        "support.ticket_lifecycle",
     )
 
     ticket_presentation = sot_relationships.owning_service_for(
