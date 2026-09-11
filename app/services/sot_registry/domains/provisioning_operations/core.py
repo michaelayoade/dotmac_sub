@@ -921,7 +921,9 @@ SERVICES: tuple[SOTService, ...] = (
             "read-only and projects active vendor labels for expense entry. ERP "
             "owns eligible approvers, bank identity, account verification, and the "
             "opaque claim-bound destination token. Sub stores no raw account number; "
-            "it owns the selected local approver link and masked expense snapshot."
+            "it owns the selected local approver link and masked expense snapshot. "
+            "ERP delivery failures retain only typed allowlisted diagnostic codes, "
+            "HTTP status, and request identifiers alongside partial-delivery progress."
         ),
         contract=ServiceContract(
             concerns=(

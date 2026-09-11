@@ -81,6 +81,18 @@ identity. Local submission, durable delivery pending, delivered but awaiting
 ERP acceptance, ERP accepted, rejected, failed/dead, approved, and paid facts
 remain distinct. `sent` outbox evidence is not presented as ERP acceptance;
 only an accepted event or ERP claim reference qualifies.
+An unapproved local claim is labelled **Awaiting manager approval**, because no
+ERP delivery is expected yet. A canceled or locally rejected claim is labelled
+**Not sent to ERP**. **ERP delivery evidence is unavailable** is reserved for an
+approved or paid claim that unexpectedly has neither an ERP reference nor a
+durable release event.
+
+Rejected and dead release events persist only the allowlisted integration
+diagnostic code, HTTP status, and ERP request identifier alongside any existing
+partial-delivery progress. Provider response text and validation input are not
+persisted or displayed. Web and Field API projections render their explanation
+from that typed diagnostic evidence; malformed or legacy evidence falls back to
+a generic failure message.
 
 Manager approval is the sole ERP release point. Its single durable event creates
 or retrieves an idempotent ERP draft, maps stable Sub line IDs to ERP items,
