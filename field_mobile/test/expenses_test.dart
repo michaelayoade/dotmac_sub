@@ -356,7 +356,7 @@ void main() {
   });
 
   test(
-    'uploadReceipt posts multipart receipt and returns download path',
+    'uploadReceipt posts multipart receipt and returns its typed result',
     () async {
       final dir = await io.Directory.systemTemp.createTemp('receipt-test');
       final file = io.File('${dir.path}/receipt.jpg');
@@ -387,7 +387,7 @@ void main() {
         );
       });
 
-      final path = await container
+      final result = await container
           .read(expensesRepositoryProvider)
           .uploadReceipt(
             workOrderId: 'wo-1',
@@ -396,9 +396,87 @@ void main() {
             clientRef: 'ref-1',
           );
 
-      expect(path, '/api/v1/field/attachments/attachment-1/content');
+      expect(result.attachmentId, 'attachment-1');
+      expect(
+        result.downloadPath,
+        '/api/v1/field/attachments/attachment-1/content',
+      );
     },
   );
+
+  test('receipt upload attachment ID is used to submit the expense', () async {
+    final dir = await io.Directory.systemTemp.createTemp('receipt-contract');
+    final file = io.File('${dir.path}/receipt.jpg');
+    await file.writeAsBytes([0xff, 0xd8, 0xff, 0xd9]);
+    addTearDown(() => dir.delete(recursive: true));
+
+    adapter.on('POST', '/api/v1/field/expense-requests/receipts', (_) {
+      return (
+        201,
+        {
+          'id': 'attachment-9',
+          'download_path': '/api/v1/field/attachments/attachment-9/content',
+        },
+      );
+    });
+    adapter.on('POST', '/api/v1/field/expense-requests/submit', (options) {
+      final data = (options.data as Map).cast<String, dynamic>();
+      final item = ((data['items'] as List).single as Map)
+          .cast<String, dynamic>();
+      expect(item['receipt_attachment_id'], 'attachment-9');
+      expect(item.containsKey('receipt_url'), isFalse);
+      return (
+        201,
+        {
+          'id': 'expense-9',
+          'number': 'EXP-0009',
+          'status': 'submitted',
+          'purpose': 'Generator fuel',
+        },
+      );
+    });
+
+    final upload = await container
+        .read(expensesRepositoryProvider)
+        .uploadReceipt(
+          workOrderId: 'wo-9',
+          filePath: file.path,
+          fileName: 'receipt.jpg',
+        );
+    final request = await container
+        .read(expensesRepositoryProvider)
+        .createRequest(
+          purpose: 'Generator fuel',
+          clientRef: 'expense-client-ref-9',
+          workOrderId: 'wo-9',
+          items: [
+            ExpenseItemDraft(
+              categoryCode: 'FUEL',
+              description: 'Diesel',
+              amount: 5000,
+              receiptAttachmentId: upload.attachmentId,
+            ),
+          ],
+        );
+
+    expect(request.id, 'expense-9');
+    expect(upload.downloadPath, contains('attachment-9/content'));
+  });
+
+  test('expense draft round trip preserves receipt attachment ID', () {
+    const item = ExpenseItemDraft(
+      categoryCode: 'FUEL',
+      description: 'Diesel',
+      amount: 5000,
+      receiptAttachmentId: 'attachment-11',
+    );
+
+    final restored = ExpenseItemDraft.fromDraftJson(item.toDraftJson());
+
+    expect(restored.receiptAttachmentId, 'attachment-11');
+    expect(restored.toJson()['receipt_attachment_id'], 'attachment-11');
+    expect(restored.toJson().containsKey('receipt_url'), isFalse);
+  });
 
   test('ExpenseRequest parses status, ERP fields and items', () {
     final request = ExpenseRequest.fromJson({
@@ -742,6 +820,94 @@ void main() {
     // Let the confirmation SnackBar timer expire.
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('new expense request displays a structured safe server message', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    var submitted = false;
+    adapter.on(
+      'POST',
+      '/api/v1/field/expense-requests/payment-destination/verify',
+      (_) => (
+        409,
+        {
+          'detail': {
+            'code': 'operations.expense_requests.destination_expired',
+            'message': 'Verify the payment destination again.',
+            'context': {'internal_reason': 'expired-token'},
+          },
+        },
+      ),
+    );
+    adapter.on('POST', '/api/v1/field/expense-requests/submit', (_) {
+      submitted = true;
+      return (500, {'detail': 'must not submit'});
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(client),
+          expenseCategoriesProvider.overrideWith(
+            (ref) async => const [
+              ExpenseCategory(
+                categoryCode: 'FUEL',
+                categoryName: 'Fuel',
+                requiresReceipt: true,
+              ),
+            ],
+          ),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
+        ],
+        child: const MaterialApp(
+          home: NewExpenseRequestScreen(
+            initialWorkOrderId: 'wo-1',
+            initialWorkOrderLabel: 'WO-1',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('expense-purpose')),
+      'Generator fuel',
+    );
+    await tester.tap(find.byKey(const Key('expense-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expense Approver').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('expense-category')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuel').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('expense-description')),
+      'Diesel',
+    );
+    await tester.enterText(find.byKey(const Key('expense-amount')), '5000');
+    await tester.enterText(
+      find.byKey(const Key('expense-receipt-url')),
+      'https://receipts.test/fuel.jpg',
+    );
+    await tester.tap(find.byKey(const Key('add-expense-line')));
+    await tester.pump();
+    await tester.ensureVisible(find.text('Submit request'));
+    await tester.tap(find.text('Submit request'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Verify the payment destination again.'),
+      findsAtLeastNWidgets(1),
+    );
+    expect(find.textContaining('expired-token'), findsNothing);
+    expect(submitted, isFalse);
   });
 
   testWidgets('new expense request blocks an empty ERP category list', (

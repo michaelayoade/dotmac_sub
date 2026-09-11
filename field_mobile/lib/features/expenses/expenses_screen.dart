@@ -660,6 +660,7 @@ class _NewExpenseRequestScreenState
   bool _saving = false;
   bool _receiptUploading = false;
   String _receiptFileName = '';
+  String? _receiptAttachmentId;
   String _submitError = '';
   String _approverError = '';
   String _lineError = '';
@@ -714,7 +715,9 @@ class _NewExpenseRequestScreenState
       );
       return;
     }
-    if (category.requiresReceipt && _receiptUrl.text.trim().isEmpty) {
+    if (category.requiresReceipt &&
+        _receiptUrl.text.trim().isEmpty &&
+        (_receiptAttachmentId == null || _receiptAttachmentId!.isEmpty)) {
       setState(
         () => _lineError = '${category.displayName} requires a receipt.',
       );
@@ -729,6 +732,7 @@ class _NewExpenseRequestScreenState
           amount: amount,
           vendorName: _vendor.text,
           receiptUrl: _receiptUrl.text,
+          receiptAttachmentId: _receiptAttachmentId,
         ),
       );
       _selectedCategory = null;
@@ -737,6 +741,7 @@ class _NewExpenseRequestScreenState
       _vendor.clear();
       _receiptUrl.clear();
       _receiptFileName = '';
+      _receiptAttachmentId = null;
       _lineError = '';
     });
   }
@@ -792,7 +797,7 @@ class _NewExpenseRequestScreenState
             'work_order_id': _workOrderId,
             'project_id': _projectId.text,
             'ticket_id': _ticketId.text,
-            'items': _items.map(_expenseDraftItemJson).toList(),
+            'items': _items.map((item) => item.toDraftJson()).toList(),
           },
         );
     ref.invalidate(expenseRequestDraftsProvider);
@@ -956,7 +961,7 @@ class _NewExpenseRequestScreenState
       _lineError = '';
     });
     try {
-      final url = await ref
+      final upload = await ref
           .read(expensesRepositoryProvider)
           .uploadReceipt(
             workOrderId: workOrderId,
@@ -966,7 +971,8 @@ class _NewExpenseRequestScreenState
           );
       if (!mounted) return;
       setState(() {
-        _receiptUrl.text = url;
+        _receiptUrl.clear();
+        _receiptAttachmentId = upload.attachmentId;
         _receiptFileName = picked.name;
       });
     } on DioException catch (error) {
@@ -1506,6 +1512,13 @@ class _NewExpenseRequestScreenState
                 child: TextField(
                   key: const Key('expense-receipt-url'),
                   controller: _receiptUrl,
+                  onChanged: (_) {
+                    if (_receiptAttachmentId == null) return;
+                    setState(() {
+                      _receiptAttachmentId = null;
+                      _receiptFileName = '';
+                    });
+                  },
                   decoration: InputDecoration(
                     labelText: _selectedCategory?.requiresReceipt == true
                         ? 'Receipt URL required'
@@ -1570,8 +1583,12 @@ class _NewExpenseRequestScreenState
                             if (item.vendorName != null &&
                                 item.vendorName!.trim().isNotEmpty)
                               item.vendorName!.trim(),
-                            if (item.receiptUrl != null &&
-                                item.receiptUrl!.trim().isNotEmpty)
+                            if ((item.receiptUrl != null &&
+                                    item.receiptUrl!.trim().isNotEmpty) ||
+                                (item.receiptAttachmentId != null &&
+                                    item.receiptAttachmentId!
+                                        .trim()
+                                        .isNotEmpty))
                               'receipt attached',
                           ].join(' · '),
                           maxLines: 2,
@@ -1913,6 +1930,12 @@ String _expenseErrorMessage(DioException error, String fallback) {
   if (data is Map) {
     final detail = data['detail'];
     if (detail is String && detail.trim().isNotEmpty) return detail.trim();
+    if (detail is Map) {
+      final message = detail['message'];
+      if (message is String && message.trim().isNotEmpty) {
+        return message.trim();
+      }
+    }
     if (detail is List && detail.isNotEmpty) {
       return detail
           .map((item) {
@@ -2007,34 +2030,9 @@ class _StatusStep {
   final bool error;
 }
 
-Map<String, dynamic> _expenseDraftItemJson(ExpenseItemDraft item) => {
-  'category_code': item.categoryCode,
-  'category_name': item.categoryName,
-  'description': item.description,
-  'amount': item.amount,
-  'expense_date': item.expenseDate,
-  'vendor_name': item.vendorName,
-  'receipt_url': item.receiptUrl,
-  'notes': item.notes,
-};
-
 List<ExpenseItemDraft> _expenseDraftItems(Object? raw) {
   if (raw is! List) return const [];
   return raw.whereType<Map>().map((item) {
-    final data = item.cast<String, dynamic>();
-    return ExpenseItemDraft(
-      categoryCode: data['category_code'] as String? ?? '',
-      categoryName: data['category_name'] as String?,
-      description: data['description'] as String? ?? '',
-      amount: switch (data['amount']) {
-        num value => value.toDouble(),
-        String value => double.tryParse(value) ?? 0,
-        _ => 0,
-      },
-      expenseDate: data['expense_date'] as String?,
-      vendorName: data['vendor_name'] as String?,
-      receiptUrl: data['receipt_url'] as String?,
-      notes: data['notes'] as String?,
-    );
+    return ExpenseItemDraft.fromDraftJson(item.cast<String, dynamic>());
   }).toList();
 }

@@ -110,6 +110,30 @@ class VerifiedExpenseDestination {
   final Map<String, dynamic> data;
 }
 
+class ExpenseReceiptUploadResult {
+  const ExpenseReceiptUploadResult({
+    required this.attachmentId,
+    required this.downloadPath,
+  });
+
+  final String attachmentId;
+  final String downloadPath;
+
+  factory ExpenseReceiptUploadResult.fromJson(Map<String, dynamic> json) {
+    final attachmentId = json['id']?.toString().trim() ?? '';
+    final downloadPath = json['download_path']?.toString().trim() ?? '';
+    if (attachmentId.isEmpty || downloadPath.isEmpty) {
+      throw const FormatException(
+        'Receipt upload did not return an attachment ID and download path.',
+      );
+    }
+    return ExpenseReceiptUploadResult(
+      attachmentId: attachmentId,
+      downloadPath: downloadPath,
+    );
+  }
+}
+
 class ExpenseItemDraft {
   const ExpenseItemDraft({
     required this.categoryCode,
@@ -119,6 +143,7 @@ class ExpenseItemDraft {
     this.expenseDate,
     this.vendorName,
     this.receiptUrl,
+    this.receiptAttachmentId,
     this.notes,
   });
 
@@ -129,6 +154,7 @@ class ExpenseItemDraft {
   final String? expenseDate;
   final String? vendorName;
   final String? receiptUrl;
+  final String? receiptAttachmentId;
   final String? notes;
 
   Map<String, dynamic> toJson() => {
@@ -143,8 +169,39 @@ class ExpenseItemDraft {
       'vendor_name': vendorName!.trim(),
     if (receiptUrl != null && receiptUrl!.trim().isNotEmpty)
       'receipt_url': receiptUrl!.trim(),
+    if (receiptAttachmentId != null && receiptAttachmentId!.trim().isNotEmpty)
+      'receipt_attachment_id': receiptAttachmentId!.trim(),
     if (notes != null && notes!.trim().isNotEmpty) 'notes': notes!.trim(),
   };
+
+  Map<String, dynamic> toDraftJson() => {
+    'category_code': categoryCode,
+    'category_name': categoryName,
+    'description': description,
+    'amount': amount,
+    'expense_date': expenseDate,
+    'vendor_name': vendorName,
+    'receipt_url': receiptUrl,
+    'receipt_attachment_id': receiptAttachmentId,
+    'notes': notes,
+  };
+
+  factory ExpenseItemDraft.fromDraftJson(Map<String, dynamic> json) =>
+      ExpenseItemDraft(
+        categoryCode: json['category_code'] as String? ?? '',
+        categoryName: json['category_name'] as String?,
+        description: json['description'] as String? ?? '',
+        amount: switch (json['amount']) {
+          num value => value.toDouble(),
+          String value => double.tryParse(value) ?? 0,
+          _ => 0,
+        },
+        expenseDate: json['expense_date'] as String?,
+        vendorName: json['vendor_name'] as String?,
+        receiptUrl: json['receipt_url'] as String?,
+        receiptAttachmentId: json['receipt_attachment_id'] as String?,
+        notes: json['notes'] as String?,
+      );
 }
 
 class ExpenseRequestItem {

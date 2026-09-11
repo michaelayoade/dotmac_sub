@@ -156,7 +156,7 @@ class ExpensesRepository {
         .toList();
   }
 
-  Future<String> uploadReceipt({
+  Future<ExpenseReceiptUploadResult> uploadReceipt({
     required String workOrderId,
     required String filePath,
     required String fileName,
@@ -174,14 +174,9 @@ class ExpensesRepository {
             'file': await MultipartFile.fromFile(filePath, filename: fileName),
           }),
         );
-    final data = (response.data as Map).cast<String, dynamic>();
-    final downloadPath = data['download_path']?.toString().trim();
-    if (downloadPath != null && downloadPath.isNotEmpty) return downloadPath;
-    final id = data['id']?.toString().trim();
-    if (id != null && id.isNotEmpty) {
-      return '/api/v1/field/attachments/$id/content';
-    }
-    throw StateError('Receipt upload did not return an attachment link.');
+    return ExpenseReceiptUploadResult.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
   }
 }
 
