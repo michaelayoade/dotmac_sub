@@ -15,10 +15,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -298,10 +299,45 @@ class InboxAutomationRule(Base):
     )
 
 
+class InboxCustomerCompletionPolicyVersion(Base):
+    """Immutable Customer-only resolution-completion policy snapshot source."""
+
+    __tablename__ = "inbox_customer_completion_policy_versions"
+    __table_args__ = (
+        UniqueConstraint("version", name="uq_inbox_customer_completion_policy_version"),
+        CheckConstraint(
+            "version > 0", name="ck_inbox_customer_completion_policy_version_positive"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    required_fields: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON()), nullable=False
+    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    decision_source: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+@event.listens_for(InboxCustomerCompletionPolicyVersion, "before_update")
+@event.listens_for(InboxCustomerCompletionPolicyVersion, "before_delete")
+def _deny_customer_completion_policy_mutation(*_args: object) -> None:
+    raise ValueError("Inbox Customer completion policy versions are immutable")
+
+
 class InboxConversation(Base):
     __tablename__ = "inbox_conversations"
     __table_args__ = (
         Index("ix_inbox_conversations_subscriber", "subscriber_id"),
+        Index(
+            "ix_inbox_conversations_customer_completion_policy",
+            "customer_completion_policy_version_id",
+        ),
         Index(
             "ix_inbox_conversations_continued_from",
             "continued_from_conversation_id",
@@ -330,6 +366,10 @@ class InboxConversation(Base):
     )
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    customer_completion_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbox_customer_completion_policy_versions.id", ondelete="RESTRICT"),
     )
     primary_service_team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_teams.id")

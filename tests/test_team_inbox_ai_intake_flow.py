@@ -33,6 +33,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationQueueEntry,
+    InboxConversationStatus,
     InboxMessage,
     InboxMessageDirection,
     InboxStatusTransitionEvent,
@@ -41,6 +42,7 @@ from app.services import (
     ai_conversation_intake,
     ai_intake,
     ai_intake_conversation_engine,
+    team_inbox_assignment,
     team_inbox_channel_receive,
     team_inbox_maintenance,
     team_inbox_outbound,
@@ -1418,6 +1420,9 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
                 "escalate_after_minutes": 5,
                 "exclude_campaign_attribution": True,
             },
+            customer_wait_handoff_policy=(
+                ai_conversation_intake.CustomerWaitHandoffPolicy(handoff_minutes=10)
+            ),
             conversational_engine_enabled=True,
             permitted_identifiers=("portal_id",),
             tool_config={
@@ -1430,6 +1435,9 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
             },
         ),
     )
+    draft_version = db_session.get(AiIntakePolicyVersion, draft.version_id)
+    assert draft_version.escalation_rules["customer_wait_handoff_minutes"] == 10
+    assert "customer_wait_expiry_hours" not in draft_version.escalation_rules
     ai_conversation_intake.activate_policy_version(
         db_session,
         ai_conversation_intake.AiPolicyVersionActivateCommand(
@@ -2392,7 +2400,7 @@ def _recover_ai_timeouts(db_session, *, now: datetime):
     )
 
 
-def test_customer_wait_records_long_expiry_and_short_inactivity_noops(
+def test_customer_wait_records_10_minute_handoff_and_short_inactivity_noops(
     db_session, monkeypatch
 ):
     fallback = _team(db_session, "Configured Fallback Team")
@@ -2415,10 +2423,13 @@ def test_customer_wait_records_long_expiry_and_short_inactivity_noops(
     )
     assert session.state == "awaiting_customer"
     assert session.customer_wait_started_at is not None
-    assert session.customer_wait_expires_at is None
+    assert session.customer_wait_expires_at == session.expires_at
     assert session.expires_at is not None
-    assert session.expires_at - session.customer_wait_started_at == timedelta(hours=72)
-    assert session.metadata_["customer_wait_expiry_hours"] == 72
+    assert session.expires_at - session.customer_wait_started_at == timedelta(
+        minutes=10
+    )
+    assert session.metadata_["customer_wait_handoff_minutes"] == 10
+    assert "customer_wait_expiry_hours" not in session.metadata_
 
     outcome = _recover_ai_timeouts(
         db_session, now=session.customer_wait_started_at + timedelta(minutes=9)
@@ -2435,9 +2446,7 @@ def test_customer_wait_records_long_expiry_and_short_inactivity_noops(
     )
 
 
-def test_customer_silence_expires_without_human_handoff_or_queue(
-    db_session, monkeypatch
-):
+def test_customer_silence_hands_off_to_fifo_queue_idempotently(db_session, monkeypatch):
     fallback = _team(db_session, "Configured Fallback Team")
     _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
     gateway = _Gateway(confidence=0.2)
@@ -2458,26 +2467,82 @@ def test_customer_silence_expires_without_human_handoff_or_queue(
 
     conversation = db_session.get(InboxConversation, received.conversation_id)
     session = db_session.get(AiIntakeSession, session.id)
+    note = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "internal")
+        .one()
+    )
+    queue_entry = (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .one()
+    )
     assert outcome.changed == 1
     assert repeated.changed == 0
-    assert conversation.metadata_["ai_intake"]["status"] == "expired"
-    assert conversation.metadata_["ai_intake"]["reason"] == "customer_inactive_expired"
+    assert conversation.primary_service_team_id == fallback.id
+    assert conversation.metadata_["ai_intake"]["status"] == "escalated"
+    assert conversation.metadata_["ai_intake"]["reason"] == "customer_response_timeout"
     assert conversation.metadata_["ai_handling"] is False
-    assert session.state == "expired"
+    assert session.state == "completed"
     assert session.completed_at is not None
     assert session.customer_wait_started_at is None
     assert session.customer_wait_expires_at is None
     assert conversation.assignments == []
-    assert (
-        db_session.query(InboxMessage)
-        .filter(InboxMessage.conversation_id == conversation.id)
-        .filter(InboxMessage.direction == "internal")
-        .count()
-        == 0
+    assert note.metadata_["source"] == "ai_intake_timeout_handoff"
+    assert note.metadata_["destination_team_id"] == str(fallback.id)
+    assert queue_entry.service_team_id == fallback.id
+    assert queue_entry.queue_position == 1
+
+
+def test_customer_silence_handoff_respects_existing_fifo_head(db_session, monkeypatch):
+    fallback = _team(db_session, "Configured Fallback Team")
+    _available_member(db_session, fallback)
+    older = InboxConversation(
+        channel_type=InboxChannelType.whatsapp.value,
+        status=InboxConversationStatus.open.value,
+        contact_address="2348099999999",
+        external_thread_id=f"older-fifo-{uuid4()}",
     )
-    assert (
+    db_session.add(older)
+    db_session.flush()
+    team_inbox_assignment.queue_conversation_for_team(
+        db_session,
+        conversation=older,
+        service_team_id=fallback.id,
+        reason="existing customer waiting first",
+    )
+    _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
+    gateway = _Gateway(confidence=0.2)
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    received = _receive(db_session, message_id="wamid-timeout-fifo-order")
+    _process_ai(db_session, sweeps=1)
+    session = (
+        db_session.query(AiIntakeSession)
+        .filter(AiIntakeSession.conversation_id == received.conversation_id)
+        .one()
+    )
+
+    outcome = _recover_ai_timeouts(
+        db_session, now=session.expires_at + timedelta(seconds=1)
+    )
+
+    entries = (
         db_session.query(InboxConversationQueueEntry)
-        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .filter(InboxConversationQueueEntry.service_team_id == fallback.id)
+        .order_by(InboxConversationQueueEntry.queue_position.asc())
+        .all()
+    )
+    assert outcome.changed == 1
+    assert [entry.conversation_id for entry in entries] == [
+        older.id,
+        received.conversation_id,
+    ]
+    assert [entry.queue_position for entry in entries] == [1, 2]
+    assert (
+        db_session.query(InboxConversationAssignment)
+        .filter(InboxConversationAssignment.conversation_id == received.conversation_id)
         .count()
         == 0
     )
@@ -2525,7 +2590,7 @@ def test_customer_reply_after_short_inactivity_resumes_same_ai_session(
     assert len(sessions) == 1
     assert session.state == "awaiting_customer"
     assert session.customer_wait_started_at is not None
-    assert session.customer_wait_expires_at is None
+    assert session.customer_wait_expires_at is not None
     assert gateway.calls >= 1
     session_metadata = dict(session.metadata_ or {})
     assert session_metadata[f"processed_inbound:{reply.message_id}"] is True
@@ -2549,7 +2614,9 @@ def test_customer_reply_after_short_inactivity_resumes_same_ai_session(
     )
 
 
-def test_customer_silence_does_not_assign_available_agent(db_session, monkeypatch):
+def test_customer_silence_assigns_available_agent_after_ten_minutes(
+    db_session, monkeypatch
+):
     fallback = _team(db_session, "Configured Fallback Team")
     agent_id = _available_member(db_session, fallback)
     _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
@@ -2565,20 +2632,21 @@ def test_customer_silence_does_not_assign_available_agent(db_session, monkeypatc
     )
 
     outcome = _recover_ai_timeouts(
-        db_session, now=session.customer_wait_started_at + timedelta(minutes=5)
+        db_session, now=session.expires_at + timedelta(seconds=1)
     )
 
-    assignment_count = (
+    assignment = (
         db_session.query(InboxConversationAssignment)
         .filter(InboxConversationAssignment.conversation_id == received.conversation_id)
         .filter(InboxConversationAssignment.is_active.is_(True))
-        .count()
+        .one()
     )
     session = db_session.get(AiIntakeSession, session.id)
-    assert outcome.changed == 0
-    assert assignment_count == 0
-    assert session.state == "awaiting_customer"
-    assert agent_id is not None
+    assert outcome.changed == 1
+    assert assignment.person_id == agent_id
+    assert assignment.service_team_id == fallback.id
+    assert session.state == "completed"
+    assert session.metadata_["customer_timeout_assignment_kind"] == "assigned"
 
 
 def test_newer_customer_reply_cancels_timeout_handoff_and_resumes_ai(
@@ -2669,7 +2737,7 @@ def test_human_takeover_cancels_timeout_handoff(db_session, monkeypatch):
     )
 
 
-def test_legacy_awaiting_customer_null_deadline_is_backfilled_not_handed_off(
+def test_legacy_72_hour_wait_is_normalized_and_handed_off_after_10_minutes(
     db_session, monkeypatch
 ):
     fallback = _team(db_session, "Configured Fallback Team")
@@ -2684,15 +2752,69 @@ def test_legacy_awaiting_customer_null_deadline_is_backfilled_not_handed_off(
         .filter(AiIntakeSession.conversation_id == received.conversation_id)
         .one()
     )
-    session.customer_wait_started_at = None
+    wait_started = session.customer_wait_started_at
+    session.expires_at = wait_started + timedelta(hours=72)
     session.customer_wait_expires_at = None
     session_metadata = dict(session.metadata_ or {})
-    session_metadata.pop("customer_wait_started_at", None)
+    session_metadata["customer_wait_started_at"] = wait_started.isoformat()
     session_metadata.pop("customer_wait_expires_at", None)
-    session_metadata.pop("customer_wait_expiry_hours", None)
+    session_metadata.pop("customer_wait_handoff_minutes", None)
+    session_metadata["customer_wait_expiry_hours"] = 72
     session.metadata_ = session_metadata
     db_session.flush()
-    now = session.expires_at + timedelta(seconds=1)
+    now = wait_started + timedelta(minutes=10, seconds=1)
+
+    outcome = _recover_ai_timeouts(db_session, now=now)
+
+    session = db_session.get(AiIntakeSession, session.id)
+    assert outcome.changed == 1
+    assert outcome.skipped == 0
+    assert session.state == "completed"
+    assert session.customer_wait_expires_at is None
+    assert session.expires_at.replace(tzinfo=UTC) == wait_started.replace(
+        tzinfo=UTC
+    ) + timedelta(minutes=10)
+    assert session.metadata_["customer_wait_handoff_minutes"] == 10
+    assert "customer_wait_expiry_hours" not in session.metadata_
+    assert (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == received.conversation_id)
+        .filter(InboxMessage.direction == "internal")
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == received.conversation_id)
+        .count()
+        == 1
+    )
+
+
+def test_legacy_wait_without_start_receives_fresh_10_minute_window(
+    db_session, monkeypatch
+):
+    fallback = _team(db_session, "Configured Fallback Team")
+    _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
+    gateway = _Gateway(confidence=0.2)
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    received = _receive(db_session, message_id="wamid-timeout-legacy-no-start")
+    _process_ai(db_session, sweeps=1)
+    session = (
+        db_session.query(AiIntakeSession)
+        .filter(AiIntakeSession.conversation_id == received.conversation_id)
+        .one()
+    )
+    session.customer_wait_started_at = None
+    session.expires_at = None
+    session_metadata = dict(session.metadata_ or {})
+    session_metadata.pop("customer_wait_started_at", None)
+    session_metadata.pop("customer_wait_handoff_minutes", None)
+    session_metadata["customer_wait_expiry_hours"] = 72
+    session.metadata_ = session_metadata
+    db_session.flush()
+    now = datetime.now(UTC) + timedelta(days=1)
 
     outcome = _recover_ai_timeouts(db_session, now=now)
 
@@ -2700,26 +2822,16 @@ def test_legacy_awaiting_customer_null_deadline_is_backfilled_not_handed_off(
     assert outcome.changed == 1
     assert outcome.skipped == 0
     assert session.state == "awaiting_customer"
-    now_utc = now.replace(tzinfo=UTC)
-    assert session.customer_wait_started_at.replace(tzinfo=UTC) == now_utc
-    assert session.customer_wait_expires_at is None
-    assert session.expires_at.replace(tzinfo=UTC) == now_utc + timedelta(hours=72)
-    assert (
-        db_session.query(InboxMessage)
-        .filter(InboxMessage.conversation_id == received.conversation_id)
-        .filter(InboxMessage.direction == "internal")
-        .count()
-        == 0
+    assert session.customer_wait_started_at.replace(tzinfo=UTC) == now
+    assert session.expires_at.replace(tzinfo=UTC) == now + timedelta(minutes=10)
+    assert session.customer_wait_expires_at.replace(tzinfo=UTC) == now + timedelta(
+        minutes=10
     )
-    assert (
-        db_session.query(InboxConversationQueueEntry)
-        .filter(InboxConversationQueueEntry.conversation_id == received.conversation_id)
-        .count()
-        == 0
-    )
+    assert session.metadata_["customer_wait_handoff_minutes"] == 10
+    assert "customer_wait_expiry_hours" not in session.metadata_
 
 
-def test_long_term_expiry_never_creates_assignment_note_or_queue(
+def test_timeout_handoff_assignment_failure_rolls_back_and_retries(
     db_session, monkeypatch
 ):
     fallback = _team(db_session, "Configured Fallback Team")
@@ -2735,14 +2847,24 @@ def test_long_term_expiry_never_creates_assignment_note_or_queue(
         .one()
     )
     due_at = session.expires_at
-    expired = _recover_ai_timeouts(db_session, now=due_at + timedelta(seconds=1))
+
+    def _assignment_failure(*_args, **_kwargs):
+        raise RuntimeError("simulated assignment outage")
+
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr(
+            team_inbox_assignment,
+            "assign_conversation_to_available_agent",
+            _assignment_failure,
+        )
+        failed = _recover_ai_timeouts(db_session, now=due_at + timedelta(seconds=1))
 
     session = db_session.get(AiIntakeSession, session.id)
-    assert expired.changed == 1
-    assert expired.skipped == 0
-    assert session.state == "expired"
-    assert session.customer_wait_expires_at is None
+    assert failed.changed == 0
+    assert failed.skipped == 1
+    assert session.state == "awaiting_customer"
     assert "customer_timeout_handoff_key" not in dict(session.metadata_ or {})
+    assert session.metadata_["customer_timeout_handoff_failure"]["retryable"] is True
     assert (
         db_session.query(InboxMessage)
         .filter(InboxMessage.conversation_id == received.conversation_id)
@@ -2757,18 +2879,24 @@ def test_long_term_expiry_never_creates_assignment_note_or_queue(
         == 0
     )
 
+    retried = _recover_ai_timeouts(db_session, now=due_at + timedelta(seconds=2))
+
+    session = db_session.get(AiIntakeSession, session.id)
+    assert retried.changed == 1
+    assert retried.skipped == 0
+    assert session.state == "completed"
     assert (
         db_session.query(InboxMessage)
         .filter(InboxMessage.conversation_id == received.conversation_id)
         .filter(InboxMessage.direction == "internal")
         .count()
-        == 0
+        == 1
     )
     assert (
         db_session.query(InboxConversationQueueEntry)
         .filter(InboxConversationQueueEntry.conversation_id == received.conversation_id)
         .count()
-        == 0
+        == 1
     )
 
 

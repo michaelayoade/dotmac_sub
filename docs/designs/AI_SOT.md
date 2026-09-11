@@ -156,14 +156,18 @@ path. The
 provider call remains asynchronous to webhook acknowledgement. A dedupe key
 derived from the inbound message prevents a repeated delivery from creating a
 second response. Customer silence records `waiting_reason=awaiting_customer` and
-does not route, assign, queue, or increment AI inability. `expires_at` is a
-separate `customer_wait_expiry_hours` policy (72 hours by default, bounded to
-24–720 hours). The scheduled Team Inbox maintenance owner locks only sessions
-past that long-term expiry, rechecks newer inbound and human takeover, then
-transitions the AI session to `expired` and the Inbox conversation to resolved.
-It creates no handoff note or assignment. A newer customer reply resumes the
-same graph in `collecting_intent`; legacy short-wait rows are extended onto the new
-long-term lifecycle before any expiry consequence.
+does not route, assign, queue, or increment AI inability during the hold.
+`expires_at` is a separate `customer_wait_handoff_minutes` policy (10 minutes by
+default, bounded to 1–1440 minutes). The scheduled Team Inbox maintenance owner
+selects due sessions and sessions carrying a retired hours/expiry policy marker,
+locks each candidate, normalizes legacy deadlines from the recorded wait start,
+and rechecks newer inbound and human takeover. At the deadline it records a
+handoff summary, ends AI ownership, and invokes the authoritative normal routing
+owner: an eligible agent is assigned only when FIFO ordering and capacity allow;
+otherwise the conversation receives a durable entry in that team's regular FIFO
+queue. A newer customer reply before the deadline resumes the same graph in
+`collecting_intent`. A legacy wait with no trustworthy start is given one fresh
+10-minute window before any handoff consequence.
 
 Classifier transport success is not classifier acceptance. Invalid JSON,
 schema-validation failure, provider unavailability, and a response with no
