@@ -915,6 +915,22 @@ def test_sales_order_detail_context(db_session):
     assert context["project"] is None
 
 
+def test_sales_order_form_exposes_only_operator_owned_statuses(db_session):
+    context = web_sales.build_sales_order_form_context(db_session)
+
+    assert context["statuses"] == ["draft", "confirmed", "cancelled"]
+
+
+def test_sales_order_detail_links_to_account_payment_with_balance():
+    template = Path("templates/admin/sales/sales_orders/detail.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "billing:payment:create" in template
+    assert "/admin/billing/payments/new?account_id=" in template
+    assert "order.balance_due" in template
+
+
 def test_sales_orders_resolve_historical_agent_name_and_email(db_session):
     subscriber = _make_subscriber(db_session)
     agent = SystemUser(
