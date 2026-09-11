@@ -338,6 +338,18 @@ def reconcile_ont(
             # is never reassigned after this point, so the same flag applies
             # to both the pre-apply read below and the post-apply verify read.
             olt_read_attempted = olt_adapter is not None
+            # Symmetric case: ``acs_client is None`` at this point means the
+            # OLT-only profile-change pass (``olt_only_profile_change``)
+            # deliberately skipped ACS I/O and substitutes
+            # ``acs_observed_fallback`` (cached prior evidence) instead of
+            # paying for a live GenieACS read. Same treatment as
+            # ``olt_read_attempted`` above — the substitution is still
+            # classified present/absent for planning, but must not be
+            # recorded as this pass having actually observed the ACS
+            # surface. ``acs_client`` is never reassigned after this point,
+            # so the same flag applies to both the pre-apply read below and
+            # the post-apply verify read.
+            acs_read_attempted = acs_client is not None
 
             # ── Read observed (parallel OLT + ACS) ──────────────────────────
             olt_result, acs_result = _read_observed_parallel(
@@ -404,7 +416,10 @@ def reconcile_ont(
                     drift_before=(),
                     drift_after=(),
                     observed_surfaces=_surfaces_observed(
-                        olt_result, acs_result, olt_read_attempted=olt_read_attempted
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         olt_result, read_attempted=olt_read_attempted
@@ -460,7 +475,10 @@ def reconcile_ont(
                     drift_before=plan.drifts,
                     drift_after=plan.drifts,
                     observed_surfaces=_surfaces_observed(
-                        olt_result, acs_result, olt_read_attempted=olt_read_attempted
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         olt_result, read_attempted=olt_read_attempted
@@ -485,6 +503,7 @@ def reconcile_ont(
                             olt_result,
                             acs_result,
                             olt_read_attempted=olt_read_attempted,
+                            acs_read_attempted=acs_read_attempted,
                         ),
                         olt_read_status=_observed_olt_read_status(
                             olt_result, read_attempted=olt_read_attempted
@@ -524,6 +543,7 @@ def reconcile_ont(
                             olt_result,
                             acs_result,
                             olt_read_attempted=olt_read_attempted,
+                            acs_read_attempted=acs_read_attempted,
                         ),
                         olt_read_status=_observed_olt_read_status(
                             olt_result, read_attempted=olt_read_attempted
@@ -540,7 +560,10 @@ def reconcile_ont(
                     drift_before=plan.drifts,
                     drift_after=(),
                     observed_surfaces=_surfaces_observed(
-                        olt_result, acs_result, olt_read_attempted=olt_read_attempted
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         olt_result, read_attempted=olt_read_attempted
@@ -587,7 +610,10 @@ def reconcile_ont(
                     drift_before=plan.drifts,
                     drift_after=plan.drifts,
                     observed_surfaces=_surfaces_observed(
-                        olt_result, acs_result, olt_read_attempted=olt_read_attempted
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         olt_result, read_attempted=olt_read_attempted
@@ -653,6 +679,7 @@ def reconcile_ont(
                             olt_result,
                             acs_result,
                             olt_read_attempted=olt_read_attempted,
+                            acs_read_attempted=acs_read_attempted,
                         ),
                         olt_read_status=_observed_olt_read_status(
                             olt_result, read_attempted=olt_read_attempted
@@ -675,7 +702,10 @@ def reconcile_ont(
                     drift_before=plan.drifts,
                     drift_after=residual_ppp_drift,
                     observed_surfaces=_surfaces_observed(
-                        olt_result, acs_result, olt_read_attempted=olt_read_attempted
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         olt_result, read_attempted=olt_read_attempted
@@ -736,6 +766,7 @@ def reconcile_ont(
                         verify_olt_result,
                         verify_acs_result,
                         olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         verify_olt_result, read_attempted=olt_read_attempted
@@ -762,6 +793,7 @@ def reconcile_ont(
                         verify_olt_result,
                         verify_acs_result,
                         olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         verify_olt_result, read_attempted=olt_read_attempted
@@ -815,6 +847,7 @@ def reconcile_ont(
                         verify_olt_result,
                         verify_acs_result,
                         olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         verify_olt_result, read_attempted=olt_read_attempted
@@ -871,6 +904,7 @@ def reconcile_ont(
                         verify_olt_result,
                         verify_acs_result,
                         olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         verify_olt_result, read_attempted=olt_read_attempted
@@ -897,6 +931,7 @@ def reconcile_ont(
                         verify_olt_result,
                         verify_acs_result,
                         olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
                     ),
                     olt_read_status=_observed_olt_read_status(
                         verify_olt_result, read_attempted=olt_read_attempted
@@ -923,6 +958,7 @@ def reconcile_ont(
                     verify_olt_result,
                     verify_acs_result,
                     olt_read_attempted=olt_read_attempted,
+                    acs_read_attempted=acs_read_attempted,
                 ),
                 olt_read_status=_observed_olt_read_status(
                     verify_olt_result, read_attempted=olt_read_attempted
@@ -1206,6 +1242,7 @@ def _surfaces_observed(
     acs_result: ReadResult,
     *,
     olt_read_attempted: bool = True,
+    acs_read_attempted: bool = True,
 ) -> frozenset[WriteSurface]:
     """Which surfaces this pass actually produced a trustworthy read for.
 
@@ -1214,20 +1251,22 @@ def _surfaces_observed(
     real evidence — ``upsert_ont_observation`` must not let it overwrite the
     last genuine observation for that surface.
 
-    ``olt_read_attempted`` is a separate axis from ``olt_result.status``: a
-    WiFi-only delivery pass never builds an OLT adapter at all and instead
-    substitutes the last cached observation (see ``reconcile_ont`` and
+    ``olt_read_attempted``/``acs_read_attempted`` are each a separate axis
+    from their respective result's ``.status``: a WiFi-only delivery pass
+    never builds an OLT adapter at all, and an OLT-only profile-change pass
+    never builds an ACS client at all — both substitute the last cached
+    observation instead (see ``reconcile_ont`` and
     ``_read_observed_parallel``). That substitution is still classified
     ``"present"``/``"absent"`` — the cached data is real and usable for
-    planning — but no OLT I/O happened this pass, so it must not count as
-    this pass having observed the surface. Callers that never skip OLT I/O
-    (every call site except the WiFi-only delivery path) pass no override and
-    get the original behaviour.
+    planning — but no I/O happened this pass for that surface, so it must
+    not count as this pass having observed it. Callers that never skip a
+    given surface's I/O pass no override for that flag and get the original
+    behaviour.
     """
     surfaces: set[WriteSurface] = set()
     if olt_result.status != "unavailable" and olt_read_attempted:
         surfaces.add("olt")
-    if acs_result.status != "unavailable":
+    if acs_result.status != "unavailable" and acs_read_attempted:
         surfaces.add("acs")
     return frozenset(surfaces)
 

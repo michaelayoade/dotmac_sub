@@ -10,6 +10,7 @@ rows.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -1800,8 +1801,15 @@ def test_tr069_profile_change_is_olt_only_and_persists_after_readback(
     assert ont.desired_tr069_profile_id == 5
     observation = db_session.query(OntObservation).one()
     assert observation.olt_tr069_profile_id == 5
-    assert observation.acs_present is True
-    assert observation.acs_observed_software_version == "V5R020"
+    # ``_cached_acs_observation`` above stands in for the last stored ACS
+    # evidence, used only for planning — this pass never talks to ACS at all
+    # (``olt_only_profile_change``), so it must not be recorded as a fresh
+    # ACS observation. This is the very first observation row for this ONT
+    # (no genuine prior evidence exists), so the row correctly reflects "no
+    # evidence yet" rather than stamping the substituted planning data as a
+    # real one.
+    assert observation.acs_present is False
+    assert observation.acs_observed_software_version is None
 
 
 # ── PPP refusal is residual drift, not a hard failure ───────────────────────
@@ -2446,3 +2454,362 @@ def test_observed_olt_read_status_is_none_only_when_not_attempted():
     )
     # Default matches every existing (non-WiFi-only) call site.
     assert reconcile_core._observed_olt_read_status(present) == "present"
+
+
+# ── Symmetric ACS-side cached-substitution provenance (mirrors the OLT-side
+# ``olt_read_attempted`` fix above, for ``olt_only_profile_change``) ────────
+
+
+def _absent_olt_for_seed() -> OltObservedFields:
+    """Minimal OLT "no evidence" shape for seeding a baseline observation row
+    whose ACS half is what these tests actually exercise."""
+    return OltObservedFields(
+        olt_present=False,
+        olt_match_state=None,
+        olt_run_state=None,
+        olt_distance_m=None,
+        olt_rx_dbm=None,
+        olt_tx_dbm=None,
+        olt_temperature_c=None,
+        olt_description=None,
+        olt_mgmt_ip=None,
+        olt_mgmt_vlan=None,
+        olt_line_profile_id=None,
+        olt_service_profile_id=None,
+        olt_service_ports=(),
+    )
+
+
+def _cached_present_acs(software_version: str) -> AcsObservedFields:
+    """Genuine ACS evidence — standing in for the last real GenieACS read
+    that an OLT-only profile-change pass will substitute rather than
+    re-observe live."""
+    return AcsObservedFields(
+        acs_present=True,
+        acs_last_inform_at=None,
+        acs_last_boot_at=None,
+        acs_last_bootstrap_at=None,
+        acs_observed_software_version=software_version,
+        acs_observed_pppoe_username=None,
+        acs_observed_pppoe_enable=None,
+        acs_observed_wan_vlan=None,
+        acs_observed_wan_external_ip=None,
+        acs_observed_wan_connection_status=None,
+        acs_observed_nat_enabled=None,
+        acs_observed_dhcp_enabled=None,
+        acs_observed_ssid=None,
+        acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username=None,
+        acs_observed_cr_username_set=None,
+        acs_observed_cr_password_set=None,
+        acs_observed_wan_wcd_index=None,
+        acs_observed_wan_instance_index=None,
+        acs_observed_wan_ppp_locations=(),
+    )
+
+
+def _seed_acs_observation_row(db_session, ont, *, acs: AcsObservedFields, at) -> None:
+    """Write a baseline ``OntObservation`` row with genuine ACS evidence,
+    as if a real prior reconcile pass had produced it — bypassing
+    ``reconcile_ont`` so the test controls the exact prior provenance."""
+    upsert_ont_observation(
+        db_session,
+        ont.id,
+        OntObservedState(
+            last_reconciled_at=at,
+            last_reconcile_duration_ms=100,
+            mgmt_ip_pingable=True,
+            consecutive_sweep_unreachable=0,
+            olt=_absent_olt_for_seed(),
+            acs=acs,
+        ),
+        observed_surfaces=frozenset({"acs"}),
+        olt_read_status=None,
+    )
+    db_session.commit()
+
+
+def test_olt_only_profile_change_does_not_advance_stale_acs_provenance(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """An OLT-only profile-change pass (``olt_only_profile_change``)
+    substitutes cached ACS data for planning but must not record it as a
+    fresh observation: the row's genuine ACS evidence stays exactly as it
+    was, even though the substituted planning data returned by
+    ``_cached_acs_observation`` here deliberately differs from it (a
+    non-idempotent probe: if the substitution ever leaked into the write
+    path, the row would visibly pick up the wrong version string). Before
+    the fix, ``_surfaces_observed`` unconditionally added ``"acs"`` whenever
+    the substituted status wasn't ``"unavailable"``, so every OLT-only
+    profile-change pass re-stamped the ACS columns off whatever
+    ``_cached_acs_observation`` happened to return.
+    """
+    baseline_seen_at = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_acs_observation_row(
+        db_session,
+        ont,
+        acs=_cached_present_acs("GENUINE-BASELINE"),
+        at=baseline_seen_at,
+    )
+
+    reads = 0
+
+    def _profile_read(adapter, target, *, deadline=None):
+        nonlocal reads
+        reads += 1
+        observed_profile = 2 if reads == 1 else target.tr069_profile_id
+        return ReadResult(
+            status="present",
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=None,
+                olt_rx_dbm=None,
+                olt_tx_dbm=None,
+                olt_temperature_c=None,
+                olt_description=None,
+                olt_mgmt_ip=None,
+                olt_mgmt_vlan=None,
+                olt_line_profile_id=None,
+                olt_service_profile_id=None,
+                olt_service_ports=(),
+                olt_tr069_profile_id=observed_profile,
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _profile_read
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._resolve_acs_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("profile-only reconcile must not require ACS")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._cached_acs_observation",
+        lambda db, target: _cached_present_acs("SUBSTITUTED-FOR-PLANNING-ONLY"),
+    )
+
+    captured_observed_surfaces: list[frozenset[str]] = []
+    real_upsert = reconcile_core.upsert_ont_observation
+
+    def _spy_upsert(db, ont_unit_id, observed, *, observed_surfaces, olt_read_status):
+        captured_observed_surfaces.append(observed_surfaces)
+        return real_upsert(
+            db,
+            ont_unit_id,
+            observed,
+            observed_surfaces=observed_surfaces,
+            olt_read_status=olt_read_status,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.upsert_ont_observation", _spy_upsert
+    )
+
+    adapter = _StubOltAdapter()
+
+    result = reconcile_ont(
+        db_session,
+        str(ont.id),
+        proposed_change={"tr069_profile_id": 5},
+        olt_adapter=adapter,
+    )
+
+    # Still completes successfully end-to-end — no spurious refusal from
+    # introducing the ``acs_read_attempted`` bookkeeping.
+    assert result.success is True
+    assert result.failure is None
+    assert adapter.calls == ["bind_tr069_profile"]
+    assert captured_observed_surfaces
+    assert "acs" not in captured_observed_surfaces[-1]
+
+    db_session.commit()
+    observation = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    # The genuine baseline is untouched — not overwritten by the substituted
+    # planning-only data.
+    assert observation.acs_present is True
+    assert observation.acs_observed_software_version == "GENUINE-BASELINE"
+
+
+def test_genuine_acs_read_still_included_in_observed_surfaces(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """Regression proof for the unaffected default case: a genuine
+    (non-OLT-only) pass that actually talks to ACS still includes ``"acs"``
+    in ``observed_surfaces``, exactly as before this fix."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    captured_observed_surfaces: list[frozenset[str]] = []
+    real_upsert = reconcile_core.upsert_ont_observation
+
+    def _spy_upsert(db, ont_unit_id, observed, *, observed_surfaces, olt_read_status):
+        captured_observed_surfaces.append(observed_surfaces)
+        return real_upsert(
+            db,
+            ont_unit_id,
+            observed,
+            observed_surfaces=observed_surfaces,
+            olt_read_status=olt_read_status,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.upsert_ont_observation", _spy_upsert
+    )
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert captured_observed_surfaces
+    assert "acs" in captured_observed_surfaces[-1]
+
+
+def test_acs_last_inform_at_is_unchanged_by_a_cached_substitution_pass(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """``acs_last_inform_at`` is the device-supplied Inform timestamp — a
+    completely separate, already-correct freshness signal unrelated to this
+    reconcile-pass-level provenance bug. Prove directly (not by inference)
+    that an OLT-only profile-change pass leaves it exactly as it was, even
+    when the substituted planning data carries a different value."""
+    genuine_inform_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    baseline_acs = _cached_present_acs("GENUINE-BASELINE")
+    baseline_acs = replace(baseline_acs, acs_last_inform_at=genuine_inform_at)
+    _seed_acs_observation_row(
+        db_session, ont, acs=baseline_acs, at=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    reads = 0
+
+    def _profile_read(adapter, target, *, deadline=None):
+        nonlocal reads
+        reads += 1
+        observed_profile = 2 if reads == 1 else target.tr069_profile_id
+        return ReadResult(
+            status="present",
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=None,
+                olt_rx_dbm=None,
+                olt_tx_dbm=None,
+                olt_temperature_c=None,
+                olt_description=None,
+                olt_mgmt_ip=None,
+                olt_mgmt_vlan=None,
+                olt_line_profile_id=None,
+                olt_service_profile_id=None,
+                olt_service_ports=(),
+                olt_tr069_profile_id=observed_profile,
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _profile_read
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._resolve_acs_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("profile-only reconcile must not require ACS")
+        ),
+    )
+    # A substituted read that (deliberately, implausibly) carries a DIFFERENT
+    # Inform timestamp than the genuine baseline — proves the substitution
+    # never reaches the row's ``acs_last_inform_at`` column.
+    substituted_inform_at = datetime(2026, 6, 1, tzinfo=UTC)
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._cached_acs_observation",
+        lambda db, target: replace(
+            _cached_present_acs("SUBSTITUTED-FOR-PLANNING-ONLY"),
+            acs_last_inform_at=substituted_inform_at,
+        ),
+    )
+
+    adapter = _StubOltAdapter()
+
+    result = reconcile_ont(
+        db_session,
+        str(ont.id),
+        proposed_change={"tr069_profile_id": 5},
+        olt_adapter=adapter,
+    )
+
+    assert result.success is True
+    db_session.commit()
+    observation = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert observation.acs_last_inform_at == genuine_inform_at.replace(tzinfo=None)
+
+
+def test_surfaces_observed_excludes_acs_for_a_cached_substitution():
+    """Unit-level pin for ``_surfaces_observed``'s new ``acs_read_attempted``
+    parameter, mirroring ``test_surfaces_observed_excludes_olt_for_a_cached_
+    substitution`` for the ACS side: a substituted present/absent ACS result
+    is excluded from ``observed_surfaces`` when the read was never attempted,
+    and included (the near-miss / prior behaviour) when it was."""
+    olt_present_result = ReadResult(
+        status="present",
+        observed=OltObservedFields(
+            olt_present=True,
+            olt_match_state="match",
+            olt_run_state="online",
+            olt_distance_m=None,
+            olt_rx_dbm=None,
+            olt_tx_dbm=None,
+            olt_temperature_c=None,
+            olt_description=None,
+            olt_mgmt_ip=None,
+            olt_mgmt_vlan=None,
+            olt_line_profile_id=None,
+            olt_service_profile_id=None,
+            olt_service_ports=(),
+        ),
+        error=None,
+    )
+    acs_present_result = ReadResult(
+        status="present", observed=_absent_acs_for_seed(), error=None
+    )
+
+    substituted = reconcile_core._surfaces_observed(
+        olt_present_result, acs_present_result, acs_read_attempted=False
+    )
+    assert substituted == frozenset({"olt"})
+
+    real_read = reconcile_core._surfaces_observed(
+        olt_present_result, acs_present_result, acs_read_attempted=True
+    )
+    assert real_read == frozenset({"olt", "acs"})
+
+    # Default (no override) matches every non-OLT-only call site, which
+    # never skips ACS I/O.
+    default = reconcile_core._surfaces_observed(olt_present_result, acs_present_result)
+    assert default == frozenset({"olt", "acs"})
+
+    # Both flags compose independently: neither surface counted as observed
+    # when both reads were skipped this pass.
+    both_skipped = reconcile_core._surfaces_observed(
+        olt_present_result,
+        acs_present_result,
+        olt_read_attempted=False,
+        acs_read_attempted=False,
+    )
+    assert both_skipped == frozenset()
