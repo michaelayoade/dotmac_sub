@@ -14,7 +14,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -1219,7 +1219,11 @@ def _record_execution_event(
     message: str,
     success: bool,
     waiting: bool = False,
+    extra_data: dict[str, Any] | None = None,
 ) -> None:
+    data = {"phase": phase.value, "revision": revision.revision}
+    if extra_data:
+        data.update(extra_data)
     record_ont_provisioning_event(
         db,
         ont,
@@ -1229,7 +1233,7 @@ def _record_execution_event(
             success=success,
             waiting=waiting,
             message=message,
-            data={"phase": phase.value, "revision": revision.revision},
+            data=data,
         ),
         action="configuration_phase_changed",
         lifecycle=ProvisioningLifecycleIdentity(
@@ -1293,29 +1297,37 @@ def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
     )
 
 
-def _lan_connection_request_pending(
-    revision: OntServiceConfigurationRevision, result: ReconcileResult
-) -> bool:
+def _connection_request_queued_pending(result: ReconcileResult) -> bool:
+    """Whether GenieACS accepted this revision's write but the immediate
+    Connection Request failed, leaving the task queued for the device's next
+    Inform.
+
+    This GenieACS behavior (``ACS_CR_FAILED``) is identical regardless of
+    which section (LAN, WiFi, WAN, management) issued the write — the
+    ``setParameterValues`` batch is accepted and queued either way. This used
+    to be gated to ``_force_lan_delivery`` (LAN's forced write-only-block
+    predicate), which routed every WiFi/WAN/management occurrence of this
+    exact GenieACS delivery outcome into terminal failure instead of the
+    queued/readback-pending recovery LAN already received.
+    """
     failure = result.failure
-    return (
-        _force_lan_delivery(revision)
-        and failure is not None
-        and failure.reason == "acs_cr_failed"
-    )
+    return failure is not None and failure.reason == "acs_cr_failed"
 
 
-def _lan_connection_request_drain_still_pending(
+def _connection_request_drain_still_pending(
     *,
-    revision: OntServiceConfigurationRevision,
     waiting_reason: str | None,
     result: ReconcileResult,
 ) -> bool:
+    """Whether a prior queued-CR-failure wait is still undrained.
+
+    Section-agnostic for the same reason as
+    ``_connection_request_queued_pending`` — the ``awaiting_acs_task_drain``
+    wait state and the GenieACS failure it watches for are identical across
+    sections.
+    """
     failure = result.failure
-    if (
-        not _force_lan_delivery(revision)
-        or waiting_reason != "awaiting_acs_task_drain"
-        or failure is None
-    ):
+    if waiting_reason != "awaiting_acs_task_drain" or failure is None:
         return False
     if failure.reason == "acs_cr_failed":
         return True
@@ -1579,14 +1591,15 @@ def _execution_locked(
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
         )
-        lan_cr_pending = _lan_connection_request_pending(
-            revision, result
-        ) or _lan_connection_request_drain_still_pending(
-            revision=revision,
+        connection_request_queued_pending = _connection_request_queued_pending(
+            result
+        ) or _connection_request_drain_still_pending(
             waiting_reason=prior_waiting_reason,
             result=result,
         )
-        if command.force_readback_only and (readback_pending or lan_cr_pending):
+        if command.force_readback_only and (
+            readback_pending or connection_request_queued_pending
+        ):
             # A readback-only verification (``verify_ont_service_configuration_
             # readback``) must never auto re-dispatch. The retry loop below
             # re-stages ``ont_service_config_apply_v1`` with a ``verify:N``
@@ -1664,12 +1677,15 @@ def _execution_locked(
             )
             phase = OntServiceConfigurationPhase.readback_pending
             message = "Configuration applied; fresh readback is pending."
-        elif lan_cr_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+        elif (
+            connection_request_queued_pending
+            and command.verification_attempt < _MAX_READBACK_ATTEMPTS
+        ):
             next_attempt = command.verification_attempt + 1
             pending_message = (
-                "The LAN configuration was accepted by ACS, but the ONT rejected "
-                "the immediate Connection Request. The queued ACS task will drain "
-                "on the next Inform or after an OLT ONT reset."
+                f"The {revision.section} configuration was accepted by ACS, but "
+                "the ONT rejected the immediate Connection Request. The queued "
+                "ACS task will drain on the next Inform or after an OLT ONT reset."
             )
             head.phase = OntServiceConfigurationPhase.readback_pending
             revision.phase = OntServiceConfigurationPhase.readback_pending
@@ -1695,16 +1711,27 @@ def _execution_locked(
                 message=pending_message,
                 success=False,
                 waiting=True,
+                extra_data={
+                    "acs_task_queued_despite_cr_failure": True,
+                    "section": revision.section,
+                    "failure_reason": failure.reason if failure is not None else None,
+                    "failure_message": (
+                        failure.message if failure is not None else None
+                    ),
+                    "confirmation_path": "readback_only_verification_after_fresh_inform",
+                    "verification_attempt": next_attempt,
+                },
             )
             phase = OntServiceConfigurationPhase.readback_pending
             message = pending_message
         else:
-            if lan_cr_pending:
+            if connection_request_queued_pending:
                 failure_code = "acs_cr_failed"
                 failure_message = (
-                    "The LAN configuration is queued in ACS, but the ONT still rejects "
-                    "or misses the GenieACS Connection Request. Fix the ONT connection "
-                    "request credentials or force an OLT ONT reset, then retry."
+                    f"The {revision.section} configuration is queued in ACS, but "
+                    "the ONT still rejects or misses the GenieACS Connection "
+                    "Request. Fix the ONT connection request credentials or force "
+                    "an OLT ONT reset, then retry."
                 )
             head.phase = OntServiceConfigurationPhase.failed
             revision.phase = OntServiceConfigurationPhase.failed
