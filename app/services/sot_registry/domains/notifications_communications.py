@@ -4227,9 +4227,19 @@ DOMAIN = DomainSOT(
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
-                            "Long-term AI awaiting-customer session expiry and "
-                            "customer-reply or human-takeover race evidence. Inactivity "
-                            "expires the AI session without human routing or assignment."
+                            "Ten-minute AI awaiting-customer handoff, legacy deadline "
+                            "normalization, and customer-reply or human-takeover race "
+                            "evidence. A due wait enters normal agent assignment or "
+                            "durable FIFO queue admission."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="normal human routing and FIFO state",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Active destination team, strict FIFO head, agent "
+                            "presence, capacity, assignment, and durable queue state."
                         ),
                     ),
                     AuthorityInput(
@@ -4258,6 +4268,8 @@ DOMAIN = DomainSOT(
                     "communications.team_inbox_maintenance.conversation_not_found",
                     "communications.team_inbox_maintenance.profile_target_changed",
                     "communications.team_inbox_maintenance.profile_name_missing",
+                    "communications.team_inbox_maintenance.invalid_ai_wait_deadline",
+                    "communications.team_inbox_maintenance.ai_intake_timeout_handoff_failed",
                 ),
                 event_types=("team_inbox.projection_repaired.v1",),
                 projections=(

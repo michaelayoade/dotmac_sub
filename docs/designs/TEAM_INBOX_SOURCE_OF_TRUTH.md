@@ -99,12 +99,17 @@ conversation and rechecks assignment and message evidence in the owner
 transaction before applying the audited status transition.
 
 AI customer waiting is not an escalation signal. The AI session owns
-`awaiting_customer`, the wait start, and a separate long-term `expires_at` based
-on `customer_wait_expiry_hours`. Team Inbox maintenance locks only sessions past
-that long-term expiry, rejects races with a newer customer reply or human
-takeover, and closes the inactive session/conversation without creating a note,
-assignment, or FIFO queue entry. Legacy five-minute wait rows are extended onto
-the long-term lifecycle before any consequence. Human routing still occurs only
+`awaiting_customer`, the wait start, and a separate `expires_at` based on
+`customer_wait_handoff_minutes` (10 minutes by default). Team Inbox maintenance
+selects due sessions plus waits carrying a retired hours/expiry marker,
+normalizes those deadlines from their authoritative wait start, and rejects
+races with a newer customer reply or human takeover. At the deadline it records
+a handoff summary, ends AI ownership, and enters the same authoritative routing
+path used by other human work: FIFO order and available capacity decide whether
+an eligible agent is assigned immediately or the conversation receives a durable
+entry in the team's regular FIFO queue. A legacy row with no trustworthy wait
+start receives a fresh 10-minute window before any consequence. Human routing
+also occurs earlier
 for a recorded explicit handoff reason such as a human request, unsupported
 issue, policy boundary, required tool failure, or exhausted troubleshooting.
 

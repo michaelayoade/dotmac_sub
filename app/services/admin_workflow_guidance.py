@@ -509,7 +509,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "When authorized human intervention is intentional, choose Take Over Conversation and confirm it before replying; an ordinary reply never takes ownership away from AI.",
         "After AI hands the conversation to the human queue, the first eligible reply claims it for that agent. If another agent already owns it, the reply is not sent and the Inbox names the current owner.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
-        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and long-term inactive-session expiry.",
+        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
@@ -518,7 +518,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Reply auto-claim uses the same active team membership, availability, capacity, and queue-order checks as assignment.",
             "AI-owned conversations have a separate AI Intake count and do not contribute to normal human workload counts until handoff, queueing, or assignment.",
             "Take Over stops the active AI session and acquires the conversation through the existing Team Inbox assignment rules; if it fails, refresh and leave AI ownership unchanged.",
-            "Awaiting-customer AI sessions remain resumable. Their long-term expiry ends AI ownership without assigning or queueing a human.",
+            "Awaiting-customer AI sessions remain resumable for ten minutes. After that, normal assignment selects an available agent or admits the conversation to the team's FIFO queue.",
             "SLA policies define response and resolution targets, working hours, and warning time. Use a unique policy name and check the saved values before relying on them.",
             "Turning an SLA policy off prevents it being selected for new conversations; existing conversation deadlines continue. Scheduled checks record each warning once, before the response deadline.",
             "In Manager AI, select a Conversation or use Period Review with a period and any channel or status filters, then submit your question with Ask AI.",

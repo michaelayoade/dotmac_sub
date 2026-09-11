@@ -286,8 +286,9 @@ DOMAIN = DomainSOT(
                 "composes customer wording for a backend-approved next action; a "
                 "typed validator rejects invented facts, unsafe promises, repeated "
                 "questions, and internal terminology. Customer inactivity remains "
-                "awaiting_customer until long-term expiry and never requests human "
-                "assignment by itself. An invalid, unavailable, or unaccepted "
+                "awaiting_customer for the configured ten-minute hold, then requests "
+                "normal human routing through assignment or FIFO queue admission. "
+                "An invalid, unavailable, or unaccepted "
                 "classifier result is a typed classification_unavailable condition: "
                 "deterministic facts and human-request precedence are preserved, and "
                 "the engine uses the existing bounded clarification budget before an "
@@ -941,7 +942,7 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary="Session processing enters execute_owner_command once and delegates Inbox consequences to Team Inbox owners.",
-                    locking="Ready sessions are selected with row locks and skip_locked; human takeover, customer reply, and long-term wait-expiry races are rechecked before consequences.",
+                    locking="Ready sessions are selected with row locks and skip_locked; human takeover, customer reply, and minute-based customer-wait handoff races are rechecked before consequences.",
                     idempotency="Session/message/generation, welcome, wait-expiry, and outbound dedupe keys suppress duplicate webhook and worker execution.",
                     retries="Beat reruns pick up incomplete sessions; failed sessions are recorded and safely escalated.",
                 ),

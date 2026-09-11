@@ -128,7 +128,9 @@ DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 10
 DEFAULT_QUEUE_HEARTBEAT_MINUTES = 30
 DEFAULT_QUEUE_HEARTBEAT_ENABLED = False
 DEFAULT_CUSTOMER_RESPONSE_TIMEOUT_MINUTES = 5
-DEFAULT_CUSTOMER_WAIT_EXPIRY_HOURS = 72
+DEFAULT_CUSTOMER_WAIT_HANDOFF_MINUTES = 10
+MIN_CUSTOMER_WAIT_HANDOFF_MINUTES = 1
+MAX_CUSTOMER_WAIT_HANDOFF_MINUTES = 1440
 DEFAULT_QUEUE_TEMPLATES = {
     "initial": (
         "All our agents are currently engaged. You are number {position} in the "
@@ -266,6 +268,25 @@ class _PreviewConversation:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerWaitHandoffPolicy:
+    """Typed policy for handing an inactive AI conversation to humans."""
+
+    handoff_minutes: int = DEFAULT_CUSTOMER_WAIT_HANDOFF_MINUTES
+
+    def __post_init__(self) -> None:
+        if isinstance(self.handoff_minutes, bool) or not isinstance(
+            self.handoff_minutes, int
+        ):
+            raise ValueError("Customer wait handoff must be a whole number of minutes")
+        if not (
+            MIN_CUSTOMER_WAIT_HANDOFF_MINUTES
+            <= self.handoff_minutes
+            <= MAX_CUSTOMER_WAIT_HANDOFF_MINUTES
+        ):
+            raise ValueError("Customer wait handoff must be between 1 and 1440 minutes")
+
+
+@dataclass(frozen=True, slots=True)
 class AiPolicyVersionDraftCommand:
     context: CommandContext
     policy_id: UUID
@@ -280,6 +301,7 @@ class AiPolicyVersionDraftCommand:
     intent_team_mappings: tuple[Mapping[str, object], ...] = ()
     queue_templates: Mapping[str, object] | None = None
     escalation_rules: Mapping[str, object] | None = None
+    customer_wait_handoff_policy: CustomerWaitHandoffPolicy | None = None
     data_cleanup_policy: Mapping[str, object] | None = None
     conversational_engine_enabled: bool | None = None
     conversation_engine_mode: str | None = None
@@ -309,6 +331,7 @@ class AiDraftPolicyCommand:
     intent_team_mappings: tuple[Mapping[str, object], ...] = ()
     queue_templates: Mapping[str, object] | None = None
     escalation_rules: Mapping[str, object] | None = None
+    customer_wait_handoff_policy: CustomerWaitHandoffPolicy | None = None
     data_cleanup_policy: Mapping[str, object] | None = None
     conversational_engine_enabled: bool | None = None
     conversation_engine_mode: str | None = None
@@ -656,6 +679,7 @@ def create_draft_policy(
                 intent_team_mappings=command.intent_team_mappings,
                 queue_templates=command.queue_templates,
                 escalation_rules=command.escalation_rules,
+                customer_wait_handoff_policy=command.customer_wait_handoff_policy,
                 data_cleanup_policy=command.data_cleanup_policy,
                 conversational_engine_enabled=command.conversational_engine_enabled,
                 conversation_engine_mode=command.conversation_engine_mode,
@@ -707,10 +731,37 @@ def _mapping_dict(value: object) -> dict[str, object]:
     return {}
 
 
+def _canonical_escalation_rules(
+    rules: Mapping[str, object] | None,
+    *,
+    customer_wait_handoff_policy: CustomerWaitHandoffPolicy | None,
+) -> dict[str, object]:
+    canonical = dict(rules or {})
+    canonical.pop("customer_wait_expiry_hours", None)
+    canonical.pop("customer_wait_expiry_minutes", None)
+    handoff_minutes = (
+        customer_wait_handoff_policy.handoff_minutes
+        if customer_wait_handoff_policy is not None
+        else _customer_wait_handoff_minutes(canonical)
+    )
+    canonical["customer_wait_handoff_minutes"] = handoff_minutes
+    return canonical
+
+
 def _copy_version_payload(
     base: AiIntakePolicyVersion | None,
     command: AiPolicyVersionDraftCommand,
 ) -> dict[str, object | None]:
+    base_escalation_rules = (
+        base.escalation_rules
+        if base is not None and isinstance(base.escalation_rules, Mapping)
+        else None
+    )
+    customer_wait_handoff_policy = command.customer_wait_handoff_policy
+    if customer_wait_handoff_policy is None and command.escalation_rules is None:
+        customer_wait_handoff_policy = CustomerWaitHandoffPolicy(
+            handoff_minutes=_customer_wait_handoff_minutes(base_escalation_rules)
+        )
     policy_text: dict[str, object] = {
         "display_name": command.display_name,
         "welcome_message": command.welcome_message,
@@ -800,9 +851,14 @@ def _copy_version_payload(
         "queue_templates": dict(command.queue_templates or {})
         if command.queue_templates is not None
         else (dict(base.queue_templates or {}) if base is not None else None),
-        "escalation_rules": dict(command.escalation_rules or {})
-        if command.escalation_rules is not None
-        else (dict(base.escalation_rules or {}) if base is not None else None),
+        "escalation_rules": _canonical_escalation_rules(
+            command.escalation_rules
+            if command.escalation_rules is not None
+            else base_escalation_rules,
+            customer_wait_handoff_policy=(
+                customer_wait_handoff_policy or CustomerWaitHandoffPolicy()
+            ),
+        ),
         "data_cleanup_policy": dict(command.data_cleanup_policy or {})
         if command.data_cleanup_policy is not None
         else (dict(base.data_cleanup_policy or {}) if base is not None else None),
@@ -1617,6 +1673,12 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "customer_response_timeout_minutes",
         _customer_response_timeout_minutes(escalation_rules),
     )
+    escalation_rules.pop("customer_wait_expiry_hours", None)
+    escalation_rules.pop("customer_wait_expiry_minutes", None)
+    escalation_rules.setdefault(
+        "customer_wait_handoff_minutes",
+        _customer_wait_handoff_minutes(escalation_rules),
+    )
     queue_templates = (
         dict(editable_version.queue_templates or {})
         if editable_version is not None
@@ -1783,13 +1845,13 @@ def _customer_response_timeout_minutes(
     )
 
 
-def _customer_wait_expiry_hours(rules: Mapping[str, object] | None) -> int:
+def _customer_wait_handoff_minutes(rules: Mapping[str, object] | None) -> int:
     source = dict(rules or {})
     return _bounded_int(
-        source.get("customer_wait_expiry_hours"),
-        default=DEFAULT_CUSTOMER_WAIT_EXPIRY_HOURS,
-        minimum=24,
-        maximum=720,
+        source.get("customer_wait_handoff_minutes"),
+        default=DEFAULT_CUSTOMER_WAIT_HANDOFF_MINUTES,
+        minimum=MIN_CUSTOMER_WAIT_HANDOFF_MINUTES,
+        maximum=MAX_CUSTOMER_WAIT_HANDOFF_MINUTES,
     )
 
 
@@ -1856,19 +1918,19 @@ def _session_customer_response_timeout_minutes(
     )
 
 
-def _session_customer_wait_expiry_hours(
+def _session_customer_wait_handoff_minutes(
     session: AiIntakeSession,
     *,
     version: AiIntakePolicyVersion | None = None,
 ) -> int:
     if version is not None and isinstance(version.escalation_rules, Mapping):
-        return _customer_wait_expiry_hours(version.escalation_rules)
+        return _customer_wait_handoff_minutes(version.escalation_rules)
     metadata = dict(session.metadata_ or {})
     return _bounded_int(
-        metadata.get("customer_wait_expiry_hours"),
-        default=DEFAULT_CUSTOMER_WAIT_EXPIRY_HOURS,
-        minimum=24,
-        maximum=720,
+        metadata.get("customer_wait_handoff_minutes"),
+        default=DEFAULT_CUSTOMER_WAIT_HANDOFF_MINUTES,
+        minimum=MIN_CUSTOMER_WAIT_HANDOFF_MINUTES,
+        maximum=MAX_CUSTOMER_WAIT_HANDOFF_MINUTES,
     )
 
 
@@ -1881,20 +1943,21 @@ def record_customer_wait(
     now: datetime | None = None,
 ) -> datetime:
     started_at = (now or datetime.now(UTC)).astimezone(UTC)
-    expiry_hours = _session_customer_wait_expiry_hours(session, version=version)
-    expires_at = started_at + timedelta(hours=expiry_hours)
+    handoff_minutes = _session_customer_wait_handoff_minutes(session, version=version)
+    expires_at = started_at + timedelta(minutes=handoff_minutes)
     session.customer_wait_started_at = started_at
-    # This legacy column previously drove a five-minute handoff. It is kept
-    # clear so stale-session recovery cannot confuse customer waiting with AI
-    # failure. ``expires_at`` owns long-term, non-handoff expiry.
-    session.customer_wait_expires_at = None
+    # Keep the compatibility deadline aligned while ``expires_at`` remains the
+    # indexed lifecycle selector for the scheduled handoff owner.
+    session.customer_wait_expires_at = expires_at
     session.expires_at = expires_at
     metadata = dict(session.metadata_ or {})
+    metadata.pop("customer_wait_expiry_hours", None)
+    metadata.pop("customer_wait_expiry_minutes", None)
     metadata.update(
         {
             "customer_wait_started_at": started_at.isoformat(),
-            "customer_wait_expires_at": None,
-            "customer_wait_expiry_hours": expiry_hours,
+            "customer_wait_expires_at": expires_at.isoformat(),
+            "customer_wait_handoff_minutes": handoff_minutes,
             "customer_wait_reason": reason,
             "waiting_reason": "awaiting_customer",
         }
@@ -1912,9 +1975,9 @@ def record_customer_wait(
             if inbound_message_id is not None
             else None,
             "customer_wait_started_at": started_at.isoformat(),
-            "customer_wait_expires_at": None,
+            "customer_wait_expires_at": expires_at.isoformat(),
             "session_expires_at": expires_at.isoformat(),
-            "expiry_hours": expiry_hours,
+            "handoff_minutes": handoff_minutes,
             "reason": reason,
         },
     )
@@ -2583,7 +2646,7 @@ def ensure_session_for_outcome(
         # classification can produce a clarification question or handoff.
         state = "welcome_pending"
         policy_metadata = dict(policy.metadata_ or {})
-        expiry_hours = _customer_wait_expiry_hours(version.escalation_rules)
+        handoff_minutes = _customer_wait_handoff_minutes(version.escalation_rules)
         session = AiIntakeSession(
             conversation_id=conversation.id,
             policy_id=policy.id,
@@ -2600,11 +2663,11 @@ def ensure_session_for_outcome(
             if outcome.classification
             else float(policy_metadata.get("confidence_threshold") or 0),
             fallback_team_id=outcome.fallback_team_id or policy.fallback_team_id,
-            expires_at=now + timedelta(hours=expiry_hours),
+            expires_at=now + timedelta(minutes=handoff_minutes),
             metadata_={
                 "ai_handling": True,
                 "created_from": "team_inbox_receive",
-                "customer_wait_expiry_hours": expiry_hours,
+                "customer_wait_handoff_minutes": handoff_minutes,
                 "initial_inbound_message_id": str(initial_inbound_message_id),
             },
         )
