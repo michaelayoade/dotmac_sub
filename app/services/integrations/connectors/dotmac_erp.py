@@ -423,6 +423,11 @@ class DotmacErpRunner:
                     raise ValueError("unsupported staff access projection entity")
                 return client.get_staff_access_projection(
                     entity=cast(Literal["leave_restriction", "account_status"], entity),
+                    updated_after=(
+                        str(params["updated_after"])
+                        if params.get("updated_after") is not None
+                        else None
+                    ),
                     limit=int(params.get("limit") or 500),
                 )
         elif capability_id == WORKFORCE_ATTENDANCE_READ_CAPABILITY:

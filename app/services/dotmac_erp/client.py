@@ -331,13 +331,18 @@ class DotMacERPClient:
         self,
         *,
         entity: Literal["leave_restriction", "account_status"],
+        updated_after: str | None = None,
         limit: int = 500,
     ) -> dict:
-        """Read one complete bounded ERP staff-access projection entity."""
+        """Read one bounded page of an ERP staff-access projection entity."""
+
+        params: dict[str, object] = {"entity": entity, "limit": limit}
+        if updated_after is not None:
+            params["updated_after"] = updated_after
 
         return self.get(
             "/api/v1/sync/sub/staff-access/projection",
-            params={"entity": entity, "limit": limit},
+            params=params,
             expected_status_codes={200},
         )
 
