@@ -455,7 +455,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
 
     # The replacement opening value must also be used when a renewal consumes
     # more opening funding than the immutable, incorrect value could cover.
-    ensure_test_prepaid_contract(db_session, subscription, Decimal("4000.00"))
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("5000.00"))
     corrected_subscription_id = subscription.id
     corrected_period_start = cutoff + timedelta(days=1)
     corrected_period_end = cutoff + timedelta(days=32)
@@ -464,7 +464,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         subscription_id=corrected_subscription_id,
         starts_at=corrected_period_start,
         ends_at=corrected_period_end,
-        amount=Decimal("4000.00"),
+        amount=Decimal("5000.00"),
     )
     assert corrected_renewal_preview.allowed is True
     assert corrected_renewal_preview.funding_before == Decimal("5562.50")
@@ -476,13 +476,13 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
             subscription_id=corrected_subscription_id,
             starts_at=corrected_period_start,
             ends_at=corrected_period_end,
-            amount=Decimal("4000.00"),
+            amount=Decimal("5000.00"),
             currency="NGN",
             expected_preview_fingerprint=corrected_renewal_preview.fingerprint,
             evidence_ref="finance-review:pytest-corrected-opening-renewal",
         ),
     )
-    assert corrected_renewal.renewal.preview.funding_after == Decimal("1562.50")
+    assert corrected_renewal.renewal.preview.funding_after == Decimal("562.50")
     corrected_consumption = (
         db_session.query(PrepaidOpeningFundingConsumption)
         .filter(PrepaidOpeningFundingConsumption.opening_position_id == opening.id)
