@@ -369,6 +369,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         is_active=True,
     )
     db_session.add(correction_actor)
+    correction_actor_id = correction_actor.id
     db_session.commit()
     correction_query = PreviewCustomerSubledgerOpeningCorrectionQuery(
         account_id=subscriber_account.id,
@@ -396,7 +397,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
                 query=correction_query,
                 expected_preview_fingerprint=correction_preview.preview_fingerprint,
                 permission_granted=False,
-                authorized_system_user_id=correction_actor.id,
+                authorized_system_user_id=correction_actor_id,
             ),
         )
     assert permission_exc.value.code.endswith("permission_denied")
@@ -414,7 +415,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
             query=correction_query,
             expected_preview_fingerprint=correction_preview.preview_fingerprint,
             permission_granted=True,
-            authorized_system_user_id=correction_actor.id,
+            authorized_system_user_id=correction_actor_id,
         ),
     )
     assert correction.replayed is False
@@ -445,7 +446,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
             query=correction_query,
             expected_preview_fingerprint=correction_preview.preview_fingerprint,
             permission_granted=True,
-            authorized_system_user_id=correction_actor.id,
+            authorized_system_user_id=correction_actor_id,
         ),
     )
     assert correction_replay.replayed is True
