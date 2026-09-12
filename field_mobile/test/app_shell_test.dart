@@ -6,6 +6,8 @@ import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/features/attendance/attendance_models.dart';
 import 'package:dotmac_field/features/attendance/attendance_repository.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
+import 'package:dotmac_field/features/expenses/expense_models.dart';
+import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/location/location_cadence.dart';
@@ -134,6 +136,20 @@ Widget _app({
         ),
         managerJobsProvider.overrideWith((ref) async => managerJobs),
         managerExpensesProvider.overrideWith((ref) async => const []),
+        expenseRequestsProvider.overrideWith(
+          (ref) async => ExpenseRequestHistory(
+            totalCount: 1,
+            items: [
+              ExpenseRequest.fromJson({
+                'id': 'manager-expense-1',
+                'status': 'submitted',
+                'purpose': 'Manager site transport',
+                'currency': 'NGN',
+                'total_amount': '2500.00',
+              }),
+            ],
+          ),
+        ),
         meProvider.overrideWith(
           (ref) async => const MeSummary(
             name: 'Chidi Tech',
@@ -247,7 +263,9 @@ void main() {
     expect(find.text('Sales'), findsNothing);
   });
 
-  testWidgets('manager shell shows dispatch and approval tabs', (tester) async {
+  testWidgets('manager shell shows personal expenses and approvals', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _app(
         managerProfile: const ManagerProfile(
@@ -287,7 +305,7 @@ void main() {
     expect(find.text('Dashboard'), findsOneWidget);
     expect(find.text('Team'), findsWidgets);
     expect(find.text('Dispatch'), findsOneWidget);
-    expect(find.text('Approvals'), findsWidgets);
+    expect(find.text('Expenses'), findsOneWidget);
     expect(find.text('Materials'), findsNothing);
     expect(find.text('Sales'), findsNothing);
 
@@ -301,6 +319,19 @@ void main() {
     expect(find.text('Repair customer drop'), findsOneWidget);
     expect(find.text('Assigned to Ada Technician'), findsOneWidget);
     expect(find.text('Unassign'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Expenses'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('My requests'), findsOneWidget);
+    expect(find.text('Approvals'), findsOneWidget);
+    expect(find.text('No team expenses'), findsOneWidget);
+
+    await tester.tap(find.text('My requests'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('My expense requests (1)'), findsOneWidget);
+    expect(find.text('Manager site transport'), findsOneWidget);
   });
 
   testWidgets('manager shell hides team map without dispatch read', (

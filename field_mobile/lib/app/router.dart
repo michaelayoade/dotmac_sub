@@ -295,9 +295,45 @@ class _ExpensesSwitch extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (isManagerProfile(ref.watch(managerProfileProvider))) {
-      return const ManagerExpenseReviewScreen();
+      return const _ManagerExpensesHub();
     }
     return const ExpensesScreen();
+  }
+}
+
+class _ManagerExpensesHub extends StatelessWidget {
+  const _ManagerExpensesHub();
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      initialIndex: 1,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Expenses'),
+          actions: [
+            IconButton(
+              tooltip: 'New expense request',
+              onPressed: () => context.push('/expenses/new'),
+              icon: const Icon(Icons.add),
+            ),
+          ],
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'My requests'),
+              Tab(text: 'Approvals'),
+            ],
+          ),
+        ),
+        body: const TabBarView(
+          children: [
+            ExpensesScreen(embedded: true),
+            ManagerExpenseReviewScreen(embedded: true),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -336,12 +372,12 @@ const _vendorNav = [
 
 // Managers keep the same branch set but re-skinned: the Today branch hosts
 // the dashboard, Map becomes the team map, Schedule becomes dispatch, and
-// Expenses becomes the approvals queue.
+// Expenses hosts both requester history and the manager approvals queue.
 const _managerNav = [
   _NavItem(0, Icons.dashboard_outlined, 'Dashboard'),
   _NavItem(1, Icons.map_outlined, 'Team'),
   _NavItem(2, Icons.assignment_ind_outlined, 'Dispatch'),
-  _NavItem(4, Icons.fact_check_outlined, 'Approvals'),
+  _NavItem(4, Icons.receipt_long_outlined, 'Expenses'),
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 

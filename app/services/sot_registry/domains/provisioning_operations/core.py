@@ -924,6 +924,9 @@ SERVICES: tuple[SOTService, ...] = (
             "it owns the selected local approver link and masked expense snapshot. "
             "ERP delivery failures retain only typed allowlisted diagnostic codes, "
             "HTTP status, and request identifiers alongside partial-delivery progress."
+            " Requester history resolves exact SystemUser, Person Party, and every "
+            "historically linked technician-profile identity without treating "
+            "profile lifecycle as history authorization."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1010,7 +1013,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical field expense request state",
-                        "authenticated requester and work-order access evidence",
+                        "authenticated requester identity evidence",
                     ),
                 ),
                 ConcernContract(
@@ -1042,6 +1045,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "Authenticated system-user identity and global, reseller, or "
                         "region operations:dispatch:read access resolved for the exact "
                         "work order"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authenticated requester identity evidence",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Active authenticated SystemUser identity normalized at the "
+                        "field API boundary; no current technician-profile or "
+                        "work-order assignment is required to read owned history"
                     ),
                 ),
                 AuthorityInput(
@@ -1151,7 +1164,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "read-only session-scoped query. Requester-history reads are "
                     "side-effect free; ERP form-context and destination-verification "
                     "queries are also side-effect free. "
-                    "Revision 584 performs the bounded, idempotent "
+                    "Revision 587 performs the bounded, idempotent "
                     "identity repair during schema migration."
                 ),
                 locking=(
@@ -1270,12 +1283,12 @@ SERVICES: tuple[SOTService, ...] = (
                     name="field expense requester identity bridge",
                     input_names=(
                         "canonical field expense request state",
-                        "authenticated requester and work-order access evidence",
+                        "authenticated requester identity evidence",
                     ),
                     writer="operations.expense_requests",
                     freshness=(
                         "Written with each native submission and repaired once by "
-                        "revision 584 for exact legacy identity matches."
+                        "revision 587 for exact legacy identity matches."
                     ),
                     stale_behavior=(
                         "Ambiguous legacy rows remain hidden from requester history "
@@ -1288,7 +1301,7 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     rebuild_operation=(
                         "Apply the idempotent requester-identity repair from Alembic "
-                        "revision 584 to the bounded drift cohort."
+                        "revision 587 to the bounded drift cohort."
                     ),
                     repair_owner="operations.expense_requests",
                 ),

@@ -362,6 +362,13 @@ class ExpenseRequest {
   String get statusLabel => status.replaceAll('_', ' ');
 }
 
+class ExpenseRequestHistory {
+  const ExpenseRequestHistory({required this.items, required this.totalCount});
+
+  final List<ExpenseRequest> items;
+  final int totalCount;
+}
+
 String? _string(Object? value) => value?.toString();
 
 double? _double(Object? value) => switch (value) {
