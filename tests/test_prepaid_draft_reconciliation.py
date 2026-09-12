@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.models.audit import AuditEvent
 from app.models.billing import (
     AccountAdjustment,
     Invoice,
@@ -40,6 +41,7 @@ from app.services.domain_errors import DomainError
 from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
+    REPAIR_SCOPE,
     AdoptFundedPrepaidProformaCommand,
     AutoRepairPaidPrepaidInvoiceAfterSettlementCommand,
     CreateReviewedPaidPrepaidInvoiceCommand,
@@ -413,16 +415,19 @@ def test_historical_paid_unlinked_invoice_repairs_coverage_and_requests_access(
     fingerprint = preview.fingerprint
     db_session.commit()
 
+    actor_system_user_id = uuid4()
     command = RepairHistoricalPaidPrepaidInvoiceCommand(
         context=CommandContext.system(
             actor="pytest:billing-operator",
-            scope="prepaid_draft_reconciliation",
+            scope=REPAIR_SCOPE,
             reason="Reviewed exact paid onboarding invoice settlement evidence",
             idempotency_key=f"pytest-paid-prepaid-repair-{invoice_id}",
         ),
         invoice_id=invoice_id,
         subscription_id=subscription_id,
         preview_fingerprint=fingerprint,
+        permission_granted=True,
+        actor_system_user_id=actor_system_user_id,
     )
     result = repair_historical_paid_prepaid_invoice(db_session, command)
     replay = repair_historical_paid_prepaid_invoice(db_session, command)
@@ -448,6 +453,138 @@ def test_historical_paid_unlinked_invoice_repairs_coverage_and_requests_access(
     assert allocation.amount == Decimal("18812.50")
     assert db_session.query(PaymentAllocation).count() == 1
     assert db_session.query(ServiceEntitlement).count() == 1
+    repair_metadata = invoice.metadata_["paid_prepaid_invoice_repair"]
+    assert repair_metadata["actor_system_user_id"] == str(actor_system_user_id)
+    audit_event = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == "repair_historical_paid_prepaid_invoice",
+            AuditEvent.entity_id == str(invoice.id),
+        )
+        .one()
+    )
+    assert audit_event.metadata_["actor_system_user_id"] == str(actor_system_user_id)
+
+
+def test_historical_paid_invoice_repair_refuses_without_granted_permission(
+    db_session,
+    subscriber,
+    subscription,
+):
+    """A caller that never checked the reviewed repair permission is refused.
+
+    This is the exact gap an independent risk review found in PR #3092: the
+    CLI could invoke the repair command with a bare free-text actor string
+    and no application-level permission evidence at all. The owner must fail
+    closed, and it must not mutate the invoice, allocation, or subscription.
+    """
+
+    invoice, _payment, allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+    assert preview.actionable is True
+    invoice_id = invoice.id
+    subscription_id = subscription.id
+    fingerprint = preview.fingerprint
+    db_session.commit()
+
+    command = RepairHistoricalPaidPrepaidInvoiceCommand(
+        context=CommandContext.system(
+            actor="pytest:billing-operator",
+            scope=REPAIR_SCOPE,
+            reason="Reviewed exact paid onboarding invoice settlement evidence",
+            idempotency_key=f"pytest-paid-prepaid-repair-denied-{invoice_id}",
+        ),
+        invoice_id=invoice_id,
+        subscription_id=subscription_id,
+        preview_fingerprint=fingerprint,
+        permission_granted=False,
+    )
+
+    with pytest.raises(DomainError) as exc_info:
+        repair_historical_paid_prepaid_invoice(db_session, command)
+
+    assert exc_info.value.code == (
+        "financial.prepaid_draft_reconciliation.permission_denied"
+    )
+    db_session.rollback()
+    db_session.refresh(invoice)
+    db_session.refresh(allocation)
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.billing_period_start is None
+    assert invoice.billing_period_end is None
+    assert db_session.query(ServiceEntitlement).count() == 0
+
+
+def test_historical_paid_invoice_repair_refuses_mismatched_scope(
+    db_session,
+    subscriber,
+    subscription,
+):
+    """A caller-checked ``permission_granted=True`` alone is not sufficient.
+
+    The declared ``CommandContext.scope`` must also name the exact reviewed
+    repair permission; a caller wiring a different scope onto a
+    permission_granted evidence is a near miss the owner must still refuse
+    (mirrors ``network.ont_service_configuration``'s combined check).
+    """
+
+    invoice, _payment, _allocation = _historical_paid_unlinked_invoice(
+        db_session,
+        subscriber,
+        subscription,
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+    )
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+    assert preview.actionable is True
+    invoice_id = invoice.id
+    subscription_id = subscription.id
+    fingerprint = preview.fingerprint
+    db_session.commit()
+
+    command = RepairHistoricalPaidPrepaidInvoiceCommand(
+        context=CommandContext.system(
+            actor="pytest:billing-operator",
+            scope="prepaid_draft_reconciliation",
+            reason="Reviewed exact paid onboarding invoice settlement evidence",
+            idempotency_key=f"pytest-paid-prepaid-repair-scope-{invoice_id}",
+        ),
+        invoice_id=invoice_id,
+        subscription_id=subscription_id,
+        preview_fingerprint=fingerprint,
+        permission_granted=True,
+    )
+
+    with pytest.raises(DomainError) as exc_info:
+        repair_historical_paid_prepaid_invoice(db_session, command)
+
+    assert exc_info.value.code == (
+        "financial.prepaid_draft_reconciliation.permission_denied"
+    )
 
 
 def test_historical_paid_mixed_invoice_requires_explicit_service_line(
@@ -553,13 +690,14 @@ def test_historical_paid_mixed_annual_invoice_repairs_selected_service_line(
     command = RepairHistoricalPaidPrepaidInvoiceCommand(
         context=CommandContext.system(
             actor="pytest:billing-operator",
-            scope="prepaid_draft_reconciliation",
+            scope=REPAIR_SCOPE,
             reason="Reviewed annual prepaid service line in settled mixed invoice",
             idempotency_key=f"pytest-mixed-annual-repair-{invoice_id}",
         ),
         invoice_id=invoice_id,
         subscription_id=subscription_id,
         preview_fingerprint=fingerprint,
+        permission_granted=True,
         line_id=service_line_id,
     )
     result = repair_historical_paid_prepaid_invoice(db_session, command)
@@ -730,13 +868,14 @@ def test_historical_paid_invoice_repair_accepts_same_business_day_due_anchor(
         RepairHistoricalPaidPrepaidInvoiceCommand(
             context=CommandContext.system(
                 actor="pytest:billing-operator",
-                scope="prepaid_draft_reconciliation",
+                scope=REPAIR_SCOPE,
                 reason="Reviewed exact same-day paid invoice evidence",
                 idempotency_key=f"pytest-paid-anchor-boundary-{invoice_id}",
             ),
             invoice_id=invoice_id,
             subscription_id=subscription_id,
             preview_fingerprint=fingerprint,
+            permission_granted=True,
         ),
     )
 

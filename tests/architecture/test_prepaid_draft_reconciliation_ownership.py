@@ -190,3 +190,81 @@ def test_admin_invoice_adapter_calls_only_the_authoritative_reconciler():
     assert "reconcile_prepaid_draft_invoice(" in source
     assert "settle_prepaid_recovery_invoice" not in source
     assert "prepaid_recovery_billing" not in invoice_adapter
+
+
+def test_historical_paid_invoice_repair_has_a_permission_gate():
+    """The reviewed paid-invoice repair authoritative input names a real gate.
+
+    PR #3092's independent risk review found this command reachable with no
+    application-level permission check at all -- a free-text ``actor`` label
+    through ``CommandContext.system(...)``. This pins the fix's shape so a
+    later edit cannot quietly drop the gate.
+    """
+
+    service = service_relationship("financial.prepaid_draft_reconciliation")
+    assert "auth.permission_gate" in service.depends_on
+
+    repair_concern = next(
+        item
+        for item in service.contract.concerns
+        if item.name == "historical paid prepaid invoice identity and coverage repair"
+    )
+    assert "reviewed historical paid-invoice repair command" in (
+        repair_concern.input_names
+    )
+
+    gate_input = next(
+        item
+        for item in service.contract.authoritative_inputs
+        if item.name == "reviewed historical paid-invoice repair command"
+    )
+    assert gate_input.owner == "auth.permission_gate"
+    assert "billing:prepaid_reconciliation:repair" in gate_input.source
+
+    assert (
+        "financial.prepaid_draft_reconciliation.permission_denied"
+        in service.contract.errors.domain_codes
+    )
+
+    source = inspect.getsource(prepaid_draft_reconciliation)
+    assert 'REPAIR_SCOPE = "billing:prepaid_reconciliation:repair"' in source
+    assert "permission_granted: bool" in source
+    assert (
+        "command.context.scope != REPAIR_SCOPE or not command.permission_granted"
+        in source
+    )
+
+
+def test_reconciliation_cli_checks_a_real_staff_permission_before_repair():
+    """The CLI resolves a real principal's RBAC grants, not a free-text actor.
+
+    A caller could previously type any ``--actor`` string it liked; nothing
+    checked it against an actual granted role. This pins that the CLI now
+    resolves an operator-supplied staff identifier's real permissions via
+    ``system_user_role_names`` (the real ``Role``/``SystemUserRole`` join,
+    not ``auth_dependencies.user_role_names``, which reads a ``roles``
+    attribute ``SystemUser`` does not have and always returns ``None``) and
+    ``has_permission`` before treating the repair as authorized. This is a
+    source-grep supplement only: ``tests/test_reconcile_prepaid_drafts_cli.py``
+    is the non-vacuous proof that the resolver can actually return ``True``.
+    """
+
+    with open(
+        "scripts/billing/reconcile_prepaid_drafts.py",
+        encoding="utf-8",
+    ) as handle:
+        source = handle.read()
+
+    assert "from app.services.auth_dependencies import has_permission" in source
+    assert (
+        "from app.services.system_user_assignments import system_user_role_names"
+        in source
+    )
+    assert "auth_dependencies import has_permission, user_role_names" not in source
+    assert "system_user.is_active" in source
+    assert 'parser.add_argument("--actor-system-user-id", type=_uuid)' in source
+    assert "_resolve_repair_permission_granted(" in source
+    assert "permission_granted=repair_permission_granted" in source
+    assert "actor_system_user_id=args.actor_system_user_id" in source
+    assert "REPAIR_SCOPE" in source
+    assert '("--actor-system-user-id", args.actor_system_user_id)' in source

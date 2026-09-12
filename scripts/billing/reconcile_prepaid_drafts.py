@@ -15,9 +15,12 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
+from app.models.system_user import SystemUser
+from app.services.auth_dependencies import has_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
+    REPAIR_SCOPE,
     AdoptFundedPrepaidProformaCommand,
     CreateReviewedPaidPrepaidInvoiceCommand,
     MissingPaidPrepaidInvoiceRepairQuery,
@@ -42,6 +45,35 @@ from app.services.prepaid_draft_reconciliation import (
     reconcile_prepaid_draft_invoice,
     repair_historical_paid_prepaid_invoice,
 )
+from app.services.system_user_assignments import system_user_role_names
+
+
+def _resolve_repair_permission_granted(
+    db, *, actor_system_user_id: UUID | None
+) -> bool:
+    """Check a real staff principal's granted roles, never a free-text actor.
+
+    ``--actor`` is only an audit label; it proves nothing about who is really
+    running this script. This resolves the operator-supplied staff identifier
+    against its actual RBAC grants via ``system_user_role_names`` -- the real
+    ``Role`` join over ``SystemUserRole`` that ``app.services.staff_provisioning``
+    already uses for this exact purpose -- and the same ``has_permission``
+    mechanism the admin web routes use, before the owner is allowed to treat
+    the repair as authorized. A deactivated staff account never resolves.
+    """
+
+    if actor_system_user_id is None:
+        return False
+    system_user = db.get(SystemUser, actor_system_user_id)
+    if system_user is None or not system_user.is_active:
+        return False
+    roles = system_user_role_names(db, actor_system_user_id)
+    auth = {
+        "principal_id": str(actor_system_user_id),
+        "principal_type": "system_user",
+        "roles": set(roles),
+    }
+    return has_permission(auth, db, REPAIR_SCOPE)
 
 
 def _uuid(value: str) -> UUID:
@@ -275,6 +307,7 @@ def main() -> int:
     parser.add_argument("--effective-at", type=_timestamp)
     parser.add_argument("--idempotency-key")
     parser.add_argument("--actor")
+    parser.add_argument("--actor-system-user-id", type=_uuid)
     parser.add_argument("--reason")
     args = parser.parse_args()
 
@@ -406,6 +439,8 @@ def main() -> int:
             else:
                 required.append(("--invoice-id", args.invoice_id))
                 required.append(("--effective-at", args.effective_at))
+        if args.repair_paid_invoice:
+            required.append(("--actor-system-user-id", args.actor_system_user_id))
         missing = [name for name, value in required if not value]
         if missing:
             parser.error("--apply requires " + ", ".join(missing))
@@ -423,9 +458,25 @@ def main() -> int:
                 "--account-id and --limit are preview-only"
             )
         with db_session_adapter.owner_command_session() as db:
+            repair_permission_granted = False
+            if args.repair_paid_invoice:
+                # Resolve the real permission before entering the owner
+                # command boundary: a raw SELECT would otherwise leave this
+                # session mid-transaction and execute_owner_command requires
+                # a transaction-free session at entry.
+                repair_permission_granted = _resolve_repair_permission_granted(
+                    db,
+                    actor_system_user_id=args.actor_system_user_id,
+                )
+                db_session_adapter.release_read_transaction(db)
+            command_scope = (
+                REPAIR_SCOPE
+                if args.repair_paid_invoice
+                else "prepaid_draft_reconciliation"
+            )
             context = CommandContext.system(
                 actor=args.actor,
-                scope="prepaid_draft_reconciliation",
+                scope=command_scope,
                 reason=args.reason,
                 idempotency_key=args.idempotency_key,
             )
@@ -468,7 +519,9 @@ def main() -> int:
                         invoice_id=args.invoice_id,
                         subscription_id=args.subscription_id,
                         preview_fingerprint=args.fingerprint,
+                        permission_granted=repair_permission_granted,
                         line_id=args.line_id,
+                        actor_system_user_id=args.actor_system_user_id,
                     ),
                 )
             else:
