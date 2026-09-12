@@ -19,12 +19,14 @@ from app.models.billing_contract import BillingRecordAuthority
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.customer_subledger import (
     CustomerPostingGroup,
+    CustomerSubledgerOpeningCorrection,
     CustomerSubledgerOpeningPosition,
     PositionEffectKind,
     PostingCommandKind,
 )
 from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.system_user import SystemUser
 from app.services import customer_financial_ledger
 from app.services.billing.customer_subledger import resolve_position
 from app.services.billing.shadow_verification import (
@@ -44,9 +46,13 @@ from app.services.billing.shadow_verification import (
 from app.services.billing.subledger_opening import (
     ActivateCustomerSubledgerAuthorityCommand,
     CaptureCustomerSubledgerOpeningsCommand,
+    CorrectCustomerSubledgerOpeningCommand,
     CustomerSubledgerOpeningError,
+    PreviewCustomerSubledgerOpeningCorrectionQuery,
     activate_customer_subledger_authority,
     capture_customer_subledger_opening_positions,
+    correct_customer_subledger_opening_position,
+    preview_customer_subledger_opening_correction,
 )
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_funding_reconstruction import (
@@ -353,6 +359,99 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         + default_position.prepaid_funding_reserved
         == verified_prepaid_funding_balance(db_session, subscriber_account.id)
     )
+
+    correction_actor = SystemUser(
+        id=uuid4(),
+        first_name="Finance",
+        last_name="Reviewer",
+        display_name="Finance Reviewer",
+        email=f"finance-{uuid4().hex}@example.test",
+        is_active=True,
+    )
+    db_session.add(correction_actor)
+    correction_actor_id = correction_actor.id
+    db_session.commit()
+    correction_query = PreviewCustomerSubledgerOpeningCorrectionQuery(
+        account_id=subscriber_account.id,
+        currency="NGN",
+        corrected_opening_amount=Decimal("3562.50"),
+        reason="Reviewed test correction for an incorrect immutable opening",
+        review_reference="finance-review:pytest-opening-correction",
+    )
+    correction_preview = preview_customer_subledger_opening_correction(
+        db_session, correction_query
+    )
+    assert correction_preview.previous_opening_amount == Decimal("1107.00")
+    assert correction_preview.delta == Decimal("2455.50")
+    db_session.rollback()
+    with pytest.raises(CustomerSubledgerOpeningError) as permission_exc:
+        correct_customer_subledger_opening_position(
+            db_session,
+            CorrectCustomerSubledgerOpeningCommand(
+                context=CommandContext.system(
+                    actor="finance:pytest",
+                    scope="billing:customer_subledger_opening:correct",
+                    reason="pytest denied opening correction",
+                    idempotency_key="opening-correction-denied",
+                ),
+                query=correction_query,
+                expected_preview_fingerprint=correction_preview.preview_fingerprint,
+                permission_granted=False,
+                authorized_system_user_id=correction_actor_id,
+            ),
+        )
+    assert permission_exc.value.code.endswith("permission_denied")
+    assert db_session.query(CustomerSubledgerOpeningCorrection).count() == 0
+    db_session.rollback()
+    correction = correct_customer_subledger_opening_position(
+        db_session,
+        CorrectCustomerSubledgerOpeningCommand(
+            context=CommandContext.system(
+                actor="finance:pytest",
+                scope="billing:customer_subledger_opening:correct",
+                reason="pytest reviewed opening correction",
+                idempotency_key="opening-correction-1",
+            ),
+            query=correction_query,
+            expected_preview_fingerprint=correction_preview.preview_fingerprint,
+            permission_granted=True,
+            authorized_system_user_id=correction_actor_id,
+        ),
+    )
+    assert correction.replayed is False
+    assert correction.corrected_opening_amount == Decimal("3562.50")
+    evidence = db_session.query(CustomerSubledgerOpeningCorrection).one()
+    assert evidence.opening_position_id == opening.id
+    assert Decimal(opening.legacy_position) == Decimal("1107.00")
+    assert verified_prepaid_funding_balance(
+        db_session, subscriber_account.id
+    ) == Decimal("5562.50")
+    corrected_position = resolve_position(
+        db_session,
+        account_id=subscriber_account.id,
+        currency="NGN",
+    )
+    assert corrected_position.unapplied_customer_credit == Decimal("5562.50")
+
+    db_session.commit()
+    correction_replay = correct_customer_subledger_opening_position(
+        db_session,
+        CorrectCustomerSubledgerOpeningCommand(
+            context=CommandContext.system(
+                actor="finance:pytest",
+                scope="billing:customer_subledger_opening:correct",
+                reason="pytest reviewed opening correction",
+                idempotency_key="opening-correction-1",
+            ),
+            query=correction_query,
+            expected_preview_fingerprint=correction_preview.preview_fingerprint,
+            permission_granted=True,
+            authorized_system_user_id=correction_actor_id,
+        ),
+    )
+    assert correction_replay.replayed is True
+    assert correction_replay.correction_id == correction.correction_id
+    assert db_session.query(CustomerSubledgerOpeningCorrection).count() == 1
 
     db_session.commit()
     replay = _capture(db_session, preview, key="opening-capture-1")

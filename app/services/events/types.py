@@ -116,6 +116,9 @@ class EventType(enum.Enum):
     customer_subledger_opening_positions_captured = (
         "customer_subledger.opening_positions_captured"
     )
+    customer_subledger_opening_position_corrected = (
+        "customer_subledger.opening_position_corrected"
+    )
     customer_subledger_authority_activated = "customer_subledger.authority_activated"
 
     # Billing - Bank-transfer evidence lifecycle
