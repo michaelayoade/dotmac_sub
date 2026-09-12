@@ -21,6 +21,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.services.integrations.diagnostics import (
+    DELIVERY_DIAGNOSTIC_KEY,
+    OperationDiagnostic,
+    parse_diagnostic_evidence,
+)
+
 if TYPE_CHECKING:
     from app.models.field_erp_sync import FieldErpSyncEvent
     from app.models.field_expense import FieldExpenseRequest
@@ -64,6 +70,13 @@ class BackofficeDeliveryView:
     queued_at: datetime | None
     updated_at: datetime | None
     sent_at: datetime | None
+    diagnostic: OperationDiagnostic | None
+
+
+def _delivery_diagnostic(event: FieldErpSyncEvent | None) -> OperationDiagnostic | None:
+    if event is None or not isinstance(event.erp_response, dict):
+        return None
+    return parse_diagnostic_evidence(event.erp_response.get(DELIVERY_DIAGNOSTIC_KEY))
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +218,7 @@ def get_material_request_delivery(
         queued_at=event.created_at if event is not None else None,
         updated_at=event.updated_at if event is not None else None,
         sent_at=event.sent_at if event is not None else None,
+        diagnostic=_delivery_diagnostic(event),
     )
 
 
@@ -252,6 +266,7 @@ def get_expense_claim_deliveries(
             queued_at=(row.created_at if row is not None else None),
             updated_at=(row.updated_at if row is not None else None),
             sent_at=(row.sent_at if row is not None else None),
+            diagnostic=_delivery_diagnostic(row),
         )
         for request_id in ids
         for row in (latest.get(request_id),)
@@ -296,6 +311,7 @@ def get_expense_payment_deliveries(
             queued_at=(row.created_at if row is not None else None),
             updated_at=(row.updated_at if row is not None else None),
             sent_at=(row.sent_at if row is not None else None),
+            diagnostic=_delivery_diagnostic(row),
         )
         for request_id in ids
         for row in (latest.get(request_id),)
@@ -345,6 +361,7 @@ def get_expense_decision_delivery(
         queued_at=matching.created_at if matching is not None else None,
         updated_at=matching.updated_at if matching is not None else None,
         sent_at=matching.sent_at if matching is not None else None,
+        diagnostic=_delivery_diagnostic(matching),
     )
 
 

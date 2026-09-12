@@ -31,12 +31,13 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services import backoffice
-from app.services.backoffice import ExpenseCategoryView
+from app.services.backoffice import BackofficeDeliveryView, ExpenseCategoryView
 from app.services.db_session_adapter import db_session_adapter
 from app.services.dotmac_erp import expense_sync, outbox
 from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientError
 from app.services.field import attachments as attachments_module
 from app.services.field import expense_recovery as expense_recovery_module
+from app.services.field import expense_requests as expense_requests_module
 from app.services.field.attachments import ResolvedExpenseReceiptAttachment
 from app.services.field.expense_recovery import (
     PreviewExpenseDeliveryRecovery,
@@ -61,12 +62,39 @@ from app.services.field.expense_requests import (
     submit_field_expense_request_command,
 )
 from app.services.integrations.backoffice_contracts import ERP_OUTBOX_CAPABILITY
+from app.services.integrations.diagnostics import safe_diagnostic
 from app.services.owner_commands import CommandContext
 from tests.integration_platform_helpers import enable_erp_capability
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
+
+
+def test_field_projection_exposes_only_safe_expense_delivery_diagnostic():
+    request_id = uuid4()
+    diagnostic = safe_diagnostic(status=422).model_copy(
+        update={"message": "private provider detail", "request_id": request_id}
+    )
+    delivery = BackofficeDeliveryView(
+        flow_owner="sub",
+        sub_owns_delivery=True,
+        event_id=uuid4(),
+        event_status=FieldErpSyncStatus.dead.value,
+        attempts=1,
+        last_error="private provider detail",
+        queued_at=None,
+        updated_at=None,
+        sent_at=None,
+        diagnostic=diagnostic,
+    )
+
+    error = expense_requests_module._expense_sync_error(delivery)
+
+    assert error is not None
+    assert "ERP rejected request validation" in error
+    assert f"request_id={request_id}" in error
+    assert "private provider detail" not in error
 
 
 def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
@@ -776,8 +804,16 @@ def test_permanent_receipt_failure_is_dead_with_safe_diagnostics(
     )
     db_session.commit()
     _approve(db_session, request)
+    request_id = uuid4()
     client = _FakeERPClient(
-        upload_outcomes=[DotMacERPError("credential and private file detail")]
+        upload_outcomes=[
+            DotMacERPError(
+                "credential and private file detail",
+                diagnostic=safe_diagnostic(status=422).model_copy(
+                    update={"request_id": request_id}
+                ),
+            )
+        ]
     )
 
     result = outbox.deliver_pending(db_session, client=client)
@@ -785,7 +821,12 @@ def test_permanent_receipt_failure_is_dead_with_safe_diagnostics(
     row = _outbox_rows(db_session, request)[0]
     assert result.dead == 1
     assert row.status == FieldErpSyncStatus.dead.value
-    assert row.last_error == "ERP expense release was rejected"
+    assert row.last_error == (
+        "ERP rejected request validation; inspect redacted ERP validation evidence. "
+        f"(code=validation_error; status=422; request_id={request_id})"
+    )
+    assert row.erp_response["delivery_diagnostic"]["request_id"] == str(request_id)
+    assert row.erp_response["delivery_diagnostic"]["code"] == "validation_error"
     diagnostic = " ".join(result.errors)
     assert "credential" not in diagnostic
     assert "private-person-name" not in diagnostic

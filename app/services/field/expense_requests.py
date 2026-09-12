@@ -48,6 +48,7 @@ from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
 )
 from app.services.integrations import installations
+from app.services.integrations.diagnostics import safe_diagnostic_summary
 from app.services.integrations.erp_capability import (
     ErpCapabilityError,
     ErpCapabilityTransientError,
@@ -1285,6 +1286,8 @@ def _expense_sync_error(delivery: BackofficeDeliveryView | None) -> str | None:
     if delivery.event_status == ExpenseErpSyncStatus.REJECTED.value:
         return "ERP rejected this expense claim."
     if delivery.event_status == ExpenseErpSyncStatus.DEAD.value:
+        if delivery.diagnostic is not None:
+            return safe_diagnostic_summary(delivery.diagnostic)
         return "ERP delivery failed after automatic retries."
     return None
 
