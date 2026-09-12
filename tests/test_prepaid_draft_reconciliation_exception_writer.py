@@ -39,10 +39,15 @@ def _draft_invoice(db_session, account_id) -> Invoice:
 
 
 def test_records_full_evidence_including_subscription_and_period(
-    db_session, subscriber
+    db_session, subscriber, subscription
 ):
     invoice = _draft_invoice(db_session, subscriber.id)
-    subscription_id = uuid4()
+    # A real `Subscription` row, not a bare `uuid4()` (2026-09, round 7):
+    # `PrepaidDraftReconciliationException.subscription_id` is a real FK
+    # (`ondelete="RESTRICT"`), so an arbitrary UUID with no matching row
+    # fails the insert with an `IntegrityError` rather than exercising this
+    # writer's evidence-recording behavior.
+    subscription_id = subscription.id
     starts_at = datetime.now(UTC)
     ends_at = starts_at + timedelta(days=30)
     fingerprint = "a" * 64
@@ -130,6 +135,6 @@ def test_is_idempotent_on_invoice_id_and_bumps_attempt_count_on_new_evidence(
     assert updated.attempt_count == 2
     assert updated.payment_backed_amount == Decimal("700.00")
 
-    assert (
-        db_session.query(PrepaidDraftReconciliationException).count() == 1
-    ), "one invoice must never accumulate more than one open review row"
+    assert db_session.query(PrepaidDraftReconciliationException).count() == 1, (
+        "one invoice must never accumulate more than one open review row"
+    )

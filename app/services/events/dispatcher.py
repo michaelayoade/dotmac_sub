@@ -431,6 +431,22 @@ class EventDispatcher:
                     retry_count=event_record.retry_count,
                 )
             except Exception as exc:
+                # Classify the SAME way the initial dispatch path does
+                # (2026-09, round 8 -- Michael's original finding #7, missed
+                # in the round 1-6 reorder plan because it didn't cleanly
+                # belong to any of its 6 steps): a permanent failure that
+                # occurs DURING a retry attempt must stay permanent, not
+                # silently fall back to the default retryable classification.
+                # Previously this handler recorded `status="failed"`
+                # unconditionally with no `"retryable"` key at all, so the
+                # NEXT retry's own permanent-carry-forward filter above
+                # (`str(failure.get("retryable", "True")).lower() ==
+                # "false"`) treated it as retryable by default -- a handler
+                # that fails PERMANENTLY on a retry (e.g.
+                # `PrepaidTriggerExecutionConflictError`) was silently
+                # redelivered forever, defeating the whole permanent/
+                # transient classification this dispatcher builds.
+                retryable = not (isinstance(exc, DomainError) and not exc.retryable)
                 logger.exception(
                     "event_retry_handler_failed",
                     extra={
@@ -441,22 +457,31 @@ class EventDispatcher:
                         ),
                         "handler": step.handler_name,
                         "error": str(exc),
+                        "retryable": retryable,
                     },
                 )
                 new_failures.append(
                     {
                         "handler": step.handler_name,
                         "error": str(exc),
+                        "retryable": str(retryable),
                     }
                 )
                 event_store_service.record_handler_attempt(
                     db,
                     event_store_id=event_record.id,
                     handler_name=step.handler_name,
-                    status="failed",
+                    status="failed" if retryable else "failed_permanent",
                     error=str(exc),
                     retry_count=event_record.retry_count,
                 )
+                if not retryable:
+                    _record_permanent_handler_failure(
+                        db,
+                        event=event,
+                        handler_name=step.handler_name,
+                        exc=exc,
+                    )
 
         # Update final status. Permanent failures are carried forward
         # unconditionally: they were never re-attempted above, so leaving

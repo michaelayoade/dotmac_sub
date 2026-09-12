@@ -464,6 +464,73 @@ class TestEventDispatcher:
 
         assert result is False
 
+    def test_retry_event_permanent_failure_is_classified_and_alerted(self, db_session):
+        """Michael's original finding #7 (2026-09, round 8): a handler that
+        fails PERMANENTLY during a RETRY attempt must be classified and
+        recorded the same way the initial dispatch path does -- not
+        silently default to retryable, which would make it eligible for
+        redelivery forever.
+        """
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.permanent_retry_failure",
+            message="permanent on retry",
+            retryable=False,
+        )
+        handler.__class__.__name__ = "PermanentRetryHandler"
+        dispatcher.register_handler(handler)
+
+        event_record = MagicMock()
+        event_record.event_id = uuid.uuid4()
+        event_record.event_type = "subscriber.created"
+        event_record.payload = {}
+        event_record.actor = None
+        event_record.subscriber_id = None
+        event_record.account_id = None
+        event_record.subscription_id = None
+        event_record.invoice_id = None
+        event_record.service_order_id = None
+        event_record.failed_handlers = [
+            {"handler": "PermanentRetryHandler", "error": "boom"}
+        ]
+        event_record.retry_count = 0
+
+        mock_db = MagicMock()
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            with patch(
+                "app.services.event_store.record_handler_attempt"
+            ) as record_attempt:
+                with patch(
+                    "app.services.event_store.mark_event_completed"
+                ) as mark_completed:
+                    dispatcher.retry_event(mock_db, event_record)
+
+        alert.assert_called_once()
+        _, alert_kwargs = alert.call_args
+        assert alert_kwargs["handler_name"] == "PermanentRetryHandler"
+
+        # The handler-attempt row is recorded permanent, not merely "failed".
+        record_attempt.assert_called_once()
+        _, attempt_kwargs = record_attempt.call_args
+        assert attempt_kwargs["status"] == "failed_permanent"
+
+        # The failure manifest carries `retryable=False` so the NEXT retry's
+        # own carry-forward filter (`failure.get("retryable", "True")`)
+        # correctly excludes this handler from redelivery instead of
+        # defaulting it back to retryable.
+        mark_completed.assert_called_once()
+        # `mark_event_completed(db, record, failed_handlers)` -- positional.
+        completed_args, _completed_kwargs = mark_completed.call_args
+        failed_handlers_arg = completed_args[2]
+        assert len(failed_handlers_arg) == 1
+        assert failed_handlers_arg[0]["handler"] == "PermanentRetryHandler"
+        assert failed_handlers_arg[0]["retryable"] == "False"
+
 
 # ---------------------------------------------------------------------------
 # EnforcementHandler tests

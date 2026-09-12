@@ -309,6 +309,27 @@ class PrepaidDraftReconciliationException(Base):
             postgresql_where=text("invoice_id IS NOT NULL"),
             sqlite_where=text("invoice_id IS NOT NULL"),
         ),
+        # Migration 601 (2026-09, round 7): the no-invoice (pre-mutation
+        # ambiguous classification) case's own uniqueness key, mirroring the
+        # with-invoice index above. Only covers the case that carries a real
+        # subscription/period identity -- see that migration's docstring for
+        # why the fully-degenerate all-null case is a named, separate gap.
+        Index(
+            "uq_prepaid_draft_exception_no_invoice_identity",
+            "account_id",
+            "subscription_id",
+            "period_start",
+            "period_end",
+            unique=True,
+            postgresql_where=text(
+                "invoice_id IS NULL AND subscription_id IS NOT NULL "
+                "AND period_start IS NOT NULL AND period_end IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "invoice_id IS NULL AND subscription_id IS NOT NULL "
+                "AND period_start IS NOT NULL AND period_end IS NOT NULL"
+            ),
+        ),
         Index(
             "ix_prepaid_draft_exception_status_created",
             "status",

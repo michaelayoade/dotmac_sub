@@ -39,7 +39,6 @@ from decimal import Decimal
 from sqlalchemy.orm import sessionmaker
 
 from app.models.billing import (
-    BillingMode,
     Invoice,
     InvoiceLine,
     LedgerEntry,
@@ -55,6 +54,7 @@ from app.models.billing import (
 from app.models.catalog import (
     AccessType,
     BillingCycle,
+    BillingMode,
     CatalogOffer,
     OfferPrice,
     OfferStatus,
@@ -308,7 +308,12 @@ def test_ambiguous_account_is_isolated_while_a_second_account_still_renews(engin
         isolated = summary["prepaid_renewals_isolated"]
         assert isinstance(isolated, list)
         assert len(isolated) == 1
-        assert isolated[0]["subscription_id"] == str(subscription_a_id)
+        # Account-level isolation (2026-09, round 7): the isolated entry now
+        # names the account and every due subscription that account had in
+        # this pass (comma-joined) -- account A has exactly one due
+        # subscription here, so the value is unchanged even though the key
+        # is now plural.
+        assert isolated[0]["subscription_ids"] == str(subscription_a_id)
         assert isolated[0]["error_type"] == "PrepaidRenewalAmbiguousEvidenceError"
 
         review_items = (

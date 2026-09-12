@@ -19,6 +19,7 @@ import pytest
 from app.models.billing import (
     Payment,
     PaymentSettlement,
+    PaymentSettlementOrigin,
     PaymentStatus,
     ServiceEntitlement,
 )
@@ -64,6 +65,7 @@ def _settled_payment(db_session, subscriber) -> Payment:
         payment_id=payment.id,
         currency="NGN",
         amount=Decimal("100.00"),
+        origin=PaymentSettlementOrigin.system,
     )
     db_session.add(settlement)
     db_session.commit()
@@ -112,6 +114,14 @@ def test_payment_and_settlement_rows_survive_a_forced_consequence_rollback(
             account_id=subscriber.id,
             payment_id=payment_id,
             evidence_ref="pytest:payment-preservation",
+            # No `event_id` here on purpose (this test predates the receipt
+            # model), but the fail-closed guard added 2026-09 round 7 would
+            # otherwise raise on THAT before ever reaching the injected
+            # `_boom` failure below, making this test pass for the wrong
+            # reason (a vacuous pass, not a real proof of payment/settlement
+            # preservation) -- `skip_receipt_for_repair=True` is the same
+            # explicit, named opt-out a real repair call uses.
+            skip_receipt_for_repair=True,
         )
 
     # The forced failure must not have reached back into the payment/

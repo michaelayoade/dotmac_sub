@@ -274,16 +274,26 @@ class EvaluatePrepaidServiceAfterSettlementCommand:
     payment_id: UUID
     evidence_ref: str
     # The domain event's own id (``Event.event_id`` / ``EventStore.event_id``,
-    # NOT the ``EventStore`` surrogate primary key). Optional for backward
-    # compatibility with any caller that predates the trigger-receipt model
-    # (e.g. a direct test call) -- when absent, no receipt is written/checked
-    # and this call behaves exactly as it did before that model existed.
+    # NOT the ``EventStore`` surrogate primary key). The durable dispatch path
+    # always supplies this. A caller with no event identity at all (the
+    # repair CLI -- see ``skip_receipt_for_repair`` below) must say so
+    # explicitly; omitting ``event_id`` without that flag is a hard failure
+    # (2026-09, round 7) rather than a silent unreceipted fallthrough.
     event_id: UUID | None = None
     # Narrows the due-subscription scan to exactly one subscription. Real
     # dispatch never sets this; the repair CLI does, so what actually gets
     # applied cannot exceed the one subscription/period its fingerprint-bound
     # preview committed to.
     only_subscription_id: UUID | None = None
+    # Explicit, named opt-out of the trigger-receipt model for a call that
+    # has no durable event to receipt against -- exactly the repair CLI's
+    # case (``scripts/billing/repair_prepaid_funding_consequences.py``): a
+    # repair is a fresh, current-state evaluation, not a replay of the
+    # original event, and deliberately does not touch that event's
+    # ``PrepaidFundingTriggerExecution`` receipt. Must be set ``True``
+    # together with ``event_id=None``; any other caller omitting
+    # ``event_id`` is refused rather than silently proceeding unreceipted.
+    skip_receipt_for_repair: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -624,6 +634,13 @@ class PrepaidServiceRenewalResult:
     adjustment: AccountAdjustment | None
     ledger_entry: LedgerEntry | None
     replayed: bool
+    # The reviewed-opening-funding lane's own consumption evidence id
+    # (2026-09, round 7). Previously discarded at the call site, which left
+    # the receipt able to declare an `opening_funding` disposition with an
+    # EMPTY evidence list -- the exact gap this closes. `None` for the
+    # payment-only lane and for the pre-invoice-backed-renewal-cutover
+    # adjustment replay path (neither ever consumes opening funding).
+    opening_funding_consumption_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +705,21 @@ class FundingChangeRenewalDisposition(enum.StrEnum):
     currency_mismatch = "currency_mismatch"
     non_cash_granted = "non_cash_granted"
     treatment_blocked = "treatment_blocked"
+
+
+#: A disposition that claims a real settlement happened. A receipt written
+#: with one of these MUST carry at least one subscription decision -- the
+#: exact defect this whole round targets (2026-09, round 7/8). Mirrored in
+#: `scripts/billing/census_prepaid_funding_consequence_gaps.py`'s
+#: `_SUCCESSFUL_TRIGGER_DISPOSITIONS` (a separate, string-keyed constant
+#: there since that script reads the persisted `disposition` column rather
+#: than this enum) -- keep both in sync if this set ever changes.
+SUCCESSFUL_FUNDING_CHANGE_RENEWAL_DISPOSITIONS = frozenset(
+    {
+        FundingChangeRenewalDisposition.draft_invoice_settled,
+        FundingChangeRenewalDisposition.funded,
+    }
+)
 
 
 class FundingChangeEvaluationDisposition(enum.StrEnum):
@@ -948,6 +980,39 @@ def _prepaid_funding_request_fingerprint(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _prepaid_funding_subscription_decision_evidence_fingerprint(
+    *,
+    subscription_id: UUID,
+    period_start: datetime,
+    period_end: datetime,
+    disposition: str,
+    funding_source: str | None,
+    invoice_id: UUID | None,
+    invoice_line_id: UUID | None,
+    entitlement_id: UUID | None,
+    funding_evidence_ids: list[str],
+    amount: Decimal,
+    currency: str,
+) -> str:
+    """Stable hash of one subscription's full settlement/allocation shape.
+
+    Covers settlement/allocation shape and every resulting invoice/line/
+    entitlement/funding-evidence identity (2026-09, round 7) -- not just
+    disposition/amount/currency, so two outcomes reaching the same
+    disposition through different evidence (e.g. a different invoice, a
+    different set of payment allocations, or opening funding vs. none)
+    hash differently instead of colliding.
+    """
+
+    raw = (
+        f"{subscription_id}:{period_start.isoformat()}:{period_end.isoformat()}:"
+        f"{disposition}:{funding_source or ''}:{invoice_id or ''}:"
+        f"{invoice_line_id or ''}:{entitlement_id or ''}:"
+        f"{','.join(sorted(funding_evidence_ids))}:{amount}:{currency.upper()}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _prepaid_funding_outcome_fingerprint(
     renewal: FundingChangeRenewalResult,
 ) -> str:
@@ -957,6 +1022,9 @@ def _prepaid_funding_outcome_fingerprint(
         sorted(
             f"{decision.subscription_id}:{decision.period_start.isoformat()}:"
             f"{decision.period_end.isoformat()}:{decision.disposition}:"
+            f"{decision.funding_source or ''}:{decision.invoice_id or ''}:"
+            f"{decision.invoice_line_id or ''}:{decision.entitlement_id or ''}:"
+            f"{','.join(sorted(decision.funding_evidence_ids))}:"
             f"{decision.amount}:{decision.currency}"
             for decision in renewal.subscription_decisions
         )
@@ -987,6 +1055,25 @@ def _record_prepaid_funding_trigger_execution(
         PrepaidFundingTriggerExecution,
         PrepaidFundingTriggerSubscriptionOutcome,
     )
+
+    # The inverse of the per-decision `funding_evidence_missing` invariant
+    # above, and the actual defect class this whole round targets (2026-09,
+    # round 8): a receipt claiming a real settlement (`draft_invoice_settled`/
+    # `funded`) must never commit with zero children. This is the write-site
+    # gate `find_successful_receipts_missing_child_evidence` exists to make
+    # unnecessary in the first place -- the census check is a detective
+    # control for anything that slips past THIS gate, not a substitute for it.
+    if (
+        renewal.disposition in SUCCESSFUL_FUNDING_CHANGE_RENEWAL_DISPOSITIONS
+        and not renewal.subscription_decisions
+    ):
+        _error(
+            "successful_receipt_missing_child_evidence",
+            "A receipt claiming a real settlement cannot commit with zero "
+            "subscription-level child outcomes.",
+            account_id=str(account_id),
+            disposition=renewal.disposition.value,
+        )
 
     receipt = PrepaidFundingTriggerExecution(
         event_store_id=event_store_id,
@@ -1072,6 +1159,7 @@ def evaluate_prepaid_service_after_settlement(
     evidence_ref: str,
     event_id: UUID | None = None,
     only_subscription_id: UUID | None = None,
+    skip_receipt_for_repair: bool = False,
 ) -> FundingChangeEvaluation:
     """Validate settlement evidence and request its prepaid consequence.
 
@@ -1139,9 +1227,20 @@ def evaluate_prepaid_service_after_settlement(
         )
 
     # Receipt replay check: "have we already processed this EXACT durable
-    # event." Only engaged when the caller supplies `event_id` (the durable
-    # dispatch path always does; a direct/legacy caller that doesn't gets
-    # today's un-receipted behavior unchanged).
+    # event." A receipt-eligible call must actually be able to write a
+    # receipt (2026-09, round 7): a fail-open here would leave a real
+    # settlement consequence permanently un-receipted with no trace of why.
+    if event_id is None and not skip_receipt_for_repair:
+        _error(
+            "receipt_required",
+            "This call has no event identity and did not explicitly opt "
+            "out of receipting. Supply `event_id` (the durable dispatch "
+            "path always does), or pass `skip_receipt_for_repair=True` if "
+            "this is genuinely a repair re-evaluation with no original "
+            "event to receipt against.",
+            account_id=str(account_id),
+            payment_id=str(payment_id),
+        )
     event_store_id: UUID | None = None
     request_fingerprint: str | None = None
     if event_id is not None:
@@ -1154,19 +1253,16 @@ def evaluate_prepaid_service_after_settlement(
         if event_store_row is None:
             # Should never happen on the real dispatch path (`dispatch()`
             # persists the `EventStore` row before any handler runs, in the
-            # same transaction) -- but if it ever does, this execution
-            # proceeds un-receipted rather than failing, so make the gap
-            # visible instead of silently skipping idempotency protection.
-            logger.warning(
-                "prepaid_funding_trigger_execution_receipt_skipped_no_event_store_row",
-                extra={
-                    "event": (
-                        "prepaid_funding_trigger_execution_receipt_skipped_"
-                        "no_event_store_row"
-                    ),
-                    "event_id": str(event_id),
-                    "account_id": str(account_id),
-                },
+            # same transaction) -- if it ever does, a receipt-eligible call
+            # with no way to write a receipt is not safe to let proceed
+            # unreceipted, so this is now a hard failure (2026-09, round 7)
+            # rather than a warn-and-continue.
+            _error(
+                "event_store_row_missing",
+                "Funding-change event has an event_id with no matching "
+                "EventStore row; refusing to proceed unreceipted.",
+                event_id=str(event_id),
+                account_id=str(account_id),
             )
         if event_store_row is not None:
             event_store_id = event_store_row.id
@@ -1285,6 +1381,7 @@ def execute_prepaid_service_after_settlement(
             evidence_ref=command.evidence_ref,
             event_id=command.event_id,
             only_subscription_id=command.only_subscription_id,
+            skip_receipt_for_repair=command.skip_receipt_for_repair,
         ),
     )
 
@@ -1640,6 +1737,19 @@ def confirm_prepaid_service_renewal(
             adjustment=None,
             ledger_entry=None,
             replayed=True,
+            # Re-derived, not just discarded on replay (2026-09, round 7):
+            # without this, the SAME renewal would report real opening-funding
+            # evidence on its first execution and none on a replay, which
+            # would make the receipt's evidence fingerprint disagree with
+            # itself across an exact replay of the same durable event.
+            opening_funding_consumption_id=db.scalar(
+                select(PrepaidOpeningFundingConsumption.id)
+                .where(
+                    PrepaidOpeningFundingConsumption.invoice_id
+                    == invoice_evidence.invoice.id
+                )
+                .limit(1)
+            ),
         )
 
     # Preserve replay compatibility for periods funded before invoice-backed
@@ -1793,7 +1903,7 @@ def confirm_prepaid_service_renewal(
             detail=classification.reason,
         )
         raise PrepaidRenewalAmbiguousEvidenceError(
-            "Due prepaid renewal does not have clean, exact settlement " "evidence.",
+            "Due prepaid renewal does not have clean, exact settlement evidence.",
             subscription_id=str(subscription.id),
             disposition=classification.disposition.value,
             reason=classification.reason,
@@ -1876,6 +1986,7 @@ def confirm_prepaid_service_renewal(
     }
     db.flush()
 
+    opening_funding_consumption_id: UUID | None = None
     if classification.disposition is PrepaidDraftDisposition.exact_payment_fundable:
         _settle_exact_payment_fundable_renewal(
             db,
@@ -1883,7 +1994,7 @@ def confirm_prepaid_service_renewal(
             decision_at=decision_at,
         )
     else:
-        _settle_reviewed_opening_fundable_renewal(
+        opening_funding_consumption_id = _settle_reviewed_opening_fundable_renewal(
             db,
             invoice=invoice,
             classification=classification,
@@ -1933,6 +2044,7 @@ def confirm_prepaid_service_renewal(
         adjustment=None,
         ledger_entry=None,
         replayed=False,
+        opening_funding_consumption_id=opening_funding_consumption_id,
     )
 
 
@@ -2001,7 +2113,7 @@ def _settle_exact_payment_fundable_renewal(
         raise PrepaidServiceRenewalError(
             code="financial.prepaid_service_renewals.invoice_settlement_rejected",
             message=(
-                "Verified funding did not produce one exactly paid renewal " "invoice."
+                "Verified funding did not produce one exactly paid renewal invoice."
             ),
             details={
                 "invoice_id": str(invoice.id),
@@ -2020,8 +2132,12 @@ def _settle_reviewed_opening_fundable_renewal(
     current: PrepaidServiceRenewalPreview,
     decision_at: datetime,
     idempotency_key: str,
-) -> None:
+) -> UUID | None:
     """Full 8-step reviewed-opening-funding lane, atomically, for one invoice.
+
+    Returns the consumption row's id when opening funding was actually
+    consumed (``opening_amount > 0``), so the caller can carry it as this
+    renewal's funding evidence -- never silently discarded (2026-09, round 7).
 
     1. Lock — delegated to the already-locked account
        (:func:`confirm_prepaid_service_renewal` locks it at entry) plus
@@ -2105,8 +2221,9 @@ def _settle_reviewed_opening_fundable_renewal(
             preview_fingerprint=funding.fingerprint,
         )
         opening_amount = result.invoice_remaining
+        consumption_id: UUID | None = None
         if opening_amount > Decimal("0.00"):
-            stage_reviewed_opening_funding_consumption_for_owner(
+            consumption = stage_reviewed_opening_funding_consumption_for_owner(
                 db,
                 invoice=invoice,
                 opening=opening,
@@ -2116,6 +2233,7 @@ def _settle_reviewed_opening_fundable_renewal(
                 effective_at=decision_at,
                 idempotency_key=f"funding-consequence:{invoice.id}:{idempotency_key}",
             )
+            consumption_id = consumption.id
         finalize_invoice_application_for_owner(db, invoice, effective_at=decision_at)
     except (InvoiceOwnerError, AccountCreditApplicationError) as exc:
         raise PrepaidServiceRenewalError(
@@ -2131,6 +2249,7 @@ def _settle_reviewed_opening_fundable_renewal(
             retryable=False,
         ) from exc
     db.refresh(invoice)
+    return consumption_id
 
 
 def execute_reviewed_prepaid_service_renewal(
@@ -3220,6 +3339,45 @@ def apply_due_prepaid_service_after_funding_change(
     if draft_result.drafts_found and not duplicate_drafts_voided:
         settled = draft_result.drafts_settled
         pending = draft_result.drafts_blocked
+        # A real settlement must never produce a receipt with zero
+        # subscription-level children (2026-09, round 7): the existing-draft
+        # reconciliation owner (`prepaid_draft_reconciliation`) returns typed
+        # per-subscription evidence for its own settle/void outcomes, which
+        # this owner converts into the same receipt-child shape the
+        # new-renewal lanes populate, so `execute_prepaid_service_after_settlement`
+        # writes a non-empty `PrepaidFundingTriggerSubscriptionOutcome` row
+        # whenever a real financial consequence occurred here.
+        subscription_decisions = tuple(
+            PrepaidFundingSubscriptionDecision(
+                subscription_id=outcome.subscription_id,
+                period_start=outcome.period_start,
+                period_end=outcome.period_end,
+                disposition=outcome.disposition,
+                funding_source=outcome.funding_source,
+                invoice_id=outcome.invoice_id,
+                invoice_line_id=outcome.invoice_line_id,
+                entitlement_id=None,
+                funding_evidence_ids=outcome.funding_evidence_ids,
+                amount=outcome.amount,
+                currency=outcome.currency,
+                evidence_fingerprint=(
+                    _prepaid_funding_subscription_decision_evidence_fingerprint(
+                        subscription_id=outcome.subscription_id,
+                        period_start=outcome.period_start,
+                        period_end=outcome.period_end,
+                        disposition=outcome.disposition,
+                        funding_source=outcome.funding_source,
+                        invoice_id=outcome.invoice_id,
+                        invoice_line_id=outcome.invoice_line_id,
+                        entitlement_id=None,
+                        funding_evidence_ids=outcome.funding_evidence_ids,
+                        amount=outcome.amount,
+                        currency=outcome.currency,
+                    )
+                ),
+            )
+            for outcome in draft_result.subscription_outcomes
+        )
         return FundingChangeRenewalResult(
             account_id=account_id,
             scanned=draft_result.drafts_found,
@@ -3241,6 +3399,7 @@ def apply_due_prepaid_service_after_funding_change(
             draft_invoices_voided=0,
             draft_invoices_pending=pending,
             draft_review_exceptions=draft_result.review_exceptions,
+            subscription_decisions=subscription_decisions,
         )
 
     due_subscriptions_query = (
@@ -3450,35 +3609,87 @@ def apply_due_prepaid_service_after_funding_change(
                 trigger_payment_id=trigger_payment_id,
             )
             renewals.append(outcome)
-            subscription_outcomes.append(
-                PrepaidFundingSubscriptionDecision(
+        # Receipt-child evidence is built for BOTH the fresh and the
+        # period-level-replayed case (2026-09, round 8) -- `renewal.replayed`
+        # means THIS subscription/period was already fully settled by
+        # earlier evidence (`_invoice_backed_renewal_evidence`/
+        # `existing_adjustment`), a period-level idempotency concept
+        # completely independent of whether the DURABLE EVENT itself is
+        # being replayed (that's guarded much earlier, in
+        # `evaluate_prepaid_service_after_settlement`, before this loop ever
+        # runs). `confirm_prepaid_service_renewal`'s replay branches return
+        # the exact same invoice/line/entitlement/payment-allocation
+        # evidence shape as a fresh settlement, so this receipt still gets
+        # real, non-empty children -- only `stage_prepaid_service_renewed_
+        # outcome` (which would emit a duplicate "renewed" event/outcome
+        # record) stays guarded above. Previously `funded += 1` below ran
+        # unconditionally while this whole block was skipped on replay,
+        # so a purely-replayed renewal could produce a `funded`-disposition
+        # receipt with ZERO children -- invisible to
+        # `find_successful_receipts_missing_child_evidence`.
+        #
+        # The reviewed-opening-funding lane applies payment-backed credit
+        # fully before falling back to opening funding for the remainder
+        # (`AccountCreditApplications.apply_invoice_available`), so a
+        # single renewal can legitimately carry BOTH kinds of evidence at
+        # once -- this is no longer treated as one-or-the-other
+        # (2026-09, round 7); previously the opening-funding lane could
+        # declare `opening_funding` while recording an empty evidence
+        # list, because the consumption id was computed and discarded.
+        funding_sources = []
+        funding_evidence_ids = [str(value) for value in renewal.payment_allocation_ids]
+        if renewal.payment_allocation_ids:
+            funding_sources.append("payment")
+        if renewal.opening_funding_consumption_id is not None:
+            funding_sources.append("opening_funding")
+            funding_evidence_ids.append(str(renewal.opening_funding_consumption_id))
+        # Hard invariant, not just a natural consequence of the fix above
+        # (2026-09, round 7): a disposition naming a funding source with
+        # no matching evidence id is not a successful disposition -- this
+        # must never regress silently if a future lane forgets to thread
+        # its own evidence id through.
+        if funding_sources and not funding_evidence_ids:
+            _error(
+                "funding_evidence_missing",
+                "A funded renewal declared a funding source with no evidence id.",
+                subscription_id=str(subscription.id),
+                funding_sources=funding_sources,
+            )
+        decision_invoice_id = (
+            renewal.invoice.id if renewal.invoice is not None else None
+        )
+        decision_invoice_line_id = (
+            renewal.invoice_line.id if renewal.invoice_line is not None else None
+        )
+        decision_funding_source = "+".join(funding_sources) or None
+        subscription_outcomes.append(
+            PrepaidFundingSubscriptionDecision(
+                subscription_id=subscription.id,
+                period_start=renewal.preview.starts_at,
+                period_end=renewal.preview.ends_at,
+                disposition="created_canonical_renewal",
+                funding_source=decision_funding_source,
+                invoice_id=decision_invoice_id,
+                invoice_line_id=decision_invoice_line_id,
+                entitlement_id=renewal.entitlement.id,
+                funding_evidence_ids=funding_evidence_ids,
+                amount=renewal.preview.amount,
+                currency=renewal.preview.currency,
+                evidence_fingerprint=_prepaid_funding_subscription_decision_evidence_fingerprint(
                     subscription_id=subscription.id,
                     period_start=renewal.preview.starts_at,
                     period_end=renewal.preview.ends_at,
                     disposition="created_canonical_renewal",
-                    funding_source=(
-                        "payment"
-                        if renewal.invoice is not None
-                        and renewal.payment_allocation_ids
-                        else "opening_funding"
-                    ),
-                    invoice_id=(
-                        renewal.invoice.id if renewal.invoice is not None else None
-                    ),
-                    invoice_line_id=(
-                        renewal.invoice_line.id
-                        if renewal.invoice_line is not None
-                        else None
-                    ),
+                    funding_source=decision_funding_source,
+                    invoice_id=decision_invoice_id,
+                    invoice_line_id=decision_invoice_line_id,
                     entitlement_id=renewal.entitlement.id,
-                    funding_evidence_ids=[
-                        str(value) for value in renewal.payment_allocation_ids
-                    ],
+                    funding_evidence_ids=funding_evidence_ids,
                     amount=renewal.preview.amount,
                     currency=renewal.preview.currency,
-                    evidence_fingerprint=renewal.preview.fingerprint,
-                )
+                ),
             )
+        )
         funded += 1
 
     db.flush()
@@ -3550,8 +3761,7 @@ def _confirm_and_stage_scheduled_renewal(
         preview,
         effective_at=effective_at,
         evidence_ref=(
-            "scheduled-billing-run:"
-            f"{effective_at.isoformat().replace('+00:00', 'Z')}"
+            f"scheduled-billing-run:{effective_at.isoformat().replace('+00:00', 'Z')}"
         ),
     )
     if not renewal.replayed:
@@ -3589,7 +3799,6 @@ def run_due_prepaid_service_renewals(
     """
     from app.services.billing_automation import _period_end
     from app.services.prepaid_funding_reconstruction import (
-        PrepaidFundingBaselineMissingError,
         authority_cutover_batch,
         prepaid_funding_incomplete_source_account_ids,
     )
@@ -3694,139 +3903,245 @@ def run_due_prepaid_service_renewals(
         chargeable_subscriptions,
         effective_at,
     )
+    # Grouped by account, preserving each account's first-due-subscription
+    # position in the original `next_billing_at, id` order (2026-09,
+    # round 7: the isolation boundary moved UP from one subscription to one
+    # ACCOUNT -- see `_process_one_due_prepaid_subscription` and the
+    # per-account savepoint below for why).
+    subscriptions_by_account: dict[UUID, list[Subscription]] = {}
+    account_order: list[UUID] = []
     for subscription in chargeable_subscriptions:
-        if subscription.subscriber_id in incomplete_source_account_ids:
-            _bump_summary(summary, "prepaid_renewals_quarantined", 1)
+        account_id = subscription.subscriber_id
+        if account_id not in subscriptions_by_account:
+            subscriptions_by_account[account_id] = []
+            account_order.append(account_id)
+        subscriptions_by_account[account_id].append(subscription)
+
+    for account_id in account_order:
+        account_subscriptions = subscriptions_by_account[account_id]
+        if account_id in incomplete_source_account_ids:
+            _bump_summary(
+                summary, "prepaid_renewals_quarantined", len(account_subscriptions)
+            )
             continue
-        next_billing_at = subscription.next_billing_at
-        if next_billing_at is None:
-            continue
-        period_start = _utc(next_billing_at)
-        lag = effective_at - period_start
-        if period_start <= authority_at or lag > _MAX_AUTOMATIC_LAG:
-            _bump_summary(summary, "prepaid_renewals_stale_anchor", 1)
-            continue
-        charge = charges[subscription.id]
-        if charge is None:
-            _bump_summary(summary, "prepaid_renewals_missing_price", 1)
-            continue
-        amount, currency, cycle = charge
-        period_end = _period_end(period_start, cycle)
-        paid_through = prepaid_entitlement_coverage_end(
-            db,
-            subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-        if paid_through is not None and _utc(paid_through) > period_start:
-            if not dry_run and period_start < _utc(paid_through):
-                stage_subscription_billing_anchor(
+        if dry_run:
+            # Nothing mutates in a dry run, so nothing to isolate: no
+            # savepoint needed, write straight to the real summary.
+            for subscription in account_subscriptions:
+                _process_one_due_prepaid_subscription(
                     db,
                     subscription,
-                    BillingAnchorProjectionCommand(
-                        subscription_id=subscription.id,
-                        expected_previous=subscription.next_billing_at,
-                        target=_utc(paid_through),
-                        source=BillingAnchorProjectionSource.prepaid_coverage,
-                        evidence_ref=(
-                            f"scheduled-coverage:{subscription.id}:"
-                            f"{_utc(paid_through).isoformat()}"
-                        ),
-                    ),
-                )
-            _bump_summary(summary, "prepaid_renewals_already_covered", 1)
-            continue
-        try:
-            preview = preview_prepaid_service_renewal(
-                db,
-                subscription_id=subscription.id,
-                starts_at=period_start,
-                ends_at=period_end,
-                amount=amount,
-                currency=currency,
-            )
-        except PrepaidFundingBaselineMissingError:
-            # A baseline may become unavailable after the quarantine snapshot
-            # above. Preview is read-only, so isolating this account cannot
-            # retain a partial renewal write.
-            _bump_summary(summary, "prepaid_renewals_missing_baseline", 1)
-            continue
-        if not preview.allowed:
-            _bump_summary(summary, "prepaid_renewals_unfunded", 1)
-            continue
-        if not dry_run:
-            # Nightly isolation (Michael's exact decided shape): isolate and
-            # continue ONLY for the three named, typed, account-scoped
-            # failures in `PREPAID_RENEWAL_ISOLATABLE_ERRORS` -- checked by
-            # an explicit closed `isinstance` allowlist, never
-            # `retryable=False`, never a generic `DomainError`, never a bare
-            # `except Exception`. A posting-owner failure, a DB/
-            # infrastructure failure, an unexpected integrity/atomicity
-            # violation, or a programming error is NOT in that allowlist and
-            # propagates naturally, aborting the whole pass -- there is no
-            # catch-all here.
-            #
-            # Rollback uses `execute_owner_savepoint` (the established
-            # repository helper), never a raw `db.begin_nested()` -- see
-            # `tests/test_owner_commands.py:185`, which proves a raw nested
-            # transaction is the wrong primitive inside an active owner
-            # command.
-            def _run_this_subscription(
-                _preview: PrepaidServiceRenewalPreview = preview,
-            ) -> None:
-                _confirm_and_stage_scheduled_renewal(
-                    db,
-                    preview=_preview,
                     effective_at=effective_at,
+                    authority_at=authority_at,
+                    charges=charges,
+                    dry_run=True,
+                    summary=summary,
+                )
+            continue
+
+        # Nightly isolation (Michael's exact decided shape, extended
+        # 2026-09 round 7 to account granularity): isolate and continue
+        # ONLY for the three named, typed, account-scoped failures in
+        # `PREPAID_RENEWAL_ISOLATABLE_ERRORS` -- checked by an explicit
+        # closed `isinstance` allowlist, never `retryable=False`, never a
+        # generic `DomainError`, never a bare `except Exception`. A
+        # posting-owner failure, a DB/infrastructure failure, an unexpected
+        # integrity/atomicity violation, or a programming error is NOT in
+        # that allowlist and propagates naturally, aborting the whole pass
+        # -- there is no catch-all here.
+        #
+        # The savepoint now wraps this WHOLE account's due subscriptions,
+        # not one subscription: an ambiguous/isolatable conflict on ANY
+        # subscription in this account rolls back every sibling
+        # subscription this same pass had already funded on this account,
+        # so a partial, inconsistent account-level consequence can never
+        # survive this run. Counters are staged in a local scratch summary
+        # for the same reason -- a Python-level counter bump is not part of
+        # the DB transaction the savepoint rolls back, so it must not be
+        # applied to the real summary until the whole account's savepoint
+        # body has actually succeeded.
+        #
+        # Rollback uses `execute_owner_savepoint` (the established
+        # repository helper), never a raw `db.begin_nested()` -- see
+        # `tests/test_owner_commands.py:185`, which proves a raw nested
+        # transaction is the wrong primitive inside an active owner command.
+        account_scratch_summary = _new_scheduled_renewal_scratch_summary()
+
+        def _run_this_account(
+            _subscriptions: list[Subscription] = account_subscriptions,
+            _scratch: dict[str, PrepaidRenewalSummaryValue] = account_scratch_summary,
+        ) -> None:
+            for subscription in _subscriptions:
+                _process_one_due_prepaid_subscription(
+                    db,
+                    subscription,
+                    effective_at=effective_at,
+                    authority_at=authority_at,
+                    charges=charges,
+                    dry_run=False,
+                    summary=_scratch,
                 )
 
-            try:
-                execute_owner_savepoint(db, _run_this_subscription)
-            except PREPAID_RENEWAL_ISOLATABLE_ERRORS as exc:
-                # The savepoint above has already rolled back this
-                # subscription's work. The finance work item was already
-                # persisted OUT OF BAND (a separate connection/transaction,
-                # `_record_review_item_out_of_band`) by the code that raised
-                # this -- and if THAT persistence itself had failed, it
-                # would have raised a DIFFERENT (non-allowlisted) exception,
-                # which is deliberately NOT caught here and aborts the whole
-                # pass instead of silently isolating past an unrecorded
-                # permanent conflict.
-                isolated_entry = {
-                    "subscription_id": str(subscription.id),
-                    "account_id": str(subscription.subscriber_id),
-                    "error_type": type(exc).__name__,
-                    "reason": exc.message,
-                }
-                isolated_accounts = summary.setdefault("prepaid_renewals_isolated", [])
-                assert isinstance(isolated_accounts, list)
-                isolated_accounts.append(isolated_entry)
-                logger.warning(
-                    "prepaid_scheduled_renewal_account_isolated",
-                    extra={
-                        "event": "prepaid_scheduled_renewal_account_isolated",
-                        **isolated_entry,
-                    },
-                )
-                continue
-            from app.models.collections import FinancialAccessOrigin
-            from app.services.collections._core import restore_account_services
-
-            restored = restore_account_services(
-                db,
-                str(subscription.subscriber_id),
-                origin=FinancialAccessOrigin.prepaid_enforcement,
-                resolved_by=(
-                    "prepaid_service_renewal:"
-                    f"{subscription.id}:{period_start.isoformat()}"
+        try:
+            execute_owner_savepoint(db, _run_this_account)
+        except PREPAID_RENEWAL_ISOLATABLE_ERRORS as exc:
+            # The savepoint above has already rolled back every mutation
+            # this account's subscriptions made in this pass, including any
+            # sibling subscription this SAME call had already funded before
+            # the isolating subscription was reached. The finance work item
+            # for the specific subscription that raised was already
+            # persisted OUT OF BAND (a separate connection/transaction,
+            # `_record_review_item_out_of_band`) by the code that raised
+            # this -- and if THAT persistence itself had failed, it would
+            # have raised a DIFFERENT (non-allowlisted) exception, which is
+            # deliberately NOT caught here and aborts the whole pass instead
+            # of silently isolating past an unrecorded permanent conflict.
+            isolated_entry = {
+                "account_id": str(account_id),
+                "subscription_ids": ",".join(
+                    str(subscription.id) for subscription in account_subscriptions
                 ),
+                "error_type": type(exc).__name__,
+                "reason": exc.message,
+            }
+            isolated_accounts = summary.setdefault("prepaid_renewals_isolated", [])
+            assert isinstance(isolated_accounts, list)
+            isolated_accounts.append(isolated_entry)
+            logger.warning(
+                "prepaid_scheduled_renewal_account_isolated",
+                extra={
+                    "event": "prepaid_scheduled_renewal_account_isolated",
+                    **isolated_entry,
+                },
             )
-            _bump_summary(summary, "prepaid_renewals_restored", restored)
-        _bump_summary(summary, "prepaid_renewals_funded", 1)
+            continue
+        for key, value in account_scratch_summary.items():
+            assert isinstance(value, int)
+            _bump_summary(summary, key, value)
     db.flush()
     _finalize_scheduled_renewal_summary(db, summary)
     return summary
+
+
+_SCHEDULED_RENEWAL_SCRATCH_SUMMARY_KEYS = (
+    "prepaid_renewals_already_covered",
+    "prepaid_renewals_stale_anchor",
+    "prepaid_renewals_missing_price",
+    "prepaid_renewals_missing_baseline",
+    "prepaid_renewals_unfunded",
+    "prepaid_renewals_funded",
+    "prepaid_renewals_restored",
+)
+
+
+def _new_scheduled_renewal_scratch_summary() -> dict[str, PrepaidRenewalSummaryValue]:
+    """One account's provisional counters, merged into the real summary only
+    after that account's savepoint has actually succeeded (see the
+    per-account loop above)."""
+
+    return dict.fromkeys(_SCHEDULED_RENEWAL_SCRATCH_SUMMARY_KEYS, 0)
+
+
+def _process_one_due_prepaid_subscription(
+    db: Session,
+    subscription: Subscription,
+    *,
+    effective_at: datetime,
+    authority_at: datetime,
+    charges: dict[UUID, tuple[Decimal, str, BillingCycle] | None],
+    dry_run: bool,
+    summary: dict[str, PrepaidRenewalSummaryValue],
+) -> None:
+    """One subscription's scheduled-renewal decision, and its mutation if due.
+
+    Raises one of `PREPAID_RENEWAL_ISOLATABLE_ERRORS` for ambiguous or
+    insufficient evidence when `dry_run` is false. The caller wraps a whole
+    ACCOUNT's due subscriptions in one savepoint (2026-09, round 7) -- this
+    function itself carries no savepoint, so that one raise unwinds every
+    sibling subscription call this same account's loop already made in this
+    pass, not just this one.
+    """
+    from app.services.billing_automation import _period_end
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    next_billing_at = subscription.next_billing_at
+    if next_billing_at is None:
+        return
+    period_start = _utc(next_billing_at)
+    lag = effective_at - period_start
+    if period_start <= authority_at or lag > _MAX_AUTOMATIC_LAG:
+        _bump_summary(summary, "prepaid_renewals_stale_anchor", 1)
+        return
+    charge = charges[subscription.id]
+    if charge is None:
+        _bump_summary(summary, "prepaid_renewals_missing_price", 1)
+        return
+    amount, currency, cycle = charge
+    period_end = _period_end(period_start, cycle)
+    paid_through = prepaid_entitlement_coverage_end(
+        db,
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    if paid_through is not None and _utc(paid_through) > period_start:
+        if not dry_run and period_start < _utc(paid_through):
+            stage_subscription_billing_anchor(
+                db,
+                subscription,
+                BillingAnchorProjectionCommand(
+                    subscription_id=subscription.id,
+                    expected_previous=subscription.next_billing_at,
+                    target=_utc(paid_through),
+                    source=BillingAnchorProjectionSource.prepaid_coverage,
+                    evidence_ref=(
+                        f"scheduled-coverage:{subscription.id}:"
+                        f"{_utc(paid_through).isoformat()}"
+                    ),
+                ),
+            )
+        _bump_summary(summary, "prepaid_renewals_already_covered", 1)
+        return
+    try:
+        preview = preview_prepaid_service_renewal(
+            db,
+            subscription_id=subscription.id,
+            starts_at=period_start,
+            ends_at=period_end,
+            amount=amount,
+            currency=currency,
+        )
+    except PrepaidFundingBaselineMissingError:
+        # A baseline may become unavailable after the quarantine snapshot
+        # taken before this account's loop started. Preview is read-only, so
+        # isolating this account cannot retain a partial renewal write.
+        _bump_summary(summary, "prepaid_renewals_missing_baseline", 1)
+        return
+    if not preview.allowed:
+        _bump_summary(summary, "prepaid_renewals_unfunded", 1)
+        return
+    if not dry_run:
+        _confirm_and_stage_scheduled_renewal(
+            db,
+            preview=preview,
+            effective_at=effective_at,
+        )
+        from app.models.collections import FinancialAccessOrigin
+        from app.services.collections._core import restore_account_services
+
+        restored = restore_account_services(
+            db,
+            str(subscription.subscriber_id),
+            origin=FinancialAccessOrigin.prepaid_enforcement,
+            resolved_by=(
+                f"prepaid_service_renewal:{subscription.id}:{period_start.isoformat()}"
+            ),
+        )
+        _bump_summary(summary, "prepaid_renewals_restored", restored)
+    _bump_summary(summary, "prepaid_renewals_funded", 1)
 
 
 def _finalize_scheduled_renewal_summary(
@@ -3844,18 +4159,36 @@ def _finalize_scheduled_renewal_summary(
     assert isinstance(isolated, list)
     summary["prepaid_renewals_status"] = "partial_failure"
     from app.services import staff_notifications
+    from app.services.db_session_adapter import db_session_adapter
 
     fingerprint = (
         "prepaid-scheduled-renewal-partial-failure:"
         + hashlib.sha256(
             ",".join(
-                sorted(str(entry.get("subscription_id")) for entry in isolated)
+                # Account-level grouping (2026-09, round 7) renamed this
+                # entry's key from `subscription_id` to `subscription_ids`
+                # (one account can isolate more than one due subscription
+                # at once); this lookup must track that key or every batch
+                # would hash to the same fingerprint regardless of which
+                # accounts were actually isolated.
+                sorted(str(entry.get("subscription_ids")) for entry in isolated)
             ).encode("utf-8")
         ).hexdigest()[:32]
     )
+    # Guaranteed, not best-effort (2026-09, round 6/7): queued on a genuinely
+    # independent connection, the same technique `_record_review_item_out_of_
+    # band` uses, so this alert's fate never depends on the main pass's own
+    # session/transaction state. The durable evidence for each isolated case
+    # already lives in `prepaid_draft_reconciliation_exceptions` regardless
+    # of whether this alert is ever delivered, so a failure here logs loudly
+    # but does not abort the pass (unlike a lost review item, a lost or
+    # delayed staff PAGE is not itself a loss of financial evidence) -- one
+    # retry on a fresh connection before giving up, so a single transient
+    # connection blip cannot silently drop the only attempt.
+    out_of_band_db = db_session_adapter.create_session()
     try:
         staff_notifications.queue_permission_review_request(
-            db,
+            out_of_band_db,
             permission_key="billing:write",
             fingerprint=fingerprint,
             event_type="prepaid_scheduled_renewal_partial_failure",
@@ -3873,18 +4206,61 @@ def _finalize_scheduled_renewal_summary(
             category="billing",
             source="prepaid_service_renewals.run_due_prepaid_service_renewals",
         )
+        out_of_band_db.commit()
     except Exception:
-        # The isolated-accounts list and "partial_failure" status are
-        # already set on `summary` above regardless -- an alert-delivery
-        # failure must not hide the honest status from whatever already
-        # consumes this return value (logs, the caller's own reporting).
+        out_of_band_db.rollback()
         logger.exception(
             "prepaid_scheduled_renewal_partial_failure_alert_failed",
             extra={
                 "event": "prepaid_scheduled_renewal_partial_failure_alert_failed",
                 "isolated_count": len(isolated),
+                "attempt": "first",
             },
         )
+        retry_db = db_session_adapter.create_session()
+        try:
+            staff_notifications.queue_permission_review_request(
+                retry_db,
+                permission_key="billing:write",
+                fingerprint=fingerprint,
+                event_type="prepaid_scheduled_renewal_partial_failure",
+                title=(
+                    f"Nightly prepaid renewal isolated {len(isolated)} "
+                    "subscription(s) -- review required"
+                ),
+                body=(
+                    "The scheduled prepaid renewal pass completed but "
+                    f"isolated {len(isolated)} subscription(s) rather than "
+                    "aborting the whole run. Each isolated case has its own "
+                    "durable review item; see "
+                    "prepaid_draft_reconciliation_exceptions."
+                ),
+                target_url="/admin/billing/prepaid-review",
+                category="billing",
+                source="prepaid_service_renewals.run_due_prepaid_service_renewals",
+            )
+            retry_db.commit()
+        except Exception:
+            # The isolated-accounts list and "partial_failure" status are
+            # already set on `summary` above regardless -- an alert-delivery
+            # failure must not hide the honest status from whatever already
+            # consumes this return value (logs, the caller's own reporting).
+            # The financial evidence itself is durable independently of this
+            # alert (see the module docstring above), so the pass is not
+            # aborted for a second failed delivery attempt.
+            retry_db.rollback()
+            logger.exception(
+                "prepaid_scheduled_renewal_partial_failure_alert_failed",
+                extra={
+                    "event": "prepaid_scheduled_renewal_partial_failure_alert_failed",
+                    "isolated_count": len(isolated),
+                    "attempt": "retry",
+                },
+            )
+        finally:
+            retry_db.close()
+    finally:
+        out_of_band_db.close()
 
 
 def execute_due_prepaid_service_renewals(

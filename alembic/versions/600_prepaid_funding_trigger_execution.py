@@ -203,6 +203,28 @@ def downgrade() -> None:
     op.drop_index("uq_prepaid_funding_trigger_event_store", table_name=_TRIGGER_TABLE)
     op.drop_table(_TRIGGER_TABLE)
 
+    # Refuse, don't silently corrupt (2026-09, round 7; established pattern:
+    # see 580_invoice_line_tax_snapshots.py's downgrade). A pre-mutation
+    # ambiguous classification legitimately writes a review item with NO
+    # invoice yet (the whole reason this column was widened to nullable
+    # above) -- if any such row exists after real use, restoring `NOT NULL`
+    # would either fail outright or, worse on some backends, silently drop
+    # data. This is a genuine data-loss tradeoff, not a reversible schema
+    # tweak, so the downgrade refuses outright rather than guessing.
+    bind = op.get_bind()
+    if bind.scalar(
+        sa.text(
+            f"SELECT EXISTS (SELECT 1 FROM {_EXCEPTIONS_TABLE} "
+            "WHERE invoice_id IS NULL)"
+        )
+    ):
+        raise RuntimeError(
+            "prepaid_draft_reconciliation_exceptions has rows with a NULL "
+            "invoice_id (a pre-mutation ambiguous classification with no "
+            "invoice yet) -- restoring NOT NULL would destroy or fail to "
+            "represent this evidence. Resolve or reassign those rows before "
+            "downgrading, or retain the nullable column and roll forward."
+        )
     op.drop_index("uq_prepaid_draft_exception_invoice", table_name=_EXCEPTIONS_TABLE)
     op.alter_column(
         _EXCEPTIONS_TABLE,

@@ -120,6 +120,7 @@ from app.services.billing.invoices import (
     Invoices,
     PaidPrepaidInvoiceDocumentRepair,
     PrepaidProformaDocumentAdoption,
+    build_transient_classification_invoice_shell,
 )
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
@@ -332,6 +333,37 @@ class PrepaidDraftReconciliationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class FundingChangeDraftSubscriptionOutcome:
+    """One subscription's typed evidence from an existing-draft settlement.
+
+    ``financial.prepaid_service_renewals`` (the funding-consequence owner)
+    converts this into a ``PrepaidFundingTriggerSubscriptionOutcome`` receipt
+    child row. Only produced for the ``settle_paid``/``void_duplicate``
+    single-invoice outcomes -- those are the only cases where a real
+    financial consequence occurred, and the only cases where a draft
+    invoice's single active line is guaranteed to resolve to exactly one
+    subscription (`preview.recommended_action` is never ``settle_paid``/
+    ``void_duplicate`` when a draft has zero or multiple subscription
+    lines -- see ``manual_review`` handling above). A blocked or
+    multiple-draft-candidate outcome leaves this empty: nothing was written
+    to the invoice, and the durable review item
+    (``PrepaidDraftReconciliationException``) is that case's evidence.
+    """
+
+    subscription_id: UUID
+    period_start: datetime
+    period_end: datetime
+    disposition: str
+    funding_source: str | None
+    invoice_id: UUID
+    invoice_line_id: UUID | None
+    funding_evidence_ids: list[str]
+    amount: Decimal
+    currency: str
+    evidence_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
 class FundingChangeDraftResult:
     drafts_found: int
     drafts_settled: int
@@ -339,6 +371,7 @@ class FundingChangeDraftResult:
     drafts_blocked: int
     review_exceptions: int
     invoice_ids: tuple[UUID, ...]
+    subscription_outcomes: tuple[FundingChangeDraftSubscriptionOutcome, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -920,20 +953,23 @@ def classify_prospective_prepaid_funding(
 ) -> ProspectiveFundingClassification:
     """Classify funding for an amount that has not been invoiced yet.
 
-    Builds a throwaway, NEVER-persisted ``Invoice`` shell (never added to the
+    Asks the invoice owner (``app.services.billing.invoices``) for a
+    throwaway, NEVER-persisted ``Invoice`` shell (never added to the
     session, never flushed) purely to reuse the exact same funding-math
     functions (:class:`AccountCreditApplications`.preview_invoice_funding`,
     :func:`_reviewed_opening_funding_preview`) real invoices use — those
     functions only ever read ``account_id``/``currency``/``balance_due`` off
     the invoice they're given, so a shell satisfies them without writing
-    anything.
+    anything. This module is not an approved ``Invoice`` constructor
+    (``tests/architecture/test_financial_ownership.py``), so it delegates
+    the construction itself to the owner rather than building the shell
+    inline.
     """
 
-    shell = Invoice(
+    shell = build_transient_classification_invoice_shell(
         account_id=account_id,
         currency=currency,
-        balance_due=round_money(amount),
-        status=InvoiceStatus.draft,
+        balance_due=amount,
     )
     funding = AccountCreditApplications.preview_invoice_funding(db, shell)
     opening = _reviewed_opening_funding_preview(
@@ -3393,21 +3429,14 @@ def record_prepaid_draft_reconciliation_exception(
     fingerprint actually changed) rather than creating a duplicate.
     """
 
-    if invoice_id is not None:
-        alert_fingerprint = _exception_alert_fingerprint(invoice_id)
-        exception = db.scalar(
-            select(PrepaidDraftReconciliationException).where(
-                PrepaidDraftReconciliationException.invoice_id == invoice_id
+    def _select_existing() -> PrepaidDraftReconciliationException | None:
+        if invoice_id is not None:
+            return db.scalar(
+                select(PrepaidDraftReconciliationException).where(
+                    PrepaidDraftReconciliationException.invoice_id == invoice_id
+                )
             )
-        )
-    else:
-        alert_fingerprint = _no_invoice_alert_fingerprint(
-            account_id=account_id,
-            subscription_id=subscription_id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-        exception = db.scalar(
+        return db.scalar(
             select(PrepaidDraftReconciliationException).where(
                 PrepaidDraftReconciliationException.invoice_id.is_(None),
                 PrepaidDraftReconciliationException.account_id == account_id,
@@ -3416,6 +3445,17 @@ def record_prepaid_draft_reconciliation_exception(
                 PrepaidDraftReconciliationException.period_end == period_end,
             )
         )
+
+    if invoice_id is not None:
+        alert_fingerprint = _exception_alert_fingerprint(invoice_id)
+    else:
+        alert_fingerprint = _no_invoice_alert_fingerprint(
+            account_id=account_id,
+            subscription_id=subscription_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+    exception = _select_existing()
     created = exception is None
     if exception is None:
         exception = PrepaidDraftReconciliationException(
@@ -3433,8 +3473,27 @@ def record_prepaid_draft_reconciliation_exception(
             preview_fingerprint=preview_fingerprint,
             alert_fingerprint=alert_fingerprint,
         )
-        db.add(exception)
-    else:
+        # A SAVEPOINT, not a bare rollback (matches the established
+        # `task_idempotency.py` idiom): losing the insert race must not
+        # discard anything else this session/transaction has already done.
+        # Both the pre-existing with-invoice unique index and migration
+        # 601's new no-invoice partial unique index are real DB-level races
+        # a genuinely concurrent out-of-band writer can lose (2026-09,
+        # round 8) -- without this, a benign duplicate that used to be
+        # harmless now aborts the whole nightly pass or funding-event
+        # transaction instead of degrading gracefully into an update of the
+        # row the other writer just created.
+        try:
+            with db.begin_nested():
+                db.add(exception)
+                db.flush()
+            created = True
+        except IntegrityError:
+            exception = _select_existing()
+            if exception is None:  # pragma: no cover - the row must exist now
+                raise
+            created = False
+    if not created:
         same_evidence = exception.preview_fingerprint == preview_fingerprint
         exception.status = "open"
         exception.reason = reason
@@ -3448,7 +3507,7 @@ def record_prepaid_draft_reconciliation_exception(
         exception.resolved_at = None
         if not same_evidence:
             exception.attempt_count = int(exception.attempt_count or 0) + 1
-    db.flush()
+        db.flush()
 
     from app.services import staff_notifications
 
@@ -5995,7 +6054,7 @@ def stage_prepaid_draft_after_funding_change(
             review_exceptions=1,
             invoice_ids=invoice_ids,
         )
-    invoice, _applied, _payment_applied, _opening_consumption = _stage_action(
+    invoice, applied, payment_applied, opening_consumption = _stage_action(
         db,
         preview=preview,
         effective_at=effective_at,
@@ -6017,6 +6076,87 @@ def stage_prepaid_draft_after_funding_change(
             "incomplete_repair",
             "Funding-change duplicate closure did not produce a void invoice.",
         )
+    # Guaranteed by `preview_prepaid_draft_reconciliation`: `settle_paid`/
+    # `void_duplicate` are only ever recommended when the draft has exactly
+    # one active line resolving to exactly one subscription (every other
+    # shape returns `manual_review`/action `none` above) -- so this is safe
+    # without re-checking cardinality here.
+    active_lines = _active_positive_lines(db, invoice.id)
+    subscription_outcomes: tuple[FundingChangeDraftSubscriptionOutcome, ...] = ()
+    # `settle_paid`/`void_duplicate` are only recommended for a draft with an
+    # exact positive billing period (the `manual_review` branch above handles
+    # "invoice has no exact positive billing period"), so both are non-null
+    # here -- asserted, not re-derived, to keep the type checker honest
+    # without weakening the nullable column itself.
+    assert invoice.billing_period_start is not None
+    assert invoice.billing_period_end is not None
+    period_start = invoice.billing_period_start
+    period_end = invoice.billing_period_end
+    if preview.recommended_action is PrepaidDraftAction.settle_paid:
+        # Payment and opening funding are not mutually exclusive here either
+        # (2026-09, round 8 -- mirrors the identical fix already made in the
+        # sibling new-renewal lane, `prepaid_service_renewals.py`'s
+        # `"+".join(funding_sources)`): a reviewed-opening settlement can
+        # apply payment-backed credit first and opening funding for the
+        # remainder in the SAME invoice
+        # (`tests/test_prepaid_draft_reconciliation.py`'s
+        # `test_reviewed_opening_funding_settles_exact_remainder_atomically`-
+        # style case, 18812.50 settled via 16812.50 payment + 2000.00
+        # opening funding). Treating them as either/or silently dropped the
+        # `PaymentAllocation` evidence whenever opening funding was ALSO
+        # present.
+        funding_sources: list[str] = []
+        funding_evidence_ids: list[str] = []
+        if payment_applied > Decimal("0.00"):
+            funding_sources.append("payment")
+            funding_evidence_ids.extend(
+                str(value)
+                for value in db.scalars(
+                    select(PaymentAllocation.id).where(
+                        PaymentAllocation.invoice_id == invoice.id,
+                        PaymentAllocation.is_active.is_(True),
+                    )
+                ).all()
+            )
+        if opening_consumption is not None:
+            funding_sources.append("opening_funding")
+            funding_evidence_ids.append(str(opening_consumption.id))
+        funding_source: str | None = "+".join(funding_sources) or None
+        subscription_outcomes = (
+            FundingChangeDraftSubscriptionOutcome(
+                subscription_id=preview.subscription_ids[0],
+                period_start=period_start,
+                period_end=period_end,
+                disposition="existing_draft_settled",
+                funding_source=funding_source,
+                invoice_id=invoice.id,
+                invoice_line_id=(
+                    active_lines[0].id if len(active_lines) == 1 else None
+                ),
+                funding_evidence_ids=funding_evidence_ids,
+                amount=applied,
+                currency=preview.currency,
+                evidence_fingerprint=preview.fingerprint,
+            ),
+        )
+    elif preview.recommended_action is PrepaidDraftAction.void_duplicate:
+        subscription_outcomes = (
+            FundingChangeDraftSubscriptionOutcome(
+                subscription_id=preview.subscription_ids[0],
+                period_start=period_start,
+                period_end=period_end,
+                disposition="existing_draft_voided",
+                funding_source=None,
+                invoice_id=invoice.id,
+                invoice_line_id=(
+                    active_lines[0].id if len(active_lines) == 1 else None
+                ),
+                funding_evidence_ids=[],
+                amount=Decimal("0.00"),
+                currency=preview.currency,
+                evidence_fingerprint=preview.fingerprint,
+            ),
+        )
     return FundingChangeDraftResult(
         drafts_found=1,
         drafts_settled=(
@@ -6028,6 +6168,7 @@ def stage_prepaid_draft_after_funding_change(
         drafts_blocked=0,
         review_exceptions=0,
         invoice_ids=invoice_ids,
+        subscription_outcomes=subscription_outcomes,
     )
 
 
@@ -6037,6 +6178,7 @@ __all__ = [
     "CreateReviewedPaidPrepaidInvoiceCommand",
     "FundingChangeDraftCommand",
     "FundingChangeDraftResult",
+    "FundingChangeDraftSubscriptionOutcome",
     "MissingPaidPrepaidInvoiceRepairDisposition",
     "MissingPaidPrepaidInvoiceRepairPreview",
     "MissingPaidPrepaidInvoiceRepairQuery",

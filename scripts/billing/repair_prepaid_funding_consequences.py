@@ -31,8 +31,10 @@ parallel decision implementation.
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from app.models.catalog import Subscription
 from app.models.prepaid_funding import PrepaidDraftReconciliationException
 from app.models.system_user import SystemUser
 from app.services.auth_dependencies import has_permission
@@ -46,6 +48,7 @@ from app.services.prepaid_draft_reconciliation import (
 from app.services.prepaid_service_renewals import (
     EvaluatePrepaidServiceAfterSettlementCommand,
     execute_prepaid_service_after_settlement,
+    resolve_prepaid_monthly_charge_detail,
 )
 from app.services.system_user_assignments import system_user_role_names
 
@@ -90,14 +93,54 @@ def _resolve_review_item(
     return review_item
 
 
+#: Disposition strings that mean "a real settlement actually happened for
+#: this one subscription" -- see `PrepaidFundingSubscriptionDecision.
+#: disposition` write sites in `app.services.prepaid_service_renewals` /
+#: `app.services.prepaid_draft_reconciliation`.
+_SETTLED_DECISION_DISPOSITIONS = frozenset(
+    {"created_canonical_renewal", "existing_draft_settled"}
+)
+
+
+def matching_settled_decision(evaluation, *, subscription_id: UUID):
+    """Find THIS repair's own evidence that subscription_id was settled.
+
+    Pure/no I/O so it can be tested directly with a fake evaluation object
+    (2026-09, round 8): this repair path deliberately skips the trigger
+    receipt (`skip_receipt_for_repair=True`), so there is no receipt-child
+    row to check afterward -- the in-memory `subscription_decisions` the
+    settlement call just returned is the ONLY evidence available. Returns
+    `None` when no matching, genuinely-settled decision exists -- the
+    caller must not resolve the review item in that case.
+    """
+
+    renewal = evaluation.renewal
+    return next(
+        (
+            decision
+            for decision in (renewal.subscription_decisions if renewal else ())
+            if decision.subscription_id == subscription_id
+            and decision.disposition in _SETTLED_DECISION_DISPOSITIONS
+        ),
+        None,
+    )
+
+
 def preview_repair(
     db, review_item: PrepaidDraftReconciliationException
 ) -> dict[str, object]:
     """Read-only: classify CURRENT funding for the review item's account/currency.
 
     Returns a fingerprint binding exactly what `--apply` must reproduce:
-    the review item id, and today's classification of the account's current
-    funding (not the historical amount recorded on the review item).
+    the review item id, PERIOD, CHARGE/TAX, and the current classification's
+    PAYMENT and OPENING-FUNDING identity (2026-09, round 7) -- not just the
+    review item id and a coarse funding-shape hash. The narrower fingerprint
+    let a stale or drifted preview match and resolve the WRONG evidence: two
+    different subscription/period cases on the same account/currency with
+    the same required amount could classify to the identical disposition and
+    funding-fingerprint hash, and the old fingerprint could not tell them
+    apart, or notice that funding had moved from one payment/opening
+    position to a different one carrying the same coarse shape.
     """
 
     if review_item.subscription_id is None or review_item.period_start is None:
@@ -113,12 +156,32 @@ def preview_repair(
         currency=review_item.currency,
         amount=review_item.required_amount,
     )
+    subscription = db.get(Subscription, review_item.subscription_id)
+    if subscription is None:
+        raise SystemExit(
+            f"subscription {review_item.subscription_id} referenced by this "
+            "review item no longer exists"
+        )
+    charge = resolve_prepaid_monthly_charge_detail(db, subscription, datetime.now(UTC))
+    if charge is None:
+        raise SystemExit(
+            "current charge could not be resolved for this subscription -- "
+            "preview again once a contract price is available"
+        )
     import hashlib
 
     fingerprint = hashlib.sha256(
         (
-            f"repair:{review_item.id}:{classification.disposition.value}:"
-            f"{classification.funding.fingerprint}"
+            f"repair:{review_item.id}:"
+            f"{review_item.subscription_id}:"
+            f"{review_item.period_start.isoformat()}:"
+            f"{review_item.period_end.isoformat() if review_item.period_end else ''}:"
+            f"{classification.disposition.value}:"
+            f"{classification.funding.fingerprint}:"
+            f"{charge.subtotal}:{charge.tax_total}:{charge.total}:"
+            f"{','.join(str(value) for value in sorted(classification.funding.source_payment_ids))}:"
+            f"{classification.opening.baseline_id}:"
+            f"{classification.opening.opening_position_id}"
         ).encode()
     ).hexdigest()
     return {
@@ -181,6 +244,11 @@ def main() -> int:
                 return 1
             review_item_id = review_item.id
             review_item_account_id = review_item.account_id
+            # `preview_repair` above already refused (`SystemExit`) a review
+            # item with no subscription evidence -- asserted here only to
+            # keep the type checker honest about that cross-function
+            # narrowing.
+            assert review_item.subscription_id is not None
             review_item_subscription_id = review_item.subscription_id
             command = EvaluatePrepaidServiceAfterSettlementCommand(
                 context=CommandContext.system(
@@ -200,7 +268,10 @@ def main() -> int:
                 # evaluation, not a replay of the original (possibly
                 # historical) event -- it deliberately does not touch the
                 # `PrepaidFundingTriggerExecution` receipt for the original
-                # event.
+                # event. `skip_receipt_for_repair=True` makes that omission
+                # an explicit, named decision rather than a silent
+                # fallthrough (2026-09, round 7) -- any OTHER caller that
+                # omits `event_id` without this flag is refused.
                 #
                 # `only_subscription_id`: the fingerprint above was computed
                 # for exactly this review item's one subscription/period.
@@ -209,6 +280,7 @@ def main() -> int:
                 # the account -- a broader scope than what was previewed and
                 # fingerprint-gated.
                 only_subscription_id=review_item_subscription_id,
+                skip_receipt_for_repair=True,
             )
             # `execute_owner_command` (inside `execute_prepaid_service_after_
             # settlement`) requires a transaction-free session at entry. The
@@ -219,6 +291,29 @@ def main() -> int:
             # does for the identical reason.
             db_session_adapter.release_read_transaction(db)
             result = execute_prepaid_service_after_settlement(db, command)
+            # Prove a real, matching consequence actually happened for THIS
+            # exact subscription/period before marking the review item
+            # resolved (2026-09, round 7) -- an unconditional resolve
+            # previously trusted the call not raising as proof enough.
+            if (
+                matching_settled_decision(
+                    result, subscription_id=review_item_subscription_id
+                )
+                is None
+            ):
+                # `execute_owner_command` already committed the settlement
+                # itself on success (this is NOT a rollback of that money --
+                # there is nothing left to roll back by this point). What's
+                # refused here is narrower: this repair simply does not mark
+                # the review item resolved, since it cannot prove a matching
+                # settled decision exists for this exact subscription.
+                print(
+                    "Repair executed but produced no matching settled outcome "
+                    f"for subscription {review_item_subscription_id} -- the "
+                    "review item was NOT resolved. Re-preview and investigate "
+                    f"before retrying. Raw result: {result}"
+                )
+                return 1
             resolve_prepaid_draft_reconciliation_exception_for_owner(db, review_item_id)
             db.commit()
             print(

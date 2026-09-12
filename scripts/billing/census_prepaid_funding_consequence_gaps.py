@@ -73,6 +73,41 @@ _BLOCKED_TRIGGER_DISPOSITIONS = (
     "renewal_review_required",
     "draft_invoice_review_required",
 )
+# A disposition that claims a real settlement happened. Any receipt written
+# with one of these MUST carry at least one
+# `PrepaidFundingTriggerSubscriptionOutcome` child row -- the exact gap
+# Michael found (2026-09, round 7): a `draft_invoice_settled` receipt could
+# previously commit with ZERO children, because the existing-draft
+# reconciliation branch discarded its own settlement evidence instead of
+# reporting it back as a `PrepaidFundingSubscriptionDecision`. Fixed at the
+# write site (`app/services/prepaid_service_renewals.py`'s
+# `_record_prepaid_funding_trigger_execution`, which now refuses to commit
+# this exact shape).
+#
+# Accuracy correction (2026-09, round 8): this is a hardcoded two-string
+# disposition filter, not a disposition-name-independent structural check --
+# `find_successful_receipts_missing_child_evidence` only inspects rows whose
+# `disposition` is one of these two exact values, so a hypothetical future
+# write site that names a THIRD "this succeeded" disposition string is
+# invisible to this check until that string is added here too. What IS
+# structural about it is narrower: for the two dispositions it does check,
+# it inspects the actual child-row count rather than trusting the
+# disposition alone.
+#
+# Known, deliberately un-widened gap: `stage_prepaid_draft_after_funding_
+# change`'s `void_duplicate` outcome (`existing_draft_voided`) is never
+# reported through `FundingChangeRenewalDisposition.draft_invoice_settled`/
+# `funded` on its own -- a void-only funding event (no new renewal follows
+# it in the same call) currently produces no receipt at all, so it is
+# invisible to BOTH this check and `find_blocked_trigger_executions`. Voiding
+# a duplicate is not itself a funding consequence needing review (the
+# ORIGINAL invoice it duplicates is what actually got funded), so this is
+# likely fine as-is, but it is flagged here honestly rather than silently
+# left unmentioned.
+_SUCCESSFUL_TRIGGER_DISPOSITIONS = (
+    "draft_invoice_settled",
+    "funded",
+)
 
 
 def _uuid(value: str) -> UUID:
@@ -175,6 +210,60 @@ def find_blocked_trigger_executions(
     return cases
 
 
+def find_successful_receipts_missing_child_evidence(
+    db, *, account_id: UUID | None = None
+) -> list[dict[str, object]]:
+    """A receipt that CLAIMS a real settlement but proves none happened.
+
+    A `draft_invoice_settled`/`funded` disposition with zero
+    `PrepaidFundingTriggerSubscriptionOutcome` rows means the
+    payment->period->invoice->entitlement consequence chain is completely
+    unbound for whatever this receipt was supposed to record -- a
+    false-clean result the disposition-filter-only checks above (blocked/
+    review-required dispositions) structurally cannot see, because this
+    receipt does not report itself as blocked at all.
+    """
+
+    query = select(PrepaidFundingTriggerExecution).where(
+        PrepaidFundingTriggerExecution.disposition.in_(_SUCCESSFUL_TRIGGER_DISPOSITIONS)
+    )
+    if account_id is not None:
+        query = query.where(PrepaidFundingTriggerExecution.account_id == account_id)
+    receipts = db.scalars(
+        query.order_by(PrepaidFundingTriggerExecution.created_at)
+    ).all()
+    now = datetime.now(UTC)
+    cases: list[dict[str, object]] = []
+    for receipt in receipts:
+        has_child = (
+            db.scalar(
+                select(PrepaidFundingTriggerSubscriptionOutcome.id)
+                .where(
+                    PrepaidFundingTriggerSubscriptionOutcome.trigger_execution_id
+                    == receipt.id
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if has_child:
+            continue
+        cases.append(
+            {
+                "source": "successful_receipt_missing_child_evidence",
+                "trigger_execution_id": str(receipt.id),
+                "event_id": str(receipt.event_id),
+                "account_id": str(receipt.account_id),
+                "disposition": receipt.disposition,
+                "currency": receipt.currency,
+                "age_days": (
+                    (now - receipt.created_at).days if receipt.created_at else None
+                ),
+            }
+        )
+    return cases
+
+
 def find_legacy_unreconciled_handler_failures(
     db, *, account_id: UUID | None = None
 ) -> list[dict[str, object]]:
@@ -250,6 +339,9 @@ def main() -> int:
             trigger_cases = find_blocked_trigger_executions(
                 db, account_id=args.account_id
             )
+            missing_evidence_cases = find_successful_receipts_missing_child_evidence(
+                db, account_id=args.account_id
+            )
             legacy_cases = (
                 find_legacy_unreconciled_handler_failures(
                     db, account_id=args.account_id
@@ -263,10 +355,12 @@ def main() -> int:
     payload = {
         "open_review_items": review_items,
         "blocked_trigger_executions": trigger_cases,
+        "successful_receipts_missing_child_evidence": missing_evidence_cases,
         "legacy_unreconciled_handler_failures": legacy_cases,
         "totals": {
             "open_review_items": len(review_items),
             "blocked_trigger_executions": len(trigger_cases),
+            "successful_receipts_missing_child_evidence": len(missing_evidence_cases),
             "legacy_unreconciled_handler_failures": len(legacy_cases),
         },
     }
@@ -287,6 +381,13 @@ def main() -> int:
                 f"subscription={case.get('subscription_id')} "
                 f"period=[{case.get('period_start')}, {case.get('period_end')}) "
                 f"disposition={case['disposition']} age_days={case['age_days']}"
+            )
+        for case in missing_evidence_cases:
+            print(
+                f"  [missing_evidence] account={case['account_id']} "
+                f"trigger_execution={case['trigger_execution_id']} "
+                f"disposition={case['disposition']} age_days={case['age_days']} "
+                "-- successful disposition with ZERO child outcome rows"
             )
         for case in legacy_cases:
             print(

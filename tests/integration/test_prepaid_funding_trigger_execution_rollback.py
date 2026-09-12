@@ -30,10 +30,16 @@ from decimal import Decimal
 
 from sqlalchemy.orm import sessionmaker
 
-from app.models.billing import BillingMode, Payment, PaymentSettlement, PaymentStatus
+from app.models.billing import (
+    Payment,
+    PaymentSettlement,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.models.catalog import (
     AccessType,
     BillingCycle,
+    BillingMode,
     CatalogOffer,
     OfferPrice,
     OfferStatus,
@@ -124,6 +130,7 @@ def test_mismatched_replay_review_item_survives_the_transaction_rollback(engine)
                 payment_id=payment.id,
                 currency="NGN",
                 amount=Decimal("50.00"),
+                origin=PaymentSettlementOrigin.system,
             )
         )
         setup.commit()
