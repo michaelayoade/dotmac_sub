@@ -60,6 +60,13 @@ def _receipt(
         request_fingerprint="a" * 64,
         outcome_fingerprint="b" * 64,
         disposition=disposition,
+        # Explicit, timezone-aware, not left to the column's
+        # `server_default=sa.func.now()`: on SQLite (this test's engine)
+        # that default produces a NAIVE datetime, which then fails to
+        # subtract against `find_successful_receipts_missing_child_evidence`'s
+        # `datetime.now(UTC)` with `TypeError: can't subtract offset-naive
+        # and offset-aware datetimes`.
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
     )
     db_session.add(receipt)
     db_session.flush()

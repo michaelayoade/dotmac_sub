@@ -504,11 +504,23 @@ def test_funding_event_uses_owner_root_for_renewal_consumption(
     )
     db_session.commit()
 
+    from app.services import event_store as event_store_service
+
     event = Event(
         event_type=EventType.payment_received,
         payload={"payment_id": str(payment.id)},
         account_id=subscriber.id,
     )
+    # A real `EventStore` row (2026-09 round 8): this test calls the
+    # handler directly (not through the real dispatcher), but
+    # `evaluate_prepaid_service_after_settlement`'s fail-closed guard now
+    # requires `event_id` to resolve to a real, durable row -- this test's
+    # payment carries genuine settlement evidence
+    # (`create_test_settled_payment_credit`), so it reaches that guard
+    # rather than failing earlier the way the two deliberately-incomplete
+    # fixtures above do.
+    event_store_service.create_event_record(db_session, event)
+    db_session.flush()
     PrepaidRenewalHandler().handle(db_session, event)
 
     group = (
