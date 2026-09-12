@@ -664,7 +664,7 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     assert event.payload["renewed_through"] == "2026-08-01T00:00:00+00:00"
 
 
-def test_funding_change_renews_suspended_due_service_from_payment_day(
+def test_funding_change_renews_suspended_due_service_from_lagos_payment_day(
     db_session, subscriber, subscription, monkeypatch
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
@@ -698,7 +698,9 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     result = apply_due_prepaid_service_after_funding_change(
         db_session,
         account_id=subscriber.id,
-        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        # 00:30 on July 21 in Lagos is still July 20 in UTC. Renewal creation
+        # and settlement re-anchoring must resolve the same local-day period.
+        effective_at=datetime(2026, 7, 20, 23, 30, tzinfo=UTC),
         funding_currency="NGN",
         evidence_ref="pytest:account-credit-event",
     )
@@ -708,6 +710,8 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     db_session.refresh(subscription)
     db_session.refresh(subscriber)
     entitlement = db_session.query(ServiceEntitlement).one()
+    invoice = db_session.query(Invoice).one()
+    invoice_line = db_session.query(InvoiceLine).one()
     assert result.disposition == FundingChangeRenewalDisposition.funded
     assert result.funded == 1
     assert result.restored_service_count == 0
@@ -715,22 +719,34 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     assert subscription.status == SubscriptionStatus.active
     assert subscriber.status == SubscriberStatus.active
     assert entitlement.starts_at.replace(tzinfo=UTC) == datetime(
-        2026, 7, 20, tzinfo=UTC
+        2026, 7, 20, 23, tzinfo=UTC
     )
-    assert entitlement.ends_at.replace(tzinfo=UTC) == datetime(2026, 8, 20, tzinfo=UTC)
+    assert entitlement.ends_at.replace(tzinfo=UTC) == datetime(
+        2026, 8, 20, 23, tzinfo=UTC
+    )
+    assert invoice.billing_period_start.replace(
+        tzinfo=UTC
+    ) == entitlement.starts_at.replace(tzinfo=UTC)
+    assert invoice.billing_period_end.replace(
+        tzinfo=UTC
+    ) == entitlement.ends_at.replace(tzinfo=UTC)
+    assert invoice_line.metadata_["billing_period_start"] == (
+        "2026-07-20T23:00:00+00:00"
+    )
+    assert invoice_line.metadata_["billing_period_end"] == ("2026-08-20T23:00:00+00:00")
     assert subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
-        2026, 8, 20, tzinfo=UTC
+        2026, 8, 20, 23, tzinfo=UTC
     )
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
     assert len(result.renewals) == 1
-    assert result.renewals[0].renewed_through == datetime(2026, 8, 20, tzinfo=UTC)
+    assert result.renewals[0].renewed_through == datetime(2026, 8, 20, 23, tzinfo=UTC)
     assert result.renewals[0].source.value == "account_credit"
     event = (
         db_session.query(EventStore)
         .filter_by(event_type="prepaid_service.renewed")
         .one()
     )
-    assert event.payload["renewed_through"] == "2026-08-20T00:00:00+00:00"
+    assert event.payload["renewed_through"] == "2026-08-20T23:00:00+00:00"
     assert event.payload["schema_version"] == 2
     assert event.payload["invoice_id"] is not None
     assert str(event.invoice_id) == event.payload["invoice_id"]

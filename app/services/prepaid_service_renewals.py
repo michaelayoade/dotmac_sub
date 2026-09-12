@@ -2504,7 +2504,6 @@ def apply_due_prepaid_service_after_funding_change(
     renewals: list[PrepaidServiceRenewedOutcome] = []
     non_cash_granted = 0
     treatment_blocked = 0
-    paid_day = evaluated_at.replace(hour=0, minute=0, second=0, microsecond=0)
     treatment_decisions = resolve_subscription_billing_treatments(
         db, due_subscriptions, as_of=evaluated_at
     )
@@ -2523,6 +2522,12 @@ def apply_due_prepaid_service_after_funding_change(
             if not treatment.grantable:
                 treatment_blocked += 1
                 continue
+            paid_day = resolve_prepaid_settlement_period(
+                PrepaidSettlementPeriodQuery(
+                    effective_at=evaluated_at,
+                    billing_cycle=BillingCycle.monthly,
+                )
+            ).starts_at
             anchor = _utc(subscription.next_billing_at or paid_day)
             period_start = max(anchor, paid_day, _utc(treatment.starts_at or paid_day))
             period_end = _period_end(period_start, BillingCycle.monthly)
@@ -2552,6 +2557,12 @@ def apply_due_prepaid_service_after_funding_change(
         if charge_currency != currency:
             currency_mismatch += 1
             continue
+        paid_day = resolve_prepaid_settlement_period(
+            PrepaidSettlementPeriodQuery(
+                effective_at=evaluated_at,
+                billing_cycle=cycle,
+            )
+        ).starts_at
         anchor = _utc(subscription.next_billing_at or paid_day)
         period_start = max(anchor, paid_day)
         period_end = _period_end(period_start, cycle)
