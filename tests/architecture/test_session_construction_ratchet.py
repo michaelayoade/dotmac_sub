@@ -58,7 +58,14 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: real-Postgres tests (ambiguous-account isolation, unclassified-failure
 #: abort) each with their own `sessionmaker`, driving the single-owner
 #: funding-consequence fix through the real nightly entry point.
-TEST_FIXTURE_BASELINE_TOTAL = 123
+#: +1 from tests/integration/test_prepaid_account_lock_compatibility.py: a
+#: deterministic two-session PostgreSQL proof that account-writer
+#: serialization remains compatible with the prepaid review item's subscriber
+#: foreign key.
+#: +1 from tests/integration/test_prepaid_renewal_nightly_isolation.py: the
+#: teardown session that relinquishes the test-created global authority-cutover
+#: marker after independently committed nightly-owner transactions.
+TEST_FIXTURE_BASELINE_TOTAL = 125
 
 
 def _baseline() -> dict[str, int]:

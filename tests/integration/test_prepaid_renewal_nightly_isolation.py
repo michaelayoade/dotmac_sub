@@ -36,6 +36,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from sqlalchemy import select, update
 from sqlalchemy.orm import sessionmaker
 
 from app.models.billing import (
@@ -64,7 +66,11 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.prepaid_funding import PrepaidDraftReconciliationException
+from app.models.prepaid_funding import (
+    PrepaidDraftReconciliationException,
+    PrepaidFundingBaseline,
+    PrepaidFundingReconstructionBatch,
+)
 from app.models.subscriber import Reseller, Subscriber
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_service_renewals import (
@@ -73,6 +79,45 @@ from app.services.prepaid_service_renewals import (
     resolve_prepaid_monthly_charge_detail,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+
+
+@pytest.fixture()
+def relinquish_nightly_authority_cutover(engine):
+    """Relinquish this file's committed authority-cutover marker after each test.
+
+    The nightly proof deliberately uses independently committed sessions so it
+    can exercise the production out-of-band review write. Its reviewed
+    opening-balance helper therefore commits a real authority-cutover batch,
+    unlike the ordinary ``db_session`` fixture whose enclosing transaction is
+    rolled back. The shared integration database may subsequently construct
+    that fixture, which must be free to install its own empty cutover marker.
+
+    We demote only the reviewed test batch associated with this test's account
+    ids; its other test evidence remains available for failure diagnosis, but
+    the globally unique authority-cutover slot cannot leak into the next test.
+    """
+
+    account_ids: set[object] = set()
+    yield account_ids
+    if not account_ids:
+        return
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with session_factory() as cleanup:
+        cleanup.execute(
+            update(PrepaidFundingReconstructionBatch)
+            .where(
+                PrepaidFundingReconstructionBatch.is_authority_cutover.is_(True),
+                PrepaidFundingReconstructionBatch.source
+                == "pytest-reviewed-opening-balance",
+                PrepaidFundingReconstructionBatch.id.in_(
+                    select(PrepaidFundingBaseline.batch_id).where(
+                        PrepaidFundingBaseline.account_id.in_(account_ids)
+                    )
+                ),
+            )
+            .values(is_authority_cutover=False)
+        )
+        cleanup.commit()
 
 
 def _account_and_subscription(
@@ -223,7 +268,9 @@ def _assert_zero_mutation_for_subscription(session, subscription_id) -> None:
     )
 
 
-def test_ambiguous_account_is_isolated_while_a_second_account_still_renews(engine):
+def test_ambiguous_account_is_isolated_while_a_second_account_still_renews(
+    engine, relinquish_nightly_authority_cutover
+):
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     suffix = uuid.uuid4().hex[:12]
 
@@ -251,6 +298,7 @@ def test_ambiguous_account_is_isolated_while_a_second_account_still_renews(engin
             setup, subscription_b, datetime(2026, 7, 1, 12, tzinfo=UTC)
         )
         assert charge_a is not None and charge_b is not None
+        relinquish_nightly_authority_cutover.update({account_a.id, account_b.id})
 
         # Account A: an active baseline covering the real charge exactly
         # (so the ledger-based affordability gate passes and classification
@@ -370,7 +418,7 @@ def test_ambiguous_account_is_isolated_while_a_second_account_still_renews(engin
 
 
 def test_unclassified_failure_aborts_the_whole_pass_before_later_accounts(
-    engine, monkeypatch
+    engine, monkeypatch, relinquish_nightly_authority_cutover
 ):
     """The direct complement: a failure NOT in the 3-type allowlist (a
     posting-owner failure, matching the shape of the preserved
@@ -393,6 +441,9 @@ def test_unclassified_failure_aborts_the_whole_pass_before_later_accounts(
             suffix=suffix,
             label="Second",
             next_billing_at=datetime(2026, 7, 1, 1, tzinfo=UTC),
+        )
+        relinquish_nightly_authority_cutover.update(
+            {account_first.id, account_second.id}
         )
         materialize_test_prepaid_opening_balance(
             setup,
