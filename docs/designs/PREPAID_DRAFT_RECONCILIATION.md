@@ -220,6 +220,14 @@ reused as Payments nor quarantined again as current unbacked credit. Without an
 active baseline, the generic all-history payment-backed classification remains
 unchanged.
 
+A payment-linked structural ledger projection stays on the same side of that
+boundary as its Payment. A reconciliation or allocation recorded after the
+boundary cannot make the consumption of a pre-boundary Payment reduce newer
+payment-backed credit, because the older Payment and its consumption were both
+already absorbed by the reviewed opening. A Payment created after the boundary
+still crosses it even when its business timestamp is backdated, so late native
+money is never hidden.
+
 No path rounds a shortfall, invents a payment, represents opening funding as a
 Payment, marks an underfunded invoice paid, double-spends an opening baseline,
 or creates a second entitlement.
