@@ -33,7 +33,7 @@ driven through the real production entry point
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import sessionmaker
@@ -108,6 +108,13 @@ def _account_and_subscription(
         status=SubscriptionStatus.active,
         billing_mode=BillingMode.prepaid,
         billing_cycle=BillingCycle.monthly,
+        # `ck_subscriptions_active_billing_anchor` (migration 539, enforced
+        # on PostgreSQL for every new row even though NOT VALID for
+        # pre-existing ones) requires an active subscription to carry BOTH
+        # `start_at` and `next_billing_at` -- missing here (2026-09, round
+        # 9), so this fixture's INSERT itself was rejected before either
+        # flagship isolation test could ever actually run on PostgreSQL.
+        start_at=next_billing_at - timedelta(days=30),
         next_billing_at=next_billing_at,
         unit_price=Decimal("50.00"),
     )

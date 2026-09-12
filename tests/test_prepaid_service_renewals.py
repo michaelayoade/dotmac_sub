@@ -617,9 +617,17 @@ def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(
     subscription.unit_price = None
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): `run_due_prepaid_
+    # service_renewals`'s account-level isolation savepoint requires an
+    # active owner command, which only exists via
+    # `execute_due_prepaid_service_renewals`.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-catalog-fallback",
+        ),
     )
 
     assert summary["prepaid_renewals_missing_price"] == 1
@@ -637,9 +645,14 @@ def test_scheduled_owner_refuses_historical_catch_up(
     subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): same reason as above.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 5, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 5, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-historical-catch-up",
+        ),
     )
 
     assert summary["prepaid_renewals_stale_anchor"] == 1

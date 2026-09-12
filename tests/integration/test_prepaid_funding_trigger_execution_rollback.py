@@ -99,6 +99,12 @@ def test_mismatched_replay_review_item_survives_the_transaction_rollback(engine)
             status=SubscriptionStatus.active,
             billing_mode=BillingMode.prepaid,
             billing_cycle=BillingCycle.monthly,
+            # `ck_subscriptions_active_billing_anchor` (migration 539)
+            # requires an active subscription to carry both `start_at` and
+            # `next_billing_at` -- missing here (2026-09, round 9), so this
+            # fixture's INSERT was rejected before this test could ever run
+            # on PostgreSQL.
+            start_at=datetime(2026, 6, 1, tzinfo=UTC),
             next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
             unit_price=Decimal("50.00"),
         )

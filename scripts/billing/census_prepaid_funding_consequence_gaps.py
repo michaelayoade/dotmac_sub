@@ -42,6 +42,27 @@ from app.models.prepaid_funding import (
 )
 from app.services.db_session_adapter import db_session_adapter
 
+
+def _utc(value: datetime) -> datetime:
+    """Defensively normalize a DB-sourced timestamp to timezone-aware UTC.
+
+    Matches the `_utc()` convention repeated across this codebase's service
+    modules (e.g. `prepaid_service_renewals.py`, `prepaid_draft_
+    reconciliation.py`) -- each module defines its own local copy rather
+    than importing a shared one. Needed here because SQLite does not
+    preserve timezone info on round-trip regardless of what is inserted
+    (2026-09, round 9): a `DateTime(timezone=True)` column comes back NAIVE
+    from SQLite even when written with an aware value, so subtracting it
+    from `datetime.now(UTC)` raised `TypeError: can't subtract offset-naive
+    and offset-aware datetimes` in this script's SQLite-backed unit tests.
+    PostgreSQL preserves timezone correctly, which is why this was invisible
+    in any Postgres-backed path -- but the read side must not assume its
+    caller/database always hands back an aware value.
+    """
+
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 _HANDLER_NAME = "PrepaidRenewalHandler"
 _FUNDING_EVENT_TYPES = ("payment.received", "account_credit.deposited")
 # The ONLY values `PrepaidFundingTriggerExecution.disposition` is ever
@@ -148,7 +169,7 @@ def find_open_review_items(
             "currency": row.currency,
             "required_amount": str(row.required_amount),
             "attempt_count": row.attempt_count,
-            "age_days": (now - row.created_at).days if row.created_at else None,
+            "age_days": (now - _utc(row.created_at)).days if row.created_at else None,
         }
         for row in rows
     ]
@@ -184,7 +205,7 @@ def find_blocked_trigger_executions(
             "disposition": receipt.disposition,
             "currency": receipt.currency,
             "age_days": (
-                (now - receipt.created_at).days if receipt.created_at else None
+                (now - _utc(receipt.created_at)).days if receipt.created_at else None
             ),
         }
         if not outcomes:
@@ -257,7 +278,9 @@ def find_successful_receipts_missing_child_evidence(
                 "disposition": receipt.disposition,
                 "currency": receipt.currency,
                 "age_days": (
-                    (now - receipt.created_at).days if receipt.created_at else None
+                    (now - _utc(receipt.created_at)).days
+                    if receipt.created_at
+                    else None
                 ),
             }
         )
@@ -310,7 +333,7 @@ def find_legacy_unreconciled_handler_failures(
                 "handler_status": attempt.status,
                 "handler_error": attempt.error,
                 "age_days": (
-                    (now - event.created_at).days if event.created_at else None
+                    (now - _utc(event.created_at)).days if event.created_at else None
                 ),
                 "note": (
                     "exact affected subscription/period not reconstructable "

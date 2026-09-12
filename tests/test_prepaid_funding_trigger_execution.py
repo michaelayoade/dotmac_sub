@@ -188,7 +188,7 @@ def test_receipt_replay_returns_same_result_without_duplicate_mutation(
 
 
 def test_receipt_mismatch_raises_permanent_conflict(
-    db_session, subscriber, subscription
+    db_session, subscriber, subscription, monkeypatch
 ):
     """Same durable event, but a receipt already exists recording DIFFERENT
     computed inputs than what this call now presents -- a genuine
@@ -203,7 +203,28 @@ def test_receipt_mismatch_raises_permanent_conflict(
     test (`StaticPool`), so a same-session assertion here would pass even if
     the out-of-band write were broken (exactly the round-2 defect this test
     used to hide).
+
+    `_record_review_item_out_of_band` opens its own session via
+    `db_session_adapter.create_session()` (`SessionLocal()`, bound to
+    `DATABASE_URL`) and RE-RAISES if that write fails (round-3 correction:
+    a permanent conflict that cannot be durably recorded must not be
+    silently skipped past). `conftest.py` deliberately points `DATABASE_URL`
+    at an unreachable port (`127.0.0.1:9`, a discard port, `connect_timeout=
+    1`) so any accidental real-DB access in the SQLite unit-test lane fails
+    fast and loud rather than silently hitting a real database -- correct
+    for that purpose, but it means this exact code path cannot complete in
+    this tier without redirecting it (2026-09, round 9). Redirected to this
+    test's OWN `db_session` (the established pattern used across this
+    codebase's unit tests for exactly this scenario, e.g.
+    `test_forwarding_observation_collector.py`) -- safe here specifically
+    because nothing in this test touches `db_session` after the assertion
+    block below, so an out-of-band `.commit()`/`.close()` against the same
+    object cannot corrupt a later assertion.
     """
+    monkeypatch.setattr(
+        "app.services.db_session_adapter.db_session_adapter.create_session",
+        lambda: db_session,
+    )
     subscriber.billing_mode = BillingMode.prepaid
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active

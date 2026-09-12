@@ -22,6 +22,21 @@ from app.services.prepaid_draft_reconciliation import (
 )
 
 
+def _utc(value: datetime) -> datetime:
+    """Defensively normalize a possibly-naive datetime to aware UTC.
+
+    SQLite (this test's engine) does not preserve timezone info on
+    round-trip regardless of what is inserted (2026-09, round 9): after
+    `db_session.commit()` expires the ORM instance, the next attribute read
+    re-fetches from the database and comes back NAIVE even though an aware
+    value was originally assigned. PostgreSQL preserves timezone correctly,
+    so this is purely a SQLite unit-test-tier artifact, not evidence of a
+    production bug in the writer under test.
+    """
+
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 def _draft_invoice(db_session, account_id) -> Invoice:
     invoice = Invoice(
         account_id=account_id,
@@ -72,8 +87,8 @@ def test_records_full_evidence_including_subscription_and_period(
     assert exception.status == "open"
     assert exception.reason == "renewal_insufficient_funding"
     assert exception.subscription_id == subscription_id
-    assert exception.period_start == starts_at
-    assert exception.period_end == ends_at
+    assert _utc(exception.period_start) == starts_at
+    assert _utc(exception.period_end) == ends_at
     assert exception.attempt_count == 1
 
     stored = db_session.get(PrepaidDraftReconciliationException, exception.id)
