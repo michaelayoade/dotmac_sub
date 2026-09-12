@@ -456,11 +456,12 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     # The replacement opening value must also be used when a renewal consumes
     # more opening funding than the immutable, incorrect value could cover.
     ensure_test_prepaid_contract(db_session, subscription, Decimal("4000.00"))
+    corrected_subscription_id = subscription.id
     corrected_period_start = cutoff + timedelta(days=1)
     corrected_period_end = cutoff + timedelta(days=32)
     corrected_renewal_preview = preview_prepaid_service_renewal(
         db_session,
-        subscription_id=subscription.id,
+        subscription_id=corrected_subscription_id,
         starts_at=corrected_period_start,
         ends_at=corrected_period_end,
         amount=Decimal("4000.00"),
@@ -472,7 +473,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         db_session,
         ExecuteReviewedPrepaidServiceRenewalCommand(
             context=_context("operator:pytest", "renew-from-corrected-opening"),
-            subscription_id=subscription.id,
+            subscription_id=corrected_subscription_id,
             starts_at=corrected_period_start,
             ends_at=corrected_period_end,
             amount=Decimal("4000.00"),
