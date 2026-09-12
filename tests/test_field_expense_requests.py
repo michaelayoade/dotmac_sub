@@ -301,6 +301,8 @@ def test_create_submit_cancel_and_surface_expense_in_job_detail(db_session):
     )
 
     assert replayed["id"] == created["id"]
+    assert created["id"] == client_ref
+    assert created["client_ref"] == client_ref
     assert created["status"] == "submitted"
     assert str(created["total_amount"]) == "2500.00"
     db_session.refresh(work_order)
@@ -388,6 +390,41 @@ def test_expense_history_supports_person_and_legacy_user_ownership(db_session):
         item["id"] for item in field_expense_requests.list_mine(db_session, _auth(user))
     ] == [created["id"]]
     assert field_expense_requests.list_mine(db_session, _auth(other)) == []
+
+
+def test_accepted_historical_claim_identity_remains_readable_and_unchanged(
+    db_session,
+):
+    user = _user(db_session, "HistoricalIdentity")
+    _profile(db_session, user, crm_person_id="historical-expense-identity-tech")
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-historical-expense-identity",
+        assigned_to_crm_person_id="historical-expense-identity-tech",
+    )
+    db_session.commit()
+
+    created = _submit_expense(db_session, user, work_order)
+    request = db_session.get(FieldExpenseRequest, created["id"])
+    assert request is not None
+    historical_client_ref = uuid4()
+    request.client_ref = historical_client_ref
+    request.status = "approved"
+    request.approved_at = datetime.now(UTC)
+    request.expense_claim_reference = "ERP-HISTORICAL-CLAIM"
+    db_session.commit()
+
+    detail = field_expense_requests.get(db_session, _auth(user), str(request.id))
+
+    assert detail["id"] == request.id
+    assert detail["client_ref"] == historical_client_ref
+    assert detail["status"] == "approved"
+    persisted = db_session.get(FieldExpenseRequest, request.id)
+    assert persisted is not None
+    assert persisted.client_ref == historical_client_ref
+    assert persisted.expense_claim_reference == "ERP-HISTORICAL-CLAIM"
 
 
 def test_expense_request_scope_and_receipt_attachment_validation(
@@ -654,6 +691,8 @@ def test_atomic_expense_submission_replays_and_rejects_changed_payload(
 
     assert created.status_code == 201
     assert created.json()["status"] == "submitted"
+    assert created.json()["id"] == client_ref
+    assert created.json()["client_ref"] == client_ref
     assert replayed.status_code == 201
     assert replayed.json()["id"] == created.json()["id"]
     assert listed.status_code == 200
