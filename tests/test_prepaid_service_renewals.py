@@ -351,12 +351,40 @@ def _add_due_account_without_baseline(db_session, subscriber, subscription):
     return account, due_subscription
 
 
+def test_scheduled_owner_requires_an_active_owner_command(
+    db_session, subscriber, subscription
+):
+    """`run_due_prepaid_service_renewals` is an internal function, never the
+    production entry point on its own -- nightly per-account isolation
+    (`execute_owner_savepoint`) requires an active owner command, which only
+    exists via `execute_due_prepaid_service_renewals`. This is a deliberate,
+    tested invariant of the owner-command boundary, not just something the
+    3 fixed fixtures below happen to satisfy.
+    """
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+
+    with pytest.raises(
+        RuntimeError, match="Owner savepoints require an active owner command"
+    ):
+        run_due_prepaid_service_renewals(
+            db_session,
+            run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        )
+
+
 def test_scheduled_owner_funds_current_due_cycle(db_session, subscriber, subscription):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (`execute_due_prepaid_
+    # service_renewals` -> `execute_owner_command`), not the bare function:
+    # nightly per-account isolation depends on an active owner command
+    # (`execute_owner_savepoint` requires one), which only exists here.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-funds-current-due-cycle",
+        ),
     )
     db_session.commit()
 
@@ -476,11 +504,23 @@ def test_funding_event_uses_owner_root_for_renewal_consumption(
     )
     db_session.commit()
 
+    from app.services import event_store as event_store_service
+
     event = Event(
         event_type=EventType.payment_received,
         payload={"payment_id": str(payment.id)},
         account_id=subscriber.id,
     )
+    # A real `EventStore` row (2026-09 round 8): this test calls the
+    # handler directly (not through the real dispatcher), but
+    # `evaluate_prepaid_service_after_settlement`'s fail-closed guard now
+    # requires `event_id` to resolve to a real, durable row -- this test's
+    # payment carries genuine settlement evidence
+    # (`create_test_settled_payment_credit`), so it reaches that guard
+    # rather than failing earlier the way the two deliberately-incomplete
+    # fixtures above do.
+    event_store_service.create_event_record(db_session, event)
+    db_session.flush()
     PrepaidRenewalHandler().handle(db_session, event)
 
     group = (
@@ -521,9 +561,12 @@ def test_scheduled_owner_skips_quarantine_and_funds_verified_account(
         db_session, subscriber, subscription
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-skips-quarantine",
+        ),
     )
     db_session.commit()
 
@@ -574,9 +617,17 @@ def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(
     subscription.unit_price = None
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): `run_due_prepaid_
+    # service_renewals`'s account-level isolation savepoint requires an
+    # active owner command, which only exists via
+    # `execute_due_prepaid_service_renewals`.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-catalog-fallback",
+        ),
     )
 
     assert summary["prepaid_renewals_missing_price"] == 1
@@ -594,9 +645,14 @@ def test_scheduled_owner_refuses_historical_catch_up(
     subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): same reason as above.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 5, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 5, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-historical-catch-up",
+        ),
     )
 
     assert summary["prepaid_renewals_stale_anchor"] == 1
@@ -635,9 +691,12 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
         lambda *_args, **_kwargs: None,
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-restores-lock",
+        ),
     )
     db_session.commit()
 

@@ -1453,13 +1453,23 @@ def test_fifty_kobo_shortfall_stays_draft(
     db_session.commit()
 
     db_session.refresh(invoice)
-    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_pending
+    # 2026-09 round 3: the previously-writerless
+    # `PrepaidDraftReconciliationException` table now gets a durable review
+    # item for every unresolved draft-funding case, including a plain
+    # shortfall like this one -- an operator can now see this stuck invoice
+    # without manually querying, instead of it being silently invisible.
+    # The invoice's own state is unchanged: still draft, still unmodified.
+    assert (
+        result.disposition
+        is FundingChangeRenewalDisposition.draft_invoice_review_required
+    )
     assert result.draft_invoices_pending == 1
     assert invoice.status is InvoiceStatus.draft
     assert invoice.issued_at is None
     assert db_session.query(PaymentAllocation).count() == 0
     assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
+    assert db_session.query(PrepaidDraftReconciliationException).count() == 1
 
 
 def test_reviewed_opening_funding_settles_exact_remainder_atomically(
@@ -1651,10 +1661,17 @@ def test_opening_funding_shortfall_stays_unmodified(
     db_session.commit()
 
     assert preview.disposition is PrepaidDraftDisposition.insufficient_funding
-    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_pending
+    # 2026-09 round 3: a durable review item is now recorded for every
+    # unresolved draft-funding case (previously this table had no writer at
+    # all), so this shortfall is now visibly reviewable instead of silently
+    # invisible -- the invoice itself is still completely unmodified.
+    assert (
+        result.disposition
+        is FundingChangeRenewalDisposition.draft_invoice_review_required
+    )
     assert db_session.query(PaymentAllocation).count() == 0
     assert db_session.query(PrepaidOpeningFundingConsumption).count() == 0
-    assert db_session.query(PrepaidDraftReconciliationException).count() == 0
+    assert db_session.query(PrepaidDraftReconciliationException).count() == 1
 
 
 def test_lapsed_opening_funded_invoice_reanchors_coverage_to_effective_date(
@@ -1793,11 +1810,67 @@ def test_funding_event_settles_from_approved_account_balance_alone(
     assert prepaid_available_balance(db_session, subscriber.id) == Decimal("1187.50")
 
 
-def test_multiple_drafts_fail_closed_without_exception_or_funding_consumption(
+def test_existing_draft_settlement_produces_a_non_empty_receipt_child(
     db_session,
     subscriber,
     subscription,
 ):
+    """2026-09 round 7/8: the exact defect this whole round targets.
+
+    Settling an EXISTING draft invoice (not creating a new renewal) must
+    report itself back to the caller as a real, non-empty
+    `PrepaidFundingSubscriptionDecision` -- previously this branch settled
+    the invoice correctly but returned `subscription_decisions=()`, so the
+    funding-consequence owner's receipt committed with a `draft_invoice_
+    settled` disposition and ZERO children (the exact false-clean shape
+    `find_successful_receipts_missing_child_evidence` now detects).
+    """
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("18812.50"),
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("20000.00"),
+    )
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:existing-draft-receipt-child",
+    )
+    db_session.commit()
+
+    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_settled
+    assert len(result.subscription_decisions) == 1
+    decision = result.subscription_decisions[0]
+    assert decision.subscription_id == subscription.id
+    assert decision.invoice_id == invoice.id
+    assert decision.disposition == "existing_draft_settled"
+    assert decision.funding_source == "opening_funding"
+    assert decision.amount == Decimal("18812.50")
+    assert decision.currency == "NGN"
+    assert len(decision.funding_evidence_ids) == 1
+    consumption = db_session.query(PrepaidOpeningFundingConsumption).one()
+    assert decision.funding_evidence_ids == [str(consumption.id)]
+    assert len(decision.evidence_fingerprint) == 64
+
+
+def test_multiple_drafts_fail_closed_without_funding_consumption(
+    db_session,
+    subscriber,
+    subscription,
+):
+    """Renamed 2026-09 round 3 (was `..._without_exception_or_funding_
+    consumption`): a durable review item is now written per blocked draft
+    (previously this table had no writer at all), so "no exception" is no
+    longer this case's contract -- "no funding consumption / no invoice
+    mutation" still is, and that's what this test now proves."""
     first = _draft(
         db_session,
         subscriber,
@@ -1827,13 +1900,20 @@ def test_multiple_drafts_fail_closed_without_exception_or_funding_consumption(
 
     db_session.refresh(first)
     db_session.refresh(second)
-    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_pending
+    assert (
+        result.disposition
+        is FundingChangeRenewalDisposition.draft_invoice_review_required
+    )
     assert result.draft_invoices_pending == 2
     assert first.status is InvoiceStatus.draft
     assert second.status is InvoiceStatus.draft
     assert db_session.query(PaymentAllocation).count() == 0
     assert db_session.query(PrepaidOpeningFundingConsumption).count() == 0
-    assert db_session.query(PrepaidDraftReconciliationException).count() == 0
+    # One durable review item PER blocked draft invoice (2026-09 round 3):
+    # `stage_prepaid_draft_after_funding_change` writes an exception for
+    # each candidate when more than one draft is found for the same
+    # account/currency, not one combined row.
+    assert db_session.query(PrepaidDraftReconciliationException).count() == 2
 
 
 def test_consumed_opening_funding_cannot_fund_a_second_invoice(

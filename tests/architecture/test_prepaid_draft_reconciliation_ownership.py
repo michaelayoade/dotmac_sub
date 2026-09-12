@@ -77,13 +77,37 @@ def test_funding_change_checks_existing_draft_before_new_funded_invoice():
 
 
 def test_funded_prepaid_renewal_uses_invoice_and_credit_participants_only():
-    source = inspect.getsource(prepaid_service_renewals.confirm_prepaid_service_renewal)
+    """Neither settlement lane re-enters the generic draft write path.
 
-    assert "Invoices.stage_system_invoice_for_owner(" in source
-    assert "InvoiceLines.stage_system_line_for_owner(" in source
-    assert "stage_prepaid_draft_after_funding_change(" in source
-    assert "stage_system_account_adjustment(" not in source
-    assert "ensure_prepaid_entitlement_for_wallet_debit(" not in source
+    Single-owner funding-consequence cutover (2026-09, round 2): the
+    original defect was `confirm_prepaid_service_renewal` re-entering
+    `stage_prepaid_draft_after_funding_change` to settle a document it had
+    just created itself. Both settlement lanes now settle directly
+    (`_settle_exact_payment_fundable_renewal`/
+    `_settle_reviewed_opening_fundable_renewal`) and neither calls that
+    function or its private `_stage_action` write path at all -- this
+    assertion is intentionally inverted from what it required before that
+    cutover.
+    """
+    confirm_source = inspect.getsource(
+        prepaid_service_renewals.confirm_prepaid_service_renewal
+    )
+    exact_source = inspect.getsource(
+        prepaid_service_renewals._settle_exact_payment_fundable_renewal
+    )
+    opening_source = inspect.getsource(
+        prepaid_service_renewals._settle_reviewed_opening_fundable_renewal
+    )
+    combined = confirm_source + exact_source + opening_source
+
+    assert "Invoices.stage_system_invoice_for_owner(" in confirm_source
+    assert "InvoiceLines.stage_system_line_for_owner(" in confirm_source
+    assert "AccountCreditApplications.apply_invoice_fully(" in exact_source
+    assert "AccountCreditApplications.apply_invoice_available(" in opening_source
+    assert "stage_prepaid_draft_after_funding_change(" not in combined
+    assert "_stage_action(" not in combined
+    assert "stage_system_account_adjustment(" not in combined
+    assert "ensure_prepaid_entitlement_for_wallet_debit(" not in combined
 
 
 def test_duplicate_draft_transition_stays_under_reconciliation_owner():

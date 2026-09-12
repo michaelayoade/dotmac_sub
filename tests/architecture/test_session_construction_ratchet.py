@@ -50,7 +50,22 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: partial unique index (two sessions racing to activate the same
 #: cpe_device_id), reviewed test-fixture authorship for the CPE identity
 #: cardinality program.
-TEST_FIXTURE_BASELINE_TOTAL = 120
+#: +1 from tests/integration/test_prepaid_funding_trigger_execution_rollback.py:
+#: a real-Postgres two-connection proof that a forced failure in the
+#: funding-consequence owner's own transaction rolls back only that
+#: transaction, following the established two-real-connection pattern.
+#: +2 from tests/integration/test_prepaid_renewal_nightly_isolation.py: two
+#: real-Postgres tests (ambiguous-account isolation, unclassified-failure
+#: abort) each with their own `sessionmaker`, driving the single-owner
+#: funding-consequence fix through the real nightly entry point.
+#: +1 from tests/integration/test_prepaid_account_lock_compatibility.py: a
+#: deterministic two-session PostgreSQL proof that account-writer
+#: serialization remains compatible with the prepaid review item's subscriber
+#: foreign key.
+#: +1 from tests/integration/test_prepaid_renewal_nightly_isolation.py: the
+#: teardown session that relinquishes the test-created global authority-cutover
+#: marker after independently committed nightly-owner transactions.
+TEST_FIXTURE_BASELINE_TOTAL = 125
 
 
 def _baseline() -> dict[str, int]:
