@@ -265,6 +265,7 @@ class ExpenseRequest {
     this.paymentStatus,
     this.paymentIntentId,
     this.paymentError,
+    this.requestedByName,
     this.selectedApproverName,
     this.paymentDestinationMode,
     this.recipientBankName,
@@ -298,6 +299,7 @@ class ExpenseRequest {
   final String? paymentStatus;
   final String? paymentIntentId;
   final String? paymentError;
+  final String? requestedByName;
   final String? selectedApproverName;
   final String? paymentDestinationMode;
   final String? recipientBankName;
@@ -335,6 +337,7 @@ class ExpenseRequest {
     paymentStatus: _string(json['payment_status']),
     paymentIntentId: _string(json['payment_intent_id']),
     paymentError: _string(json['payment_error']),
+    requestedByName: _string(json['requested_by_name']),
     selectedApproverName: _string(json['selected_approver_name']),
     paymentDestinationMode: _string(json['payment_destination_mode']),
     recipientBankName: _string(json['recipient_bank_name']),
@@ -360,6 +363,13 @@ class ExpenseRequest {
       total ?? items.fold<double>(0, (sum, item) => sum + item.amount);
 
   String get statusLabel => status.replaceAll('_', ' ');
+}
+
+class ExpenseRequestHistory {
+  const ExpenseRequestHistory({required this.items, required this.totalCount});
+
+  final List<ExpenseRequest> items;
+  final int totalCount;
 }
 
 String? _string(Object? value) => value?.toString();
