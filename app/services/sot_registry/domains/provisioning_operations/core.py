@@ -1339,6 +1339,7 @@ SERVICES: tuple[SOTService, ...] = (
             "contextual material need and ERP submission",
             "service-work-order material need and operational approval",
             "ERP material status observation",
+            "ERP-confirmed material request cancellation",
             "backoffice material-outcome projection into the service workflow",
             "work-order material allocation after confirmed external issue",
             "committed material output consumption",
@@ -1383,6 +1384,16 @@ SERVICES: tuple[SOTService, ...] = (
                     name="ERP material status observation",
                     role=OwnerRole.RECONCILER,
                     input_names=("ERP material-support outcome observation",),
+                    canonical_writer="operations.material_dependencies",
+                ),
+                ConcernContract(
+                    name="ERP-confirmed material request cancellation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical material dependency state",
+                        "ERP material-support outcome observation",
+                        "material dependency transition protocol",
+                    ),
                     canonical_writer="operations.material_dependencies",
                 ),
                 ConcernContract(
@@ -1469,8 +1480,8 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="operations.work_order_status",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "draft, submission, approval, refusal, issued, and "
-                        "fulfilled transition invariants"
+                        "draft, submission, approval, cancellation-pending, "
+                        "refusal, issued, and fulfilled transition invariants"
                     ),
                 ),
                 AuthorityInput(
@@ -1496,7 +1507,9 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Each material command owns the request, workflow, allocation, "
-                    "event evidence, and ERP outbox transaction; reconciled ERP "
+                    "event evidence, and ERP outbox transaction; cancellation stays "
+                    "pending until an ERP refusal observation, while an issued "
+                    "observation wins a concurrent cancellation race. Reconciled ERP "
                     "outcomes commit one locked request at a time. Requester-history "
                     "reads are side-effect free; revision 584 performs the bounded, "
                     "idempotent identity repair during schema migration."
@@ -1547,13 +1560,15 @@ SERVICES: tuple[SOTService, ...] = (
             events=EventContract(
                 event_types=(
                     "field_material_request.approved",
+                    "field_material_request.cancellation_requested",
                     "field_material_request.fulfilled",
                 ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
                     "Version 1 is additive and identifies the request, work order, "
-                    "transition, actor or ERP source, and occurrence time."
+                    "transition or cancellation intent, actor or ERP source, and "
+                    "occurrence time."
                 ),
                 replay=(
                     "Canonical material-request, item, allocation, ERP mirror, and "
@@ -1644,6 +1659,8 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_field_material_requests.py",
                 "tests/test_dotmac_erp_material_sync.py",
                 "tests/test_admin_material_requests.py",
+                "tests/test_erp_material_webhook.py",
+                "field_mobile/test/materials_test.dart",
                 "tests/architecture/test_field_request_history_identity.py",
                 "tests/integration/test_field_request_requester_history_migration.py",
             ),

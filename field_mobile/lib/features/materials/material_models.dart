@@ -158,6 +158,7 @@ class MaterialRequest {
   const MaterialRequest({
     required this.id,
     required this.status,
+    this.canCancel = false,
     this.number,
     this.priority,
     this.notes,
@@ -185,6 +186,7 @@ class MaterialRequest {
 
   final String id;
   final String status;
+  final bool canCancel;
   final String? number;
   final String? priority;
   final String? notes;
@@ -214,6 +216,7 @@ class MaterialRequest {
   ) => MaterialRequest(
     id: json['id'].toString(),
     status: json['status'] as String? ?? 'draft',
+    canCancel: json['can_cancel'] == true,
     number: _string(json['number']),
     priority: _string(json['priority']),
     notes: _string(json['notes']),
