@@ -205,11 +205,12 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     _candidate(db_session, subscriber_account, subscription)
+    funding_position_at = datetime(2026, 3, 16, tzinfo=UTC)
     materialize_test_prepaid_opening_balance(
         db_session,
         subscriber_account.id,
         Decimal("100.00"),
-        position_at=datetime(2026, 3, 16, tzinfo=UTC),
+        position_at=funding_position_at,
     )
 
     provider = _provider(db_session)
@@ -345,8 +346,8 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         amount=Decimal("54437.50"),
         currency="NGN",
         status=PaymentStatus.succeeded,
-        paid_at=cutoff - timedelta(days=10),
-        created_at=cutoff - timedelta(days=1),
+        paid_at=funding_position_at - timedelta(days=10),
+        created_at=funding_position_at - timedelta(days=1),
     )
     db_session.add(pre_boundary_payment)
     db_session.flush()
@@ -516,7 +517,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
         .filter(PrepaidOpeningFundingConsumption.opening_position_id == opening.id)
         .one()
     )
-    assert corrected_consumption.amount == Decimal("2000.00")
+    assert corrected_consumption.amount == Decimal("3000.00")
     assert (
         corrected_consumption.approval_evidence_ref
         == "finance-review:pytest-opening-correction"
