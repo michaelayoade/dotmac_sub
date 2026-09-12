@@ -467,6 +467,7 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     )
     assert corrected_renewal_preview.allowed is True
     assert corrected_renewal_preview.funding_before == Decimal("5562.50")
+    db_session.commit()
     corrected_renewal = execute_reviewed_prepaid_service_renewal(
         db_session,
         ExecuteReviewedPrepaidServiceRenewalCommand(
