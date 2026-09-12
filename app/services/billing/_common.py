@@ -294,7 +294,10 @@ def lock_account(db: Session, account_id: str) -> None:
 
     Any code that reads ``get_account_credit_balance`` and then writes a debit
     based on it (plan change, add-on purchase, autopay) must call this first.
-    Postgres takes a row lock on the subscriber; SQLite serializes writes
+    Postgres takes a ``FOR NO KEY UPDATE`` row lock on the subscriber: it
+    still conflicts with every account writer using this helper, but remains
+    compatible with the ``KEY SHARE`` lock a separate transaction needs to
+    insert a row that references the subscriber. SQLite serializes writes
     globally so it is a no-op there.
     """
     from app.models.subscriber import Subscriber
@@ -304,7 +307,7 @@ def lock_account(db: Session, account_id: str) -> None:
     if bind is not None and bind.dialect.name == "postgresql":
         db.query(Subscriber).filter(
             Subscriber.id == coerce_uuid(account_id)
-        ).with_for_update().first()
+        ).with_for_update(key_share=True).first()
 
 
 def _validate_invoice_totals(data: dict):
