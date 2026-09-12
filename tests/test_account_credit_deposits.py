@@ -38,6 +38,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.event_store import EventStatus, EventStore
 from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInbox,
@@ -63,6 +64,8 @@ from app.services.billing_health import (
     billing_health_snapshot,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.events.dispatcher import get_dispatcher
+from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
 from app.services.topup_intents import (
     DIRECT_TRANSFER_PROVIDER,
@@ -162,6 +165,42 @@ def _settle(db_session, *, intent_id, transaction):
         already_recorded=result.already_recorded,
         result=result,
     )
+
+
+def _dispatch_pending_account_credit_deposit_event(db_session, *, account_id):
+    """Drive the durable ``account_credit_deposited`` outbox row to completion.
+
+    ``settle_verified`` stages the event and defers dispatch to the session's
+    real ``after_commit`` hook (``app/services/session_hooks.py``'s
+    ``run_after_commit``), which is only reliable across a genuine top-level
+    commit. The SAVEPOINT-based ``db_session`` fixture's connection-level
+    transaction never actually commits during a test, so that deferred
+    dispatch does not reliably complete inside this test session. No test in
+    this suite relies on it firing on its own: every other test that depends
+    on a handler's effect drives it explicitly, either by calling the
+    handler directly (e.g. ``PrepaidRenewalHandler().handle(...)`` in
+    ``tests/test_payment_allocation_settlement_consequence.py``) or, as here,
+    by claiming the pending outbox row via
+    ``dispatcher.dispatch_pending_event`` (see
+    ``tests/test_events_enforcement_services.py``). Do the same here so the
+    prepaid-renewal consequence (and any handler ordered after it, such as
+    enforcement-lock release) actually runs.
+    """
+    pending_event = (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type == EventType.account_credit_deposited.value,
+            EventStore.account_id == account_id,
+            EventStore.status == EventStatus.pending,
+        )
+        .order_by(EventStore.created_at.desc())
+        .first()
+    )
+    assert pending_event is not None, (
+        "expected a pending account_credit_deposited event"
+    )
+    assert get_dispatcher().dispatch_pending_event(db_session, pending_event.id) is True
+    db_session.commit()
 
 
 def test_intent_persists_typed_server_owned_contract(db_session, subscriber):
@@ -787,6 +826,7 @@ def test_confirmed_deposit_renews_due_suspended_service_before_restoration(
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-due-prepaid-deposit"),
     )
+    _dispatch_pending_account_credit_deposit_event(db_session, account_id=subscriber.id)
 
     db_session.refresh(subscription)
     db_session.refresh(lock)
