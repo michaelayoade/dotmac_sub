@@ -486,6 +486,7 @@ void main() {
       'number': 'EXP-0001',
       'status': 'rejected',
       'purpose': 'Taxi to site',
+      'requested_by_name': 'Ada Technician',
       'expense_date': '2026-07-01',
       'currency': 'NGN',
       'total_amount': '80.00',
@@ -516,6 +517,7 @@ void main() {
     expect(request.displayNumber, 'EXP-0001');
     expect(request.statusLabel, 'rejected');
     expect(request.totalAmount, 80.0);
+    expect(request.requestedByName, 'Ada Technician');
     expect(request.rejectionReason, 'Missing receipt');
     expect(request.erpClaimNumber, 'EC-12');
     expect(request.erpSyncStatus, 'failed');

@@ -1562,6 +1562,17 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
                 color: AppColors.subdued(context),
               ),
             ),
+            const SizedBox(height: 4),
+            Text(
+              request.requestedByName == null
+                  ? 'Raised by unavailable'
+                  : 'Raised by ${request.requestedByName}',
+              key: Key('expense-requester-${request.id}'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.subdued(context),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 12),
             if (request.paymentStatus != null) ...[
               Text(

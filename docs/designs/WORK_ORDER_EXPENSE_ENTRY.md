@@ -127,6 +127,12 @@ For a manager who is also a technician, the Field Expenses destination exposes
 both `My requests` and `Approvals`. Approvals remain the default operational
 view, while the requester-owned tab uses the same history resolver as every
 other field technician; manager capability never hides personal history.
+The manager approval list uses a typed owner query and labels every card
+`Raised by` with the requester display identity resolved by
+`auth.staff_provisioning`. A historical row without exact SystemUser identity
+is labelled unavailable; the client never infers a requester from the current
+work-order assignment. The manager navigation does not expose the Materials
+destination.
 
 ## Schema change
 

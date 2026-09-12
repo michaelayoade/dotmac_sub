@@ -394,6 +394,11 @@ def test_manager_expense_approve_and_reject(db_session):
         str(first["id"]),
         str(second["id"]),
     }
+    assert {
+        item["requested_by_name"]
+        for item in pending
+        if item["id"] in {first["id"], second["id"]}
+    } == {"Tech Staff"}
 
     approved = _approve_expense(
         db_session, request_id=first["id"], reviewer_id=tech_user.id
@@ -557,7 +562,10 @@ def test_manager_api(db_session):
 
     expenses = client.get("/api/v1/field/manager/expenses")
     assert expenses.status_code == 200
-    assert str(expense["id"]) in [entry["id"] for entry in expenses.json()["items"]]
+    manager_expense = next(
+        entry for entry in expenses.json()["items"] if entry["id"] == str(expense["id"])
+    )
+    assert manager_expense["requested_by_name"] == "Tech Staff"
 
     approved = client.post(f"/api/v1/field/manager/expenses/{expense['id']}/approve")
     assert approved.status_code == 200

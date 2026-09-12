@@ -118,6 +118,7 @@ def _expense_read(view: ExpenseRequestView) -> FieldExpenseRequestRead:
         crm_expense_request_id=view.crm_expense_request_id,
         requested_by_person_id=view.requested_by_person_id,
         requested_by_system_user_id=view.requested_by_system_user_id,
+        requested_by_name=view.requested_by_name,
         selected_approver_erp_id=view.selected_approver_erp_id,
         selected_approver_name=view.selected_approver_name,
         selected_approver_email=view.selected_approver_email,

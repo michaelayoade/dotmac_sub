@@ -41,7 +41,7 @@ from app.services.backoffice import (
     get_expense_decision_delivery,
     get_expense_payment_deliveries,
 )
-from app.services.common import apply_pagination, coerce_uuid
+from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.field.jobs import _scoped_query
 from app.services.field.source import (
@@ -64,6 +64,10 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+)
+from app.services.staff_provisioning import (
+    StaffDisplayIdentityQuery,
+    resolve_staff_display_identities,
 )
 
 
@@ -362,6 +366,7 @@ class ExpenseRequestView:
     crm_expense_request_id: str | None
     requested_by_person_id: UUID
     requested_by_system_user_id: UUID | None
+    requested_by_name: str | None
     selected_approver_erp_id: UUID | None
     selected_approver_name: str | None
     selected_approver_email: str | None
@@ -412,6 +417,22 @@ class RequesterExpenseDetailQuery:
 
 @dataclass(frozen=True, slots=True)
 class RequesterExpenseHistoryPage:
+    items: tuple[ExpenseRequestView, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerExpenseReviewQuery:
+    approver_system_user_id: UUID | None
+    status: ExpenseRequestStatus | None = None
+    limit: int = 100
+    offset: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerExpenseReviewPage:
     items: tuple[ExpenseRequestView, ...]
     total: int
     limit: int
@@ -1374,6 +1395,7 @@ def _expense_sync_error(delivery: BackofficeDeliveryView | None) -> str | None:
 def _expense_request_view(
     request: FieldExpenseRequest,
     *,
+    requested_by_name: str | None = None,
     delivery: BackofficeDeliveryView | None = None,
     payment_delivery: BackofficeDeliveryView | None = None,
 ) -> ExpenseRequestView:
@@ -1393,6 +1415,7 @@ def _expense_request_view(
         crm_expense_request_id=request.crm_expense_request_id,
         requested_by_person_id=request.requested_by_person_id,
         requested_by_system_user_id=request.requested_by_system_user_id,
+        requested_by_name=requested_by_name,
         selected_approver_erp_id=request.selected_approver_erp_id,
         selected_approver_name=request.selected_approver_name,
         selected_approver_email=request.selected_approver_email,
@@ -1452,6 +1475,7 @@ def _legacy_expense_request_view(view: ExpenseRequestView) -> dict[str, object]:
         "crm_expense_request_id": view.crm_expense_request_id,
         "requested_by_person_id": view.requested_by_person_id,
         "requested_by_system_user_id": view.requested_by_system_user_id,
+        "requested_by_name": view.requested_by_name,
         "selected_approver_erp_id": view.selected_approver_erp_id,
         "selected_approver_name": view.selected_approver_name,
         "selected_approver_email": view.selected_approver_email,
@@ -1517,15 +1541,6 @@ def serialize_expense_request(
     )
 
 
-def _serialize_expense_requests(
-    db: Session, requests: list[FieldExpenseRequest]
-) -> list[dict]:
-    return [
-        _legacy_expense_request_view(view)
-        for view in _expense_request_views(db, requests)
-    ]
-
-
 def _expense_request_views(
     db: Session, requests: list[FieldExpenseRequest]
 ) -> tuple[ExpenseRequestView, ...]:
@@ -1533,9 +1548,24 @@ def _expense_request_views(
     payment_deliveries = get_expense_payment_deliveries(
         db, [request.id for request in requests]
     )
+    requester_identities = resolve_staff_display_identities(
+        db,
+        query=StaffDisplayIdentityQuery(
+            user_ids=frozenset(
+                request.requested_by_system_user_id
+                for request in requests
+                if request.requested_by_system_user_id is not None
+            )
+        ),
+    )
+    requester_names = {
+        identity.user_id: identity.display_name
+        for identity in requester_identities.identities
+    }
     return tuple(
         _expense_request_view(
             request,
+            requested_by_name=requester_names.get(request.requested_by_system_user_id),
             delivery=deliveries.get(request.id),
             payment_delivery=payment_deliveries.get(request.id),
         )
@@ -1664,6 +1694,45 @@ def get_requester_expense_request(
     return _expense_request_views(db, [request])[0]
 
 
+def list_manager_expense_requests(
+    db: Session, query: ManagerExpenseReviewQuery
+) -> ManagerExpenseReviewPage:
+    if query.limit < 1 or query.limit > 200 or query.offset < 0:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.invalid_request",
+            message="Manager expense review pagination is invalid.",
+        )
+    review = (
+        db.query(FieldExpenseRequest)
+        .options(selectinload(FieldExpenseRequest.items))
+        .filter(FieldExpenseRequest.is_active.is_(True))
+    )
+    if query.status is not None:
+        review = review.filter(FieldExpenseRequest.status == query.status.value)
+    if query.approver_system_user_id is not None:
+        review = review.filter(
+            or_(
+                FieldExpenseRequest.status != ExpenseRequestStatus.SUBMITTED.value,
+                FieldExpenseRequest.selected_approver_system_user_id.is_(None),
+                FieldExpenseRequest.selected_approver_system_user_id
+                == query.approver_system_user_id,
+            )
+        )
+    total = int(review.with_entities(func.count(FieldExpenseRequest.id)).scalar() or 0)
+    rows = (
+        review.order_by(FieldExpenseRequest.created_at.desc())
+        .offset(query.offset)
+        .limit(query.limit)
+        .all()
+    )
+    return ManagerExpenseReviewPage(
+        items=_expense_request_views(db, rows),
+        total=total,
+        limit=query.limit,
+        offset=query.offset,
+    )
+
+
 class FieldExpenseRequests:
     @staticmethod
     def list_mine(
@@ -1711,25 +1780,16 @@ class FieldExpenseRequests:
         offset: int = 0,
     ) -> list[dict]:
         """Manager view: expense requests across all technicians."""
-        query = (
-            db.query(FieldExpenseRequest)
-            .options(selectinload(FieldExpenseRequest.items))
-            .filter(FieldExpenseRequest.is_active.is_(True))
-            .order_by(FieldExpenseRequest.created_at.desc())
+        page = list_manager_expense_requests(
+            db,
+            ManagerExpenseReviewQuery(
+                approver_system_user_id=approver_system_user_id,
+                status=ExpenseRequestStatus(_status(status)) if status else None,
+                limit=limit,
+                offset=offset,
+            ),
         )
-        if status:
-            query = query.filter(FieldExpenseRequest.status == _status(status))
-        if approver_system_user_id is not None:
-            query = query.filter(
-                or_(
-                    FieldExpenseRequest.status != "submitted",
-                    FieldExpenseRequest.selected_approver_system_user_id.is_(None),
-                    FieldExpenseRequest.selected_approver_system_user_id
-                    == approver_system_user_id,
-                )
-            )
-        requests = apply_pagination(query, limit, offset).all()
-        return _serialize_expense_requests(db, requests)
+        return [_legacy_expense_request_view(item) for item in page.items]
 
 
 def _expense_request_uuid(expense_request_id: str | UUID) -> UUID:

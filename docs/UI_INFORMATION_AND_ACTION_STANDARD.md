@@ -701,6 +701,10 @@ implementation.
   approved, rejected, canceled, paid, and ERP/payment delivery problems remain
   distinct. Manager mode defaults to Approvals and provides a separate `My
   requests` tab sourced from the same requester query.
+- Manager approval list: every expense card labels `Raised by` from the
+  owner-supplied staff display identity. Missing historical identity is rendered
+  as unavailable and is never inferred from current assignment. The manager
+  bottom navigation omits the Materials destination.
 
 ## Field Work-Order Note Contract
 
