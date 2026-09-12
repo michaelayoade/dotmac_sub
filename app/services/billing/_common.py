@@ -478,7 +478,31 @@ def _assert_invoice_allocatable(invoice: Invoice) -> None:
 
 
 def _recalculate_invoice_totals(db: Session, invoice: Invoice):
-    """Recalculate invoice totals from lines and payments."""
+    """Recalculate invoice totals from lines and payments.
+
+    ``invoice.metadata_["renewal_totals_authoritative"]`` (set by
+    `financial.prepaid_service_renewals` alongside
+    ``renewal_period_authoritative`` on a canonical renewal invoice it
+    constructs itself) skips the subtotal/tax_total/total re-derivation
+    below ONCE -- this is the SAME fix-by-construction pattern
+    `_reanchor_paid_prepaid_invoice_if_lapsed` already uses for the period,
+    extended to cover totals too (round-3 correction: a runtime defensive
+    assertion catching a divergence was judged insufficient, since it would
+    still abort a real customer's renewal in production the first time the
+    two formulas ever disagreed). balance_due/status below still run against
+    whatever `invoice.total` already holds -- only the
+    subtotal/tax_total/total RE-DERIVATION is skipped, not the
+    settlement-driven state machine.
+
+    Round-4 correction: the flag is CONSUMED on this first use (popped from
+    `invoice.metadata_` in the `elif` branch below), not left as a permanent
+    property of the invoice. Left permanent, it would silently freeze totals
+    re-derivation forever for every FUTURE, unrelated caller that ever
+    touches this invoice's lines again (a discount edit, a usage adjustment,
+    a remediation script) -- exactly the kind of latent, non-obvious
+    behavior change a generic, widely-called function like this must not
+    carry indefinitely for one caller's one-time need.
+    """
     # Serialize concurrent recalculation of the same invoice. The summary
     # fields written below (subtotal/tax_total/total/balance_due/status) are
     # denormalized from SUM() aggregates over lines, payment allocations and
@@ -492,93 +516,110 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     # PostgreSQL; a harmless no-op on SQLite (tests) and for a not-yet-flushed
     # new invoice (which has no concurrency).
     lock_for_update(db, Invoice, invoice.id)
-    lines = (
-        db.query(InvoiceLine)
-        .filter(InvoiceLine.invoice_id == invoice.id)
-        .filter(InvoiceLine.is_active.is_(True))
-        .all()
+    totals_authoritative = isinstance(invoice.metadata_, dict) and bool(
+        invoice.metadata_.get("renewal_totals_authoritative")
     )
-    if not lines:
-        total_lines = (
-            db.query(func.count(InvoiceLine.id))
+    if not totals_authoritative:
+        lines = (
+            db.query(InvoiceLine)
             .filter(InvoiceLine.invoice_id == invoice.id)
-            .scalar()
+            .filter(InvoiceLine.is_active.is_(True))
+            .all()
         )
-        if total_lines == 0:
-            subtotal = round_money(to_decimal(invoice.subtotal))
-            tax_total = round_money(to_decimal(invoice.tax_total))
+        if not lines:
+            total_lines = (
+                db.query(func.count(InvoiceLine.id))
+                .filter(InvoiceLine.invoice_id == invoice.id)
+                .scalar()
+            )
+            if total_lines == 0:
+                subtotal = round_money(to_decimal(invoice.subtotal))
+                tax_total = round_money(to_decimal(invoice.tax_total))
+                discount_amount = round_money(
+                    to_decimal(getattr(invoice, "discount_amount", Decimal("0.00")))
+                )
+                if discount_amount > 0:
+                    discounted_subtotal = max(
+                        Decimal("0.00"), subtotal - discount_amount
+                    )
+                    total = round_money(discounted_subtotal + tax_total)
+                else:
+                    # Legacy and externally-created Invoices may carry an explicit
+                    # total without line rows or a populated subtotal. Preserve that
+                    # authoritative amount when there is no discount to reprice.
+                    total = round_money(
+                        to_decimal(invoice.total, default=subtotal + tax_total)
+                    )
+                invoice.subtotal = subtotal
+                invoice.tax_total = tax_total
+                invoice.total = total
+            else:
+                invoice.subtotal = Decimal("0.00")
+                invoice.tax_total = Decimal("0.00")
+                invoice.total = Decimal("0.00")
+        else:
+            # Pre-fetch all tax rates used by lines to avoid N+1 queries
+            tax_rate_ids = {line.tax_rate_id for line in lines if line.tax_rate_id}
+            tax_rates_map = {}
+            if tax_rate_ids:
+                tax_rates = db.query(TaxRate).filter(TaxRate.id.in_(tax_rate_ids)).all()
+                tax_rates_map = {rate.id: rate for rate in tax_rates}
+
+            subtotal = Decimal("0.00")
+            tax_total = Decimal("0.00")
+            for line in lines:
+                amount = round_money(line.amount)
+                if line.tax_rate_id:
+                    rate = tax_rates_map.get(line.tax_rate_id)
+                    if rate:
+                        rate_percent = to_decimal(rate.rate)
+                        if line.tax_application == TaxApplication.inclusive:
+                            # Inclusive: amount already contains tax — extract it so
+                            # the gross stays the customer-facing total
+                            # (subtotal + tax == gross). Mirrors the credit-note path.
+                            tax_amount = _calculate_tax_amount(
+                                amount, rate_percent, line.tax_application
+                            )
+                            subtotal += round_money(amount - tax_amount)
+                            tax_total += tax_amount
+                        elif line.tax_application == TaxApplication.exempt:
+                            subtotal += amount
+                        else:
+                            # Exclusive: tax is added on top
+                            tax_amount = _calculate_tax_amount(
+                                amount, rate_percent, line.tax_application
+                            )
+                            subtotal += amount
+                            tax_total += tax_amount
+                    else:
+                        subtotal += amount
+                else:
+                    subtotal += amount
+            subtotal = round_money(subtotal)
+            tax_total = round_money(tax_total)
             discount_amount = round_money(
                 to_decimal(getattr(invoice, "discount_amount", Decimal("0.00")))
             )
-            if discount_amount > 0:
-                discounted_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
-                total = round_money(discounted_subtotal + tax_total)
-            else:
-                # Legacy and externally-created Invoices may carry an explicit
-                # total without line rows or a populated subtotal. Preserve that
-                # authoritative amount when there is no discount to reprice.
-                total = round_money(
-                    to_decimal(invoice.total, default=subtotal + tax_total)
-                )
+            discounted_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
+            if discount_amount > 0 and subtotal > 0:
+                # An Invoice discount is applied to the net subtotal before tax.
+                # Proportional allocation across the active lines makes mixed tax
+                # rates deterministic without rewriting the immutable line facts.
+                tax_total = round_money(tax_total * discounted_subtotal / subtotal)
             invoice.subtotal = subtotal
             invoice.tax_total = tax_total
-            invoice.total = total
-        else:
-            invoice.subtotal = Decimal("0.00")
-            invoice.tax_total = Decimal("0.00")
-            invoice.total = Decimal("0.00")
-    else:
-        # Pre-fetch all tax rates used by lines to avoid N+1 queries
-        tax_rate_ids = {line.tax_rate_id for line in lines if line.tax_rate_id}
-        tax_rates_map = {}
-        if tax_rate_ids:
-            tax_rates = db.query(TaxRate).filter(TaxRate.id.in_(tax_rate_ids)).all()
-            tax_rates_map = {rate.id: rate for rate in tax_rates}
-
-        subtotal = Decimal("0.00")
-        tax_total = Decimal("0.00")
-        for line in lines:
-            amount = round_money(line.amount)
-            if line.tax_rate_id:
-                rate = tax_rates_map.get(line.tax_rate_id)
-                if rate:
-                    rate_percent = to_decimal(rate.rate)
-                    if line.tax_application == TaxApplication.inclusive:
-                        # Inclusive: amount already contains tax — extract it so
-                        # the gross stays the customer-facing total
-                        # (subtotal + tax == gross). Mirrors the credit-note path.
-                        tax_amount = _calculate_tax_amount(
-                            amount, rate_percent, line.tax_application
-                        )
-                        subtotal += round_money(amount - tax_amount)
-                        tax_total += tax_amount
-                    elif line.tax_application == TaxApplication.exempt:
-                        subtotal += amount
-                    else:
-                        # Exclusive: tax is added on top
-                        tax_amount = _calculate_tax_amount(
-                            amount, rate_percent, line.tax_application
-                        )
-                        subtotal += amount
-                        tax_total += tax_amount
-                else:
-                    subtotal += amount
-            else:
-                subtotal += amount
-        subtotal = round_money(subtotal)
-        tax_total = round_money(tax_total)
-        discount_amount = round_money(
-            to_decimal(getattr(invoice, "discount_amount", Decimal("0.00")))
-        )
-        discounted_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
-        if discount_amount > 0 and subtotal > 0:
-            # An Invoice discount is applied to the net subtotal before tax.
-            # Proportional allocation across the active lines makes mixed tax
-            # rates deterministic without rewriting the immutable line facts.
-            tax_total = round_money(tax_total * discounted_subtotal / subtotal)
-        invoice.subtotal = subtotal
-        invoice.tax_total = tax_total
-        invoice.total = round_money(discounted_subtotal + tax_total)
+            invoice.total = round_money(discounted_subtotal + tax_total)
+    elif isinstance(invoice.metadata_, dict):
+        # Consume the flag on first use rather than freezing this invoice's
+        # totals-recompute behavior forever. This is the settlement-moment
+        # skip the renewal owner needs, not a permanent opt-out: a LATER,
+        # genuinely different caller (a discount edit, a usage adjustment, a
+        # remediation script touching this invoice's lines) must get normal
+        # recompute behavior, not silently stale totals while balance_due
+        # still moves underneath them.
+        remaining_metadata = dict(invoice.metadata_)
+        remaining_metadata.pop("renewal_totals_authoritative", None)
+        invoice.metadata_ = remaining_metadata
 
     settlement = resolve_invoice_settlement_amounts(db, invoice.id)
     # Void and written_off are terminal: never recompute their balance or

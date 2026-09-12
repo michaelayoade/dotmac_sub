@@ -1094,7 +1094,27 @@ def _reanchor_paid_prepaid_invoice_if_lapsed(
     period after they have already been suspended or otherwise lapsed. When a
     payment fully settles that renewal invoice, move the covered period to the
     payment date and advance the subscription from there.
+
+    A document owner that has ALREADY computed this invoice's period as
+    authoritative (``invoice.metadata_["renewal_period_authoritative"]`` —
+    set by ``financial.prepaid_service_renewals`` on a canonical renewal
+    invoice it constructs itself, in the same transaction that settles it)
+    skips this re-derivation entirely. This is a structural fix, not a
+    coincidence: before it existed, this function and the renewal owner each
+    independently computed "what period does this payment cover" from
+    ``resolve_prepaid_settlement_period``, and those two computations could
+    disagree whenever the payment this function locates via
+    ``_latest_successful_invoice_payment`` differs from the payment/event
+    that actually triggered the renewal (a real possibility whenever an
+    account has more than one available payment-backed credit source) — see
+    the funding-consequence single-owner decision record. One formula
+    computing a fact and a second formula silently overwriting it is exactly
+    the class of defect this guard removes.
     """
+    if isinstance(invoice.metadata_, dict) and invoice.metadata_.get(
+        "renewal_period_authoritative"
+    ):
+        return False
     if invoice.status != InvoiceStatus.paid:
         return False
     if invoice.billing_period_start is None or invoice.billing_period_end is None:

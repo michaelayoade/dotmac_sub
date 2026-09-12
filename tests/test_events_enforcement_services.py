@@ -266,6 +266,81 @@ class TestEventDispatcher:
         # h2 should still be called
         h2.handle.assert_called_once_with(mock_db, event)
 
+    def test_dispatch_default_failure_stays_retryable_and_unalerted(self, db_session):
+        """An unmarked exception keeps today's behavior: no permanent alert."""
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.transient_failure", message="transient"
+        )
+        handler.__class__.__name__ = "TransientHandler"
+        dispatcher.register_handler(handler)
+
+        event = Event(event_type=EventType.subscriber_created, payload={})
+        mock_db = MagicMock()
+
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            dispatcher.dispatch(mock_db, event)
+
+        alert.assert_not_called()
+
+    def test_dispatch_permanent_failure_is_recorded_and_alerted(self, db_session):
+        """A `.retryable = False` failure is classified permanent and made
+        visible via a durable review item, not just a log line."""
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.permanent_failure",
+            message="permanent",
+            retryable=False,
+        )
+        handler.__class__.__name__ = "PermanentHandler"
+        dispatcher.register_handler(handler)
+
+        event = Event(event_type=EventType.subscriber_created, payload={})
+        mock_db = MagicMock()
+
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            dispatcher.dispatch(mock_db, event)
+
+        alert.assert_called_once()
+        _, kwargs = alert.call_args
+        assert kwargs["handler_name"] == "PermanentHandler"
+        assert kwargs["event"] is event
+
+    def test_record_permanent_handler_failure_queues_a_review_request(self):
+        """The permanent-failure alert reuses the generic durable review-queue
+        primitive, not a one-off logging-only mechanism."""
+        from app.services.events.dispatcher import _record_permanent_handler_failure
+
+        mock_db = MagicMock()
+        event = Event(event_type=EventType.payment_received, payload={})
+
+        with patch(
+            "app.services.staff_notifications.queue_permission_review_request"
+        ) as queue:
+            _record_permanent_handler_failure(
+                mock_db,
+                event=event,
+                handler_name="PrepaidRenewalHandler",
+                exc=RuntimeError("boom"),
+            )
+
+        queue.assert_called_once()
+        _, kwargs = queue.call_args
+        assert kwargs["fingerprint"] == (
+            f"event-handler-permanent-failure:{event.event_id}:PrepaidRenewalHandler"
+        )
+        assert kwargs["category"] == "operations"
+
     def test_dispatch_persists_event_record(self, db_session):
         dispatcher = EventDispatcher()
         event = Event(

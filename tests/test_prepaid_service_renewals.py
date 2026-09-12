@@ -351,12 +351,40 @@ def _add_due_account_without_baseline(db_session, subscriber, subscription):
     return account, due_subscription
 
 
+def test_scheduled_owner_requires_an_active_owner_command(
+    db_session, subscriber, subscription
+):
+    """`run_due_prepaid_service_renewals` is an internal function, never the
+    production entry point on its own -- nightly per-account isolation
+    (`execute_owner_savepoint`) requires an active owner command, which only
+    exists via `execute_due_prepaid_service_renewals`. This is a deliberate,
+    tested invariant of the owner-command boundary, not just something the
+    3 fixed fixtures below happen to satisfy.
+    """
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+
+    with pytest.raises(
+        RuntimeError, match="Owner savepoints require an active owner command"
+    ):
+        run_due_prepaid_service_renewals(
+            db_session,
+            run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        )
+
+
 def test_scheduled_owner_funds_current_due_cycle(db_session, subscriber, subscription):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (`execute_due_prepaid_
+    # service_renewals` -> `execute_owner_command`), not the bare function:
+    # nightly per-account isolation depends on an active owner command
+    # (`execute_owner_savepoint` requires one), which only exists here.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-funds-current-due-cycle",
+        ),
     )
     db_session.commit()
 
@@ -521,9 +549,12 @@ def test_scheduled_owner_skips_quarantine_and_funds_verified_account(
         db_session, subscriber, subscription
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-skips-quarantine",
+        ),
     )
     db_session.commit()
 
@@ -635,9 +666,12 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
         lambda *_args, **_kwargs: None,
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-restores-lock",
+        ),
     )
     db_session.commit()
 
