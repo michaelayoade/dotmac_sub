@@ -1548,14 +1548,11 @@ def _expense_request_views(
     payment_deliveries = get_expense_payment_deliveries(
         db, [request.id for request in requests]
     )
+    requester_user_ids = _expense_requester_system_user_ids(db, requests)
     requester_identities = resolve_staff_display_identities(
         db,
         query=StaffDisplayIdentityQuery(
-            user_ids=frozenset(
-                request.requested_by_system_user_id
-                for request in requests
-                if request.requested_by_system_user_id is not None
-            )
+            user_ids=frozenset(requester_user_ids.values())
         ),
     )
     requester_names = {
@@ -1565,12 +1562,81 @@ def _expense_request_views(
     return tuple(
         _expense_request_view(
             request,
-            requested_by_name=requester_names.get(request.requested_by_system_user_id),
+            requested_by_name=requester_names.get(requester_user_ids.get(request.id)),
             delivery=deliveries.get(request.id),
             payment_delivery=payment_deliveries.get(request.id),
         )
         for request in requests
     )
+
+
+def _expense_requester_system_user_ids(
+    db: Session, requests: list[FieldExpenseRequest]
+) -> dict[UUID, UUID]:
+    """Resolve only exact persisted requester bridges for display projection."""
+
+    resolved = {
+        request.id: request.requested_by_system_user_id
+        for request in requests
+        if request.requested_by_system_user_id is not None
+    }
+    unresolved = [request for request in requests if request.id not in resolved]
+    technician_ids = {
+        request.requested_by_technician_id
+        for request in unresolved
+        if request.requested_by_technician_id is not None
+    }
+    technician_users = (
+        dict(
+            db.execute(
+                select(TechnicianProfile.id, TechnicianProfile.system_user_id).where(
+                    TechnicianProfile.id.in_(technician_ids),
+                    TechnicianProfile.system_user_id.is_not(None),
+                )
+            ).all()
+        )
+        if technician_ids
+        else {}
+    )
+    for request in unresolved:
+        system_user_id = technician_users.get(request.requested_by_technician_id)
+        if system_user_id is not None:
+            resolved[request.id] = system_user_id
+
+    unresolved = [request for request in unresolved if request.id not in resolved]
+    person_ids = {request.requested_by_person_id for request in unresolved}
+    if not person_ids:
+        return resolved
+    person_candidates: dict[UUID, set[UUID]] = {
+        person_id: set() for person_id in person_ids
+    }
+    staff_rows = db.execute(
+        select(SystemUser.id, SystemUser.person_party_id).where(
+            or_(
+                SystemUser.id.in_(person_ids),
+                SystemUser.person_party_id.in_(person_ids),
+            )
+        )
+    ).all()
+    for system_user_id, person_party_id in staff_rows:
+        if system_user_id in person_candidates:
+            person_candidates[system_user_id].add(system_user_id)
+        if person_party_id in person_candidates:
+            person_candidates[person_party_id].add(system_user_id)
+    profile_rows = db.execute(
+        select(TechnicianProfile.person_id, TechnicianProfile.system_user_id).where(
+            TechnicianProfile.person_id.in_(person_ids),
+            TechnicianProfile.system_user_id.is_not(None),
+        )
+    ).all()
+    for person_id, system_user_id in profile_rows:
+        if system_user_id is not None:
+            person_candidates[person_id].add(system_user_id)
+    for request in unresolved:
+        candidates = person_candidates[request.requested_by_person_id]
+        if len(candidates) == 1:
+            resolved[request.id] = next(iter(candidates))
+    return resolved
 
 
 def list_expense_vendors(
@@ -1610,16 +1676,22 @@ def _requester_identity(db: Session, system_user_id: UUID) -> _ExpenseRequesterI
             if value is not None
         )
     )
-    technician_profile_ids = tuple(
+    technician_profiles = tuple(
         db.execute(
-            select(TechnicianProfile.id).where(
+            select(TechnicianProfile.id, TechnicianProfile.person_id).where(
                 or_(
                     TechnicianProfile.system_user_id == system_user.id,
                     TechnicianProfile.person_id.in_(person_ids),
                 )
             )
-        ).scalars()
+        ).all()
     )
+    person_ids = tuple(
+        dict.fromkeys(
+            (*person_ids, *(person_id for _, person_id in technician_profiles))
+        )
+    )
+    technician_profile_ids = tuple(profile_id for profile_id, _ in technician_profiles)
     return _ExpenseRequesterIdentity(
         system_user_id=system_user.id,
         person_ids=person_ids,
@@ -1760,15 +1832,22 @@ class FieldExpenseRequests:
     def get(
         db: Session, principal: dict[str, Any], expense_request_id: str | UUID
     ) -> dict:
-        return _legacy_expense_request_view(
-            get_requester_expense_request(
-                db,
-                RequesterExpenseDetailQuery(
-                    system_user_id=_principal_system_user_id(principal),
-                    request_id=_expense_request_uuid(expense_request_id),
-                ),
+        try:
+            return _legacy_expense_request_view(
+                get_requester_expense_request(
+                    db,
+                    RequesterExpenseDetailQuery(
+                        system_user_id=_principal_system_user_id(principal),
+                        request_id=_expense_request_uuid(expense_request_id),
+                    ),
+                )
             )
-        )
+        except FieldExpenseRequestError as exc:
+            if exc.code == "operations.expense_requests.request_not_found":
+                raise HTTPException(
+                    status_code=404, detail="Expense request not found"
+                ) from exc
+            raise
 
     @staticmethod
     def list_all(

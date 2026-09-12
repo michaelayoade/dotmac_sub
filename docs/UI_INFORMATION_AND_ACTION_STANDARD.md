@@ -704,7 +704,10 @@ implementation.
 - Manager approval list: every expense card labels `Raised by` from the
   owner-supplied staff display identity. Missing historical identity is rendered
   as unavailable and is never inferred from current assignment. The manager
-  bottom navigation omits the Materials destination.
+  bottom navigation omits the Materials destination. While manager capability
+  is unresolved or unavailable, navigation also omits Materials, and a manager
+  restored onto that branch receives manager content rather than the material
+  list.
 
 ## Field Work-Order Note Contract
 

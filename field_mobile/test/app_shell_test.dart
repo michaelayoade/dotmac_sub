@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dotmac_field/app/app.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/location/map_coordinates.dart';
@@ -99,6 +101,7 @@ Widget _app({
   LocationPingService? locationPingService,
   AuthController Function() controller = _AuthedController.new,
   ManagerProfile? managerProfile,
+  Future<ManagerProfile?> Function()? managerProfileLoader,
   List<ManagerJob> managerJobs = const [],
   Future<JobList> Function()? jobsLoader,
   AttendanceRepositoryContract? attendanceRepository,
@@ -120,7 +123,9 @@ Widget _app({
           attendanceLocationSource ?? _ReadyAttendanceLocation(),
         ),
         ...extra,
-        managerProfileProvider.overrideWith((ref) async => managerProfile),
+        managerProfileProvider.overrideWith(
+          (ref) => managerProfileLoader?.call() ?? Future.value(managerProfile),
+        ),
         managerSummaryProvider.overrideWith(
           (ref) async => const ManagerSummary(
             techniciansTotal: 3,
@@ -332,6 +337,58 @@ void main() {
 
     expect(find.text('My expense requests (1)'), findsOneWidget);
     expect(find.text('Manager site transport'), findsOneWidget);
+  });
+
+  testWidgets('manager-hidden materials stay absent while capability loads', (
+    tester,
+  ) async {
+    final profile = Completer<ManagerProfile?>();
+    await tester.pumpWidget(_app(managerProfileLoader: () => profile.future));
+    await tester.pump();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Materials'), findsNothing);
+
+    profile.complete(
+      const ManagerProfile(
+        name: 'Manager',
+        roles: ['field_manager'],
+        permissions: ['operations:expense_request:read'],
+        isManager: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Operations dashboard'), findsOneWidget);
+    expect(find.text('Materials'), findsNothing);
+  });
+
+  testWidgets('manager cannot remain on the technician materials branch', (
+    tester,
+  ) async {
+    ManagerProfile? profile;
+    await tester.pumpWidget(_app(managerProfileLoader: () async => profile));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Materials'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.widgetWithText(AppBar, 'Materials'), findsOneWidget);
+
+    profile = const ManagerProfile(
+      name: 'Manager',
+      roles: ['field_manager'],
+      permissions: ['operations:expense_request:read'],
+      isManager: true,
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(NavigationBar)),
+    );
+    container.invalidate(managerProfileProvider);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Operations dashboard'), findsOneWidget);
+    expect(find.text('Materials'), findsNothing);
   });
 
   testWidgets('manager shell hides team map without dispatch read', (

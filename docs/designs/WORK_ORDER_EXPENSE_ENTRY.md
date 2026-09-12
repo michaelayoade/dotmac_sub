@@ -130,9 +130,10 @@ other field technician; manager capability never hides personal history.
 The manager approval list uses a typed owner query and labels every card
 `Raised by` with the requester display identity resolved by
 `auth.staff_provisioning`. A historical row without exact SystemUser identity
-is labelled unavailable; the client never infers a requester from the current
-work-order assignment. The manager navigation does not expose the Materials
-destination.
+is resolved only when its persisted technician or Person link yields one exact
+SystemUser; otherwise it is labelled unavailable. The client never infers a
+requester from the current work-order assignment. The manager navigation does
+not expose the Materials destination.
 
 ## Schema change
 

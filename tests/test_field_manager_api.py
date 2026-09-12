@@ -17,6 +17,7 @@ from app.models.field_erp_sync import (
     SyncFlowOwner,
     SyncFlowOwnership,
 )
+from app.models.field_expense import FieldExpenseRequest
 from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
@@ -386,6 +387,16 @@ def test_manager_expense_approve_and_reject(db_session):
     )
     first = _expense(db_session, tech_user, profile, work_order)
     second = _expense(db_session, tech_user, profile, work_order)
+    legacy_first = db_session.get(FieldExpenseRequest, first["id"])
+    assert legacy_first is not None
+    legacy_first.requested_by_system_user_id = None
+    legacy_second = db_session.get(FieldExpenseRequest, second["id"])
+    assert legacy_second is not None
+    legacy_person_id = uuid4()
+    profile.person_id = legacy_person_id
+    legacy_second.requested_by_person_id = legacy_person_id
+    legacy_second.requested_by_system_user_id = None
+    legacy_second.requested_by_technician_id = None
     _enable_expense_flow(db_session)
     db_session.commit()
 
