@@ -453,6 +453,48 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     assert correction_replay.correction_id == correction.correction_id
     assert db_session.query(CustomerSubledgerOpeningCorrection).count() == 1
 
+    # The replacement opening value must also be used when a renewal consumes
+    # more opening funding than the immutable, incorrect value could cover.
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("5000.00"))
+    corrected_subscription_id = subscription.id
+    corrected_period_start = cutoff + timedelta(days=1)
+    corrected_period_end = cutoff + timedelta(days=32)
+    corrected_renewal_preview = preview_prepaid_service_renewal(
+        db_session,
+        subscription_id=corrected_subscription_id,
+        starts_at=corrected_period_start,
+        ends_at=corrected_period_end,
+        amount=Decimal("5000.00"),
+    )
+    assert corrected_renewal_preview.allowed is True
+    assert corrected_renewal_preview.funding_before == Decimal("5562.50")
+    db_session.commit()
+    corrected_renewal = execute_reviewed_prepaid_service_renewal(
+        db_session,
+        ExecuteReviewedPrepaidServiceRenewalCommand(
+            context=_context("operator:pytest", "renew-from-corrected-opening"),
+            subscription_id=corrected_subscription_id,
+            starts_at=corrected_period_start,
+            ends_at=corrected_period_end,
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            expected_preview_fingerprint=corrected_renewal_preview.fingerprint,
+            evidence_ref="finance-review:pytest-corrected-opening-renewal",
+        ),
+    )
+    assert corrected_renewal.renewal.preview.funding_after == Decimal("562.50")
+    corrected_consumption = (
+        db_session.query(PrepaidOpeningFundingConsumption)
+        .filter(PrepaidOpeningFundingConsumption.opening_position_id == opening.id)
+        .one()
+    )
+    assert corrected_consumption.amount == Decimal("2000.00")
+    assert (
+        corrected_consumption.approval_evidence_ref
+        == "finance-review:pytest-opening-correction"
+    )
+    assert corrected_consumption.approval_actor == "finance:pytest"
+
     db_session.commit()
     replay = _capture(db_session, preview, key="opening-capture-1")
     assert replay.replayed is True
@@ -759,7 +801,13 @@ def test_approved_residual_closes_position_without_double_counting_forward_fact(
     assert invoice.subtotal == Decimal("17500.00")
     assert invoice.tax_total == Decimal("1312.50")
     assert invoice.total == Decimal("18812.50")
-    consumption = db_session.query(PrepaidOpeningFundingConsumption).one()
+    consumption = (
+        db_session.query(PrepaidOpeningFundingConsumption)
+        .filter(
+            PrepaidOpeningFundingConsumption.opening_position_id == migrated_opening.id
+        )
+        .one()
+    )
     assert consumption.baseline_id is None
     assert consumption.opening_position_id == migrated_opening.id
     assert consumption.amount == Decimal("10334.75")

@@ -79,6 +79,7 @@ from app.models.customer_subledger import (
     CustomerPositionEffect,
     CustomerPostingGroup,
     CustomerSubledgerAuthorityCutover,
+    CustomerSubledgerOpeningCorrection,
     CustomerSubledgerOpeningPosition,
     PositionEffectKind,
     PostingCommandKind,
@@ -711,6 +712,49 @@ def _funding_preview(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ReviewedOpeningSource:
+    amount: Decimal
+    approval_evidence_ref: str
+    approval_actor: str
+
+
+def _reviewed_opening_source(
+    db: Session,
+    opening: CustomerSubledgerOpeningPosition,
+) -> _ReviewedOpeningSource:
+    """Resolve the latest reviewed replacement value for one immutable opening."""
+
+    corrections = tuple(
+        db.scalars(
+            select(CustomerSubledgerOpeningCorrection)
+            .where(CustomerSubledgerOpeningCorrection.opening_position_id == opening.id)
+            .order_by(
+                CustomerSubledgerOpeningCorrection.occurred_at,
+                CustomerSubledgerOpeningCorrection.created_at,
+                CustomerSubledgerOpeningCorrection.id,
+            )
+        ).all()
+    )
+    amount = round_money(
+        Decimal(opening.legacy_position)
+        + sum(
+            (Decimal(correction.delta) for correction in corrections),
+            Decimal("0.00"),
+        )
+    )
+    latest = corrections[-1] if corrections else None
+    return _ReviewedOpeningSource(
+        amount=amount,
+        approval_evidence_ref=(
+            latest.review_reference if latest is not None else opening.review_reference
+        ),
+        approval_actor=(
+            latest.applied_by if latest is not None else opening.captured_by
+        ),
+    )
+
+
 def _reviewed_opening_funding_preview(
     db: Session,
     *,
@@ -761,14 +805,15 @@ def _reviewed_opening_funding_preview(
     consumed_filter: ColumnElement[bool] = PrepaidOpeningFundingConsumption.id.is_(None)
     approval_evidence_ref: str | None = None
     approval_actor: str | None = None
-    if opening is not None and opening.legacy_position > Decimal("0.00"):
+    opening_source = _reviewed_opening_source(db, opening) if opening else None
+    if opening is not None and opening_source is not None and opening_source.amount > 0:
         source_opening_id = opening.id
-        source_amount = round_money(to_decimal(opening.legacy_position))
+        source_amount = opening_source.amount
         consumed_filter = (
             PrepaidOpeningFundingConsumption.opening_position_id == opening.id
         )
-        approval_evidence_ref = opening.review_reference
-        approval_actor = opening.captured_by
+        approval_evidence_ref = opening_source.approval_evidence_ref
+        approval_actor = opening_source.approval_actor
     elif baseline is not None and baseline.amount > Decimal("0.00"):
         source_baseline_id = baseline.id
         source_amount = round_money(to_decimal(baseline.amount))
@@ -2935,12 +2980,13 @@ def _stage_opening_funding_consumption(
                 "opening_funding_changed",
                 "Reviewed opening funding changed after preview; preview again.",
             )
-        source_amount = round_money(to_decimal(opening.legacy_position))
+        opening_source = _reviewed_opening_source(db, opening)
+        source_amount = opening_source.amount
         consumed_filter = (
             PrepaidOpeningFundingConsumption.opening_position_id == opening.id
         )
-        approval_evidence_ref = opening.review_reference
-        approval_actor = opening.captured_by
+        approval_evidence_ref = opening_source.approval_evidence_ref
+        approval_actor = opening_source.approval_actor
     else:
         assert baseline_id is not None
         baseline = db.scalar(
