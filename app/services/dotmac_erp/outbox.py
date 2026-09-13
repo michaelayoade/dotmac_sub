@@ -436,13 +436,13 @@ def _deliver_typed_expense_event(
             raise DotMacERPError("ERP did not accept expense rejection")
         return response
     if action == "initiate_payment":
-        command = ErpExpensePaymentCommand.model_validate(
+        payment_command = ErpExpensePaymentCommand.model_validate(
             {"source_claim_id": row.entity_id, **_transport_payload(row)}
         )
-        outcome = client.initiate_expense_payment(
-            command, idempotency_key=row.idempotency_key
+        payment_outcome = client.initiate_expense_payment(
+            payment_command, idempotency_key=row.idempotency_key
         )
-        return _transition_outcome_dict(outcome)
+        return _transition_outcome_dict(payment_outcome)
     raise DotMacERPError("Unsupported typed expense event")
 
 

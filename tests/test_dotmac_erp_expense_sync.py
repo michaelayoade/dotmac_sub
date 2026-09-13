@@ -1271,6 +1271,9 @@ def test_payment_delivery_uses_typed_capability_and_writes_erp_projection(db_ses
     manager = _user(db_session, "PaymentDeliveryManager")
     command_id = uuid4()
     payment_intent_id = uuid4()
+    expense_request_id = request.id
+    manager_id = manager.id
+    manager_email = manager.email
     db_session.commit()
 
     db_session_adapter.release_read_transaction(db_session)
@@ -1280,13 +1283,13 @@ def test_payment_delivery_uses_typed_capability_and_writes_erp_projection(db_ses
             context=CommandContext(
                 command_id=command_id,
                 correlation_id=command_id,
-                actor=f"user:{manager.id}",
+                actor=f"user:{manager_id}",
                 scope="operations:expense_request:pay",
-                reason=f"pay_expense_request:{request.id}",
+                reason=f"pay_expense_request:{expense_request_id}",
                 idempotency_key=str(command_id),
             ),
-            expense_request_id=request.id,
-            manager_system_user_id=manager.id,
+            expense_request_id=expense_request_id,
+            manager_system_user_id=manager_id,
         ),
     )
     client = _TypedOnlyPaymentERPClient(
@@ -1312,14 +1315,16 @@ def test_payment_delivery_uses_typed_capability_and_writes_erp_projection(db_ses
     assert result.accepted == 3
     assert payment.status == FieldErpSyncStatus.accepted.value
     assert payment_post["path"] == (
-        f"/api/v1/sync/sub/expense-claims/{request.id}/payments"
+        f"/api/v1/sync/sub/expense-claims/{expense_request_id}/payments"
     )
     assert payment_post["payload"] == {
         "command_id": str(command_id),
-        "initiated_by_email": manager.email,
+        "initiated_by_email": manager_email,
         "initiated_at": payment.payload["initiated_at"],
     }
-    assert payment_post["idempotency_key"] == (f"exp-{request.id}-pay-{command_id}-v1")
+    assert payment_post["idempotency_key"] == (
+        f"exp-{expense_request_id}-pay-{command_id}-v1"
+    )
     assert request.metadata_["erp_payment"]["status"] == "processing"
     assert request.metadata_["erp_payment"]["intent_id"] == str(payment_intent_id)
 
