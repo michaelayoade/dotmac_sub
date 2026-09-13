@@ -90,15 +90,18 @@ class AccountRecoveryState(str, enum.Enum):
     ``open`` -> ``blocked`` (attempted, found an unsupported participant,
     no mutation happened) is legal and repeatable. ``open``/``blocked`` ->
     ``restored`` is the only mutating transition this owner performs
-    directly. ``rebaselined`` is a distinct, reviewed correction of the
-    generation's own evidence (see `rebaseline_recovery_evidence`) and does
-    not imply restoration.
+    directly. Re-baselining (see `rebaseline_recovery_evidence`) is a
+    reviewed correction of a generation's own evidence — it never moves the
+    record out of ``open``/``blocked``, so a re-baselined generation stays
+    restorable; it is recorded via ``rebaselined_at``/``rebaselined_by``/
+    ``rebaseline_reason`` instead of a separate terminal state. A generation
+    that is re-baselined but never restored stays ``open`` or ``blocked``
+    forever, exactly like one that was never re-baselined.
     """
 
     open = "open"
     blocked = "blocked"
     restored = "restored"
-    rebaselined = "rebaselined"
 
 
 class AccountRecoveryRecord(Base):
@@ -129,10 +132,9 @@ class AccountRecoveryRecord(Base):
             ),
         ),
         CheckConstraint(
-            "(state = 'open' AND restored_at IS NULL AND rebaselined_at IS NULL) OR "
+            "(state = 'open' AND restored_at IS NULL) OR "
             "(state = 'blocked' AND restored_at IS NULL) OR "
-            "(state = 'restored' AND restored_at IS NOT NULL) OR "
-            "(state = 'rebaselined' AND rebaselined_at IS NOT NULL)",
+            "(state = 'restored' AND restored_at IS NOT NULL)",
             name="ck_account_recovery_state_timestamps",
         ),
     )

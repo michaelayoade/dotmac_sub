@@ -60,9 +60,7 @@ DECLARED_METADATA_KEYS: Final[dict[str, str]] = {
     # `account_deletion.py`'s self-service soft-delete stamp is a SEPARATE,
     # still-active lineage: customer-initiated deletion is never recoverable
     # (no AccountRecoveryRecord is created for it), so it is out of
-    # customer.account_recovery's scope. It still has no typed home; the
-    # aspirational `customer.account_lifecycle` name used in an earlier
-    # draft of this registry never existed as a registered SOT owner.
+    # customer.account_recovery's scope. It still has no typed home.
     "account_deletion_requested_at": "customer.accounts (typed column pending)",
     "account_deletion_reason": "customer.accounts (typed column pending)",
     # --- service restriction ---------------------------------------------
