@@ -1195,7 +1195,7 @@ def team_inbox_contact_context(
 @router.get(
     "/{conversation_id}/customer-link-options",
     response_model=ListResponse[InboxCustomerLinkOptionRead],
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def team_inbox_customer_link_options(
     conversation_id: UUID,
