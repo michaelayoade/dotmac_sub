@@ -507,6 +507,32 @@ class OfferPrices(CRUDManager[OfferPrice]):
         db.commit()
 
 
+def _assert_offer_version_identity_immutable(update_payload: dict) -> None:
+    """Fail closed if any update path ever carries ``offer_id`` or
+    ``version_number``.
+
+    ``(offer_id, version_number)`` is this row's immutable identity, enforced
+    at admission by ``offer_access_requirement.admit_offer_version``'s
+    advisory lock, existence check, and DB-level unique constraint
+    (``uq_offer_versions_offer_id_version_number``). ``OfferVersionUpdate``
+    deliberately has neither field, so this should be unreachable in
+    practice — defense in depth, matching
+    ``offer_access_requirement.assert_access_requirement_immutable``'s same
+    shape, against a future edit reintroducing either field on the update
+    schema with no lock/duplicate-check guarding it.
+    """
+
+    identity_fields = {"offer_id", "version_number"} & set(update_payload)
+    if identity_fields:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "offer_versions.offer_id and .version_number are immutable "
+                f"outside admission; got: {sorted(identity_fields)}"
+            ),
+        )
+
+
 class OfferVersions(CRUDManager[OfferVersion]):
     model = OfferVersion
     not_found_detail = "Offer version not found"
@@ -520,12 +546,20 @@ class OfferVersions(CRUDManager[OfferVersion]):
         *,
         actor_id: str | None = None,
         actor_type: str | None = None,
+        idempotency_key: str | None = None,
     ):
         """Thin adapter. The actual persist, defaults resolution, and
         transaction are owned by
         ``service_intent.offer_access_requirement.admit_offer_version`` —
         this method builds the command and returns its result; it never
         constructs the ``OfferVersion`` row itself.
+
+        ``idempotency_key`` is optional: a caller that supplies one and
+        retries with the SAME key and the same request gets back the
+        original row instead of a ``duplicate_version_number`` conflict. A
+        caller that supplies none is not idempotent — a lost response or a
+        retried POST with no key is not distinguishable from a genuinely new
+        admission.
         """
         command_id = uuid4()
         version = offer_access_requirement.admit_offer_version(
@@ -541,6 +575,7 @@ class OfferVersions(CRUDManager[OfferVersion]):
                     ),
                     scope=offer_access_requirement.ADMISSION_SCOPE,
                     reason="offer version admitted via catalog API",
+                    idempotency_key=idempotency_key,
                 ),
                 payload=payload,
                 actor_id=actor_id,
@@ -592,12 +627,9 @@ class OfferVersions(CRUDManager[OfferVersion]):
             raise HTTPException(status_code=404, detail="Offer version not found")
         data = payload.model_dump(exclude_unset=True)
         offer_access_requirement.assert_access_requirement_immutable(data)
+        _assert_offer_version_identity_immutable(data)
         changes = billing_governance.billing_field_changes(version, data)
         billing_governance.assert_offer_version_update_safe(db, version, changes)
-        if "offer_id" in data:
-            offer = db.get(CatalogOffer, data["offer_id"])
-            if not offer:
-                raise HTTPException(status_code=404, detail="Offer not found")
         for key, value in data.items():
             setattr(version, key, value)
         critical_changes = billing_governance.billing_critical_changes(

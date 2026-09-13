@@ -62,6 +62,28 @@ isolation.
 - `unclassified` is never read as, defaulted to, or treated like PPPoE or any
   connection-type fallback anywhere in the codebase — see the architecture
   guard below.
+- Admission is gated by `catalog:offer_version:admission`
+  (`alembic/versions/609_offer_version_admission_permission.py`), verified
+  fresh (`_verify_admission_permission`) AFTER acquiring the per-(offer_id,
+  version_number) advisory lock, never before — the same discipline as
+  classification's re-verification immediately before its write. The route
+  itself still requires `catalog:billing_write` (unchanged); the migration
+  grants the new permission to every role that already held
+  `catalog:billing_write`, so no existing caller loses the ability to admit
+  an offer version.
+- `(offer_id, version_number)` is enforced as a real DB-level unique
+  constraint (`uq_offer_versions_offer_id_version_number`,
+  `alembic/versions/610_offer_versions_unique_version_number.py`), not only
+  by the advisory lock and pre-insert check. The pair is also immutable
+  after admission: `OfferVersionUpdate` has neither field, and
+  `OfferVersions.update` asserts this defense-in-depth, the same pattern as
+  `access_requirement`'s own exclusion below.
+- Admission accepts an optional `Idempotency-Key` header
+  (`POST /offer-versions`), recorded in the shared `idempotency_keys` ledger
+  (scope `offer_version_admission`): a retried admission that reuses the
+  same key and the same request returns the original row instead of a
+  `duplicate_version_number` conflict. A request with no header is not
+  idempotent.
 
 ## Reviewed classification command
 
@@ -111,7 +133,7 @@ this module's `ServiceContract`.
   command/correlation ids, the review reference, and the authenticated
   principal.
 
-## RBAC: real authentication, not host trust
+## RBAC: a claimed identity checked against real grants, not a free-text label
 
 `catalog:offer_access_requirement:classify` (migration
 `608_offer_access_requirement_classify_permission`) is:
@@ -125,9 +147,21 @@ this module's `ServiceContract`.
   (`scripts/catalog/classify_offer_access_requirement.py`) requires
   `--actor-system-user-id` to name an active staff principal, and the
   permission check itself runs inside
-  `offer_access_requirement._classify`, fresh, at apply time. It is not a
-  bare host-access-plus-actor-string check, and it is not a check performed
-  once ahead of time and then trusted.
+  `offer_access_requirement._classify`, fresh, at apply time.
+  `--actor-system-user-id` is the operator's CLAIMED identity, not a
+  free-text display name: it is the ONLY identity input, and it is resolved
+  against real RBAC grants, re-verified fresh inside the command's own
+  transaction, before the owner ever treats the action as authorized. **This
+  CLI does not itself verify who is really typing the command** — host or
+  container shell access to run it at all is this script's actual
+  authentication boundary, the same trust model documented in
+  `scripts/billing/correct_customer_subledger_opening.py` and its siblings.
+  What IS guaranteed: the string recorded as `classified_by`/audit
+  actor/event actor is always derived from the RBAC-verified id
+  (`principal_label`), never from an unverified claim, and a claimed id that
+  does not hold the permission (or an admin/`*` wildcard grant) is refused.
+  This is not a check performed once ahead of time and then trusted — see
+  "Permission is re-verified fresh" above.
 
 **Wildcard note (by design, not a gap):** this RBAC system already treats the
 `admin` role and the `*`/domain wildcard grants as satisfying every
