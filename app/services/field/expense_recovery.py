@@ -259,7 +259,7 @@ def _erp_payment_recovery_status(db: Session, request_id: UUID) -> Literal["appr
             code="operations.expense_requests.payment_recovery_ambiguous",
             message="ERP payment state does not permit an unambiguous recovery.",
         )
-    return claim_status
+    return "approved"
 
 
 def _preview_payment(
@@ -270,6 +270,12 @@ def _preview_payment(
 ) -> ExpensePaymentDeliveryRecoveryPreview:
     event, request = _load_recoverable_payment(db, event_id, lock=lock)
     claim_status = _erp_payment_recovery_status(db, request.id)
+    approved_at = request.approved_at
+    if approved_at is None:
+        raise ExpenseDeliveryRecoveryError(
+            code="operations.expense_requests.payment_recovery_state_invalid",
+            message="The expense approval evidence is no longer valid.",
+        )
     diagnostic = parse_diagnostic_evidence(
         (event.erp_response or {}).get(DELIVERY_DIAGNOSTIC_KEY)
     )
@@ -286,7 +292,7 @@ def _preview_payment(
         "event_updated_at": event.updated_at.isoformat(),
         "expense_request_id": str(request.id),
         "expense_updated_at": request.updated_at.isoformat(),
-        "approved_at": request.approved_at.isoformat(),
+        "approved_at": approved_at.isoformat(),
         "idempotency_key": event.idempotency_key,
         "diagnostic": {
             "code": diagnostic.code,
