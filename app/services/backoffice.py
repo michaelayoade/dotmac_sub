@@ -101,6 +101,14 @@ class BackofficeExpenseRecoveryStaging:
     replayed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class BackofficeExpensePaymentRecoveryStaging:
+    """Provider-neutral evidence for requeueing one existing payment event."""
+
+    event_id: UUID
+    idempotency_key: str
+
+
 def expense_payment_projection(
     request: FieldExpenseRequest,
 ) -> BackofficeExpensePaymentView:
@@ -599,6 +607,45 @@ def stage_expense_delivery_recovery(
         replacement_event_id=replacement.id,
         replacement_idempotency_key=replacement.idempotency_key,
         replayed=existing is not None,
+    )
+
+
+def requeue_expense_payment_delivery(
+    db: Session,
+    *,
+    dead_event_id: UUID,
+) -> BackofficeExpensePaymentRecoveryStaging:
+    """Requeue one permission-denied payment event without changing its key."""
+
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        FieldErpSyncStatus,
+    )
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense payment recovery requires the expense owner")
+    event = db.get(FieldErpSyncEvent, dead_event_id)
+    diagnostic = _delivery_diagnostic(event)
+    if (
+        event is None
+        or event.flow != FieldErpSyncFlow.expense_claim.value
+        or event.status != FieldErpSyncStatus.dead.value
+        or str((event.payload or {}).get("_expense_action")) != "initiate_payment"
+        or diagnostic is None
+        or diagnostic.code != "permission_denied"
+        or diagnostic.http_status != 403
+        or diagnostic.operation != "initiate_expense_payment"
+    ):
+        raise BackofficeUnavailableError(
+            "The expense payment delivery is no longer recoverable"
+        )
+    event.status = FieldErpSyncStatus.pending.value
+    db.flush()
+    return BackofficeExpensePaymentRecoveryStaging(
+        event_id=event.id,
+        idempotency_key=event.idempotency_key,
     )
 
 
