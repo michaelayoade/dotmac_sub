@@ -41,6 +41,8 @@ DOMAIN = DomainSOT(
             ),
             depends_on=(
                 "service_intent.catalog_policy",
+                "service_intent.catalog_billing_governance",
+                "control.settings_spec",
                 "auth.permission_gate",
                 "observability.audit_log",
                 "events.dispatcher",
@@ -130,20 +132,25 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "classify_offer_version_access_requirement enters one "
-                        "root owner transaction; admission is a single-row "
-                        "insert already atomic under the caller's existing "
-                        "offer-version creation transaction."
+                        "admit_offer_version and "
+                        "classify_offer_version_access_requirement each enter "
+                        "their own root owner transaction and perform the "
+                        "real persistence themselves — OfferVersions.create is "
+                        "a thin adapter that builds the command and returns "
+                        "the result, it does not construct the row."
                     ),
                     locking=(
                         "The reviewed command locks the exact offer version "
-                        "before comparing its reviewed fingerprint."
+                        "before comparing its reviewed fingerprint; RBAC "
+                        "permission is re-verified fresh inside that same "
+                        "transaction, never trusted from an earlier check."
                     ),
                     idempotency=(
-                        "One classification row per offer version, unique on "
-                        "idempotency key; an exact-key, exact-target replay "
-                        "returns the recorded outcome instead of "
-                        "retransitioning the row."
+                        "One classification row per offer version, globally "
+                        "unique on idempotency key; an exact-key, exact-target, "
+                        "exact-fingerprint replay returns the recorded outcome "
+                        "instead of retransitioning the row, and a key reused "
+                        "for a different version or target is a typed conflict."
                     ),
                     retries=(
                         "A stale preview fails closed and is retried only "
@@ -164,6 +171,8 @@ DOMAIN = DomainSOT(
                         "service_intent.offer_access_requirement.offer_version_not_found",
                         "service_intent.offer_access_requirement.already_classified",
                         "service_intent.offer_access_requirement.missing_idempotency_key",
+                        "service_intent.offer_access_requirement.missing_reason",
+                        "service_intent.offer_access_requirement.idempotency_conflict",
                         "service_intent.offer_access_requirement.permission_denied",
                         "service_intent.offer_access_requirement.stale_preview",
                     ),
@@ -177,8 +186,10 @@ DOMAIN = DomainSOT(
                         "a proposed target of unclassified",
                         "a stale reviewed fingerprint",
                         "a missing offer version",
-                        "a missing idempotency key",
-                        "an ungranted classify permission",
+                        "a missing idempotency key or reason",
+                        "an idempotency key reused with different command inputs",
+                        "an ungranted or revoked classify permission, "
+                        "re-verified inside the command's own transaction",
                     ),
                 ),
                 events=EventContract(

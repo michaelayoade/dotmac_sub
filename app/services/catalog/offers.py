@@ -5,6 +5,7 @@ Provides services for Offers, OfferPrices, OfferVersions, and OfferVersionPrices
 
 import logging
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -43,6 +44,7 @@ from app.services import catalog_billing_governance as billing_governance
 from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
+from app.services.owner_commands import CommandContext
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
 logger = logging.getLogger(__name__)
@@ -519,55 +521,32 @@ class OfferVersions(CRUDManager[OfferVersion]):
         actor_id: str | None = None,
         actor_type: str | None = None,
     ):
-        offer = db.get(CatalogOffer, payload.offer_id)
-        if not offer:
-            raise HTTPException(status_code=404, detail="Offer not found")
-        data = payload.model_dump()
-        # service_intent.offer_access_requirement is the sole owner of
-        # admission for this field: required and explicit on every new
-        # offer version, with no application-level fallback.
-        data["access_requirement"] = (
-            offer_access_requirement.validate_admission_access_requirement(
-                data.get("access_requirement")
-            )
-        )
-        fields_set = payload.model_fields_set
-        if "billing_cycle" not in fields_set:
-            default_billing_cycle = settings_spec.resolve_value(
-                db, SettingDomain.catalog, "default_billing_cycle"
-            )
-            if default_billing_cycle:
-                data["billing_cycle"] = validate_enum(
-                    default_billing_cycle, BillingCycle, "billing_cycle"
-                )
-        if "contract_term" not in fields_set:
-            default_contract_term = settings_spec.resolve_value(
-                db, SettingDomain.catalog, "default_contract_term"
-            )
-            if default_contract_term:
-                data["contract_term"] = validate_enum(
-                    default_contract_term, ContractTerm, "contract_term"
-                )
-        if "status" not in fields_set:
-            default_status = settings_spec.resolve_value(
-                db, SettingDomain.catalog, "default_offer_status"
-            )
-            if default_status:
-                data["status"] = validate_enum(default_status, OfferStatus, "status")
-        version = OfferVersion(**data)
-        db.add(version)
-        db.flush()
-        billing_governance.stage_billing_catalog_change(
+        """Thin adapter. The actual persist, defaults resolution, and
+        transaction are owned by
+        ``service_intent.offer_access_requirement.admit_offer_version`` —
+        this method builds the command and returns its result; it never
+        constructs the ``OfferVersion`` row itself.
+        """
+        command_id = uuid4()
+        version = offer_access_requirement.admit_offer_version(
             db,
-            action="version_created",
-            entity_type="offer_version",
-            entity_id=version.id,
-            changes=data,
-            actor_id=actor_id,
-            actor_type=actor_type,
-            offer_id=version.offer_id,
+            offer_access_requirement.AdmitOfferVersionCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=(
+                        f"{actor_type}:{actor_id}"
+                        if actor_id
+                        else "system:offer_version_admission"
+                    ),
+                    scope=offer_access_requirement.ADMISSION_SCOPE,
+                    reason="offer version admitted via catalog API",
+                ),
+                payload=payload,
+                actor_id=actor_id,
+                actor_type=actor_type,
+            ),
         )
-        db.commit()
         db.refresh(version)
         return version
 

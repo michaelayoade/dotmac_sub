@@ -39,13 +39,16 @@ isolation.
   temporary server default of `unclassified` used ONLY to initialize
   historical rows in the migration's own DDL. There is no heuristic or
   automatic backfill — every existing row simply becomes `unclassified`.
-- `OfferVersions.create` (`app/services/catalog/offers.py`) now requires the
-  field explicitly (`OfferVersionCreate.access_requirement`, no default) and
-  delegates admission validation to
-  `offer_access_requirement.validate_admission_access_requirement`.
-  `unclassified` remains an accepted explicit value in Release 1 — the
-  server-side default exists only for historical migration, never as an
-  application-level fallback for a new row.
+- `OfferVersions.create` (`app/services/catalog/offers.py`) is a THIN
+  ADAPTER: it builds an `AdmitOfferVersionCommand` and calls
+  `offer_access_requirement.admit_offer_version`, which is the actual and
+  only writer — offer lookup, catalog-default resolution, access-requirement
+  admission validation, the `OfferVersion` INSERT, and the
+  billing-governance audit participant all run inside ONE
+  `execute_owner_command` boundary owned by the new module. The adapter does
+  not construct the row itself. `unclassified` remains an accepted explicit
+  value in Release 1 — the server-side default exists only for historical
+  migration, never as an application-level fallback for a new row.
 - The field is immutable outside the reviewed classification command:
   `OfferVersionUpdate` has no `access_requirement` field, and
   `OfferVersions.update` calls
@@ -70,19 +73,37 @@ this module's `ServiceContract`.
 
 - **Preview** binds the offer version id, its current classification, the
   proposed classification, the row's `updated_at`, and the review reference
-  into a SHA-256 fingerprint.
-- **Apply** requires the exact fingerprint, an authenticated principal, a
-  reason, a review reference, an idempotency key, and explicit confirmation
-  (`--confirm` on the CLI). It is gated by the
-  `catalog:offer_access_requirement:classify` permission.
+  into a SHA-256 fingerprint. If this exact transition (offer version ->
+  proposed target) was already recorded, the preview reflects that recorded
+  transition and its STORED fingerprint (`already_applied=True`) instead of
+  raising — this is what lets a genuine retry (same idempotency key, same
+  inputs) reach the command's replay branch rather than being refused before
+  it ever tries. A version already classified to a DIFFERENT target, or
+  classified with no recorded row at all (e.g. admitted directly with a real
+  value), still previews as a refusal.
+- **Apply** requires the exact fingerprint, the authenticated principal's
+  `SystemUser` id, a reason, a review reference, an idempotency key, and
+  explicit confirmation (`--confirm` on the CLI).
+- **Identity is never a free-text argument.** The CLI has no separate
+  `--actor` field. The string recorded as `classified_by`, the audit actor,
+  the event actor, and `authenticated_principal` is always
+  `principal_label(authorized_system_user_id)` — derived server-side from
+  the id RBAC actually verified, never from anything the caller can type.
+- **Permission is re-verified fresh, inside the command's own transaction**
+  (`_verify_classify_permission`), not trusted from an earlier, separately
+  computed boolean. A grant revoked between an operator's preview and their
+  apply is caught here — there is no look-then-act gap.
 - **Refusals:** a stale preview (fingerprint mismatch), a missing offer
-  version, a proposed target of `unclassified`, and any real-to-real or
+  version, a proposed target of `unclassified`, an idempotency key reused
+  with different command inputs (`idempotency_conflict` — a typed error, not
+  a raw unique-constraint violation), and any real-to-real or
   real-to-unclassified change — all fail closed.
 - **Idempotent replay:** at most one row of
-  `offer_access_requirement_classifications` ever exists per offer version
-  (a database uniqueness invariant). An exact idempotency-key and proposed-
-  target replay reads that row and returns a typed replay outcome instead of
-  re-transitioning the offer version a second time.
+  `offer_access_requirement_classifications` ever exists per offer version,
+  and `idempotency_key` is globally unique. An exact replay requires the SAME
+  idempotency key AND matching offer version, target, preview fingerprint,
+  reason, and authenticated principal — matching only some of those is a
+  typed `idempotency_conflict`, not a replay.
 - **Evidence:** one audit event (`stage_audit_event`, action
   `offer_access_requirement_classified`) and one versioned domain event
   (`EventType.catalog_offer_access_requirement_classified`) are staged in the
@@ -102,10 +123,11 @@ this module's `ServiceContract`.
   (`app.services.auth_dependencies.has_permission`) against an actual
   `SystemUser` row's roles — the CLI
   (`scripts/catalog/classify_offer_access_requirement.py`) requires
-  `--actor-system-user-id` to name an active staff principal and reads that
-  principal's real roles (`system_user_role_names`), the same pattern used by
-  `scripts/billing/correct_customer_subledger_opening.py`. It is not a bare
-  host-access-plus-actor-string check.
+  `--actor-system-user-id` to name an active staff principal, and the
+  permission check itself runs inside
+  `offer_access_requirement._classify`, fresh, at apply time. It is not a
+  bare host-access-plus-actor-string check, and it is not a check performed
+  once ahead of time and then trusted.
 
 **Wildcard note (by design, not a gap):** this RBAC system already treats the
 `admin` role and the `*`/domain wildcard grants as satisfying every
@@ -124,6 +146,20 @@ here.
 
 Release 2 is out of scope for this change and must not be built as part of
 it — see the brief that authorized this work.
+
+## Migration safety
+
+- The classification table's CHECK constraints enforce the one legal
+  transition shape in the DATABASE, not only in service code:
+  `previous_access_requirement` is always `unclassified`, and
+  `new_access_requirement` is always one of the two real values.
+- Downgrade LOCKS both tables (`ACCESS EXCLUSIVE`, inside the migration's own
+  transaction) before counting rows, so a concurrent write cannot slip
+  between the check and the destructive DDL.
+- `SET LOCAL` (not a plain `SET`) scopes the migration's own lock/statement
+  timeout to its own transaction, so it can never discard the
+  operator-configured global override (`alembic/env.py`) for any later
+  migration or statement.
 
 ## Architecture guard
 

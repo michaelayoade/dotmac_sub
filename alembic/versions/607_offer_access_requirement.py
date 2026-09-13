@@ -11,12 +11,18 @@ default) is separate, later work.
 Also adds ``offer_access_requirement_classifications``, the reviewed
 classification command's own append-only record: at most one row per offer
 version, used to distinguish an exact idempotent replay from a genuine
-real-to-real or real-to-unclassified refusal.
+real-to-real or real-to-unclassified refusal. CHECK constraints enforce the
+one legal transition shape at the database boundary, not only in service
+code: ``previous_access_requirement`` is always ``unclassified`` and
+``new_access_requirement`` is always one of the two real values.
 
 Downgrade note: dropping this column after real classifications exist would
-destroy them irrecoverably. This migration's downgrade refuses (fails closed)
-whenever any row has left ``unclassified`` or any classification row exists;
-repair forward instead of downgrading past real data.
+destroy them irrecoverably. This migration's downgrade LOCKS both tables
+(``ACCESS EXCLUSIVE``, inside the migration's own transaction) before
+counting, so a concurrent write cannot slip between the check and the
+destructive DDL, then refuses (fails closed) whenever any row has left
+``unclassified`` or any classification row exists; repair forward instead of
+downgrading past real data.
 
 Revision ID: 607_offer_access_requirement
 Revises: 606_project_task_subtasks
@@ -39,6 +45,7 @@ depends_on: str | Sequence[str] | None = None
 _ENUM_NAME = "access_requirement"
 _ENUM_VALUES = ("network_access", "no_network_access", "unclassified")
 _ENUM_TYPE = postgresql.ENUM(*_ENUM_VALUES, name=_ENUM_NAME, create_type=False)
+_CLASSIFICATIONS_TABLE = "offer_access_requirement_classifications"
 
 
 class DowngradeRefused(RuntimeError):
@@ -50,29 +57,26 @@ def upgrade() -> None:
     is_postgres = bind.dialect.name == "postgresql"
 
     if is_postgres:
-        op.execute("SET lock_timeout = '5s'")
-        op.execute("SET statement_timeout = '15min'")
-    try:
-        if is_postgres:
-            postgresql.ENUM(*_ENUM_VALUES, name=_ENUM_NAME).create(
-                bind, checkfirst=True
-            )
-        op.add_column(
-            "offer_versions",
-            sa.Column(
-                "access_requirement",
-                _ENUM_TYPE if is_postgres else sa.Enum(*_ENUM_VALUES, name=_ENUM_NAME),
-                nullable=False,
-                server_default="unclassified",
-            ),
-        )
-    finally:
-        if is_postgres:
-            op.execute("RESET statement_timeout")
-            op.execute("RESET lock_timeout")
+        # SET LOCAL is scoped to this migration's own transaction and reverts
+        # automatically when it ends — unlike a plain SET, it never discards
+        # the operator-configured global lock_timeout (alembic/env.py) for
+        # any statement that runs after this one.
+        op.execute("SET LOCAL lock_timeout = '5s'")
+        op.execute("SET LOCAL statement_timeout = '15min'")
+        postgresql.ENUM(*_ENUM_VALUES, name=_ENUM_NAME).create(bind, checkfirst=True)
+
+    op.add_column(
+        "offer_versions",
+        sa.Column(
+            "access_requirement",
+            _ENUM_TYPE if is_postgres else sa.Enum(*_ENUM_VALUES, name=_ENUM_NAME),
+            nullable=False,
+            server_default="unclassified",
+        ),
+    )
 
     op.create_table(
-        "offer_access_requirement_classifications",
+        _CLASSIFICATIONS_TABLE,
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "offer_version_id",
@@ -111,16 +115,36 @@ def upgrade() -> None:
             "idempotency_key",
             name="uq_offer_access_requirement_classifications_idempotency_key",
         ),
+        sa.CheckConstraint(
+            "previous_access_requirement = 'unclassified'",
+            name="ck_offer_access_requirement_classifications_previous_unclassified",
+        ),
+        sa.CheckConstraint(
+            "new_access_requirement IN ('network_access', 'no_network_access')",
+            name="ck_offer_access_requirement_classifications_new_is_real",
+        ),
     )
 
 
 def downgrade() -> None:
     bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
     table_names = set(sa.inspect(bind).get_table_names())
 
-    if "offer_access_requirement_classifications" in table_names:
+    if is_postgres:
+        # Lock BOTH tables, inside this migration's own transaction, before
+        # counting anything below. Without this, a concurrent INSERT/UPDATE
+        # between the count and the destructive DDL could commit real data
+        # that the drop then destroys anyway — a check that does not hold a
+        # lock across its own "then act" is not a guarantee.
+        if _CLASSIFICATIONS_TABLE in table_names:
+            op.execute(f"LOCK TABLE {_CLASSIFICATIONS_TABLE} IN ACCESS EXCLUSIVE MODE")
+        if "offer_versions" in table_names:
+            op.execute("LOCK TABLE offer_versions IN ACCESS EXCLUSIVE MODE")
+
+    if _CLASSIFICATIONS_TABLE in table_names:
         classified_count = bind.execute(
-            sa.text("SELECT count(*) FROM offer_access_requirement_classifications")
+            sa.text(f"SELECT count(*) FROM {_CLASSIFICATIONS_TABLE}")
         ).scalar()
         if classified_count:
             raise DowngradeRefused(
@@ -128,7 +152,7 @@ def downgrade() -> None:
                 "downgrading would destroy them irrecoverably. Repair "
                 "forward instead of downgrading past real data."
             )
-        op.drop_table("offer_access_requirement_classifications")
+        op.drop_table(_CLASSIFICATIONS_TABLE)
 
     if "offer_versions" in table_names:
         columns = {
@@ -150,5 +174,5 @@ def downgrade() -> None:
                 )
             op.drop_column("offer_versions", "access_requirement")
 
-    if bind.dialect.name == "postgresql":
+    if is_postgres:
         postgresql.ENUM(name=_ENUM_NAME).drop(bind, checkfirst=True)
