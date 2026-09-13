@@ -868,11 +868,6 @@ def build_contact_context(
         identity_state=identity_state,
         party_id=party_id,
         subscriber_id=subscriber_id,
-        participants=tuple(
-            team_inbox_participants.list_participants(
-                db, conversation_id=conversation_id
-            )
-        ),
     )
     lead_ids = (
         tuple(
@@ -923,6 +918,11 @@ def build_contact_context(
         identity_state=identity_state,
         party_id=party_id,
         subscriber_id=subscriber_id,
+        participants=tuple(
+            team_inbox_participants.list_participants(
+                db, conversation_id=conversation_id
+            )
+        ),
         conversation_history_scope=conversation_history_scope,
         profile=_safe_section(
             "profile",

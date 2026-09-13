@@ -2757,7 +2757,10 @@ def team_inbox_represented_customer(
 
 @router.get(
     "/search/leads",
-    dependencies=[Depends(require_permission("crm:lead:read"))],
+    dependencies=[
+        Depends(require_permission("support:ticket:read")),
+        Depends(require_permission("crm:lead:read")),
+    ],
 )
 def team_inbox_lead_search(
     q: str = Query(min_length=2, max_length=120),
