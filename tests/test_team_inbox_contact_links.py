@@ -69,7 +69,6 @@ def _link(
     reseller: Reseller | None = None,
     note: str | None = None,
 ):
-    db_session.commit()
     target_type = (
         team_inbox_contact_links.ContactLinkTargetType.subscriber
         if subscriber is not None
@@ -77,6 +76,8 @@ def _link(
     )
     assert subscriber is not None or reseller is not None
     target_id = subscriber.id if subscriber is not None else reseller.id
+    conversation_id = conversation.id
+    db_session.commit()
     return team_inbox_contact_links.link_conversation_contact_by_id_committed(
         db_session,
         team_inbox_contact_links.LinkConversationContactCommand(
@@ -85,7 +86,7 @@ def _link(
                 scope="team-inbox:contact-link",
                 reason="focused contact-link test",
             ),
-            conversation_id=conversation.id,
+            conversation_id=conversation_id,
             target=team_inbox_contact_links.ContactLinkTarget(target_type, target_id),
             actor_person_id=None,
             source=team_inbox_contact_links.ContactLinkSource.manual_inbox_conversation,
