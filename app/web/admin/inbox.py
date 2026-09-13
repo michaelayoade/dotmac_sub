@@ -34,8 +34,10 @@ from app.db import finish_read_transaction, get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.team_inbox import InboxChannelType
+from app.schemas.common import ListResponse
 from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogueQuery
 from app.schemas.settings import DomainSettingUpdate
+from app.schemas.team_inbox import InboxCustomerLinkOptionRead
 from app.services import (
     ai_conversation_intake,
     ai_conversation_ownership,
@@ -1144,6 +1146,7 @@ def team_inbox_contact_context(
         db,
         conversation_id=conversation_id,
         actor_person_id=_actor_uuid_from_request(request),
+        include_contact_candidates=False,
     )
     if projection is None:
         return HTMLResponse(
@@ -1168,7 +1171,6 @@ def team_inbox_contact_context(
         {
             "timeline": projection.timeline,
             "subscriber_summary": projection.subscriber_summary,
-            "contact_link_candidates": projection.contact_link_candidates,
             "conversation_labels": projection.conversation_labels,
             "label_options": projection.label_options,
             "agent_options": team_inbox_projection.list_agent_options(db),
@@ -1180,6 +1182,7 @@ def team_inbox_contact_context(
             "can_view_financials": can(request, "billing:account:read"),
             "can_view_network_detail": can(request, "network:ip:read"),
             "can_manage_leads": can(request, "crm:lead:write"),
+            "can_link_customer": can(request, "support:ticket:update"),
             "contact_context": contact_context,
             "lead_intake_invitations": lead_intake.invitation_for_conversation(
                 db, conversation_id
@@ -1187,6 +1190,47 @@ def team_inbox_contact_context(
         }
     )
     return templates.TemplateResponse("admin/inbox/_contact_drawer.html", context)
+
+
+@router.get(
+    "/{conversation_id}/customer-link-options",
+    response_model=ListResponse[InboxCustomerLinkOptionRead],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_customer_link_options(
+    conversation_id: UUID,
+    response: Response,
+    q: str | None = Query(default=None, min_length=2, max_length=120),
+    limit: int = Query(default=8, ge=1, le=8),
+    db: Session = Depends(get_db),
+) -> ListResponse[InboxCustomerLinkOptionRead]:
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        page = team_inbox_contact_links.customer_link_options(
+            db,
+            query=team_inbox_contact_links.CustomerLinkOptionsQuery(
+                conversation_id=conversation_id,
+                search_text=q,
+                limit=limit,
+            ),
+        )
+    except team_inbox_contact_links.ConversationContactLinkError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except team_inbox_contact_links.ContactLinkError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ListResponse[InboxCustomerLinkOptionRead](
+        items=[
+            InboxCustomerLinkOptionRead(
+                id=item.customer_id,
+                label=item.label,
+                source=item.source.value,
+            )
+            for item in page.items
+        ],
+        count=page.count,
+        limit=page.limit,
+        offset=0,
+    )
 
 
 @router.post(

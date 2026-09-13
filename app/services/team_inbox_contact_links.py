@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TypeVar
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.organization import Organization
 from app.models.party import (
@@ -37,6 +39,11 @@ class ContactLinkError(ValueError):
 
 class ConversationContactLinkError(ContactLinkError):
     pass
+
+
+class CustomerLinkOptionSource(StrEnum):
+    suggested = "suggested"
+    search = "search"
 
 
 _INBOX_PARTY_CONTACT_CHANNELS = {
@@ -80,6 +87,27 @@ class RepresentedCustomerAssociation:
     participant_id: UUID
     subscriber_id: UUID
     already_linked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLinkOptionsQuery:
+    conversation_id: UUID
+    search_text: str | None = None
+    limit: int = 8
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLinkOption:
+    customer_id: UUID
+    label: str
+    source: CustomerLinkOptionSource
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerLinkOptionsPage:
+    items: tuple[CustomerLinkOption, ...]
+    count: int
+    limit: int
 
 
 T = TypeVar("T")
@@ -133,6 +161,138 @@ def _organization_label(row: Organization) -> str:
     extras = [row.legal_name, row.domain, row.email, row.phone, row.account_status]
     suffix = " Â· ".join(str(item) for item in extras if item and item != label)
     return f"{label} ({suffix})" if suffix else label
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _conversation_customer_terms(conversation: InboxConversation) -> tuple[str, ...]:
+    metadata = (
+        conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+    )
+    values: list[object] = [
+        conversation.contact_address,
+        metadata.get("contact_name"),
+        conversation.subject,
+        conversation.external_thread_id,
+    ]
+    resolution = metadata.get("contact_resolution")
+    if isinstance(resolution, dict):
+        values.extend(
+            (
+                resolution.get("normalized_contact"),
+                resolution.get("subscriber_id"),
+            )
+        )
+        matched_ids = resolution.get("matched_subscriber_ids")
+        if isinstance(matched_ids, list):
+            values.extend(matched_ids)
+
+    terms: list[str] = []
+    for value in values:
+        term = str(value or "").strip()
+        if len(term) >= 3 and term not in terms:
+            terms.append(term)
+    return tuple(terms[:8])
+
+
+def _subscriber_search_conditions(
+    terms: tuple[str, ...],
+) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = []
+    for term in terms:
+        try:
+            customer_id = UUID(term)
+        except ValueError:
+            customer_id = None
+        if customer_id is not None:
+            conditions.append(Subscriber.id == customer_id)
+            continue
+
+        escaped = _escape_like(term)
+        like = f"%{escaped}%"
+        conditions.extend(
+            [
+                Subscriber.email.ilike(like, escape="\\"),
+                Subscriber.phone.ilike(like, escape="\\"),
+                Subscriber.first_name.ilike(like, escape="\\"),
+                Subscriber.last_name.ilike(like, escape="\\"),
+                Subscriber.display_name.ilike(like, escape="\\"),
+                Subscriber.company_name.ilike(like, escape="\\"),
+                Subscriber.legal_name.ilike(like, escape="\\"),
+                Subscriber.account_number.ilike(like, escape="\\"),
+                Subscriber.subscriber_number.ilike(like, escape="\\"),
+            ]
+        )
+
+    if len(terms) == 1:
+        words = terms[0].split()
+        if len(words) >= 2:
+            first = f"%{_escape_like(words[0])}%"
+            remainder = f"%{_escape_like(' '.join(words[1:]))}%"
+            conditions.append(
+                and_(
+                    Subscriber.first_name.ilike(first, escape="\\"),
+                    Subscriber.last_name.ilike(remainder, escape="\\"),
+                )
+            )
+    return conditions
+
+
+def customer_link_options(
+    db: Session,
+    *,
+    query: CustomerLinkOptionsQuery,
+) -> CustomerLinkOptionsPage:
+    """Return bounded Customer suggestions or a search over only entered text."""
+
+    limit = max(1, min(query.limit, 8))
+    conversation = db.get(InboxConversation, query.conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise ConversationContactLinkError("Conversation not found.")
+
+    if query.search_text is None:
+        terms = _conversation_customer_terms(conversation)
+        source = CustomerLinkOptionSource.suggested
+    else:
+        search_text = query.search_text.strip()
+        if len(search_text) < 2:
+            raise ContactLinkError("Enter at least two characters to search Customers.")
+        if len(search_text) > 120:
+            raise ContactLinkError("Customer search text is too long.")
+        terms = (search_text,)
+        source = CustomerLinkOptionSource.search
+
+    conditions = _subscriber_search_conditions(terms)
+    if not conditions:
+        return CustomerLinkOptionsPage(items=(), count=0, limit=limit)
+
+    statement = select(Subscriber).where(
+        Subscriber.is_active.is_(True),
+        or_(*conditions),
+    )
+    if source is CustomerLinkOptionSource.suggested:
+        statement = statement.order_by(
+            Subscriber.updated_at.desc().nullslast(),
+            Subscriber.id.asc(),
+        )
+    else:
+        statement = statement.order_by(
+            Subscriber.last_name.asc(),
+            Subscriber.first_name.asc(),
+            Subscriber.id.asc(),
+        )
+    subscribers = tuple(db.scalars(statement.limit(limit)).all())
+    items = tuple(
+        CustomerLinkOption(
+            customer_id=subscriber.id,
+            label=_subscriber_label(subscriber),
+            source=source,
+        )
+        for subscriber in subscribers
+    )
+    return CustomerLinkOptionsPage(items=items, count=len(items), limit=limit)
 
 
 def contact_link_candidates(
@@ -253,6 +413,8 @@ def _target(
     reseller = db.get(Reseller, reseller_uuid) if reseller_uuid else None
     if subscriber_uuid and subscriber is None:
         raise ContactLinkError("Subscriber not found.")
+    if subscriber is not None and not subscriber.is_active:
+        raise ContactLinkError("Cannot link an inactive Customer.")
     if reseller_uuid and reseller is None:
         raise ContactLinkError("Reseller not found.")
     if reseller is not None and not reseller.is_active:

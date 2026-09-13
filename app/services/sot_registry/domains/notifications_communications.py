@@ -2641,6 +2641,7 @@ DOMAIN = DomainSOT(
                 "contact subscriber reseller and ticket association resolution",
                 "reviewed contact association and projection repair",
                 "bounded trusted support customer-identity projection",
+                "conversation-aware lazy Customer link-option projection",
                 "conversation-scoped representative customer association resolution",
             ),
             depends_on=(
@@ -2665,6 +2666,10 @@ DOMAIN = DomainSOT(
                         OwnerRole.RESOLVER,
                     ),
                     (
+                        "conversation-aware lazy Customer link-option projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
                         "conversation-scoped representative customer association resolution",
                         OwnerRole.RESOLVER,
                     ),
@@ -2680,7 +2685,7 @@ DOMAIN = DomainSOT(
                         name="customer identity scope",
                         owner="customer.identity_scope",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active Subscriber and reseller ownership identifiers; never fuzzy name or shared-address inference.",
+                        source="Active Subscriber identifiers and profile search fields plus reseller ownership identifiers; fuzzy discovery results never decide identity.",
                     ),
                     AuthorityInput(
                         name="conversation contact route",
@@ -2699,6 +2704,7 @@ DOMAIN = DomainSOT(
                 event_types=("team_inbox.contact_link_changed.v1",),
                 projections=(
                     "InboxContactLink canonical contact-point projection",
+                    "bounded lazy Customer link options",
                     "conversation-scoped represented Customer association",
                 ),
                 design_refs=(

@@ -66,6 +66,29 @@ def test_observation_owner_contracts_collision_quarantine() -> None:
     assert "ObservationCollisionPolicy.quarantine" in smtp
 
 
+def test_contact_resolution_owns_lazy_customer_link_options() -> None:
+    service = service_relationship("communications.team_inbox_contact_resolution")
+
+    assert service.contract is not None
+    assert "conversation-aware lazy Customer link-option projection" in service.owns
+    assert "bounded lazy Customer link options" in {
+        projection.name for projection in service.contract.projections
+    }
+
+    owner = (ROOT / "app/services/team_inbox_contact_links.py").read_text(
+        encoding="utf-8"
+    )
+    adapter = (ROOT / "app/web/admin/inbox.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates/admin/inbox/_authoritative_context.html").read_text(
+        encoding="utf-8"
+    )
+    assert "class CustomerLinkOptionsQuery" in owner
+    assert "def customer_link_options(" in owner
+    assert "search_text=q" in adapter
+    assert "data-typeahead-initial-url=" in template
+    assert "customer-link-options" in template
+
+
 def test_routing_owner_contracts_signed_in_agent_presence() -> None:
     service = service_relationship("communications.team_inbox_routing")
     assert service.contract is not None

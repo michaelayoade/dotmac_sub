@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from app.api import support as support_api
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
@@ -87,6 +89,24 @@ def test_link_conversation_contact_to_subscriber(db_session):
     assert historical.metadata_["contact_resolution"][
         "repair_source_conversation_id"
     ] == str(conversation.id)
+
+
+def test_link_conversation_contact_rejects_inactive_customer(db_session):
+    subscriber = _subscriber(db_session)
+    subscriber.is_active = False
+    conversation = _conversation(db_session)
+
+    with pytest.raises(
+        team_inbox_contact_links.ContactLinkError,
+        match="Cannot link an inactive Customer",
+    ):
+        team_inbox_contact_links.link_conversation_contact(
+            db_session,
+            conversation=conversation,
+            subscriber_id=subscriber.id,
+        )
+
+    assert conversation.subscriber_id is None
 
 
 def test_reviewed_contact_link_does_not_repair_a_different_contact(db_session):
