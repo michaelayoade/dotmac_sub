@@ -1730,11 +1730,12 @@ def test_payment_recovery_rejects_approval_write_scope(db_session, monkeypatch):
     request = _make_submitted_request(db_session)
     _approve(db_session, request)
     event = _permission_denied_payment_event(db_session, request)
+    event_id = event.id
     erp = _FakeERPClient(status_outcomes=[{"status": "approved"}])
     monkeypatch.setattr(expense_recovery_module, "capability_client", lambda _db: erp)
     preview = preview_expense_payment_delivery_recovery(
         db_session,
-        PreviewExpensePaymentDeliveryRecovery(dead_event_id=event.id),
+        PreviewExpensePaymentDeliveryRecovery(dead_event_id=event_id),
     )
     db_session.commit()
     command_id = uuid4()
@@ -1754,14 +1755,14 @@ def test_payment_recovery_rejects_approval_write_scope(db_session, monkeypatch):
                     reason="attempt payment recovery with approval scope",
                     idempotency_key=str(command_id),
                 ),
-                dead_event_id=event.id,
+                dead_event_id=event_id,
                 preview_fingerprint=preview.fingerprint,
             ),
         )
 
     db_session.expire_all()
     assert (
-        db_session.get(FieldErpSyncEvent, event.id).status
+        db_session.get(FieldErpSyncEvent, event_id).status
         == FieldErpSyncStatus.dead.value
     )
 
