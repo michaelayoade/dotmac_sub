@@ -733,6 +733,8 @@ def link_conversation_contact(
             "Contact links require an active owner command.",
             suffix="owner_command_required",
         )
+    conversation: InboxConversation
+    normalized_contact: str
     conversation, normalized_contact = lock_conversation_contact_route(
         db,
         conversation_id=command.conversation_id,
@@ -753,7 +755,7 @@ def link_conversation_contact(
 
     now = datetime.now(UTC)
     deactivated: list[UUID] = []
-    active_link = db.scalar(
+    active_link: InboxContactLink | None = db.scalar(
         select(InboxContactLink)
         .where(
             InboxContactLink.channel_type == conversation.channel_type,

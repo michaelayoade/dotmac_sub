@@ -45,6 +45,16 @@ class BackofficeEnqueueStatus(str, Enum):
     NOT_ENQUEUED = "not_enqueued"
 
 
+class BackofficeDeliveryStatus(str, Enum):
+    """Provider-neutral lifecycle of one durable back-office delivery."""
+
+    PENDING = "pending"
+    SENT = "sent"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    DEAD = "dead"
+
+
 @dataclass(frozen=True, slots=True)
 class BackofficeEnqueueResult:
     """Outcome of asking the configured local adapter to stage delivery."""
@@ -107,6 +117,16 @@ class BackofficeExpensePaymentRecoveryStaging:
 
     event_id: UUID
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackofficeExpensePaymentRecoveryView:
+    """Provider-neutral evidence for one payment-delivery recovery check."""
+
+    event_id: UUID
+    expense_request_id: UUID
+    idempotency_key: str
+    status: BackofficeDeliveryStatus
 
 
 def expense_payment_projection(
@@ -617,27 +637,22 @@ def requeue_expense_payment_delivery(
 ) -> BackofficeExpensePaymentRecoveryStaging:
     """Requeue one permission-denied payment event without changing its key."""
 
-    from app.models.field_erp_sync import (
-        FieldErpSyncEvent,
-        FieldErpSyncFlow,
-        FieldErpSyncStatus,
-    )
+    from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncStatus
     from app.services.owner_commands import owner_command_active
 
     if not owner_command_active(db, owner="operations.expense_requests"):
         raise RuntimeError("Expense payment recovery requires the expense owner")
-    event = db.get(FieldErpSyncEvent, dead_event_id)
-    diagnostic = _delivery_diagnostic(event)
-    if (
-        event is None
-        or event.flow != FieldErpSyncFlow.expense_claim.value
-        or event.status != FieldErpSyncStatus.dead.value
-        or str((event.payload or {}).get("_expense_action")) != "initiate_payment"
-        or diagnostic is None
-        or diagnostic.code != "permission_denied"
-        or diagnostic.http_status != 403
-        or diagnostic.operation != "initiate_expense_payment"
-    ):
+    recovery = inspect_expense_payment_recovery_delivery(
+        db,
+        event_id=dead_event_id,
+        lock=True,
+    )
+    if recovery is None or recovery.status is not BackofficeDeliveryStatus.DEAD:
+        raise BackofficeUnavailableError(
+            "The expense payment delivery is no longer recoverable"
+        )
+    event = db.get(FieldErpSyncEvent, recovery.event_id)
+    if event is None:
         raise BackofficeUnavailableError(
             "The expense payment delivery is no longer recoverable"
         )
@@ -646,6 +661,39 @@ def requeue_expense_payment_delivery(
     return BackofficeExpensePaymentRecoveryStaging(
         event_id=event.id,
         idempotency_key=event.idempotency_key,
+    )
+
+
+def inspect_expense_payment_recovery_delivery(
+    db: Session,
+    *,
+    event_id: UUID,
+    lock: bool,
+) -> BackofficeExpensePaymentRecoveryView | None:
+    """Read provider-neutral evidence for an expense payment delivery."""
+
+    from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
+
+    query = db.query(FieldErpSyncEvent).filter(FieldErpSyncEvent.id == event_id)
+    if lock:
+        query = query.with_for_update()
+    event = query.one_or_none()
+    diagnostic = _delivery_diagnostic(event)
+    if (
+        event is None
+        or event.flow != FieldErpSyncFlow.expense_claim.value
+        or str((event.payload or {}).get("_expense_action")) != "initiate_payment"
+        or diagnostic is None
+        or diagnostic.code != "permission_denied"
+        or diagnostic.http_status != 403
+        or diagnostic.operation != "initiate_expense_payment"
+    ):
+        return None
+    return BackofficeExpensePaymentRecoveryView(
+        event_id=event.id,
+        expense_request_id=event.entity_id,
+        idempotency_key=event.idempotency_key,
+        status=BackofficeDeliveryStatus(event.status),
     )
 
 

@@ -1385,8 +1385,11 @@ def recover_expense_payment_delivery(
 ) -> ExpensePaymentDeliveryRecoveryOutcome:
     """Requeue one verified payment event with its original idempotency key."""
 
-    from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncStatus
-    from app.services.backoffice import requeue_expense_payment_delivery
+    from app.services.backoffice import (
+        BackofficeDeliveryStatus,
+        inspect_expense_payment_recovery_delivery,
+        requeue_expense_payment_delivery,
+    )
     from app.services.field.expense_recovery import (
         PAYMENT_RECOVERY_CONTRACT_VERSION,
         ExpenseDeliveryRecoveryError,
@@ -1399,12 +1402,16 @@ def recover_expense_payment_delivery(
                 code="operations.expense_requests.payment_recovery_forbidden",
                 message="Payment recovery requires the expense payment permission.",
             )
-        event = db.scalar(
-            select(FieldErpSyncEvent)
-            .where(FieldErpSyncEvent.id == command.dead_event_id)
-            .with_for_update()
+        delivery = inspect_expense_payment_recovery_delivery(
+            db,
+            event_id=command.dead_event_id,
+            lock=True,
         )
-        request = db.get(FieldExpenseRequest, event.entity_id) if event else None
+        request: FieldExpenseRequest | None = (
+            db.get(FieldExpenseRequest, delivery.expense_request_id)
+            if delivery is not None
+            else None
+        )
         recoveries = list(
             ((request.metadata_ or {}).get("expense_payment_delivery_recoveries") or [])
             if request is not None
@@ -1422,13 +1429,13 @@ def recover_expense_payment_delivery(
             None,
         )
         if (
-            event is not None
-            and event.status != FieldErpSyncStatus.dead.value
+            delivery is not None
+            and delivery.status is not BackofficeDeliveryStatus.DEAD
             and matching_recovery is not None
         ):
             return ExpensePaymentDeliveryRecoveryOutcome(
-                event_id=event.id,
-                idempotency_key=event.idempotency_key,
+                event_id=delivery.event_id,
+                idempotency_key=delivery.idempotency_key,
                 replayed=True,
             )
 

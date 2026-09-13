@@ -4584,6 +4584,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/manager/expenses/payment-deliveries/{event_id}/recovery-preview": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:event_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "d31d46d100e6",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/manager/jobs": {
    "params": [
     "header:authorization",
@@ -14890,6 +14902,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/manager/expenses/payment-deliveries/{event_id}/recover": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:event_id!"
+   ],
+   "request": "3be457dd9378",
+   "responses": {
+    "200": "258ed99a961f",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/manager/expenses/{expense_request_id}/approve": {
    "params": [
     "header:X-Request-ID",
@@ -19617,6 +19642,9 @@
   "FieldExpenseDestinationVerify": "8d5426dc5450",
   "FieldExpenseFormContextRead": "0071f146bfb9",
   "FieldExpensePaymentRead": "0b8340a83012",
+  "FieldExpensePaymentRecoveryPreviewRead": "9a017d2973eb",
+  "FieldExpensePaymentRecoveryRead": "29d373ba518f",
+  "FieldExpensePaymentRecoveryRequest": "2754d308c379",
   "FieldExpenseProfileDestinationRead": "6dcef13f513e",
   "FieldExpenseRecoveryPreviewRead": "85ed7567c69d",
   "FieldExpenseRecoveryRead": "84483e229efc",
@@ -19755,7 +19783,7 @@
   "IPv6AddressRead": "d14ab909bf1f",
   "IPv6AddressUpdate": "c13ce5267072",
   "InboxAgentPerformanceRead": "6a8463944e15",
-  "InboxConversationContactLinkRead": "bb228be5e29a",
+  "InboxConversationContactLinkRead": "aedc114d3f1b",
   "InboxConversationContactLinkRequest": "f407043f0c43",
   "InboxConversationEscalateRequest": "616991a12b83",
   "InboxConversationEscalationRead": "504bf3a61754",
