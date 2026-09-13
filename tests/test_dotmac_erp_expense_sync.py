@@ -39,6 +39,7 @@ from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientErr
 from app.services.dotmac_erp.expense_form_contracts import (
     ExpenseApproverOption,
     ExpenseDestinationMode,
+    ExpenseProfileDestination,
     InspectExpenseDestination,
     VerifiedExpenseDestination,
     VerifyExpenseDestination,
@@ -58,6 +59,7 @@ from app.services.field.expense_requests import (
     ExpenseRequestLineInput,
     ExpenseWorkOrderIdentity,
     FieldExpenseRequestError,
+    GetFieldExpenseFormContext,
     InitiateFieldExpensePayment,
     RecoverExpenseDelivery,
     RejectFieldExpenseRequest,
@@ -67,6 +69,7 @@ from app.services.field.expense_requests import (
     VerifiedExpenseDestinationInput,
     VerifyFieldExpenseDestination,
     approve_field_expense_request_command,
+    get_field_expense_form_context,
     initiate_field_expense_payment_command,
     recover_expense_delivery,
     reject_field_expense_request_command,
@@ -285,6 +288,7 @@ def _make_submitted_request(
     *,
     crm_work_order_id="wo-exp",
     items: list[dict] | None = None,
+    self_approver: bool = False,
 ) -> FieldExpenseRequest:
     """Create and submit a request through the real domain service."""
     flow = FieldErpSyncFlow.expense_claim.value
@@ -297,6 +301,7 @@ def _make_submitted_request(
         ownership.owner = SyncFlowOwner.sub.value
     crm_person_id = f"crm-tech-{uuid4().hex[:8]}"
     user = _user(db)
+    approver = user if self_approver else _user(db, "Approver")
     _profile(db, user, crm_person_id=crm_person_id)
     subscriber = _subscriber(db)
     work_order = _work_order(
@@ -326,9 +331,9 @@ def _make_submitted_request(
         items=tuple(ExpenseRequestLineInput(**item) for item in (items or _items())),
         selected_approver=SelectedExpenseApprover(
             erp_employee_id=uuid4(),
-            system_user_id=user.id,
-            display_name=user.display_name,
-            email=user.email,
+            system_user_id=approver.id,
+            display_name=approver.display_name,
+            email=approver.email,
         ),
         payment_destination=VerifiedExpenseDestinationInput(
             mode="erp_profile",
@@ -361,10 +366,15 @@ def _expense_categories(monkeypatch):
     )
 
 
-def _approve(db, request: FieldExpenseRequest):
+def _approve(
+    db,
+    request: FieldExpenseRequest,
+    *,
+    reviewer_id: UUID | None = None,
+):
     request_id = request.id
-    reviewer_id = request.requested_by_system_user_id
-    assert reviewer_id is not None
+    resolved_reviewer_id = reviewer_id or request.selected_approver_system_user_id
+    assert resolved_reviewer_id is not None
     command_id = uuid4()
     db.commit()
     return approve_field_expense_request_command(
@@ -373,13 +383,13 @@ def _approve(db, request: FieldExpenseRequest):
             context=CommandContext(
                 command_id=command_id,
                 correlation_id=command_id,
-                actor=f"user:{reviewer_id}",
+                actor=f"user:{resolved_reviewer_id}",
                 scope="operations:expense_request:write",
                 reason=f"approve_expense_request:{request_id}",
                 idempotency_key=str(command_id),
             ),
             expense_request_id=request_id,
-            reviewer_system_user_id=reviewer_id,
+            reviewer_system_user_id=resolved_reviewer_id,
         ),
     )
 
@@ -554,9 +564,10 @@ class _FakeERPClient:
 class _ClaimBoundFakeERPClient(_FakeERPClient):
     """Fake ERP that enforces the real destination-token claim binding."""
 
-    def __init__(self, *, requester: SystemUser) -> None:
+    def __init__(self, *, requester: SystemUser, approver: SystemUser) -> None:
         super().__init__()
         self.requester = requester
+        self.approver = approver
         self.approver_erp_id = uuid4()
         self.destination_claims: dict[str, tuple[UUID, VerifiedExpenseDestination]] = {}
         self.verify_claim_ids: list[UUID] = []
@@ -571,10 +582,19 @@ class _ClaimBoundFakeERPClient(_FakeERPClient):
         return (
             ExpenseApproverOption(
                 employee_id=self.approver_erp_id,
-                display_name=self.requester.display_name,
-                email=self.requester.email,
+                display_name=self.approver.display_name,
+                email=self.approver.email,
             ),
         )
+
+    def get_expense_banks(self):
+        return ()
+
+    def get_expense_profile_destination(
+        self, *, requested_by_email: str
+    ) -> ExpenseProfileDestination:
+        assert requested_by_email == self.requester.email
+        return ExpenseProfileDestination(available=False)
 
     def verify_expense_destination(
         self, command: VerifyExpenseDestination
@@ -645,6 +665,49 @@ class _ClaimBoundFakeERPClient(_FakeERPClient):
         )
 
 
+def test_form_context_omits_requester_even_when_erp_returns_them(
+    db_session,
+    monkeypatch,
+):
+    requester = _user(db_session, "SelfApprover")
+    client = _ClaimBoundFakeERPClient(requester=requester, approver=requester)
+    monkeypatch.setattr(
+        expense_requests_module, "capability_client", lambda _db: client
+    )
+
+    context = get_field_expense_form_context(
+        db_session,
+        GetFieldExpenseFormContext(requester_system_user_id=requester.id),
+    )
+
+    assert context.approvers == ()
+
+
+def test_submission_context_rejects_requester_as_approver_before_token_inspection(
+    db_session,
+    monkeypatch,
+):
+    requester = _user(db_session, "SelfApprover")
+    client = _ClaimBoundFakeERPClient(requester=requester, approver=requester)
+    monkeypatch.setattr(
+        expense_requests_module, "capability_client", lambda _db: client
+    )
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        resolve_field_expense_submission_context(
+            db_session,
+            ResolveFieldExpenseSubmissionContext(
+                requester_system_user_id=requester.id,
+                selected_approver_erp_id=client.approver_erp_id,
+                source_claim_id=uuid4(),
+                destination_token="self-approver-token-that-is-never-inspected",
+            ),
+        )
+
+    assert raised.value.code == "operations.expense_requests.approver_invalid"
+    assert client.inspect_claim_ids == []
+
+
 def _submit_with_claim_bound_destination(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -652,6 +715,7 @@ def _submit_with_claim_bound_destination(
     """Exercise verification and inspection before the real submit owner."""
     crm_person_id = f"crm-claim-bound-{uuid4().hex[:8]}"
     requester = _user(db, "ClaimBound")
+    approver = _user(db, "ClaimBoundApprover")
     _profile(db, requester, crm_person_id=crm_person_id)
     subscriber = _subscriber(db)
     work_order = _work_order(
@@ -661,7 +725,7 @@ def _submit_with_claim_bound_destination(
         assigned_to_crm_person_id=crm_person_id,
     )
     source_claim_id = uuid4()
-    client = _ClaimBoundFakeERPClient(requester=requester)
+    client = _ClaimBoundFakeERPClient(requester=requester, approver=approver)
     monkeypatch.setattr(
         expense_requests_module,
         "capability_client",
@@ -912,6 +976,16 @@ def test_new_submission_uses_one_uuid_and_one_v3_event(db_session):
     assert rows[0].payload["source_claim_id"] == str(request.id)
 
 
+def test_submission_owner_rejects_requester_as_selected_approver(db_session):
+    existing_request_count = db_session.query(FieldExpenseRequest).count()
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        _make_submitted_request(db_session, self_approver=True)
+
+    assert raised.value.code == "operations.expense_requests.approver_invalid"
+    assert db_session.query(FieldExpenseRequest).count() == existing_request_count
+
+
 def test_eligibility_requires_manager_approval(db_session):
     request = _make_submitted_request(db_session)
     assert "cannot be synced" in expense_sync.expense_claim_eligibility_error(request)
@@ -926,14 +1000,43 @@ def test_eligibility_requires_manager_approval(db_session):
 
 def test_only_selected_approver_can_approve(db_session):
     request = _make_submitted_request(db_session)
-    selected_approver = _user(db_session, "Selected Approver")
-    request.selected_approver_system_user_id = selected_approver.id
+    unselected_reviewer = _user(db_session, "Unselected Approver")
     db_session.commit()
 
     with pytest.raises(FieldExpenseRequestError) as exc:
-        _approve(db_session, request)
+        _approve(db_session, request, reviewer_id=unselected_reviewer.id)
 
     assert exc.value.code == "operations.expense_requests.approver_mismatch"
+
+
+def test_approval_owner_rejects_historical_self_selected_claim_before_mutation(
+    db_session,
+):
+    request = _make_submitted_request(db_session)
+    requester_id = request.requested_by_system_user_id
+    assert requester_id is not None
+    requester = request.requested_by_system_user
+    assert requester is not None
+    request.requested_by_system_user_id = None
+    request.selected_approver_system_user_id = requester_id
+    request.selected_approver_email = requester.email
+    request.selected_approver_name = requester.display_name
+    request_id = request.id
+    db_session.commit()
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        _approve(db_session, request, reviewer_id=requester_id)
+
+    persisted = db_session.get(FieldExpenseRequest, request_id)
+    assert persisted is not None
+    assert raised.value.code == "operations.expense_requests.approver_invalid"
+    assert persisted.status == "submitted"
+    assert persisted.approved_at is None
+    assert persisted.payment_destination_locked_at is None
+    assert [
+        event.payload["_expense_action"]
+        for event in _outbox_rows(db_session, persisted)
+    ] == ["expense_submit_v3"]
 
 
 # ---------------------------------------------------------------------------
@@ -1419,7 +1522,7 @@ def test_dead_event_recovery_is_previewed_linked_and_non_destructive(
 def test_local_rejection_enqueues_ordered_erp_delivery(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     request = _make_submitted_request(db_session)
-    reviewer_id = request.requested_by_system_user_id
+    reviewer_id = request.selected_approver_system_user_id
     assert reviewer_id is not None
     expense_request_id = request.id
     command_id = uuid4()
