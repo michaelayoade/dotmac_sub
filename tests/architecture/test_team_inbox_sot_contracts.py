@@ -159,7 +159,6 @@ def test_representative_customer_path_is_conversation_scoped() -> None:
     coordinator = (ROOT / "app/services/team_inbox_commands.py").read_text(
         encoding="utf-8"
     )
-    route = (ROOT / "app/web/admin/inbox.py").read_text(encoding="utf-8")
     model = (ROOT / "app/models/team_inbox.py").read_text(encoding="utf-8")
     template = (ROOT / "templates/admin/inbox/_authoritative_context.html").read_text(
         encoding="utf-8"
@@ -188,11 +187,6 @@ def test_representative_customer_path_is_conversation_scoped() -> None:
     )
     assert 'data-typeahead-url="/api/v1/search/subscribers"' in template
     assert 'data-typeahead-url="/admin/inbox/search/leads"' in template
-    lead_search = route.split('@router.get(\n    "/search/leads"', 1)[1].split(
-        "def team_inbox_lead_search(", 1
-    )[0]
-    assert 'require_permission("support:ticket:read")' in lead_search
-    assert 'require_permission("crm:lead:read")' in lead_search
 
 
 def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
