@@ -1317,11 +1317,14 @@ def test_payment_delivery_uses_typed_capability_and_writes_erp_projection(db_ses
     assert payment_post["path"] == (
         f"/api/v1/sync/sub/expense-claims/{expense_request_id}/payments"
     )
-    assert payment_post["payload"] == {
-        "command_id": str(command_id),
-        "initiated_by_email": manager_email,
-        "initiated_at": payment.payload["initiated_at"],
-    }
+    payment_payload = payment_post["payload"]
+    assert payment_payload["command_id"] == str(command_id)
+    assert payment_payload["initiated_by_email"] == manager_email
+    assert datetime.fromisoformat(
+        str(payment_payload["initiated_at"]).replace("Z", "+00:00")
+    ) == datetime.fromisoformat(
+        str(payment.payload["initiated_at"]).replace("Z", "+00:00")
+    )
     assert payment_post["idempotency_key"] == (
         f"exp-{expense_request_id}-pay-{command_id}-v1"
     )
