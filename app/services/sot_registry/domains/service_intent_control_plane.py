@@ -97,8 +97,12 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "OfferVersionCreate.access_requirement supplied "
-                            "explicitly by the billing-catalog-write caller; "
-                            "no application-level fallback"
+                            "explicitly by a caller holding both "
+                            "catalog:billing_write (route-level) and "
+                            "catalog:offer_version:admission (re-verified "
+                            "fresh, after the per-version advisory lock, "
+                            "inside the admission command); no "
+                            "application-level fallback"
                         ),
                     ),
                     AuthorityInput(
@@ -140,22 +144,38 @@ DOMAIN = DomainSOT(
                         "the result, it does not construct the row."
                     ),
                     locking=(
-                        "The reviewed command locks the exact offer version "
-                        "before comparing its reviewed fingerprint; RBAC "
-                        "permission is re-verified fresh inside that same "
-                        "transaction, never trusted from an earlier check."
+                        "The reviewed classification command locks the exact "
+                        "offer version before comparing its reviewed "
+                        "fingerprint; RBAC permission is re-verified fresh "
+                        "inside that same transaction, never trusted from an "
+                        "earlier check. Admission holds a transaction-scoped "
+                        "advisory lock keyed on (offer_id, version_number) "
+                        "before checking for an existing row of that identity, "
+                        "and re-verifies RBAC permission (a fresh, non-cached "
+                        "read) after acquiring that lock and before the write, "
+                        "never before it."
                     ),
                     idempotency=(
                         "One classification row per offer version, globally "
                         "unique on idempotency key; an exact-key, exact-target, "
                         "exact-fingerprint replay returns the recorded outcome "
                         "instead of retransitioning the row, and a key reused "
-                        "for a different version or target is a typed conflict."
+                        "for a different version or target is a typed conflict. "
+                        "Admission accepts an optional caller-supplied "
+                        "idempotency key (the shared idempotency_keys ledger, "
+                        "scope offer_version_admission): an exact-key replay "
+                        "with a matching (offer_id, version_number, payload) "
+                        "fingerprint returns the original row instead of a "
+                        "duplicate_version_number conflict; a key reused with a "
+                        "different target or payload is a typed "
+                        "idempotency_conflict. A caller that supplies no key "
+                        "gets a fresh one per request and is not idempotent."
                     ),
                     retries=(
-                        "A stale preview fails closed and is retried only "
-                        "from a fresh preview; every other refusal is "
-                        "terminal for that command."
+                        "A stale classification preview fails closed and is "
+                        "retried only from a fresh preview; an admission retry "
+                        "is safe only when it reuses its original idempotency "
+                        "key; every other refusal is terminal for that command."
                     ),
                 ),
                 errors=ErrorContract(
@@ -167,10 +187,16 @@ DOMAIN = DomainSOT(
                         "service_intent.offer_access_requirement.immutable_access_requirement",
                         "service_intent.offer_access_requirement.invalid_worklist_page",
                         "service_intent.offer_access_requirement.missing_review_reference",
+                        "service_intent.offer_access_requirement.review_reference_too_long",
+                        "service_intent.offer_access_requirement.review_reference_mismatch",
                         "service_intent.offer_access_requirement.invalid_target_classification",
+                        "service_intent.offer_access_requirement.offer_not_found",
                         "service_intent.offer_access_requirement.offer_version_not_found",
                         "service_intent.offer_access_requirement.already_classified",
+                        "service_intent.offer_access_requirement.duplicate_version_number",
+                        "service_intent.offer_access_requirement.admission_integrity_violation",
                         "service_intent.offer_access_requirement.missing_idempotency_key",
+                        "service_intent.offer_access_requirement.idempotency_key_too_long",
                         "service_intent.offer_access_requirement.missing_reason",
                         "service_intent.offer_access_requirement.idempotency_conflict",
                         "service_intent.offer_access_requirement.permission_denied",

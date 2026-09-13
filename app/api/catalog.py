@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -88,7 +88,7 @@ def _offer_access_requirement_http_error(
         return HTTPException(status_code=404, detail=exc.message)
     if exc.code.endswith("permission_denied"):
         return HTTPException(status_code=403, detail=exc.message)
-    if exc.code.endswith("duplicate_version_number"):
+    if exc.code.endswith(("duplicate_version_number", "admission_integrity_violation")):
         return HTTPException(status_code=409, detail=exc.message)
     if exc.code.endswith(
         ("idempotency_key_too_long", "review_reference_too_long")
@@ -772,11 +772,16 @@ def create_offer_version(
     payload: OfferVersionCreate,
     db: Session = Depends(get_db),
     auth: dict = Depends(_require_billing_catalog_write),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     actor_id, actor_type = _actor(auth)
     try:
         return catalog_service.offer_versions.create(
-            db, payload, actor_id=actor_id, actor_type=actor_type
+            db,
+            payload,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            idempotency_key=idempotency_key,
         )
     except OfferAccessRequirementError as exc:
         raise _offer_access_requirement_http_error(exc) from exc

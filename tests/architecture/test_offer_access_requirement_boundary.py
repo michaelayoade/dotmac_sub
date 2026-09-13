@@ -9,6 +9,7 @@ territory must be caught, and an unrelated near-miss must not be flagged.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from app.services.rbac_catalog import _PERMISSION_KEY_PATTERN
@@ -93,6 +94,29 @@ def _find_leaks(
     return leaks
 
 
+def _enclosing_function_span(
+    tree: ast.AST, lineno: int
+) -> tuple[int, int] | None:
+    """The smallest (innermost) function/async-function body containing
+    ``lineno`` (1-based), as an inclusive ``(start_line, end_line)`` span, or
+    ``None`` if ``lineno`` sits outside every function (e.g. a module-level
+    import, class-body field, or top-level constant)."""
+
+    best: tuple[int, int] | None = None
+    best_size = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        start = node.lineno
+        end = getattr(node, "end_lineno", None) or node.lineno
+        if start <= lineno <= end:
+            size = end - start
+            if best_size is None or size < best_size:
+                best = (start, end)
+                best_size = size
+    return best
+
+
 def _find_cross_domain_leaks_within_allowed_files(
     root: Path,
     *,
@@ -109,12 +133,19 @@ def _find_cross_domain_leaks_within_allowed_files(
     access-requirement-to-PPPoE/connection-type fallback added inside one of
     those already-allowed files (e.g. near the existing
     ``ConnectionType``/PPPoE definitions in ``app/models/catalog.py``) would
-    never be scanned at all. This walks each allowed ``*.py`` file's own
-    lines and flags any guarded-token line with a cross-domain token within
-    ``window`` lines of it — catching a same-block fallback derivation
-    without flagging an unrelated mention many lines away in the same file
-    (verified against every current allowed file's real content: none of
-    them trip this today).
+    never be scanned at all.
+
+    For a guarded-token line that sits inside a function/async-function
+    body, this checks the ENTIRE enclosing function body for a cross-domain
+    token — an AST scope check, not a fixed line-window, so a fallback split
+    across an ``if``/``elif`` (condition on one line, the forbidden token
+    several lines later in the body) is caught exactly the same as one
+    planted on a single line. A guarded-token line with no enclosing
+    function (e.g. a class-body field or a top-level import) falls back to
+    the narrow ``window``-line check, which is verified against every
+    current allowed file's real content: none of them trip this today, and
+    such lines are far less likely to hide a derived fallback than a
+    function body is.
 
     Restricted to ``*.py`` allowed paths: the design docs in ``allowed``
     (``docs/...md``) legitimately DISCUSS this exact prohibition in prose
@@ -130,17 +161,28 @@ def _find_cross_domain_leaks_within_allowed_files(
         path = root / relative
         if not path.is_file():
             continue
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        lines = text.splitlines()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
         guarded_line_indexes = [
             index
             for index, line in enumerate(lines)
             if any(token in line for token in guarded)
         ]
         for index in guarded_line_indexes:
-            start = max(0, index - window)
-            end = min(len(lines), index + window + 1)
-            nearby = "\n".join(lines[start:end])
-            if any(token in nearby for token in cross_domain):
+            lineno = index + 1
+            span = _enclosing_function_span(tree, lineno) if tree is not None else None
+            if span is not None:
+                start_line, end_line = span
+                scope_text = "\n".join(lines[start_line - 1 : end_line])
+            else:
+                start = max(0, index - window)
+                end = min(len(lines), index + window + 1)
+                scope_text = "\n".join(lines[start:end])
+            if any(token in scope_text for token in cross_domain):
                 leaks.append(f"{relative}:{index + 1}")
     return leaks
 
@@ -244,6 +286,42 @@ def test_content_guard_catches_a_fallback_planted_inside_an_allowed_file(
         allowed=("app/models/catalog.py",),
     )
     assert any(leak.startswith("app/models/catalog.py:") for leak in leaks)
+
+
+def test_content_guard_catches_a_fallback_split_across_an_if_elif_block(
+    tmp_path,
+):
+    """Sensitivity proof for the AST-scope broadening: a fallback whose two
+    halves are more than ``_NEARBY_WINDOW`` (3) physical lines apart — the
+    guarded token only in an ``if``/``elif`` CONDITION, the cross-domain
+    token several lines later in the body — used to pass the old fixed
+    line-window check undetected. It must still be caught because both
+    tokens live inside the SAME enclosing function."""
+
+    (tmp_path / "app" / "models").mkdir(parents=True)
+    planted = tmp_path / "app" / "models" / "catalog.py"
+    planted.write_text(
+        "def resolve_default_connection(offer_version):\n"
+        "    if offer_version.access_requirement == 'unclassified':\n"
+        "        # filler line 1\n"
+        "        # filler line 2\n"
+        "        # filler line 3\n"
+        "        # filler line 4\n"
+        "        fallback = 'pppoe'\n"
+        "    elif offer_version.access_requirement == 'network_access':\n"
+        "        fallback = None\n"
+        "    else:\n"
+        "        fallback = None\n"
+        "    return fallback\n"
+    )
+
+    leaks = _find_cross_domain_leaks_within_allowed_files(
+        tmp_path,
+        guarded=_GUARDED_TOKENS,
+        cross_domain=_CROSS_DOMAIN_TOKENS,
+        allowed=("app/models/catalog.py",),
+    )
+    assert any(leak.startswith("app/models/catalog.py:2") for leak in leaks), leaks
 
 
 def test_content_guard_does_not_flag_unrelated_definitions_sharing_one_file(

@@ -42,6 +42,7 @@ from app.models.catalog import (
     OfferVersion,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.idempotency import IdempotencyKey
 from app.models.system_user import SystemUser
 from app.schemas.catalog import OfferVersionCreate
 from app.services import catalog_billing_governance as billing_governance
@@ -93,6 +94,20 @@ _REAL_CLASSIFICATIONS = (
 _IDEMPOTENCY_KEY_MAX_LENGTH = 120
 _REVIEW_REFERENCE_MAX_LENGTH = 200
 
+#: Scope for admission's row in the shared ``idempotency_keys`` ledger
+#: (``app/models/idempotency.py``) — the same generic replay-safe mechanism
+#: several other owners already use, rather than a bespoke per-owner table.
+_ADMISSION_IDEMPOTENCY_SCOPE = "offer_version_admission"
+
+#: Name of the DB-level unique constraint on
+#: ``(offer_versions.offer_id, offer_versions.version_number)``
+#: (``alembic/versions/610_offer_versions_unique_version_number.py``). Used
+#: to distinguish an actual duplicate-version-number race from an unrelated
+#: integrity violation (e.g. a dangling FK on ``region_zone_id``) hitting the
+#: same broad ``except IntegrityError`` — the latter must never be mislabeled
+#: as ``duplicate_version_number``.
+_DUPLICATE_VERSION_NUMBER_CONSTRAINT = "uq_offer_versions_offer_id_version_number"
+
 
 class OfferAccessRequirementError(DomainError):
     """Fail-closed offer-access-requirement admission/classification error."""
@@ -114,6 +129,34 @@ def _digest(value: object) -> str:
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _admission_fingerprint(payload: OfferVersionCreate) -> str:
+    """Fingerprint of the exact client-supplied admission request.
+
+    Computed over the RAW payload the caller supplied (never over
+    server-resolved catalog defaults) so a genuine retry of the same request
+    fingerprints identically regardless of how default resolution evolves.
+    """
+
+    return _digest(payload.model_dump(mode="json"))
+
+
+def _is_duplicate_version_number_violation(exc: IntegrityError) -> bool:
+    """True only for the specific (offer_id, version_number) unique violation.
+
+    Distinguishes it from any other ``IntegrityError`` (e.g. a dangling FK on
+    ``region_zone_id``/``usage_allowance_id``/``sla_profile_id``/
+    ``policy_set_id``) that must never be mislabeled as a duplicate. Matches
+    on the real Postgres constraint name when available, and falls back to
+    both column names appearing together (SQLite's error text names columns,
+    not the constraint) — a plain FK-violation message names neither pair.
+    """
+
+    message = str(exc.orig) if exc.orig is not None else str(exc)
+    if _DUPLICATE_VERSION_NUMBER_CONSTRAINT in message:
+        return True
+    return "offer_id" in message and "version_number" in message
 
 
 def principal_label(system_user_id: UUID) -> str:
@@ -140,7 +183,12 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
     gates.
     """
 
-    user = db.get(SystemUser, system_user_id)
+    # populate_existing=True forces a fresh read of this row even if an
+    # earlier call in this same transaction already populated the identity
+    # map for this id — without it, a second call here could silently return
+    # the FIRST call's cached object and never observe a commit (e.g. a
+    # revoked grant or a deactivated principal) that happened in between.
+    user = db.get(SystemUser, system_user_id, populate_existing=True)
     if user is None or not user.is_active:
         raise _error(
             "permission_denied",
@@ -186,6 +234,11 @@ def _verify_admission_permission(
     wildcard bypass still applies via ``has_permission``'s existing "admin"
     role shortcut); any other claimed ``actor_type`` is refused.
 
+    ``_admit`` calls this AFTER acquiring the per-(offer_id, version_number)
+    advisory lock, not before — checking earlier would leave a window where a
+    grant revoked while this call waited on the lock is never observed
+    (mirrors ``_classify``'s re-verification immediately before its write).
+
     No identity claimed at all (``actor_id`` and ``actor_type`` both
     ``None``) is treated as an internal, system-initiated admission — this
     is the existing convention ``OfferVersions.create`` already falls back
@@ -217,7 +270,13 @@ def _verify_admission_permission(
             "permission_denied",
             "Offer version admission requires a real staff principal id.",
         ) from exc
-    user = db.get(SystemUser, system_user_id)
+    # populate_existing=True forces a fresh read (see
+    # _verify_classify_permission's identical comment): admission calls this
+    # AFTER acquiring the per-(offer_id, version_number) advisory lock, and
+    # without a forced fresh read a revocation committed by another
+    # transaction while this one waited on the lock could still be missed if
+    # this id was already in the identity map.
+    user = db.get(SystemUser, system_user_id, populate_existing=True)
     if user is None or not user.is_active:
         raise _error(
             "permission_denied",
@@ -347,9 +406,20 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
             offer_id=str(payload.offer_id),
         )
 
-    _verify_admission_permission(
-        db, actor_id=command.actor_id, actor_type=command.actor_type
-    )
+    key = (command.context.idempotency_key or "").strip()
+    if key and len(key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
+        raise _error(
+            "idempotency_key_too_long",
+            "idempotency_key exceeds the stored column's maximum length.",
+            max_length=_IDEMPOTENCY_KEY_MAX_LENGTH,
+        )
+
+    # Lock order is fixed and identical for every admission: the idempotency
+    # key first (if supplied), then the (offer_id, version_number) target.
+    # Every caller acquires them in this same order, so this can never
+    # deadlock against another admission.
+    if key:
+        _acquire_xact_lock(db, "offer_access_requirement:admit_idempotency", key)
 
     # Serialize concurrent admissions targeting the SAME (offer_id,
     # version_number) before either one can observe the other's uncommitted
@@ -360,6 +430,42 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
     _acquire_xact_lock(
         db, "offer_access_requirement:admit", payload.offer_id, payload.version_number
     )
+
+    # Re-verify permission AFTER acquiring both locks above, never before:
+    # checking earlier would leave a window where a grant revoked while this
+    # call waited on a lock is never observed (mirrors _classify's
+    # re-verification immediately before its write).
+    _verify_admission_permission(
+        db, actor_id=command.actor_id, actor_type=command.actor_type
+    )
+
+    fingerprint = _admission_fingerprint(payload)
+    if key:
+        reservation = db.scalar(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _ADMISSION_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == key,
+            )
+        )
+        if reservation is not None:
+            if reservation.ref_id != fingerprint:
+                raise _error(
+                    "idempotency_conflict",
+                    "This idempotency key was already used for a different "
+                    "offer version admission.",
+                    offer_id=str(payload.offer_id),
+                    version_number=payload.version_number,
+                )
+            replayed = db.get(OfferVersion, reservation.account_id)
+            if replayed is None:
+                raise _error(
+                    "idempotency_conflict",
+                    "The prior admission result is no longer available.",
+                    offer_id=str(payload.offer_id),
+                    version_number=payload.version_number,
+                )
+            return replayed
+
     existing = db.scalar(
         select(OfferVersion).where(
             OfferVersion.offer_id == payload.offer_id,
@@ -410,16 +516,52 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
         db.flush()
     except IntegrityError as exc:
         # Defense in depth for a race the advisory lock above should already
-        # have serialized (e.g. a future DB-level uniqueness constraint, or
-        # a writer that bypasses this command's lock): a raw constraint
-        # violation still surfaces as this command's own typed conflict,
-        # never a raw database error.
+        # have serialized (e.g. a writer that bypasses this command's lock):
+        # a raw constraint violation still surfaces as this command's own
+        # typed conflict. Only the SPECIFIC (offer_id, version_number)
+        # unique violation is ever mislabeled as duplicate_version_number —
+        # any other integrity violation (e.g. a dangling FK on
+        # region_zone_id/usage_allowance_id/sla_profile_id/policy_set_id)
+        # surfaces as its own distinct, honestly-named typed error.
+        if _is_duplicate_version_number_violation(exc):
+            raise _error(
+                "duplicate_version_number",
+                "This offer already has a version with this version_number.",
+                offer_id=str(payload.offer_id),
+                version_number=payload.version_number,
+            ) from exc
         raise _error(
-            "duplicate_version_number",
-            "This offer already has a version with this version_number.",
+            "admission_integrity_violation",
+            "Offer version admission violated a database integrity "
+            "constraint unrelated to version_number uniqueness.",
             offer_id=str(payload.offer_id),
             version_number=payload.version_number,
+            detail=str(exc.orig) if exc.orig is not None else str(exc),
         ) from exc
+
+    if key:
+        db.add(
+            IdempotencyKey(
+                scope=_ADMISSION_IDEMPOTENCY_SCOPE,
+                key=key,
+                account_id=version.id,
+                ref_id=fingerprint,
+            )
+        )
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            # The idempotency-key advisory lock above should already have
+            # serialized concurrent uses of this exact key; this is defense
+            # in depth against a writer that bypasses that lock.
+            raise _error(
+                "idempotency_conflict",
+                "This idempotency key was already used for a different "
+                "offer version admission.",
+                offer_id=str(payload.offer_id),
+                version_number=payload.version_number,
+            ) from exc
+
     billing_governance.stage_billing_catalog_change(
         db,
         action="version_created",

@@ -660,6 +660,13 @@ class CatalogOffer(Base):
 
 class OfferVersion(Base):
     __tablename__ = "offer_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "offer_id",
+            "version_number",
+            name="uq_offer_versions_offer_id_version_number",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

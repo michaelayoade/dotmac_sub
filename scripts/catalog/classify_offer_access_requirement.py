@@ -14,8 +14,9 @@ Dry-run first, three modes:
         --offer-version-id ... --proposed network_access \\
         --review-reference JIRA-1234
 
-    # 3. Apply: requires the exact fingerprint from step 2, a REAL
-    #    authenticated staff principal, and an idempotency key.
+    # 3. Apply: requires the exact fingerprint from step 2, the operator's
+    #    claimed staff-principal identity (verified against real RBAC
+    #    grants — see below), and an idempotency key.
     python -m scripts.catalog.classify_offer_access_requirement \\
         --offer-version-id ... --proposed network_access \\
         --review-reference JIRA-1234 --apply \\
