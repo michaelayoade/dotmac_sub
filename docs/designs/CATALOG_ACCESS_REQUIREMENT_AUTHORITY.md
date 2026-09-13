@@ -62,15 +62,28 @@ isolation.
 - `unclassified` is never read as, defaulted to, or treated like PPPoE or any
   connection-type fallback anywhere in the codebase — see the architecture
   guard below.
-- Admission is gated by `catalog:offer_version:admission`
-  (`alembic/versions/609_offer_version_admission_permission.py`), verified
-  fresh (`_verify_admission_permission`) AFTER acquiring the per-(offer_id,
-  version_number) advisory lock, never before — the same discipline as
-  classification's re-verification immediately before its write. The route
-  itself still requires `catalog:billing_write` (unchanged); the migration
-  grants the new permission to every role that already held
-  `catalog:billing_write`, so no existing caller loses the ability to admit
-  an offer version.
+- Admission authorization is decided ENTIRELY at the route layer
+  (`app/api/catalog.py`'s `require_any_permission(catalog:billing_write,
+  catalog:offer_version:admission)` dependency on `POST`/`PATCH
+  /offer-versions`) — matching this repo's own existing pattern in
+  `app/services/billing/subledger_opening.py`. `AdmitOfferVersionCommand`
+  makes NO authorization decision of its own: it takes a REQUIRED, typed
+  `AdmissionPrincipal` (`StaffPrincipal` | `ApiKeyPrincipal` |
+  `SystemAdmission`) recorded purely for audit/attribution, never re-checked
+  against RBAC. `catalog:offer_version:admission`
+  (`alembic/versions/609_offer_version_admission_permission.py`) is a
+  genuine, narrower, OPT-IN alternative to `catalog:billing_write` — a
+  caller holding either satisfies the route — so the migration seeds only
+  the permission row (mirroring 608's pattern exactly) and copies no grants:
+  there is no existing-caller regression to prevent, because nobody's
+  existing `catalog:billing_write` access is narrowed or removed.
+  `SystemAdmission` (an admission with no authenticated end-user context at
+  all) is confined to one enumerated production call site
+  (`app/services/catalog/offers.py`), proven by an AST-based, test-enforced
+  allowlist guard with its own planted-leak sensitivity proof
+  (`tests/architecture/test_offer_access_requirement_boundary.py`) — a
+  build-time/reviewed-call-site guarantee, not an unforgeable runtime
+  credential.
 - `(offer_id, version_number)` is enforced as a real DB-level unique
   constraint (`uq_offer_versions_offer_id_version_number`,
   `alembic/versions/610_offer_versions_unique_version_number.py`), not only
@@ -114,7 +127,14 @@ this module's `ServiceContract`.
 - **Permission is re-verified fresh, inside the command's own transaction**
   (`_verify_classify_permission`), not trusted from an earlier, separately
   computed boolean. A grant revoked between an operator's preview and their
-  apply is caught here — there is no look-then-act gap.
+  apply is caught here. This NARROWS but does not fully ELIMINATE the
+  look-then-act window: no RBAC row (`system_users`, `roles`,
+  `role_permissions`, `permissions`) is locked, so a revocation committed in
+  the instant between this re-check and the write's commit is not observed.
+  This CLI's trust model is host/container shell access, not RBAC alone (see
+  "RBAC" below) — closing that residual window would require row-locking
+  the entire RBAC surface across five-plus tables, judged disproportionate
+  to a trust-the-operator CLI boundary with no pre-authorizing route.
 - **Refusals:** a stale preview (fingerprint mismatch), a missing offer
   version, a proposed target of `unclassified`, an idempotency key reused
   with different command inputs (`idempotency_conflict` — a typed error, not

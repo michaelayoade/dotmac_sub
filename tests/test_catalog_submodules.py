@@ -67,6 +67,7 @@ from app.schemas.catalog import (
     ValidationAddOnRequest,
 )
 from app.services import catalog as catalog_service
+from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -299,7 +300,14 @@ class TestOfferVersions:
         assert version.version_number == 1
 
     def test_create_offer_version_offer_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc_info:
+        """The migrated service correctly raises the transport-neutral
+        ``OfferAccessRequirementError`` (code ``offer_not_found``) from
+        ``service_intent.offer_access_requirement.admit_offer_version`` — not
+        a raw ``HTTPException``, which only the API layer
+        (``app/api/catalog.py``'s ``_offer_access_requirement_http_error``)
+        translates this into."""
+
+        with pytest.raises(OfferAccessRequirementError) as exc_info:
             catalog_service.offer_versions.create(
                 db_session,
                 OfferVersionCreate(
@@ -312,7 +320,7 @@ class TestOfferVersions:
                     price_basis=PriceBasis.flat,
                 ),
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.code.endswith("offer_not_found")
 
     def test_list_offer_versions(self, db_session):
         offer = _make_offer(db_session)

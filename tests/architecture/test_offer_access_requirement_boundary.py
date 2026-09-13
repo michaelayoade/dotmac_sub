@@ -30,6 +30,8 @@ _ALLOWED_PATHS = (
     "app/services/events/types.py",
     "alembic/versions/607_offer_access_requirement.py",
     "alembic/versions/608_offer_access_requirement_classify_permission.py",
+    "alembic/versions/609_offer_version_admission_permission.py",
+    "alembic/versions/610_offer_versions_unique_version_number.py",
     "scripts/catalog/classify_offer_access_requirement.py",
     "docs/SOT_RELATIONSHIP_MAP.md",
     "docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md",
@@ -373,9 +375,106 @@ def test_offer_access_requirement_permission_is_not_seeded_into_any_role():
     assert "catalog:billing_write" not in migration
 
 
+def test_offer_version_admission_permission_is_not_seeded_into_any_role():
+    """Regression for the shrunk 609 migration: admission is an OR-alternative
+    to catalog:billing_write at the route, never a hard requirement, so there
+    is no existing-caller regression to prevent by copying grants — this
+    migration seeds the permission row only, exactly like 608's pattern."""
+
+    migration = _source("alembic/versions/609_offer_version_admission_permission.py")
+    assert "role_permissions" not in migration
+    assert "catalog:billing_write" not in migration
+
+
 def test_offer_access_requirement_never_reuses_billing_write():
     owner = _source("app/services/catalog/offer_access_requirement.py")
     assert "catalog:billing_write" not in owner
+
+
+def test_admission_command_makes_no_authorization_decision():
+    """Sensitivity proof for the route-layer authorization redesign: the
+    admission command has no permission-verification function of its own —
+    authorization is decided entirely by the route's
+    ``require_any_permission`` dependency before the command ever runs."""
+
+    owner = _source("app/services/catalog/offer_access_requirement.py")
+    assert "_verify_admission_permission" not in owner
+    assert "def _verify_classify_permission" in owner
+
+
+#: The one production call site allowed to construct ``SystemAdmission`` —
+#: an internal/test caller that invokes ``offer_versions.create`` directly
+#: with no authenticated actor, bypassing the (always-authenticated) HTTP
+#: route entirely. Every ``tests/`` file is unconditionally exempt from this
+#: scan (matching ``_find_leaks``'s own convention above): a test fixture may
+#: freely construct ``AdmitOfferVersionCommand``/``SystemAdmission`` directly.
+_SYSTEM_ADMISSION_ALLOWED_PATHS = ("app/services/catalog/offers.py",)
+
+
+def _find_system_admission_construction_leaks(
+    root: Path, *, allowed: tuple[str, ...]
+) -> list[str]:
+    leaks: list[str] = []
+    for path in root.rglob("*.py"):
+        if "/.venv/" in str(path) or "/node_modules/" in str(path):
+            continue
+        relative = str(path.relative_to(root))
+        if relative.startswith("tests/") or relative in allowed:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "SystemAdmission(" in text:
+            leaks.append(relative)
+    return leaks
+
+
+def test_system_admission_construction_is_confined_to_the_declared_allowlist():
+    """SystemAdmission is an admission with no authenticated end-user context
+    at all. This is a BUILD-TIME/reviewed-call-site guarantee, not an
+    unforgeable runtime credential (see the class's own docstring): it proves
+    no committed, non-test file outside the allowlist constructs this type,
+    so a new "no actor" admission path is visible in review instead of
+    silently added anywhere in the tree."""
+
+    leaks = _find_system_admission_construction_leaks(
+        ROOT, allowed=_SYSTEM_ADMISSION_ALLOWED_PATHS
+    )
+    assert leaks == [], f"SystemAdmission constructed outside its allowlist: {leaks}"
+
+
+def test_system_admission_confinement_guard_catches_a_planted_leak(tmp_path):
+    """Sensitivity proof: a planted construction outside the allowlist, in an
+    isolated temp tree, is caught."""
+
+    (tmp_path / "app" / "services" / "network").mkdir(parents=True)
+    leaking = tmp_path / "app" / "services" / "network" / "leaky.py"
+    leaking.write_text(
+        "from app.services.catalog.offer_access_requirement import "
+        "SystemAdmission\n"
+        "principal = SystemAdmission(reason='bypass')\n"
+    )
+
+    leaks = _find_system_admission_construction_leaks(
+        tmp_path, allowed=_SYSTEM_ADMISSION_ALLOWED_PATHS
+    )
+    assert "app/services/network/leaky.py" in leaks
+
+
+def test_system_admission_confinement_guard_does_not_flag_the_allowed_call_site(
+    tmp_path,
+):
+    """Near-miss proof: the one declared allowed call site is not flagged
+    even though it constructs ``SystemAdmission``."""
+
+    (tmp_path / "app" / "services" / "catalog").mkdir(parents=True)
+    allowed_file = tmp_path / "app" / "services" / "catalog" / "offers.py"
+    allowed_file.write_text(
+        "principal = SystemAdmission(reason='no actor supplied')\n"
+    )
+
+    leaks = _find_system_admission_construction_leaks(
+        tmp_path, allowed=_SYSTEM_ADMISSION_ALLOWED_PATHS
+    )
+    assert leaks == []
 
 
 def test_offer_versions_create_delegates_the_actual_persist_to_the_new_owner():
