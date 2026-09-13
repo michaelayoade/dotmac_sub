@@ -3981,8 +3981,14 @@ class ProjectTemplateTasks(ListResponseMixin):
                 ),
                 title=task.title,
                 description=task.description or "",
-                status=task.status,
-                priority=task.priority,
+                status=(
+                    ProjectTaskStatus(task.status) if task.status is not None else None
+                ),
+                priority=(
+                    ProjectTaskPriority(task.priority)
+                    if task.priority is not None
+                    else None
+                ),
                 effort_hours=task.effort_hours,
                 auto_create_work_order=task.auto_create_work_order,
                 work_order_requires_as_built_evidence=(
@@ -4250,8 +4256,8 @@ class ProjectTemplateTasks(ListResponseMixin):
             .with_for_update()
         ).all()
         existing_map = {str(task.id): task for task in existing_tasks}
-        for task in existing_tasks:
-            task.parent_template_task_id = None
+        for existing_task in existing_tasks:
+            existing_task.parent_template_task_id = None
         db.flush()
 
         client_to_task: dict[str, ProjectTemplateTask] = {}
