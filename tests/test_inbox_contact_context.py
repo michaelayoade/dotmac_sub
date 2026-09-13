@@ -202,7 +202,7 @@ def test_structural_fiber_lead_is_visible_without_contact_point(db_session):
         projection.leads.availability
         is team_inbox_contact_context.ContextAvailability.available
     )
-    assert projection.leads.items[0].lead_id == lead.id
+    assert projection.leads.items[0].id == lead.id
     assert projection.leads.items[0].is_conversation_lead is True
     assert projection.lead_action.lead_id == lead.id
     assert (
@@ -221,6 +221,9 @@ def test_conflicting_customer_and_structural_lead_require_identity_review(db_ses
     db_session.flush()
     subscriber = Subscriber(
         party_id=customer_party.id,
+        party_bound_at=datetime.now(UTC),
+        party_binding_source="pytest",
+        party_binding_reason="Conflicting customer identity fixture",
         first_name="Existing",
         last_name="Customer",
         email=f"customer-{uuid4()}@example.com",
@@ -259,7 +262,7 @@ def test_conflicting_customer_and_structural_lead_require_identity_review(db_ses
         projection.identity_state
         is team_inbox_contact_context.InboxIdentityState.identity_review_required
     )
-    assert projection.leads.items[0].lead_id == lead.id
+    assert projection.leads.items[0].id == lead.id
     assert (
         projection.resolution_readiness.classification
         is team_inbox_customer_completion.InboxIdentityClassification.ambiguous
