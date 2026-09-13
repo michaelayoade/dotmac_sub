@@ -12,6 +12,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import InboxContactLink, InboxConversation
 from app.services import team_inbox_commands, team_inbox_contact_links
 from app.services.owner_commands import CommandContext
+from app.services.subscriber import _default_reseller_id
 
 
 def test_same_endpoint_links_converge_on_one_active_route(engine) -> None:
@@ -25,6 +26,7 @@ def test_same_endpoint_links_converge_on_one_active_route(engine) -> None:
             email=f"team-inbox-contact-{suffix}@example.com",
             status=SubscriberStatus.active,
             is_active=True,
+            reseller_id=_default_reseller_id(setup),
         )
         setup.add(subscriber)
         setup.flush()
