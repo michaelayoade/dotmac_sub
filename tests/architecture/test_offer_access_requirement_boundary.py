@@ -51,6 +51,21 @@ _FORBIDDEN_PATHS = (
 #: raw attribute/column/string reference to the field it backs.
 _GUARDED_TOKENS = ("AccessRequirement", "access_requirement")
 
+#: The specific cross-domain vocabulary a forbidden fallback would need to
+#: reference: the exact regression the brief names — an access-requirement-
+#: to-PPPoE/connection-type fallback hiding INSIDE an already-allowed file
+#: (e.g. near ``ConnectionType``/``pppoe`` in ``app/models/catalog.py``),
+#: which the wholesale allowlist skip in ``_find_leaks`` cannot see.
+_CROSS_DOMAIN_TOKENS = ("ConnectionType", "pppoe", "PPPoE", "PPPOE")
+
+#: How many lines of slack either side of a guarded-token line still count
+#: as "nearby" for the content guard below — wide enough to catch a
+#: same-block ``if``/``return`` fallback, narrow enough that unrelated
+#: mentions elsewhere in a large allowed file (e.g. a docstring explaining
+#: the prohibition, or an unrelated class hundreds of lines away) do not
+#: false-positive. Verified against every current allowed ``*.py`` file.
+_NEARBY_WINDOW = 3
+
 
 def _source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
@@ -75,6 +90,58 @@ def _find_leaks(
         text = path.read_text(encoding="utf-8", errors="ignore")
         if any(token in text for token in tokens):
             leaks.append(relative)
+    return leaks
+
+
+def _find_cross_domain_leaks_within_allowed_files(
+    root: Path,
+    *,
+    guarded: tuple[str, ...],
+    cross_domain: tuple[str, ...],
+    allowed: tuple[str, ...],
+    window: int = _NEARBY_WINDOW,
+) -> list[str]:
+    """Content-level scan INSIDE the allowed files themselves.
+
+    ``_find_leaks`` treats every path in ``allowed`` as entirely out of
+    scope — that is correct for the guarded token itself (this is where it
+    is meant to live), but it also means a hypothetical
+    access-requirement-to-PPPoE/connection-type fallback added inside one of
+    those already-allowed files (e.g. near the existing
+    ``ConnectionType``/PPPoE definitions in ``app/models/catalog.py``) would
+    never be scanned at all. This walks each allowed ``*.py`` file's own
+    lines and flags any guarded-token line with a cross-domain token within
+    ``window`` lines of it — catching a same-block fallback derivation
+    without flagging an unrelated mention many lines away in the same file
+    (verified against every current allowed file's real content: none of
+    them trip this today).
+
+    Restricted to ``*.py`` allowed paths: the design docs in ``allowed``
+    (``docs/...md``) legitimately DISCUSS this exact prohibition in prose
+    (e.g. "never treated like PPPoE or any connection-type fallback") and
+    are out of scope here, matching ``_find_leaks``'s own ``*.py``-only
+    scope.
+    """
+
+    leaks: list[str] = []
+    for relative in allowed:
+        if not relative.endswith(".py"):
+            continue
+        path = root / relative
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        guarded_line_indexes = [
+            index
+            for index, line in enumerate(lines)
+            if any(token in line for token in guarded)
+        ]
+        for index in guarded_line_indexes:
+            start = max(0, index - window)
+            end = min(len(lines), index + window + 1)
+            nearby = "\n".join(lines[start:end])
+            if any(token in nearby for token in cross_domain):
+                leaks.append(f"{relative}:{index + 1}")
     return leaks
 
 
@@ -129,6 +196,85 @@ def test_confinement_guard_does_not_flag_an_allowed_path_in_an_isolated_tree(
     allowed_file.write_text("access_requirement = 'unclassified'\n")
 
     leaks = _find_leaks(tmp_path, tokens=_GUARDED_TOKENS, allowed=_ALLOWED_PATHS)
+    assert leaks == []
+
+
+def test_no_allowed_file_hides_a_connection_type_or_pppoe_fallback():
+    """The allowlist skip does not create a blind spot in the real tree:
+    none of today's allowed files contain an access-requirement-to-PPPoE/
+    connection-type fallback."""
+
+    leaks = _find_cross_domain_leaks_within_allowed_files(
+        ROOT,
+        guarded=_GUARDED_TOKENS,
+        cross_domain=_CROSS_DOMAIN_TOKENS,
+        allowed=_ALLOWED_PATHS,
+    )
+    assert leaks == [], (
+        "an access-requirement-to-connection-type/PPPoE fallback leaked "
+        f"inside an already-allowed file: {leaks}"
+    )
+
+
+def test_content_guard_catches_a_fallback_planted_inside_an_allowed_file(
+    tmp_path,
+):
+    """Sensitivity proof for the content-level guard: a hypothetical
+    access-requirement-to-PPPoE fallback planted INSIDE an already-allowed
+    file (mirroring the brief's own example: near ``ConnectionType``/PPPoE
+    in ``app/models/catalog.py``) is caught, proving the wholesale
+    allowlist skip in ``_find_leaks`` no longer hides this regression."""
+
+    (tmp_path / "app" / "models").mkdir(parents=True)
+    planted = tmp_path / "app" / "models" / "catalog.py"
+    planted.write_text(
+        "class ConnectionType(enum.Enum):\n"
+        "    pppoe = 'pppoe'\n"
+        "\n"
+        "def resolve_default_connection(access_requirement):\n"
+        "    fallback = ConnectionType.pppoe if access_requirement == "
+        "AccessRequirement.unclassified else None\n"
+        "    return fallback\n"
+    )
+
+    leaks = _find_cross_domain_leaks_within_allowed_files(
+        tmp_path,
+        guarded=_GUARDED_TOKENS,
+        cross_domain=_CROSS_DOMAIN_TOKENS,
+        allowed=("app/models/catalog.py",),
+    )
+    assert any(leak.startswith("app/models/catalog.py:") for leak in leaks)
+
+
+def test_content_guard_does_not_flag_unrelated_definitions_sharing_one_file(
+    tmp_path,
+):
+    """Near-miss proof: real, unrelated definitions merely sharing one
+    allowed file — the ``AccessRequirement`` enum's own declaration, and,
+    many lines away, an unrelated ``ConnectionType``/``pppoe`` enum that
+    never appears near a guarded-token line — are not flagged. Distinguishes
+    a genuine same-block fallback from two unrelated concepts that happen to
+    live in the same large file."""
+
+    (tmp_path / "app" / "models").mkdir(parents=True)
+    planted = tmp_path / "app" / "models" / "catalog.py"
+    filler = "\n".join(f"# unrelated filler line {i}" for i in range(20))
+    planted.write_text(
+        "class AccessRequirement(enum.Enum):\n"
+        "    network_access = 'network_access'\n"
+        "    no_network_access = 'no_network_access'\n"
+        "    unclassified = 'unclassified'\n"
+        f"\n{filler}\n\n"
+        "class ConnectionType(enum.Enum):\n"
+        "    pppoe = 'pppoe'\n"
+    )
+
+    leaks = _find_cross_domain_leaks_within_allowed_files(
+        tmp_path,
+        guarded=_GUARDED_TOKENS,
+        cross_domain=_CROSS_DOMAIN_TOKENS,
+        allowed=("app/models/catalog.py",),
+    )
     assert leaks == []
 
 

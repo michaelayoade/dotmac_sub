@@ -84,6 +84,16 @@ def _offer_access_requirement_http_error(
         return HTTPException(status_code=422, detail=exc.message)
     if exc.code.endswith("immutable_access_requirement"):
         return HTTPException(status_code=409, detail=exc.message)
+    if exc.code.endswith("offer_not_found"):
+        return HTTPException(status_code=404, detail=exc.message)
+    if exc.code.endswith("permission_denied"):
+        return HTTPException(status_code=403, detail=exc.message)
+    if exc.code.endswith("duplicate_version_number"):
+        return HTTPException(status_code=409, detail=exc.message)
+    if exc.code.endswith(
+        ("idempotency_key_too_long", "review_reference_too_long")
+    ):
+        return HTTPException(status_code=422, detail=exc.message)
     return HTTPException(status_code=400, detail=exc.message)
 
 
