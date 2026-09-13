@@ -722,8 +722,11 @@ implementation.
   require the owner-resolved active technician and assigned work order.
 - States: loading, empty, read failure, locally queued drafts, submitted,
   approved, rejected, canceled, paid, and ERP/payment delivery problems remain
-  distinct. Manager mode defaults to Approvals and provides a separate `My
-  requests` tab sourced from the same requester query.
+  distinct. Manager mode defaults to `Pending` and provides separate
+  `My request` and `History` tabs. The requester tab uses the same requester
+  query. The pending and resolved manager tabs filter the authoritative manager
+  projection without reinterpreting expense status, and every history item
+  links to a detailed expense projection.
 - Manager approval list: every expense card labels `Raised by` from the
   owner-supplied staff display identity. Missing historical identity is rendered
   as unavailable and is never inferred from current assignment. The manager
