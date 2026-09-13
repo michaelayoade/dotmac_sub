@@ -16,6 +16,15 @@ Both public commands (admission and reviewed classification) enter through
 ``execute_owner_command`` and perform their own persistence and transaction
 completion here — a caller builds the command and reads the result; it never
 constructs the ``OfferVersion`` row or the classification row itself.
+
+Authorization for the two commands lives at different layers, deliberately:
+admission is gated entirely at the ROUTE (``app/api/catalog.py``'s
+``require_any_permission(catalog:billing_write, catalog:offer_version:
+admission)`` dependency) — this module makes NO authorization decision for
+admission, and ``AdmitOfferVersionCommand.principal`` is audit/attribution
+evidence only. Classification has no such pre-authorizing route (its only
+caller is a trust-the-operator CLI); its permission is re-verified fresh,
+inside this module, immediately before the write.
 """
 
 from __future__ import annotations
@@ -113,9 +122,19 @@ class OfferAccessRequirementError(DomainError):
     """Fail-closed offer-access-requirement admission/classification error."""
 
 
-def _error(suffix: str, message: str, **details: object) -> OfferAccessRequirementError:
+def _error(
+    suffix: str, message: str, *, retryable: bool, **details: object
+) -> OfferAccessRequirementError:
+    """Every call site states ``retryable`` explicitly (no default): the SOT
+    manifest declares only ``stale_preview`` as retryable and every other
+    refusal as terminal — a silent ``DomainError``-inherited default of
+    ``True`` would contradict that contract for every other code."""
+
     return OfferAccessRequirementError(
-        code=f"{OWNER}.{suffix}", message=message, details=dict(details)
+        code=f"{OWNER}.{suffix}",
+        message=message,
+        details=dict(details),
+        retryable=retryable,
     )
 
 
@@ -137,9 +156,24 @@ def _admission_fingerprint(payload: OfferVersionCreate) -> str:
     Computed over the RAW payload the caller supplied (never over
     server-resolved catalog defaults) so a genuine retry of the same request
     fingerprints identically regardless of how default resolution evolves.
+
+    ``model_dump()`` alone is not enough: Pydantic fills every OMITTED
+    optional field (e.g. ``billing_cycle``) with its schema default before
+    this ever sees it, so an omitted field and an explicit value that
+    happens to equal that same default are indistinguishable in the dumped
+    dict — a request that left ``billing_cycle`` unset (letting
+    ``_admit``'s own settings-resolved default decide) could silently
+    collide or diverge against one that explicitly asked for the schema
+    default. Including ``model_fields_set`` makes "omitted" and "explicitly
+    set to the default value" fingerprint differently.
     """
 
-    return _digest(payload.model_dump(mode="json"))
+    return _digest(
+        {
+            "payload": payload.model_dump(mode="json"),
+            "fields_set": sorted(payload.model_fields_set),
+        }
+    )
 
 
 def _is_duplicate_version_number_violation(exc: IntegrityError) -> bool:
@@ -193,7 +227,8 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
         raise _error(
             "permission_denied",
             "Classification requires an active, authenticated staff principal.",
-        )
+        retryable=False,
+    )
     granted = has_permission(
         {
             "principal_id": str(system_user_id),
@@ -208,96 +243,77 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
             "permission_denied",
             "Classification requires the catalog:offer_access_requirement:"
             "classify permission.",
-        )
+        retryable=False,
+    )
 
 
-def _verify_admission_permission(
-    db: Session, *, actor_id: str | None, actor_type: str | None
-) -> None:
-    """Verify a CLAIMED admission identity against real RBAC grants.
+@dataclass(frozen=True, slots=True)
+class StaffPrincipal:
+    """An admission attributed to an authenticated staff (system_user)
+    principal. Evidence only — the ROUTE (``app/api/catalog.py``) already
+    authorized the request via ``require_any_permission(catalog:billing_write,
+    catalog:offer_version:admission)`` before this command ever runs; this
+    id is recorded for audit/attribution and is never re-checked against RBAC
+    here."""
 
-    ``AdmitOfferVersionCommand.actor_id``/``.actor_type`` previously reached
-    this command as pure audit labels: whatever string the adapter passed
-    was written to the audit trail and trusted for nothing else. But
-    ``admit_offer_version`` is itself a public command
-    (``docs/CODING_STANDARD.md`` § 2's "validates authorization scope"
-    requirement applies to the command, not only the HTTP route that
-    happens to front it today) — a caller that invokes it directly, bypassing
-    ``app/api/catalog.py``'s ``_require_billing_catalog_write`` dependency,
-    must not be able to admit a version merely by attaching a
-    plausible-looking ``actor_id``/``actor_type`` pair with no RBAC behind it.
+    system_user_id: UUID
 
-    When BOTH are supplied, this re-checks the claim, fresh, against live
-    RBAC rows for ``ADMISSION_SCOPE`` — the same never-trust-the-caller's-own-
-    determination discipline as ``_verify_classify_permission``. Today only
-    ``system_user`` principals can hold this permission (the admin/``*``
-    wildcard bypass still applies via ``has_permission``'s existing "admin"
-    role shortcut); any other claimed ``actor_type`` is refused.
 
-    ``_admit`` calls this AFTER acquiring the per-(offer_id, version_number)
-    advisory lock, not before — checking earlier would leave a window where a
-    grant revoked while this call waited on the lock is never observed
-    (mirrors ``_classify``'s re-verification immediately before its write).
+@dataclass(frozen=True, slots=True)
+class ApiKeyPrincipal:
+    """An admission attributed to an authenticated API-key principal.
+    Evidence only, for the same reason as :class:`StaffPrincipal`."""
 
-    No identity claimed at all (``actor_id`` and ``actor_type`` both
-    ``None``) is treated as an internal, system-initiated admission — this
-    is the existing convention ``OfferVersions.create`` already falls back
-    to (``actor="system:offer_version_admission"``) for callers with no
-    authenticated end-user context (seed data, fixtures, internal tooling);
-    it is not new here, and is deliberately NOT RBAC-gated. A partially
-    supplied pair (one of the two present) is always refused: it can only be
-    an unverifiable claim, never a legitimate "no actor" case.
+    api_key_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SystemAdmission:
+    """An admission with no authenticated end-user context at all — internal
+    tooling, seed data, or a test fixture calling this command directly
+    rather than through the authorized HTTP route.
+
+    Construction of this type is confined to an explicit, test-enforced
+    allowlist of call sites
+    (``tests/architecture/test_offer_access_requirement_boundary.py``). That
+    guard is a BUILD-TIME/reviewed-call-site guarantee — it proves no
+    *committed, non-test* file outside the allowlist constructs this type —
+    it is NOT an unforgeable runtime credential: any code actually running
+    inside that allowed module can still construct one. It exists to make an
+    unreviewed new "no actor" admission path visible in review, not to
+    cryptographically bind identity.
     """
 
-    if actor_id is None and actor_type is None:
-        return
-    if not actor_id or not actor_type:
-        raise _error(
-            "permission_denied",
-            "A partially-specified admission actor is refused; supply both "
-            "actor_id and actor_type, or neither.",
-        )
-    if actor_type != "system_user":
-        raise _error(
-            "permission_denied",
-            "Offer version admission requires an authenticated staff "
-            "(system_user) principal.",
-        )
-    try:
-        system_user_id = UUID(str(actor_id))
-    except ValueError as exc:
-        raise _error(
-            "permission_denied",
-            "Offer version admission requires a real staff principal id.",
-        ) from exc
-    # populate_existing=True forces a fresh read (see
-    # _verify_classify_permission's identical comment): admission calls this
-    # AFTER acquiring the per-(offer_id, version_number) advisory lock, and
-    # without a forced fresh read a revocation committed by another
-    # transaction while this one waited on the lock could still be missed if
-    # this id was already in the identity map.
-    user = db.get(SystemUser, system_user_id, populate_existing=True)
-    if user is None or not user.is_active:
-        raise _error(
-            "permission_denied",
-            "Offer version admission requires an active, authenticated "
-            "staff principal.",
-        )
-    granted = has_permission(
-        {
-            "principal_id": str(system_user_id),
-            "principal_type": "system_user",
-            "roles": set(system_user_role_names(db, system_user_id)),
-        },
-        db,
-        ADMISSION_SCOPE,
-    )
-    if not granted:
-        raise _error(
-            "permission_denied",
-            f"Offer version admission requires the {ADMISSION_SCOPE} "
-            "permission.",
-        )
+    reason: str
+
+
+#: The closed set of ways an admission can be attributed. Never used for an
+#: authorization decision — see ``AdmitOfferVersionCommand.principal``'s
+#: docstring.
+AdmissionPrincipal = StaffPrincipal | ApiKeyPrincipal | SystemAdmission
+
+
+def admission_actor_label(principal: AdmissionPrincipal) -> str:
+    """Human-readable ``CommandContext.actor`` label for one principal."""
+
+    if isinstance(principal, StaffPrincipal):
+        return f"system_user:{principal.system_user_id}"
+    if isinstance(principal, ApiKeyPrincipal):
+        return f"api_key:{principal.api_key_id}"
+    return f"system:{principal.reason}"
+
+
+def _admission_actor_evidence(
+    principal: AdmissionPrincipal,
+) -> tuple[str | None, str | None]:
+    """``(actor_id, actor_type)`` evidence strings for the billing-governance
+    audit participant — attribution only, never an authorization input."""
+
+    if isinstance(principal, StaffPrincipal):
+        return str(principal.system_user_id), "system_user"
+    if isinstance(principal, ApiKeyPrincipal):
+        return str(principal.api_key_id), "api_key"
+    return None, None
 
 
 def _lock_key(*parts: object) -> int:
@@ -349,7 +365,8 @@ def validate_admission_access_requirement(value: object) -> AccessRequirement:
             "invalid_access_requirement",
             "Offer version creation requires an explicit access_requirement value.",
             value=value,
-        )
+        retryable=False,
+    )
     return value
 
 
@@ -367,15 +384,22 @@ def assert_access_requirement_immutable(update_payload: Mapping[str, object]) ->
             "immutable_access_requirement",
             "offer_versions.access_requirement is immutable outside the "
             "reviewed classification command.",
-        )
+        retryable=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class AdmitOfferVersionCommand:
     context: CommandContext
     payload: OfferVersionCreate
-    actor_id: str | None = None
-    actor_type: str | None = None
+    #: REQUIRED, no default. Authorization for admission is decided entirely
+    #: at the route layer (``app/api/catalog.py``'s
+    #: ``require_any_permission(catalog:billing_write,
+    #: catalog:offer_version:admission)`` dependency) before this command is
+    #: ever constructed — this command makes NO authorization decision of
+    #: its own. ``principal`` is recorded for audit/attribution only; every
+    #: caller must construct one explicitly (see ``AdmissionPrincipal``).
+    principal: AdmissionPrincipal
 
 
 def admit_offer_version(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
@@ -404,7 +428,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
             "offer_not_found",
             "Offer not found.",
             offer_id=str(payload.offer_id),
-        )
+        retryable=False,
+    )
 
     key = (command.context.idempotency_key or "").strip()
     if key and len(key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
@@ -412,7 +437,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
             "idempotency_key_too_long",
             "idempotency_key exceeds the stored column's maximum length.",
             max_length=_IDEMPOTENCY_KEY_MAX_LENGTH,
-        )
+        retryable=False,
+    )
 
     # Lock order is fixed and identical for every admission: the idempotency
     # key first (if supplied), then the (offer_id, version_number) target.
@@ -431,14 +457,6 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
         db, "offer_access_requirement:admit", payload.offer_id, payload.version_number
     )
 
-    # Re-verify permission AFTER acquiring both locks above, never before:
-    # checking earlier would leave a window where a grant revoked while this
-    # call waited on a lock is never observed (mirrors _classify's
-    # re-verification immediately before its write).
-    _verify_admission_permission(
-        db, actor_id=command.actor_id, actor_type=command.actor_type
-    )
-
     fingerprint = _admission_fingerprint(payload)
     if key:
         reservation = db.scalar(
@@ -455,7 +473,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
                     "offer version admission.",
                     offer_id=str(payload.offer_id),
                     version_number=payload.version_number,
-                )
+        retryable=False,
+    )
             replayed = db.get(OfferVersion, reservation.account_id)
             if replayed is None:
                 raise _error(
@@ -463,7 +482,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
                     "The prior admission result is no longer available.",
                     offer_id=str(payload.offer_id),
                     version_number=payload.version_number,
-                )
+        retryable=False,
+    )
             return replayed
 
     existing = db.scalar(
@@ -480,7 +500,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
             "as a new row.",
             offer_id=str(payload.offer_id),
             version_number=payload.version_number,
-        )
+        retryable=False,
+    )
 
     data = payload.model_dump()
     data["access_requirement"] = validate_admission_access_requirement(
@@ -529,7 +550,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
                 "This offer already has a version with this version_number.",
                 offer_id=str(payload.offer_id),
                 version_number=payload.version_number,
-            ) from exc
+        retryable=False,
+    ) from exc
         raise _error(
             "admission_integrity_violation",
             "Offer version admission violated a database integrity "
@@ -537,7 +559,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
             offer_id=str(payload.offer_id),
             version_number=payload.version_number,
             detail=str(exc.orig) if exc.orig is not None else str(exc),
-        ) from exc
+        retryable=False,
+    ) from exc
 
     if key:
         db.add(
@@ -560,16 +583,20 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
                 "offer version admission.",
                 offer_id=str(payload.offer_id),
                 version_number=payload.version_number,
-            ) from exc
+        retryable=False,
+    ) from exc
 
+    evidence_actor_id, evidence_actor_type = _admission_actor_evidence(
+        command.principal
+    )
     billing_governance.stage_billing_catalog_change(
         db,
         action="version_created",
         entity_type="offer_version",
         entity_id=version.id,
         changes=data,
-        actor_id=command.actor_id,
-        actor_type=command.actor_type,
+        actor_id=evidence_actor_id,
+        actor_type=evidence_actor_type,
         offer_id=version.offer_id,
     )
     return version
@@ -604,10 +631,16 @@ def list_unclassified_offer_versions(
 
     if limit < 1 or limit > 500:
         raise _error(
-            "invalid_worklist_page", "Worklist limit must be between 1 and 500."
+            "invalid_worklist_page",
+            "Worklist limit must be between 1 and 500.",
+            retryable=False,
         )
     if offset < 0:
-        raise _error("invalid_worklist_page", "Worklist offset cannot be negative.")
+        raise _error(
+            "invalid_worklist_page",
+            "Worklist offset cannot be negative.",
+            retryable=False,
+        )
 
     base_query = select(OfferVersion).where(
         OfferVersion.access_requirement == AccessRequirement.unclassified
@@ -720,26 +753,30 @@ def preview_classify_offer_version_access_requirement(
         raise _error(
             "missing_review_reference",
             "Classification requires a durable review reference.",
-        )
+        retryable=False,
+    )
     if len(review_reference) > _REVIEW_REFERENCE_MAX_LENGTH:
         raise _error(
             "review_reference_too_long",
             "review_reference exceeds the stored column's maximum length.",
             max_length=_REVIEW_REFERENCE_MAX_LENGTH,
-        )
+        retryable=False,
+    )
     if query.proposed_access_requirement not in _REAL_CLASSIFICATIONS:
         raise _error(
             "invalid_target_classification",
             "The proposed classification must be a real access requirement, "
             "never unclassified.",
-        )
+        retryable=False,
+    )
     version = db.get(OfferVersion, query.offer_version_id)
     if version is None:
         raise _error(
             "offer_version_not_found",
             "The offer version does not exist.",
             offer_version_id=str(query.offer_version_id),
-        )
+        retryable=False,
+    )
     current = version.access_requirement
 
     existing = db.scalar(
@@ -763,7 +800,8 @@ def preview_classify_offer_version_access_requirement(
                     "exact review reference recorded on the original "
                     "classification.",
                     offer_version_id=str(version.id),
-                )
+        retryable=False,
+    )
             return OfferAccessRequirementClassificationPreview(
                 offer_version_id=version.id,
                 current_access_requirement=existing.previous_access_requirement,
@@ -779,7 +817,8 @@ def preview_classify_offer_version_access_requirement(
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
             current_access_requirement=current.value,
-        )
+        retryable=False,
+    )
     if current is not AccessRequirement.unclassified:
         raise _error(
             "already_classified",
@@ -787,7 +826,8 @@ def preview_classify_offer_version_access_requirement(
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
             current_access_requirement=current.value,
-        )
+        retryable=False,
+    )
     row_updated_at = _utc(version.updated_at)
     fingerprint = _preview_fingerprint(
         offer_version_id=version.id,
@@ -830,19 +870,22 @@ def _classify(
         raise _error(
             "missing_idempotency_key",
             "Classification requires an idempotency key.",
-        )
+        retryable=False,
+    )
     if len(key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
         raise _error(
             "idempotency_key_too_long",
             "idempotency_key exceeds the stored column's maximum length.",
             max_length=_IDEMPOTENCY_KEY_MAX_LENGTH,
-        )
+        retryable=False,
+    )
     reason = (command.context.reason or "").strip()
     if not reason:
         raise _error(
             "missing_reason",
             "Classification requires a reason.",
-        )
+        retryable=False,
+    )
 
     # Serialize every command sharing this idempotency key BEFORE either one
     # can observe the other's uncommitted state. Without this, two
@@ -858,7 +901,8 @@ def _classify(
             "offer_version_not_found",
             "The offer version does not exist.",
             offer_version_id=str(command.query.offer_version_id),
-        )
+        retryable=False,
+    )
     proposed = command.query.proposed_access_requirement
     review_reference = command.query.review_reference.strip()
 
@@ -896,7 +940,8 @@ def _classify(
             "This idempotency key was already used for a different "
             "classification command.",
             offer_version_id=str(version.id),
-        )
+        retryable=False,
+    )
 
     # No key match: a different key can never replay an already-classified
     # version. A genuine retry MUST reuse its original idempotency key —
@@ -913,7 +958,8 @@ def _classify(
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
             current_access_requirement=existing_by_version.new_access_requirement.value,
-        )
+        retryable=False,
+    )
     if version.access_requirement is not AccessRequirement.unclassified:
         raise _error(
             "already_classified",
@@ -921,14 +967,16 @@ def _classify(
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
             current_access_requirement=version.access_requirement.value,
-        )
+        retryable=False,
+    )
 
     preview = preview_classify_offer_version_access_requirement(db, command.query)
     if preview.preview_fingerprint != command.expected_preview_fingerprint:
         raise _error(
             "stale_preview",
             "The offer version changed after review; preview it again.",
-        )
+        retryable=True,
+    )
 
     # Re-verify permission again, immediately before the write, under the
     # row lock acquired above. The check at the top of this function is a
@@ -970,7 +1018,8 @@ def _classify(
             "This idempotency key or offer version was already used for a "
             "different classification command.",
             offer_version_id=str(version.id),
-        ) from exc
+        retryable=False,
+    ) from exc
 
     evidence = {
         "schema_version": 1,
@@ -1011,15 +1060,20 @@ def _classify(
 __all__ = [
     "ADMISSION_SCOPE",
     "CLASSIFY_PERMISSION",
+    "AdmissionPrincipal",
     "AdmitOfferVersionCommand",
+    "ApiKeyPrincipal",
     "ClassifyOfferAccessRequirementCommand",
     "OWNER",
     "OfferAccessRequirementClassificationPreview",
     "OfferAccessRequirementClassificationResult",
     "OfferAccessRequirementError",
     "PreviewClassifyOfferAccessRequirementQuery",
+    "StaffPrincipal",
+    "SystemAdmission",
     "UnclassifiedOfferVersionRow",
     "UnclassifiedOfferVersionsWorklist",
+    "admission_actor_label",
     "admit_offer_version",
     "assert_access_requirement_immutable",
     "classify_offer_version_access_requirement",

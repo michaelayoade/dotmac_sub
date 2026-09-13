@@ -5,7 +5,7 @@ Provides services for Offers, OfferPrices, OfferVersions, and OfferVersionPrices
 
 import logging
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -540,6 +540,32 @@ class OfferVersions(CRUDManager[OfferVersion]):
     soft_delete_value = False
 
     @staticmethod
+    def _resolve_admission_principal(
+        actor_id: str | None, actor_type: str | None
+    ) -> "offer_access_requirement.AdmissionPrincipal":
+        """The ONE production call site allowed to construct
+        ``SystemAdmission`` (enumerated in
+        ``tests/architecture/test_offer_access_requirement_boundary.py``'s
+        confinement guard). ``app/api/catalog.py``'s route always supplies a
+        real, authenticated ``system_user``/``api_key`` actor, so this
+        fallback is reached only by an internal/test caller invoking this
+        adapter directly with no actor — the same pre-existing convention
+        this replaces (``tests/conftest.py``'s shared fixtures, and every
+        other test file that admits a version with no actor)."""
+
+        if actor_type == "system_user" and actor_id:
+            return offer_access_requirement.StaffPrincipal(
+                system_user_id=UUID(str(actor_id))
+            )
+        if actor_type == "api_key" and actor_id:
+            return offer_access_requirement.ApiKeyPrincipal(
+                api_key_id=UUID(str(actor_id))
+            )
+        return offer_access_requirement.SystemAdmission(
+            reason="no authenticated actor supplied to offer_versions.create"
+        )
+
+    @staticmethod
     def create(
         db: Session,
         payload: OfferVersionCreate,
@@ -560,7 +586,14 @@ class OfferVersions(CRUDManager[OfferVersion]):
         caller that supplies none is not idempotent — a lost response or a
         retried POST with no key is not distinguishable from a genuinely new
         admission.
+
+        Authorization is decided entirely by the caller (the route's
+        ``require_any_permission`` dependency, or the test/internal caller
+        that invokes this adapter directly) — this method and the command it
+        builds make no authorization decision; ``actor_id``/``actor_type``
+        become the admission's typed, audit-only principal.
         """
+        principal = OfferVersions._resolve_admission_principal(actor_id, actor_type)
         command_id = uuid4()
         version = offer_access_requirement.admit_offer_version(
             db,
@@ -568,18 +601,13 @@ class OfferVersions(CRUDManager[OfferVersion]):
                 context=CommandContext(
                     command_id=command_id,
                     correlation_id=command_id,
-                    actor=(
-                        f"{actor_type}:{actor_id}"
-                        if actor_id
-                        else "system:offer_version_admission"
-                    ),
+                    actor=offer_access_requirement.admission_actor_label(principal),
                     scope=offer_access_requirement.ADMISSION_SCOPE,
                     reason="offer version admitted via catalog API",
                     idempotency_key=idempotency_key,
                 ),
                 payload=payload,
-                actor_id=actor_id,
-                actor_type=actor_type,
+                principal=principal,
             ),
         )
         db.refresh(version)

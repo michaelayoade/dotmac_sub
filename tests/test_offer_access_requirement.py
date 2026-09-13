@@ -38,9 +38,12 @@ from app.services.catalog.offer_access_requirement import (
     ADMISSION_SCOPE,
     CLASSIFY_PERMISSION,
     AdmitOfferVersionCommand,
+    ApiKeyPrincipal,
     ClassifyOfferAccessRequirementCommand,
     OfferAccessRequirementError,
     PreviewClassifyOfferAccessRequirementQuery,
+    StaffPrincipal,
+    SystemAdmission,
     admit_offer_version,
     classify_offer_version_access_requirement,
     list_unclassified_offer_versions,
@@ -752,13 +755,14 @@ def test_preview_refuses_an_oversized_review_reference(db_session):
 # --------------------------------------------------------------------------
 
 
-def _admit_command(offer, version_number, *, actor_id=None, actor_type=None):
+def _admit_command(offer, version_number, *, principal=None):
     command_id = uuid4()
+    resolved_principal = principal or SystemAdmission(reason="test admission")
     return AdmitOfferVersionCommand(
         context=CommandContext(
             command_id=command_id,
             correlation_id=command_id,
-            actor=(f"{actor_type}:{actor_id}" if actor_id else "system:test"),
+            actor="system:test",
             scope=ADMISSION_SCOPE,
             reason="test admission",
         ),
@@ -771,14 +775,41 @@ def _admit_command(offer, version_number, *, actor_id=None, actor_type=None):
             price_basis=PriceBasis.flat,
             access_requirement=AccessRequirement.unclassified,
         ),
-        actor_id=actor_id,
-        actor_type=actor_type,
+        principal=resolved_principal,
     )
 
 
-def test_admit_with_no_claimed_actor_is_treated_as_system_initiated(db_session):
-    """Existing internal/system-initiated convention is preserved: no actor
-    claimed at all is not RBAC-gated (matches every pre-existing caller of
+def test_admit_requires_an_explicit_principal():
+    """Regression for the actor-spoofing gap's real fix: authorization moved
+    to the route layer entirely, and the command now requires an explicit,
+    typed principal — there is no default that lets a caller omit it."""
+
+    with pytest.raises(TypeError):
+        AdmitOfferVersionCommand(
+            context=CommandContext(
+                command_id=uuid4(),
+                correlation_id=uuid4(),
+                actor="system:test",
+                scope=ADMISSION_SCOPE,
+                reason="test admission",
+            ),
+            payload=OfferVersionCreate(
+                offer_id=uuid4(),
+                version_number=1,
+                name="Fiber 100 v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+        )
+
+
+def test_admit_with_system_admission_is_not_rbac_gated(db_session):
+    """Existing internal/system-initiated convention is preserved: an
+    admission with no authenticated end-user context (``SystemAdmission``) is
+    not RBAC-gated by the command — the command makes no authorization
+    decision at all now (matches every pre-existing caller of
     ``offer_versions.create``/``admit_offer_version`` with no actor, e.g.
     ``tests/conftest.py``'s shared ``catalog_offer`` fixture)."""
 
@@ -788,44 +819,47 @@ def test_admit_with_no_claimed_actor_is_treated_as_system_initiated(db_session):
     assert version.access_requirement is AccessRequirement.unclassified
 
 
-def test_admit_denies_an_unprivileged_claimed_actor(db_session):
-    """Regression for the actor-spoofing gap: before this fix, a caller
-    could claim ANY actor_id/actor_type and it was used only for the audit
-    trail, never verified. An unprivileged system_user's claim is now
-    refused."""
+def test_admit_records_an_unprivileged_staff_principal_without_checking_rbac(
+    db_session,
+):
+    """Regression for the redesign: the command no longer verifies the
+    claimed principal against RBAC at all — an unprivileged system_user's
+    admission still succeeds, because authorization was already decided
+    (or refused) at the route before this command was ever constructed.
+    The principal is recorded for attribution only."""
 
     offer = _make_offer(db_session)
     user = _unprivileged_system_user(db_session)
 
-    with pytest.raises(OfferAccessRequirementError) as excinfo:
-        admit_offer_version(
-            db_session,
-            _admit_command(offer, 1, actor_id=str(user.id), actor_type="system_user"),
-        )
-    db_session.rollback()
-    assert excinfo.value.code.endswith("permission_denied")
-
-
-def test_admit_accepts_a_privileged_claimed_actor(db_session):
-    offer = _make_offer(db_session)
-    user = _admin_system_user(db_session)
-
     version = admit_offer_version(
         db_session,
-        _admit_command(offer, 1, actor_id=str(user.id), actor_type="system_user"),
+        _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
     )
     db_session.rollback()
     assert version.offer_id == offer.id
 
 
-def test_admit_refuses_a_partially_claimed_actor(db_session):
+def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
     offer = _make_offer(db_session)
-    with pytest.raises(OfferAccessRequirementError) as excinfo:
-        admit_offer_version(
-            db_session, _admit_command(offer, 1, actor_id="not-really-an-actor")
-        )
+    user = _admin_system_user(db_session)
+
+    version = admit_offer_version(
+        db_session,
+        _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
+    )
     db_session.rollback()
-    assert excinfo.value.code.endswith("permission_denied")
+    assert version.offer_id == offer.id
+
+
+def test_admit_accepts_an_api_key_principal(db_session):
+    offer = _make_offer(db_session)
+
+    version = admit_offer_version(
+        db_session,
+        _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=uuid4())),
+    )
+    db_session.rollback()
+    assert version.offer_id == offer.id
 
 
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):

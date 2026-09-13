@@ -664,6 +664,17 @@ class OfferVersionUpdate(BaseModel):
     # admission targeting the same pair with no advisory lock or duplicate
     # check guarding it. Same pattern as access_requirement's exclusion
     # below (docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md).
+    #
+    # extra="forbid" (matching SubscriptionTechnicalUpdate's identical
+    # identity-guard convention above): without it, Pydantic's default
+    # "ignore extra fields" behavior silently DROPS an offer_id/
+    # version_number/access_requirement sent in a PATCH body before
+    # offers.py's `_assert_offer_version_identity_immutable`/
+    # `assert_access_requirement_immutable` guards ever see them via
+    # `model_dump(exclude_unset=True)` — the request would appear to
+    # succeed as a silent no-op instead of failing closed with a real error.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=160)
     code: str | None = Field(default=None, max_length=60)
     service_type: ServiceType | None = None

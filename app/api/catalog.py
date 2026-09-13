@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -63,7 +65,12 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.services import catalog as catalog_service
-from app.services.auth_dependencies import require_method_permission, require_permission
+from app.services.auth_dependencies import (
+    require_any_permission,
+    require_method_permission,
+    require_permission,
+)
+from app.services.catalog import offer_access_requirement
 from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
 
 router = APIRouter(
@@ -72,9 +79,53 @@ router = APIRouter(
 
 _require_billing_catalog_write = require_permission("catalog:billing_write")
 
+#: Admission is a genuine future narrower-delegation path (like classify's
+#: catalog:offer_access_requirement:classify): a caller holding EITHER the
+#: existing catalog:billing_write OR the newer, narrower
+#: catalog:offer_version:admission may admit/update an offer version, so
+#: today's holders of catalog:billing_write keep working unchanged while a
+#: future role can be granted only the narrower permission.
+_require_offer_version_admission = require_any_permission(
+    "catalog:billing_write", offer_access_requirement.ADMISSION_SCOPE
+)
+
 
 def _actor(auth: dict) -> tuple[str | None, str | None]:
     return auth.get("principal_id"), auth.get("principal_type")
+
+
+def _admission_principal(
+    auth: dict,
+) -> offer_access_requirement.AdmissionPrincipal:
+    """The typed principal for an admission reached through this route.
+
+    The route dependency above already authorized the request; this is
+    audit/attribution evidence only — never re-checked for authorization.
+    An authenticated route caller is always a real system_user or api_key
+    principal, so this fails closed rather than falling back to
+    ``SystemAdmission`` (that fallback is reserved for internal/test callers
+    that invoke the service layer directly, bypassing this route entirely —
+    see ``app/services/catalog/offers.py``'s
+    ``OfferVersions._resolve_admission_principal``).
+    """
+
+    principal_id = auth.get("principal_id")
+    principal_type = auth.get("principal_type")
+    if principal_type == "system_user" and principal_id:
+        return offer_access_requirement.StaffPrincipal(
+            system_user_id=UUID(str(principal_id))
+        )
+    if principal_type == "api_key" and principal_id:
+        return offer_access_requirement.ApiKeyPrincipal(
+            api_key_id=UUID(str(principal_id))
+        )
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Offer version admission requires an authenticated staff or "
+            "API-key principal."
+        ),
+    )
 
 
 def _offer_access_requirement_http_error(
@@ -88,7 +139,13 @@ def _offer_access_requirement_http_error(
         return HTTPException(status_code=404, detail=exc.message)
     if exc.code.endswith("permission_denied"):
         return HTTPException(status_code=403, detail=exc.message)
-    if exc.code.endswith(("duplicate_version_number", "admission_integrity_violation")):
+    if exc.code.endswith(
+        (
+            "duplicate_version_number",
+            "admission_integrity_violation",
+            "idempotency_conflict",
+        )
+    ):
         return HTTPException(status_code=409, detail=exc.message)
     if exc.code.endswith(
         ("idempotency_key_too_long", "review_reference_too_long")
@@ -771,10 +828,11 @@ def delete_subscription_add_on(
 def create_offer_version(
     payload: OfferVersionCreate,
     db: Session = Depends(get_db),
-    auth: dict = Depends(_require_billing_catalog_write),
+    auth: dict = Depends(_require_offer_version_admission),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     actor_id, actor_type = _actor(auth)
+    _admission_principal(auth)  # fails closed before any write if unattributable
     try:
         return catalog_service.offer_versions.create(
             db,
@@ -824,7 +882,7 @@ def update_offer_version(
     version_id: str,
     payload: OfferVersionUpdate,
     db: Session = Depends(get_db),
-    auth: dict = Depends(_require_billing_catalog_write),
+    auth: dict = Depends(_require_offer_version_admission),
 ):
     actor_id, actor_type = _actor(auth)
     try:
