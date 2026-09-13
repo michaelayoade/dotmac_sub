@@ -42,21 +42,29 @@ from typing import Final
 #: architecture guard keeps in step with this registry in both directions.
 DECLARED_METADATA_KEYS: Final[dict[str, str]] = {
     # --- account deletion and recovery -----------------------------------
-    # Two lineages recording the same event, with no rule about which wins.
-    # Both move to `customer.account_lifecycle`; see that extraction's
-    # inventory at docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md.
-    "account_deletion_requested_at": "customer.account_lifecycle",
-    "account_deletion_reason": "customer.account_lifecycle",
-    "recovery_deleted_at": "customer.account_lifecycle",
-    "recovery_deleted_by": "customer.account_lifecycle",
-    "recovery_purge_due_at": "customer.account_lifecycle",
-    "recovery_purged_at": "customer.account_lifecycle",
-    "recovery_last_restored_at": "customer.account_lifecycle",
-    "recovery_last_restored_by": "customer.account_lifecycle",
-    # A serialised copy of subscriptions, service orders and CPE devices, on
-    # the row whose deletion it describes. It is not re-homed to another JSON
-    # column — it is replaced by typed references and versions.
-    "recovery_snapshot": "customer.account_lifecycle",
+    # Two lineages recorded the same event, with no rule about which wins.
+    # The `web_system_restore_tool` lineage (`recovery_deleted_at`,
+    # `recovery_deleted_by`, `recovery_purge_due_at`, `recovery_purged_at`,
+    # `recovery_last_restored_at`, `recovery_last_restored_by`,
+    # `recovery_snapshot`) is RETIRED, not merely relabeled: nothing reads or
+    # writes any of those seven keys anymore.
+    # `customer.account_recovery` (app/services/account_recovery.py) is
+    # their typed home, migration 607_account_recovery_evidence backfilled
+    # every existing row into a typed `AccountRecoveryRecord` +
+    # `AccountRecoverySubscriptionSnapshot` and removed the keys from
+    # `metadata_`, and per this module's own rule ("retiring a key means
+    # deleting its entry in the same change that moves it") their entries
+    # are deleted here too, not kept as a dangling OBSOLETE label — see
+    # docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md.
+    #
+    # `account_deletion.py`'s self-service soft-delete stamp is a SEPARATE,
+    # still-active lineage: customer-initiated deletion is never recoverable
+    # (no AccountRecoveryRecord is created for it), so it is out of
+    # customer.account_recovery's scope. It still has no typed home; the
+    # aspirational `customer.account_lifecycle` name used in an earlier
+    # draft of this registry never existed as a registered SOT owner.
+    "account_deletion_requested_at": "customer.accounts (typed column pending)",
+    "account_deletion_reason": "customer.accounts (typed column pending)",
     # --- service restriction ---------------------------------------------
     "restricted_since": "access.subscription_lifecycle",
     "restricted_status": "access.subscription_lifecycle",

@@ -137,6 +137,27 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert lead_origin is not None
     assert lead_origin.name == "sales.lead_lifecycle"
+
+    assert sot_relationships.dependencies_for("customer.account_recovery") == (
+        "customer.accounts",
+        "access.subscription_lifecycle",
+        "events.dispatcher",
+        "observability.audit_log",
+    )
+    account_recovery = sot_relationships.service_relationship(
+        "customer.account_recovery"
+    )
+    assert account_recovery.module == "app.services.account_recovery"
+    assert account_recovery.contract is not None
+    assert account_recovery.owns == (
+        "deletion and recovery eligibility",
+        "deletion tombstones",
+        "recovery evidence re-baselining",
+        "recovery confirmation",
+    )
+    tombstones_owner = sot_relationships.owning_service_for("deletion tombstones")
+    assert tombstones_owner is not None
+    assert tombstones_owner.name == "customer.account_recovery"
     lifecycle_audit = sot_relationships.owning_service_for(
         "PII-free customer lifecycle link convergence report"
     )
