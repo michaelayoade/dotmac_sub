@@ -35,6 +35,7 @@ neither representation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 
@@ -125,10 +126,9 @@ def upgrade() -> None:
             name="ck_account_recovery_deletion_intent",
         ),
         sa.CheckConstraint(
-            "(state = 'open' AND restored_at IS NULL AND rebaselined_at IS NULL) OR "
+            "(state = 'open' AND restored_at IS NULL) OR "
             "(state = 'blocked' AND restored_at IS NULL) OR "
-            "(state = 'restored' AND restored_at IS NOT NULL) OR "
-            "(state = 'rebaselined' AND rebaselined_at IS NOT NULL)",
+            "(state = 'restored' AND restored_at IS NOT NULL)",
             name="ck_account_recovery_state_timestamps",
         ),
     )
@@ -184,8 +184,8 @@ def _backfill_legacy_evidence() -> None:
         sa.text(
             "SELECT id, metadata_ FROM subscribers "
             "WHERE metadata_ IS NOT NULL AND ("
-            "  metadata_ ? 'account_deletion_requested_at' "
-            "  OR metadata_ ? 'recovery_deleted_at'"
+            "  metadata_::jsonb ? 'account_deletion_requested_at' "
+            "  OR metadata_::jsonb ? 'recovery_deleted_at'"
             ")"
         )
     ).fetchall()
@@ -235,7 +235,17 @@ def _backfill_legacy_evidence() -> None:
             deleted_by = str(metadata.get("recovery_deleted_by") or "system_restore_tool")
             deleted_at = metadata.get("recovery_deleted_at")
             reason = "Backfilled from retired web_system_restore_tool.py lineage"
-            state = "restored" if metadata.get("recovery_last_restored_at") else "open"
+            last_restored_at = metadata.get("recovery_last_restored_at")
+            if last_restored_at:
+                state = "restored"
+                restored_at = last_restored_at
+                restored_by = str(
+                    metadata.get("recovery_last_restored_by") or deleted_by
+                )
+            else:
+                state = "open"
+                restored_at = None
+                restored_by = None
         elif has_self_service_lineage:
             # Structurally true: this lineage only ever calls
             # `transition_account_status`, which only cancels subscriptions.
@@ -246,7 +256,13 @@ def _backfill_legacy_evidence() -> None:
             reason = metadata.get("account_deletion_reason") or (
                 "Backfilled from retired account_deletion.py metadata lineage"
             )
-            state = "restored"  # self-service deletion was never recoverable
+            # Self-service deletion was never recoverable, so it is
+            # backfilled directly as restored. `deleted_at` is the only
+            # timestamp evidence this lineage recorded, so it also stands in
+            # for `restored_at` to satisfy the state/timestamp CHECK.
+            state = "restored"
+            restored_at = deleted_at
+            restored_by = deleted_by
         else:
             continue
 
@@ -262,10 +278,14 @@ def _backfill_legacy_evidence() -> None:
                 "1",
             ]
         )
-        fingerprint = conn.execute(
-            sa.text("SELECT encode(digest(:src, 'sha256'), 'hex')"),
-            {"src": fingerprint_source},
-        ).scalar()
+        # Computed in Python with hashlib, not Postgres's pgcrypto `digest()`
+        # — no migration in this chain installs that extension, and this
+        # mirrors the exact algorithm `account_recovery.py::_fingerprint`
+        # uses at runtime (see other migrations, e.g. 268/474, which take
+        # the same approach for the identical reason).
+        fingerprint = hashlib.sha256(
+            fingerprint_source.encode("utf-8")
+        ).hexdigest()
 
         conn.execute(
             sa.text(
@@ -273,11 +293,13 @@ def _backfill_legacy_evidence() -> None:
                 "id, account_id, generation, deletion_intent, requested_by, "
                 "deleted_by, reason, requested_at, deleted_at, state, "
                 "affected_resource_types, command_id, correlation_id, "
-                "confirmation_fingerprint, fingerprint_revision"
+                "confirmation_fingerprint, fingerprint_revision, "
+                "restored_at, restored_by"
                 ") VALUES ("
                 ":id, :account_id, 1, :deletion_intent, :requested_by, "
                 ":deleted_by, :reason, :deleted_at, :deleted_at, :state, "
-                ":affected, :command_id, :correlation_id, :fingerprint, 1"
+                ":affected, :command_id, :correlation_id, :fingerprint, 1, "
+                ":restored_at, :restored_by"
                 ")"
             ),
             {
@@ -293,6 +315,8 @@ def _backfill_legacy_evidence() -> None:
                 "command_id": command_id,
                 "correlation_id": correlation_id,
                 "fingerprint": fingerprint,
+                "restored_at": restored_at,
+                "restored_by": restored_by,
             },
         )
 

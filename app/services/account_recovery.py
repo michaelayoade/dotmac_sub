@@ -48,6 +48,7 @@ REGISTERED_RECOVERY_PARTICIPANTS: frozenset[str] = frozenset({"subscription"})
 
 class RecoveryOutcomeKind(StrEnum):
     restored = "restored"
+    partially_restored = "partially_restored"
     blocked_missing_participants = "blocked_missing_participants"
 
 
@@ -109,7 +110,26 @@ class RecoveryRestored:
     restored_subscription_ids: tuple[UUID, ...]
 
 
-RecoveryOutcome = RecoveryBlocked | RecoveryRestored
+@dataclass(frozen=True, slots=True)
+class RecoveryPartiallyRestored:
+    """Some, or none, of the generation's subscriptions actually reactivated.
+
+    The record is left in its existing ``open``/``blocked`` state (not
+    ``restored``) precisely so a subsequent `restore_account` call can retry
+    — closing the generation on a partial outcome would strand the
+    unrestored subscriptions with no way back in.
+    """
+
+    kind: RecoveryOutcomeKind = field(
+        default=RecoveryOutcomeKind.partially_restored, init=False
+    )
+    record_id: UUID
+    account_id: UUID
+    restored_subscription_ids: tuple[UUID, ...]
+    unrestored_subscription_ids: tuple[UUID, ...]
+
+
+RecoveryOutcome = RecoveryBlocked | RecoveryRestored | RecoveryPartiallyRestored
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +409,7 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
         ).all()
     )
     restored_ids: list[UUID] = []
+    unrestored_ids: list[UUID] = []
     for snapshot in snapshots:
         result = restore_subscription_detailed(
             db,
@@ -400,6 +421,50 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
         )
         if result.subscription_reactivated:
             restored_ids.append(snapshot.subscription_id)
+        else:
+            unrestored_ids.append(snapshot.subscription_id)
+
+    if unrestored_ids:
+        # Fail closed: at least one subscription in this generation did not
+        # reactivate (active-login conflict, remaining lock, etc). The
+        # record stays in its current open/blocked state rather than
+        # `restored` so the generation remains retryable — marking it
+        # `restored` here would permanently close recovery while the
+        # account can still be left inactive/canceled.
+        db.flush()
+        stage_audit_event(
+            db,
+            action="customer.account_recovery.partially_restored",
+            entity_type="subscriber",
+            entity_id=str(command.account_id),
+            actor_type=AuditActorType.user,
+            actor_id=command.actor,
+            request_id=str(record.correlation_id),
+            metadata={
+                "record_id": str(record.id),
+                "generation": record.generation,
+                "restored_subscription_ids": [str(i) for i in restored_ids],
+                "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
+            },
+        )
+        emit_event(
+            db,
+            EventType.account_recovery_partially_restored,
+            {
+                "account_id": str(command.account_id),
+                "record_id": str(record.id),
+                "restored_subscription_ids": [str(i) for i in restored_ids],
+                "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
+            },
+            actor=command.actor,
+            account_id=subscriber.id,
+        )
+        return RecoveryPartiallyRestored(
+            record_id=record.id,
+            account_id=command.account_id,
+            restored_subscription_ids=tuple(restored_ids),
+            unrestored_subscription_ids=tuple(unrestored_ids),
+        )
 
     record.state = AccountRecoveryState.restored
     record.restored_at = datetime.now(UTC)
@@ -489,7 +554,13 @@ def rebaseline_recovery_evidence(
 
     record.affected_resource_types = sorted(new_types)
     record.fingerprint_revision += 1
-    record.state = AccountRecoveryState.rebaselined
+    # Deliberately NOT a state transition: re-baselining corrects the
+    # generation's own evidence but does not change its restorability, and
+    # `state` must stay in the `open`/`blocked` set every other reader
+    # (`_lock_open_record`, the eligibility query, the one-open-generation
+    # partial index) recognizes as an active generation. The fact that this
+    # record was re-baselined is captured entirely by
+    # `rebaselined_at`/`rebaselined_by`/`rebaseline_reason` below.
     record.rebaselined_at = datetime.now(UTC)
     record.rebaselined_by = command.actor
     record.rebaseline_reason = command.reason

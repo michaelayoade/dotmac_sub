@@ -41,6 +41,7 @@ class EventType(enum.Enum):
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     account_recovery_deletion_tombstoned = "account_recovery.deletion_tombstoned"
     account_recovery_restored = "account_recovery.restored"
+    account_recovery_partially_restored = "account_recovery.partially_restored"
     account_recovery_rebaselined = "account_recovery.rebaselined"
     carried_source_identity_adjudicated = "billing.carried_source_identity.adjudicated"
     subscriber_suspended = "subscriber.suspended"

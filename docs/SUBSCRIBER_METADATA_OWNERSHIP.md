@@ -96,10 +96,10 @@ Facts nothing else records. Losing them loses the fact.
 > with no `metadata_` access whatsoever. The `account_deletion_*` pair is a
 > SEPARATE, still-active, still-unmigrated lineage: self-service deletion is
 > never recoverable (no `AccountRecoveryRecord` is created for it), so it
-> stayed out of `customer.account_recovery`'s scope — the earlier
-> `customer.account_lifecycle` name below was aspirational and never became
-> a registered owner. See `docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md`
-> for the full before/after.
+> stayed out of `customer.account_recovery`'s scope and still has no typed
+> home (the table below lists it as `customer.accounts (typed column
+> pending)`). See `docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md` for
+> the full before/after.
 
 **Two deletion lineages, one lifecycle — now one retired, one still open.**
 `account_deletion` writes `account_deletion_*` and remains unmigrated.
