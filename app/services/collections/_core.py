@@ -1360,6 +1360,7 @@ def confirm_financial_access_restoration(
 
     from app.services.account_lifecycle import (
         SUSPENDED_EQUIVALENT,
+        ActivationIntent,
         resolve_stale_lock_without_restoration,
         restore_subscription_detailed,
     )
@@ -1392,6 +1393,7 @@ def confirm_financial_access_restoration(
                 str(lock.subscription_id),
                 trigger=trigger,
                 resolved_by=resolved_by or f"financial_access:{account.id}",
+                intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
                 reason=lock.reason,
             )
             # `subscriptions_changed` is a count of state transitions and keeps

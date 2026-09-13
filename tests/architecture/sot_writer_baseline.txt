@@ -3,6 +3,7 @@
 # resolved/non-writing entries to be removed. Keep this file sorted.
 # source-of-truth owner. This is migration debt, not an allowlist: new entries
 app.services.account_deletion
+app.services.account_recovery
 app.services.account_status_reconcile
 app.services.admin_alerts
 app.services.admin_whats_new

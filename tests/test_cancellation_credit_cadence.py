@@ -737,6 +737,7 @@ class TestCancellationCreditMoney:
                 str(subscription.id),
                 cancel_reason="test",
                 source="pytest",
+                credit_intent=billing_automation.CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
                 emit=False,
             )
         failures = [

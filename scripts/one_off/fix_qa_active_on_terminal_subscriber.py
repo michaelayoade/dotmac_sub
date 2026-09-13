@@ -20,7 +20,6 @@ Usage:
 from __future__ import annotations
 
 import sys
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -57,16 +56,22 @@ def main(execute: bool) -> int:
         if not execute:
             print("\nDRY RUN — nothing changed. Re-run with --apply.")
             return 0
-        from app.services.account_lifecycle import compute_account_status
+        from app.services.account_lifecycle import cancel_subscription
+        from app.services.billing_automation import CancellationCreditIntent
 
-        now = datetime.now(UTC)
         for s in targets:
-            s.status = SubscriptionStatus.canceled
-            if s.canceled_at is None:
-                s.canceled_at = now
-        db.flush()
-        for sid in {s.subscriber_id for s in targets}:
-            compute_account_status(db, str(sid))
+            cancel_subscription(
+                db,
+                str(s.id),
+                "QA/test subscription left active on a terminal subscriber",
+                "scripts.one_off.fix_qa_active_on_terminal_subscriber",
+                # Administrative cleanup of QA/test data, never a real
+                # customer termination and never part of the recoverable
+                # deletion system — the typed replacement for what was
+                # conceptually `generate_credit=True` (no suppression).
+                credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
+                emit=False,
+            )
         db.commit()
         print(f"\nAPPLIED — canceled {len(targets)} QA subscriptions.")
         return 0
