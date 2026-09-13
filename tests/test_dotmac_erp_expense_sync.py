@@ -82,6 +82,8 @@ from app.services.integrations.backoffice_contracts import (
     ErpExpenseClaimDraftCommand,
     ErpExpenseClaimDraftOutcome,
     ErpExpenseDraftLineOutcome,
+    ErpExpensePaymentCommand,
+    ErpExpensePaymentOutcome,
 )
 from app.services.integrations.diagnostics import safe_diagnostic
 from app.services.owner_commands import CommandContext
@@ -550,6 +552,40 @@ class _FakeERPClient:
             raise outcome
         return outcome
 
+    def initiate_expense_payment(
+        self,
+        command: ErpExpensePaymentCommand,
+        *,
+        idempotency_key: str,
+    ) -> ErpExpensePaymentOutcome:
+        self.posts.append(
+            {
+                "path": (
+                    f"/api/v1/sync/sub/expense-claims/"
+                    f"{command.source_claim_id}/payments"
+                ),
+                "payload": command.model_dump(
+                    mode="json", exclude={"source_claim_id"}, exclude_none=True
+                ),
+                "idempotency_key": idempotency_key,
+            }
+        )
+        supplied = self._post.pop(0) if self._post else {}
+        if isinstance(supplied, Exception):
+            raise supplied
+        return ErpExpensePaymentOutcome.model_validate(
+            {
+                "source_claim_id": command.source_claim_id,
+                "claim_id": self._claim_id,
+                "claim_number": self._claim_number,
+                "claim_status": "approved",
+                "payment_intent_id": uuid4(),
+                "payment_status": "processing",
+                "retryable": False,
+                **supplied,
+            }
+        )
+
     def get_expense_claim_status(self, source_claim_id):
         self.status_calls.append(source_claim_id)
         outcome = self._status.pop(0) if self._status else None
@@ -559,6 +595,20 @@ class _FakeERPClient:
 
     def close(self):
         self.closed = True
+
+
+class _TypedOnlyPaymentERPClient(_FakeERPClient):
+    def post(self, path, payload, idempotency_key=None, expected_status_codes=None):
+        if str(path).endswith("/payments"):
+            raise AssertionError(
+                "Expense payments must not use the generic path sender"
+            )
+        return super().post(
+            path,
+            payload,
+            idempotency_key=idempotency_key,
+            expected_status_codes=expected_status_codes,
+        )
 
 
 class _ClaimBoundFakeERPClient(_FakeERPClient):
@@ -1211,6 +1261,67 @@ def test_payment_stages_after_approval_with_a_distinct_permission(db_session):
     )
     assert payment.payload["_depends_on_idempotency_key"].endswith("-v3")
     assert payment.payload["initiated_by_email"] == manager.email
+
+
+def test_payment_delivery_uses_typed_capability_and_writes_erp_projection(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    manager = _user(db_session, "PaymentDeliveryManager")
+    command_id = uuid4()
+    payment_intent_id = uuid4()
+    db_session.commit()
+
+    db_session_adapter.release_read_transaction(db_session)
+    initiate_field_expense_payment_command(
+        db_session,
+        command=InitiateFieldExpensePayment(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=f"user:{manager.id}",
+                scope="operations:expense_request:pay",
+                reason=f"pay_expense_request:{request.id}",
+                idempotency_key=str(command_id),
+            ),
+            expense_request_id=request.id,
+            manager_system_user_id=manager.id,
+        ),
+    )
+    client = _TypedOnlyPaymentERPClient(
+        post_outcomes=[
+            {"status": "approved"},
+            {
+                "claim_status": "approved",
+                "payment_intent_id": str(payment_intent_id),
+                "payment_status": "processing",
+                "retryable": False,
+            },
+        ]
+    )
+
+    result = outbox.deliver_pending(db_session, client=client)
+
+    db_session.refresh(request)
+    rows = _outbox_rows(db_session, request)
+    payment = next(
+        row for row in rows if row.payload["_expense_action"] == "initiate_payment"
+    )
+    payment_post = client.posts[-1]
+    assert result.accepted == 3
+    assert payment.status == FieldErpSyncStatus.accepted.value
+    assert payment_post["path"] == (
+        f"/api/v1/sync/sub/expense-claims/{request.id}/payments"
+    )
+    assert payment_post["payload"] == {
+        "command_id": str(command_id),
+        "initiated_by_email": manager.email,
+        "initiated_at": payment.payload["initiated_at"],
+    }
+    assert payment_post["idempotency_key"] == (f"exp-{request.id}-pay-{command_id}-v1")
+    assert request.metadata_["erp_payment"]["status"] == "processing"
+    assert request.metadata_["erp_payment"]["intent_id"] == str(payment_intent_id)
 
 
 # ---------------------------------------------------------------------------
