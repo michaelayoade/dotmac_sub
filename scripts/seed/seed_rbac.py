@@ -34,7 +34,7 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "provisioning:service_change_reconcile",
     "network:write",
     "rbac:assign",
-    "communications:nextcloud-talk-staff",
+    "communications:nextcloud_talk_staff:manage",
     "rbac:permissions:delete",
     "rbac:permissions:read",
     "rbac:permissions:write",
@@ -77,7 +77,7 @@ DEFAULT_PERMISSIONS = [
         "Send customer notifications to selected customer scopes",
     ),
     (
-        "communications:nextcloud-talk-staff",
+        "communications:nextcloud_talk_staff:manage",
         "Manage ERP staff-to-Nextcloud Talk identity mappings",
     ),
     ("system:db_admin", "Perform restricted database administration"),

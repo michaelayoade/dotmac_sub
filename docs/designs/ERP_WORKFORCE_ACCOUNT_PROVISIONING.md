@@ -45,7 +45,7 @@ The ERP API key must carry these explicit scopes:
 - `rbac:roles:read`
 - `rbac:assign`
 - `operations:service_team:membership`
-- `communications:nextcloud-talk-staff`
+- `communications:nextcloud_talk_staff:manage`
 
 The Talk mapping scope is a non-UI-assignable machine scope. It is seeded both
 in the RBAC catalog and by a deployment migration so a green deployment cannot
@@ -55,9 +55,10 @@ and disable operations.
 ## Reconciliation and failure handling
 
 Every step is retryable and idempotent around persisted provider identifiers.
-For create-only requests, Selfcare reserves a digest of the ERP principal and
-idempotency key in the account-creation transaction. An exact replay returns
-the originally created UUID without reconciling mutable fields. ERP records
+For create-only requests, Selfcare records the stable ERP command reference as
+Party external-reference provenance in the account-creation transaction. An
+exact replay returns the originally created UUID without reconciling mutable
+fields. ERP records
 that UUID immediately after successful creation and reuses it on later
 reconciliation. A true create-only conflict is surfaced for review rather than
 silently claiming or changing an existing account. A missing enabled Talk

@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATION = "605_erp_staff_talk_mapping_scope.py"
-SCOPE = "communications:nextcloud-talk-staff"
+SCOPE = "communications:nextcloud_talk_staff:manage"
 
 
 def _load():

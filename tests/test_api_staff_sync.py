@@ -43,7 +43,7 @@ _AUTH = {
         "rbac:assign",
         "rbac:roles:read",
         "operations:service_team:membership",
-        "communications:nextcloud-talk-staff",
+        "communications:nextcloud_talk_staff:manage",
     ],
 }
 

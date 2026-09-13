@@ -25,7 +25,6 @@ from app.models.audit import AuditActorType
 from app.models.auth import AuthProvider, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.dispatch import TechnicianProfile
-from app.models.idempotency import IdempotencyKey
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
@@ -53,7 +52,8 @@ ERP_HR_ROLE_SOURCE = "erp_hr"
 STAFF_ASSIGN_SCOPE = "rbac:assign"
 STAFF_PROFILE_SCOPE = "profile:self"
 STAFF_LOGIN_IDENTITY_MAX_LENGTH = 150
-_CREATE_ONLY_IDEMPOTENCY_SCOPE = "staff.provision.create_only.v1"
+_ERP_HR_SOURCE_SYSTEM = "erp_hr"
+_ERP_STAFF_ACCOUNT_ENTITY_TYPE = "staff_account"
 
 _EMAIL_ADAPTER = TypeAdapter(EmailStr)
 
@@ -1069,33 +1069,29 @@ def _provision(
     desired_roles = _role_names(command.role_names)
     _acquire_identity_lock(db, email)
 
-    reservation_key = None
+    source_reference = None
     if (
         command.existing_account_policy is ExistingStaffAccountPolicy.reject
         and command.context.idempotency_key
     ):
-        reservation_key = hashlib.sha256(
-            f"{command.context.actor}:{command.context.idempotency_key}".encode()
-        ).hexdigest()
-        reservation = db.execute(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _CREATE_ONLY_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == reservation_key,
-            )
-        ).scalar_one_or_none()
-        if reservation is not None:
-            try:
-                reserved_user_id = UUID(str(reservation.ref_id))
-            except (TypeError, ValueError) as exc:
-                raise _error(
-                    "identity_conflict",
-                    "Create-only replay evidence is invalid; no changes were made.",
-                ) from exc
-            reserved_user = db.get(SystemUser, reserved_user_id)
+        source_reference = command.context.idempotency_key.strip()
+        _acquire_identity_lock(db, f"erp-source:{source_reference}")
+        reserved_party_id = party_registry.external_reference_party_id(
+            db,
+            source_system=_ERP_HR_SOURCE_SYSTEM,
+            entity_type=_ERP_STAFF_ACCOUNT_ENTITY_TYPE,
+            external_id=source_reference,
+        )
+        if reserved_party_id is not None:
+            reserved_user = db.execute(
+                select(SystemUser)
+                .where(SystemUser.person_party_id == reserved_party_id)
+                .with_for_update()
+            ).scalar_one_or_none()
             if reserved_user is None or reserved_user.email != email:
                 raise _error(
                     "identity_conflict",
-                    "The idempotency key belongs to another staff identity.",
+                    "The ERP source reference belongs to another staff identity.",
                 )
             return _outcome(
                 reserved_user,
@@ -1129,13 +1125,22 @@ def _provision(
             context=command.context,
             binding_source="auth.staff_provisioning:erp_hr",
         )
-        if reservation_key is not None:
-            db.add(
-                IdempotencyKey(
-                    scope=_CREATE_ONLY_IDEMPOTENCY_SCOPE,
-                    key=reservation_key,
-                    ref_id=str(user.id),
+        if source_reference is not None:
+            if user.person_party_id is None:
+                raise _error(
+                    "identity_conflict",
+                    "Created staff identity has no canonical Party binding.",
                 )
+            party_registry.add_external_reference(
+                db,
+                party_id=user.person_party_id,
+                source_system=_ERP_HR_SOURCE_SYSTEM,
+                entity_type=_ERP_STAFF_ACCOUNT_ENTITY_TYPE,
+                external_id=source_reference,
+                metadata={
+                    "owner": "auth.staff_provisioning",
+                    "command_id": str(command.context.command_id),
+                },
             )
 
     role_result = _sync_roles(db, user=user, role_names=desired_roles)

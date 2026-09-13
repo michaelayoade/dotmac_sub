@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 FEATURE_SETTING = "nextcloud_talk_staff_notifications_enabled"
 OWNER = "communications.nextcloud_talk_staff"
-COMMAND_SCOPE = "communications:nextcloud-talk-staff"
+COMMAND_SCOPE = "communications:nextcloud_talk_staff:manage"
 MAX_RETRIES = 3
 STALE_ROOM_ERROR_CODES = frozenset({"provider_resource_not_found", "room_forbidden"})
 _SET_MAPPING_COMMAND = OwnerCommandDefinition(

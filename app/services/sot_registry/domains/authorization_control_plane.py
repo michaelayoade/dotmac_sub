@@ -1760,9 +1760,11 @@ DOMAIN = DomainSOT(
                         "state, and the local credential username converge to "
                         "canonical staff state under the reconcile policy. The "
                         "create-only policy rejects an existing natural key before "
-                        "mutation. Adapters carry a stable intent "
-                        "key, and invite expansion deduplicates on the immutable "
-                        "provisioning event id."
+                        "mutation. Its stable ERP command reference is retained as "
+                        "Party external-reference provenance so an exact replay "
+                        "returns the created principal without mutating it. Invite "
+                        "expansion deduplicates on the immutable provisioning event "
+                        "id."
                     ),
                     retries=(
                         "Adapters may retry a failed request with the same "

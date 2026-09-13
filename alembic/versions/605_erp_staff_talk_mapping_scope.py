@@ -24,7 +24,7 @@ down_revision: str | None = "604_material_cancel_pending"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-SCOPE = "communications:nextcloud-talk-staff"
+SCOPE = "communications:nextcloud_talk_staff:manage"
 DESCRIPTION = "Manage ERP staff-to-Nextcloud Talk identity mappings"
 _GRANT_TABLES = (
     "role_permissions",
