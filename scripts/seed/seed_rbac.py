@@ -46,6 +46,9 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "subscriber:write",
     "system:settings:read",
     "system:settings:write",
+    "customer:account_recovery:read",
+    "customer:account_recovery:restore",
+    "customer:account_recovery:rebaseline",
 }
 
 DEFAULT_PERMISSIONS = [
@@ -83,6 +86,18 @@ DEFAULT_PERMISSIONS = [
     ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
+    (
+        "customer:account_recovery:read",
+        "View accounts with an open customer.account_recovery generation",
+    ),
+    (
+        "customer:account_recovery:restore",
+        "Restore an account through customer.account_recovery",
+    ),
+    (
+        "customer:account_recovery:rebaseline",
+        "Re-baseline customer.account_recovery evidence for one generation",
+    ),
     # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
     # non-admin seeded role, so only wildcard (admin) principals can read/write.
     ("system:secrets:read", "View secret paths"),

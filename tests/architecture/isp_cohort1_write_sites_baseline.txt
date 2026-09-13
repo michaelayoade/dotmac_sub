@@ -38,6 +38,7 @@
 1 migration|alembic/versions/267_brand_profiles.py
 2 migration|alembic/versions/277_lifecycle_communications_sot.py
 2 migration|alembic/versions/383_replaceable_backoffice_boundary.py
+1 migration|alembic/versions/607_account_recovery_evidence.py
 1 service|app/services/account_deletion.py
 10 service|app/services/account_lifecycle.py
 1 service|app/services/billing_cleanup_remediation.py
@@ -61,5 +62,4 @@
 7 web_presenter|app/services/web_customer_actions.py
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
-3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 121
+TOTAL 119

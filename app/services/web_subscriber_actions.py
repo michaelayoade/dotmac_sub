@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 from app.models.subscriber import SubscriberCategory
 from app.schemas.subscriber import SubscriberUpdate
+from app.services import account_recovery
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
-from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services.audit_helpers import log_audit_event
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
@@ -294,6 +294,27 @@ def update_subscriber_from_form(
     return subscriber, before, after
 
 
+def _request_recoverable_deletion(
+    db: Session, subscriber_id: UUID, actor_id: str | None
+) -> None:
+    actor = actor_id or "system_restore_tool"
+    command = account_recovery.RequestRecoverableDeletionCommand(
+        account_id=subscriber_id
+        if isinstance(subscriber_id, UUID)
+        else UUID(str(subscriber_id)),
+        command_id=uuid4(),
+        correlation_id=uuid4(),
+        requested_by=actor,
+        deleted_by=actor,
+        reason="Administrative recoverable deletion via subscriber admin action",
+    )
+    try:
+        account_recovery.request_recoverable_deletion(db, command)
+    except account_recovery.AccountRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+
+
 def delete_subscriber(
     db: Session, subscriber_id: UUID, actor_id: str | None = None
 ) -> None:
@@ -304,11 +325,7 @@ def delete_subscriber(
         raise HTTPException(
             status_code=409, detail="Deactivate subscriber before deleting."
         )
-    web_system_restore_tool_service.mark_subscriber_deleted(
-        db=db,
-        subscriber_id=str(subscriber_id),
-        actor_id=actor_id,
-    )
+    _request_recoverable_deletion(db, subscriber_id, actor_id)
 
 
 def bulk_set_subscriber_status(
@@ -353,11 +370,7 @@ def bulk_delete_inactive_subscribers(
             if subscriber.is_active:
                 skipped_active += 1
                 continue
-            web_system_restore_tool_service.mark_subscriber_deleted(
-                db=db,
-                subscriber_id=str(subscriber_id),
-                actor_id=actor_id,
-            )
+            _request_recoverable_deletion(db, subscriber.id, actor_id)
             deleted_count += 1
         except Exception as exc:
             logger.error("Failed to delete subscriber %s: %s", subscriber_id, exc)

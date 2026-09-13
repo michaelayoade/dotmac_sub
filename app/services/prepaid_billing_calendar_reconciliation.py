@@ -48,6 +48,7 @@ from app.models.service_extension import (
 from app.models.usage import QuotaBucket
 from app.schemas.audit import AuditEventCreate
 from app.services.account_lifecycle import (
+    ActivationIntent,
     BillingAnchorProjectionCommand,
     BillingAnchorProjectionSource,
     restore_subscription_detailed,
@@ -1006,6 +1007,7 @@ def reconcile_prepaid_billing_calendar(
                 str(subscription.id),
                 trigger="top_up",
                 resolved_by=f"{_OWNER}:{locked_invoice.id}",
+                intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
                 reason=EnforcementReason.prepaid,
                 notes=(
                     "Restore exact prepaid coverage after reviewed lapsed-payment "

@@ -14,6 +14,7 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import cancel_subscription, expire_subscription
+from app.services.billing_automation import CancellationCreditIntent
 from app.services.ip_lifecycle import (
     apply_backlog_cleanup,
     plan_terminal_ip_backlog,
@@ -242,7 +243,11 @@ class TestLifecycleWiring:
         a = _assign(db_session, s, "10.3.0.2")
         db_session.commit()
         cancel_subscription(
-            db_session, str(sub.id), cancel_reason="test", source="test"
+            db_session,
+            str(sub.id),
+            cancel_reason="test",
+            source="test",
+            credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
         )
         db_session.refresh(a)
         db_session.refresh(sub)
@@ -256,7 +261,11 @@ class TestLifecycleWiring:
         a = _assign(db_session, s, "10.3.0.3")
         db_session.commit()
         cancel_subscription(
-            db_session, str(to_cancel.id), cancel_reason="t", source="t"
+            db_session,
+            str(to_cancel.id),
+            cancel_reason="t",
+            source="t",
+            credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
         )
         db_session.refresh(a)
         assert a.is_active is True  # active sibling → IP not released
