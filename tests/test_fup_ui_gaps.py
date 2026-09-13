@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import FormData
 
-from app.models.catalog import AccessType, PriceBasis, ServiceType
+from app.models.catalog import AccessRequirement, AccessType, PriceBasis, ServiceType
 from app.models.fup import FupRule
 from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate
 from app.services import catalog as catalog_service
@@ -34,6 +34,7 @@ def _create_offer(db_session, *, name: str, code: str):
     catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
+            access_requirement=AccessRequirement.unclassified,
             offer_id=offer.id,
             version_number=1,
             name=f"{name} v1",

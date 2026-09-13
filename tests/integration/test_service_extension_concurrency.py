@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.audit import AuditEvent
 from app.models.catalog import (
+    AccessRequirement,
     AccessType,
     PriceBasis,
     ServiceType,
@@ -55,6 +56,7 @@ def test_concurrent_apply_admits_one_transition_and_one_evidence_set(engine):
         catalog_service.offer_versions.create(
             setup,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name=f"Extension Concurrency {suffix} v1",

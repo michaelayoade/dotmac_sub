@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+import app.services.catalog.offer_access_requirement as offer_access_requirement
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -522,6 +523,14 @@ class OfferVersions(CRUDManager[OfferVersion]):
         if not offer:
             raise HTTPException(status_code=404, detail="Offer not found")
         data = payload.model_dump()
+        # service_intent.offer_access_requirement is the sole owner of
+        # admission for this field: required and explicit on every new
+        # offer version, with no application-level fallback.
+        data["access_requirement"] = (
+            offer_access_requirement.validate_admission_access_requirement(
+                data.get("access_requirement")
+            )
+        )
         fields_set = payload.model_fields_set
         if "billing_cycle" not in fields_set:
             default_billing_cycle = settings_spec.resolve_value(
@@ -603,6 +612,7 @@ class OfferVersions(CRUDManager[OfferVersion]):
         if not version:
             raise HTTPException(status_code=404, detail="Offer version not found")
         data = payload.model_dump(exclude_unset=True)
+        offer_access_requirement.assert_access_requirement_immutable(data)
         changes = billing_governance.billing_field_changes(version, data)
         billing_governance.assert_offer_version_update_safe(db, version, changes)
         if "offer_id" in data:

@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import (
+    AccessRequirement,
     AccessType,
     PriceBasis,
     ServiceType,
@@ -61,6 +62,7 @@ def test_anchor_projection_does_not_block_bandwidth_foreign_key_insert(engine):
         catalog_service.offer_versions.create(
             setup,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name=f"Anchor Lock Compatibility {suffix} v1",

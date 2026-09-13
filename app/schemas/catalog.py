@@ -17,6 +17,7 @@ from pydantic import (
 
 from app.models.billing import LedgerEntryType, LedgerSource
 from app.models.catalog import (
+    AccessRequirement,
     AccessType,
     AddOnType,
     BillingCycle,
@@ -647,7 +648,12 @@ class OfferVersionBase(BaseModel):
 
 
 class OfferVersionCreate(OfferVersionBase):
-    pass
+    # Owned by service_intent.offer_access_requirement (Release 1): required
+    # and explicit on every new admission. ``unclassified`` remains an
+    # accepted explicit value in Release 1; there is no application-level
+    # fallback. Never present on OfferVersionUpdate — the field is immutable
+    # once admitted (docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md).
+    access_requirement: AccessRequirement
 
 
 class OfferVersionUpdate(BaseModel):
@@ -675,6 +681,7 @@ class OfferVersionRead(OfferVersionBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    access_requirement: AccessRequirement
     created_at: datetime
     updated_at: datetime
 

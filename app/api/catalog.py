@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -64,6 +64,7 @@ from app.schemas.catalog import (
 from app.schemas.common import ListResponse
 from app.services import catalog as catalog_service
 from app.services.auth_dependencies import require_method_permission, require_permission
+from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
 
 router = APIRouter(
     dependencies=[Depends(require_method_permission("catalog:read", "catalog:write"))]
@@ -74,6 +75,16 @@ _require_billing_catalog_write = require_permission("catalog:billing_write")
 
 def _actor(auth: dict) -> tuple[str | None, str | None]:
     return auth.get("principal_id"), auth.get("principal_type")
+
+
+def _offer_access_requirement_http_error(
+    exc: OfferAccessRequirementError,
+) -> HTTPException:
+    if exc.code.endswith("invalid_access_requirement"):
+        return HTTPException(status_code=422, detail=exc.message)
+    if exc.code.endswith("immutable_access_requirement"):
+        return HTTPException(status_code=409, detail=exc.message)
+    return HTTPException(status_code=400, detail=exc.message)
 
 
 @router.post(
@@ -753,9 +764,12 @@ def create_offer_version(
     auth: dict = Depends(_require_billing_catalog_write),
 ):
     actor_id, actor_type = _actor(auth)
-    return catalog_service.offer_versions.create(
-        db, payload, actor_id=actor_id, actor_type=actor_type
-    )
+    try:
+        return catalog_service.offer_versions.create(
+            db, payload, actor_id=actor_id, actor_type=actor_type
+        )
+    except OfferAccessRequirementError as exc:
+        raise _offer_access_requirement_http_error(exc) from exc
 
 
 @router.get(
@@ -798,9 +812,12 @@ def update_offer_version(
     auth: dict = Depends(_require_billing_catalog_write),
 ):
     actor_id, actor_type = _actor(auth)
-    return catalog_service.offer_versions.update(
-        db, version_id, payload, actor_id=actor_id, actor_type=actor_type
-    )
+    try:
+        return catalog_service.offer_versions.update(
+            db, version_id, payload, actor_id=actor_id, actor_type=actor_type
+        )
+    except OfferAccessRequirementError as exc:
+        raise _offer_access_requirement_http_error(exc) from exc
 
 
 @router.delete(

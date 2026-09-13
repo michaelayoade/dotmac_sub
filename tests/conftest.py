@@ -298,7 +298,13 @@ def _kernel_tenant_metadata():
     return metadata
 
 
-from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
+from app.models.catalog import (
+    AccessRequirement,
+    AccessType,
+    PriceBasis,
+    RegionZone,
+    ServiceType,
+)
 from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
     CatalogOfferCreate,
@@ -640,6 +646,7 @@ def catalog_offer(db_session):
     catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
+            access_requirement=AccessRequirement.unclassified,
             offer_id=offer.id,
             version_number=1,
             name="Standard Internet v1",
