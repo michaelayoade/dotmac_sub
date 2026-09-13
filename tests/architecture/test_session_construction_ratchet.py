@@ -68,7 +68,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from tests/test_eg8145v5_wifi_capability_migration.py: isolated in-memory
 #: migration rehearsals for repairing and seeding the model capability each own
 #: the disposable engine that Alembic Operations executes against.
-TEST_FIXTURE_BASELINE_TOTAL = 127
+#: +1 from tests/test_erp_staff_talk_mapping_permission_migration.py: one
+#: isolated in-memory rehearsal proves the permission migration is idempotent
+#: and reversible without sharing state with the application test database.
+TEST_FIXTURE_BASELINE_TOTAL = 128
 
 
 def _baseline() -> dict[str, int]:

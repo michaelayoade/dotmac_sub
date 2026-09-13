@@ -1756,7 +1756,9 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Ticket and project owners stage a notification row in their "
-                "own transaction. This owner resolves the explicit staff mapping "
+                "own transaction. The ERP adapter enters typed owner commands to "
+                "set or disable the explicit staff mapping. This owner resolves "
+                "that mapping "
                 "and calls only the version-pinned collaboration capability from "
                 "the asynchronous notification worker."
             ),
@@ -1864,7 +1866,7 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "Admin mapping and connection-test commands enter "
+                        "ERP and admin mapping, disable, and connection-test commands enter "
                         "execute_owner_command on a transaction-free session. Business "
                         "owners stage notification outbox rows as transaction-neutral "
                         "participants, and the worker completes only delivery-owned rows."
@@ -1896,7 +1898,8 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     mapping_owner=(
-                        "admin system routes and the notification delivery worker"
+                        "app.api.staff_sync, admin system routes, and the notification "
+                        "delivery worker"
                     ),
                     retryable_codes=(
                         "communications.nextcloud_talk_staff.room_create_failed",
@@ -1959,10 +1962,12 @@ DOMAIN = DomainSOT(
                 steward="customer experience platform",
                 design_refs=(
                     "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/ERP_WORKFORCE_ACCOUNT_PROVISIONING.md",
                     "docs/designs/INTEGRATION_PLATFORM_SOT.md",
                     "docs/designs/NOTIFICATION_CHANNEL_POLICY.md",
                 ),
                 test_refs=(
+                    "tests/test_api_staff_sync.py",
                     "tests/test_nextcloud_talk_staff_notifications.py",
                     "tests/architecture/test_sot_manifest_contracts.py",
                     "tests/architecture/test_adapter_transaction_ownership.py",
