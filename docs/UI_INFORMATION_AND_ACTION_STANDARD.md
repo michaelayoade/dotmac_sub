@@ -466,8 +466,24 @@ implementation.
 - Customer-specific examples and fabricated fallback values are prohibited.
 - Profile and Lead actions are permission-scoped server outcomes. The browser
   never selects identity, pipeline defaults, or duplicate-prevention policy.
+- The Existing Customer control is a validated lazy typeahead. Focusing its
+  empty field requests a bounded set of conversation-derived likely matches.
+  Typing at least two characters replaces those options with a bounded search
+  across all active Customers using only the entered name, email, phone,
+  company/legal name, account number, subscriber number, display name, or exact
+  Customer UUID. Empty suggestions never fall back to unrelated recent
+  Customers. Loading, empty, failure/retry, and selected states remain distinct;
+  stale requests are cancelled. Results are discovery only, and the reviewed
+  server command links only the exact selected UUID after explicit submission.
 - Successful actions return to the exact originating conversation and trigger
   a fresh drawer query; read failure never replays the mutation.
+- A structural conversation-to-Lead link remains visible as `Origin Lead` even
+  when the channel supplies no Party-bound contact point. Conflicting
+  Subscriber, participant, intake, or Lead Parties show identity review while
+  retaining a read path to the exact linked Lead.
+- Reapplying the same reviewed Customer endpoint link is an idempotent success.
+  Replacing a different active endpoint target preserves the prior evidence;
+  stale reviewed route evidence is refused and the drawer must be refreshed.
 - The drawer keeps customer identity visible while Details and Conversations
   tabs provide progressive disclosure. The Conversations badge is the
   authoritative full count of matching previous active and resolved

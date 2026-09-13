@@ -148,6 +148,19 @@ def test_manager_ai_guidance_explains_question_and_answer_workflow() -> None:
     assert "verify ai advice" in content
 
 
+def test_team_inbox_guidance_explains_lazy_customer_link_search() -> None:
+    guide = guidance_for_path("/admin/inbox/conversation-id")
+
+    assert guide is not None
+    assert guide.id == "team-inbox"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "click existing customer to load likely matches" in content
+    assert "type at least two characters" in content
+    assert "search all active customers" in content
+    assert "choose the exact result" in content
+    assert "link customer" in content
+
+
 def test_smtp_sender_guidance_explains_keyring_and_mailbox_route_mapping() -> None:
     guide = guidance_for_path("/admin/system/email")
 
