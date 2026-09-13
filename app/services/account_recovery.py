@@ -35,6 +35,7 @@ from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import ActivationIntent, restore_subscription_detailed
 from app.services.audit_adapter import stage_audit_event
 from app.models.audit import AuditActorType
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 
@@ -128,8 +129,16 @@ class RebaselineApplied:
     affected_resource_types: tuple[str, ...]
 
 
-class AccountRecoveryError(ValueError):
+class AccountRecoveryError(DomainError):
     """Stable, typed failure. Never an HTTPException — see module docstring."""
+
+
+def _error(suffix: str, message: str, **details: object) -> AccountRecoveryError:
+    return AccountRecoveryError(
+        code=f"customer.account_recovery.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 def _fingerprint(
@@ -157,7 +166,11 @@ def _lock_subscriber(db: Session, account_id: UUID) -> Subscriber:
         select(Subscriber).where(Subscriber.id == account_id).with_for_update()
     ).scalar_one_or_none()
     if subscriber is None:
-        raise AccountRecoveryError(f"Account {account_id} not found")
+        raise _error(
+            "account_not_found",
+            f"Account {account_id} not found",
+            account_id=str(account_id),
+        )
     return subscriber
 
 
@@ -173,8 +186,10 @@ def _lock_open_record(db: Session, account_id: UUID) -> AccountRecoveryRecord:
         .with_for_update()
     ).scalar_one_or_none()
     if record is None:
-        raise AccountRecoveryError(
-            f"Account {account_id} has no open recovery generation"
+        raise _error(
+            "no_open_generation",
+            f"Account {account_id} has no open recovery generation",
+            account_id=str(account_id),
         )
     return record
 
@@ -203,8 +218,10 @@ def request_recoverable_deletion(
         )
     ).first()
     if existing_open is not None:
-        raise AccountRecoveryError(
-            f"Account {command.account_id} already has an open recovery generation"
+        raise _error(
+            "generation_already_open",
+            f"Account {command.account_id} already has an open recovery generation",
+            account_id=str(command.account_id),
         )
 
     prior_generation = db.execute(
@@ -303,6 +320,18 @@ def request_recoverable_deletion(
             "affected_resource_types": list(affected_types),
         },
     )
+    emit_event(
+        db,
+        EventType.account_recovery_deletion_tombstoned,
+        {
+            "account_id": str(command.account_id),
+            "record_id": str(record.id),
+            "generation": generation,
+            "affected_resource_types": list(affected_types),
+        },
+        actor=command.deleted_by,
+        account_id=subscriber.id,
+    )
 
     return DeletionTombstone(
         record_id=record.id,
@@ -332,9 +361,11 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
         revision=record.fingerprint_revision,
     )
     if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
-        raise AccountRecoveryError(
+        raise _error(
+            "fingerprint_mismatch",
             "Confirmation fingerprint does not match the current recovery "
-            "evidence; re-review before restoring."
+            "evidence; re-review before restoring.",
+            record_id=str(record.id),
         )
 
     affected = tuple(record.affected_resource_types)
@@ -430,21 +461,31 @@ def rebaseline_recovery_evidence(
         revision=record.fingerprint_revision,
     )
     if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
-        raise AccountRecoveryError(
+        raise _error(
+            "fingerprint_mismatch",
             "Confirmation fingerprint does not match the current recovery "
-            "evidence; re-review before re-baselining."
+            "evidence; re-review before re-baselining.",
+            record_id=str(record.id),
         )
 
     existing = set(record.affected_resource_types)
     new_types = set(command.affected_resource_types)
     if not existing.issubset(new_types):
-        raise AccountRecoveryError(
+        raise _error(
+            "rebaseline_would_narrow_evidence",
             "Re-baselining must not remove a previously-recorded resource "
-            f"type: {sorted(existing - new_types)}"
+            f"type: {sorted(existing - new_types)}",
+            record_id=str(record.id),
+            removed=sorted(existing - new_types),
         )
     unknown = new_types - KNOWN_RESOURCE_TYPES
     if unknown:
-        raise AccountRecoveryError(f"Unknown resource type(s): {sorted(unknown)}")
+        raise _error(
+            "unknown_resource_type",
+            f"Unknown resource type(s): {sorted(unknown)}",
+            record_id=str(record.id),
+            unknown=sorted(unknown),
+        )
 
     record.affected_resource_types = sorted(new_types)
     record.fingerprint_revision += 1
@@ -475,6 +516,18 @@ def rebaseline_recovery_evidence(
             "affected_resource_types": record.affected_resource_types,
             "fingerprint_revision": record.fingerprint_revision,
         },
+    )
+    emit_event(
+        db,
+        EventType.account_recovery_rebaselined,
+        {
+            "account_id": str(command.account_id),
+            "record_id": str(record.id),
+            "affected_resource_types": record.affected_resource_types,
+            "fingerprint_revision": record.fingerprint_revision,
+        },
+        actor=command.actor,
+        account_id=record.account_id,
     )
 
     return RebaselineApplied(
