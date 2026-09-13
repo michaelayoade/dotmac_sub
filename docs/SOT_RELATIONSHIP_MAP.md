@@ -3181,9 +3181,11 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     reference as both `FieldExpenseRequest.id` and `client_ref`, preserving one
     claim UUID across destination verification, submission, approval delivery,
     receipts, idempotency, and status polling. Manager approval fails closed on
-    token-bearing identity drift and is the sole transition that atomically
-    stages the durable ERP release event. Sent transport evidence is shown as
-    awaiting ERP acceptance, never as accepted.
+    token-bearing identity drift. The requester is excluded from approver
+    choices, and both submission and approval reject self-approval before any
+    claim mutation or ERP staging. Manager approval is the sole transition that
+    atomically stages the durable ERP release event. Sent transport evidence is
+    shown as awaiting ERP acceptance, never as accepted.
 
 15b. Field requester expense history is resolved by
     `operations.expense_requests` from the authenticated SystemUser, its exact
