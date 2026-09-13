@@ -11,6 +11,11 @@ dropping the DB default) is separate, later work — see
 ``service_intent.catalog_policy`` (``app/services/catalog/policies.py``) is a
 deliberately separate, untouched owner. This module never imports it and
 never reads/writes its tables.
+
+Both public commands (admission and reviewed classification) enter through
+``execute_owner_command`` and perform their own persistence and transaction
+completion here — a caller builds the command and reads the result; it never
+constructs the ``OfferVersion`` row or the classification row itself.
 """
 
 from __future__ import annotations
@@ -22,16 +27,28 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.models.catalog import (
     AccessRequirement,
+    BillingCycle,
+    CatalogOffer,
+    ContractTerm,
     OfferAccessRequirementClassification,
+    OfferStatus,
     OfferVersion,
 )
+from app.models.domain_settings import SettingDomain
+from app.models.system_user import SystemUser
+from app.schemas.catalog import OfferVersionCreate
+from app.services import catalog_billing_governance as billing_governance
+from app.services import settings_spec
 from app.services.audit_adapter import stage_audit_event
+from app.services.auth_dependencies import has_permission
+from app.services.common import validate_enum
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -41,9 +58,18 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.services.system_user_assignments import system_user_role_names
 
 OWNER = "service_intent.offer_access_requirement"
 CLASSIFY_PERMISSION = "catalog:offer_access_requirement:classify"
+ADMISSION_SCOPE = "catalog:offer_version:admission"
+
+_ADMIT_CONCERN = "access-classified offer-version admission"
+_ADMIT_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_ADMIT_CONCERN,
+    name="admit_offer_version",
+)
 
 _CLASSIFY_CONCERN = "reviewed classification of legacy/unclassified versions"
 _CLASSIFY_COMMAND = OwnerCommandDefinition(
@@ -82,9 +108,56 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+def principal_label(system_user_id: UUID) -> str:
+    """The recorded-identity string for an authenticated ``SystemUser``.
+
+    This — never a caller-supplied free-text actor string — is what gets
+    written as ``classified_by``, the audit actor, the event actor, and the
+    ``authenticated_principal`` evidence field. It is derived here, once,
+    from the exact id the caller authenticated, so nothing downstream can be
+    told to attribute a classification to a different name than the one RBAC
+    actually verified.
+    """
+
+    return f"system_user:{system_user_id}"
+
+
+def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
+    """Re-verify RBAC permission INSIDE the command's own transaction.
+
+    A permission check performed earlier (e.g. for a CLI preview) is a
+    look-then-act race: the grant could be revoked between that check and
+    this command's commit. The only check that counts is the one taken here,
+    against the live row, under the same lock/transaction as the write it
+    gates.
+    """
+
+    user = db.get(SystemUser, system_user_id)
+    if user is None or not user.is_active:
+        raise _error(
+            "permission_denied",
+            "Classification requires an active, authenticated staff principal.",
+        )
+    granted = has_permission(
+        {
+            "principal_id": str(system_user_id),
+            "principal_type": "system_user",
+            "roles": set(system_user_role_names(db, system_user_id)),
+        },
+        db,
+        CLASSIFY_PERMISSION,
+    )
+    if not granted:
+        raise _error(
+            "permission_denied",
+            "Classification requires the catalog:offer_access_requirement:"
+            "classify permission.",
+        )
+
+
 # --------------------------------------------------------------------------
-# Admission (called from OfferVersions.create) and the immutability guard
-# (called from OfferVersions.update).
+# Admission command (the only way OfferVersions.create persists a row) and
+# the immutability guard (called from OfferVersions.update).
 # --------------------------------------------------------------------------
 
 
@@ -121,6 +194,82 @@ def assert_access_requirement_immutable(update_payload: Mapping[str, object]) ->
             "offer_versions.access_requirement is immutable outside the "
             "reviewed classification command.",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AdmitOfferVersionCommand:
+    context: CommandContext
+    payload: OfferVersionCreate
+    actor_id: str | None = None
+    actor_type: str | None = None
+
+
+def admit_offer_version(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
+    """The one path that persists a new ``OfferVersion`` row.
+
+    Owns its own transaction end to end: offer lookup, catalog-default
+    resolution, access-requirement admission, the INSERT itself, and the
+    billing-governance audit participant all run inside one
+    ``execute_owner_command`` boundary. ``OfferVersions.create`` is a thin
+    adapter over this — it does not construct the row itself.
+    """
+
+    return execute_owner_command(
+        db,
+        definition=_ADMIT_COMMAND,
+        context=command.context,
+        operation=lambda: _admit(db, command),
+    )
+
+
+def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
+    payload = command.payload
+    offer = db.get(CatalogOffer, payload.offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    data = payload.model_dump()
+    data["access_requirement"] = validate_admission_access_requirement(
+        data.get("access_requirement")
+    )
+    fields_set = payload.model_fields_set
+    if "billing_cycle" not in fields_set:
+        default_billing_cycle = settings_spec.resolve_value(
+            db, SettingDomain.catalog, "default_billing_cycle"
+        )
+        if default_billing_cycle:
+            data["billing_cycle"] = validate_enum(
+                default_billing_cycle, BillingCycle, "billing_cycle"
+            )
+    if "contract_term" not in fields_set:
+        default_contract_term = settings_spec.resolve_value(
+            db, SettingDomain.catalog, "default_contract_term"
+        )
+        if default_contract_term:
+            data["contract_term"] = validate_enum(
+                default_contract_term, ContractTerm, "contract_term"
+            )
+    if "status" not in fields_set:
+        default_status = settings_spec.resolve_value(
+            db, SettingDomain.catalog, "default_offer_status"
+        )
+        if default_status:
+            data["status"] = validate_enum(default_status, OfferStatus, "status")
+
+    version = OfferVersion(**data)
+    db.add(version)
+    db.flush()
+    billing_governance.stage_billing_catalog_change(
+        db,
+        action="version_created",
+        entity_type="offer_version",
+        entity_id=version.id,
+        changes=data,
+        actor_id=command.actor_id,
+        actor_type=command.actor_type,
+        offer_id=version.offer_id,
+    )
+    return version
 
 
 # --------------------------------------------------------------------------
@@ -205,6 +354,9 @@ class OfferAccessRequirementClassificationPreview:
     row_updated_at: datetime
     review_reference: str
     preview_fingerprint: str
+    #: True when this preview reflects an already-recorded transition
+    #: (the stored fingerprint of a prior classification), not a fresh one.
+    already_applied: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +364,10 @@ class ClassifyOfferAccessRequirementCommand:
     context: CommandContext
     query: PreviewClassifyOfferAccessRequirementQuery
     expected_preview_fingerprint: str
-    permission_granted: bool
+    #: The authenticated principal. Permission is re-verified fresh, inside
+    #: this command's own transaction — never trusted from an earlier,
+    #: separately-computed boolean.
+    authorized_system_user_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +400,17 @@ def _preview_fingerprint(
 def preview_classify_offer_version_access_requirement(
     db: Session, query: PreviewClassifyOfferAccessRequirementQuery
 ) -> OfferAccessRequirementClassificationPreview:
-    """Preview one explicit reclassification without changing any records."""
+    """Preview one explicit reclassification without changing any records.
+
+    If this exact transition (offer version -> proposed target) was already
+    recorded by a prior classification, the preview reflects that recorded
+    transition and its STORED fingerprint instead of raising — this is what
+    lets a genuine retry (same idempotency key, same inputs) reach the
+    command's replay branch instead of being refused before it ever tries.
+    A version already classified to a DIFFERENT target, or classified
+    without any recorded row (e.g. admitted directly with a real value), is
+    still refused: only the exact-target case previews as replayable.
+    """
 
     review_reference = query.review_reference.strip()
     if not review_reference:
@@ -267,6 +432,30 @@ def preview_classify_offer_version_access_requirement(
             offer_version_id=str(query.offer_version_id),
         )
     current = version.access_requirement
+
+    existing = db.scalar(
+        select(OfferAccessRequirementClassification).where(
+            OfferAccessRequirementClassification.offer_version_id == version.id
+        )
+    )
+    if existing is not None:
+        if existing.new_access_requirement == query.proposed_access_requirement:
+            return OfferAccessRequirementClassificationPreview(
+                offer_version_id=version.id,
+                current_access_requirement=existing.previous_access_requirement,
+                proposed_access_requirement=existing.new_access_requirement,
+                row_updated_at=_utc(version.updated_at),
+                review_reference=existing.review_reference,
+                preview_fingerprint=existing.preview_fingerprint,
+                already_applied=True,
+            )
+        raise _error(
+            "already_classified",
+            "Only an unclassified offer version may be reviewed-classified; "
+            "real-to-real and real-to-unclassified changes are refused.",
+            offer_version_id=str(version.id),
+            current_access_requirement=current.value,
+        )
     if current is not AccessRequirement.unclassified:
         raise _error(
             "already_classified",
@@ -309,17 +498,20 @@ def classify_offer_version_access_requirement(
 def _classify(
     db: Session, command: ClassifyOfferAccessRequirementCommand
 ) -> OfferAccessRequirementClassificationResult:
-    if command.context.scope != CLASSIFY_PERMISSION or not command.permission_granted:
-        raise _error(
-            "permission_denied",
-            "Classification requires the catalog:offer_access_requirement:"
-            "classify permission.",
-        )
+    _verify_classify_permission(db, command.authorized_system_user_id)
+    actor = principal_label(command.authorized_system_user_id)
+
     key = (command.context.idempotency_key or "").strip()
     if not key:
         raise _error(
             "missing_idempotency_key",
             "Classification requires an idempotency key.",
+        )
+    reason = (command.context.reason or "").strip()
+    if not reason:
+        raise _error(
+            "missing_reason",
+            "Classification requires a reason.",
         )
 
     version = lock_for_update(db, OfferVersion, command.query.offer_version_id)
@@ -329,44 +521,63 @@ def _classify(
             "The offer version does not exist.",
             offer_version_id=str(command.query.offer_version_id),
         )
-    current = version.access_requirement
     proposed = command.query.proposed_access_requirement
 
-    # At most one classification row ever exists per offer version (a DB
-    # uniqueness invariant, not just an application check). Its presence is
-    # the sole authority for "was this version already reviewed-classified",
-    # independent of the offer version's own current value — which Release 1
-    # also lets admission set directly to a real value, with no row here.
-    existing = db.scalar(
+    # The idempotency key is globally unique (one durable record per
+    # command), so a key reused for a different version or a different
+    # target is a typed conflict, checked BEFORE any write — never a raw
+    # database constraint violation.
+    existing_by_key = db.scalar(
+        select(OfferAccessRequirementClassification).where(
+            OfferAccessRequirementClassification.idempotency_key == key
+        )
+    )
+    if existing_by_key is not None:
+        exact_replay = (
+            existing_by_key.offer_version_id == version.id
+            and existing_by_key.new_access_requirement == proposed
+            and existing_by_key.preview_fingerprint
+            == command.expected_preview_fingerprint
+            and existing_by_key.reason == reason
+            and existing_by_key.classified_by == actor
+        )
+        if exact_replay:
+            return OfferAccessRequirementClassificationResult(
+                offer_version_id=existing_by_key.offer_version_id,
+                previous_access_requirement=existing_by_key.previous_access_requirement,
+                new_access_requirement=existing_by_key.new_access_requirement,
+                replayed=True,
+            )
+        raise _error(
+            "idempotency_conflict",
+            "This idempotency key was already used for a different "
+            "classification command.",
+            offer_version_id=str(version.id),
+        )
+
+    # No key match: a different key can never replay an already-classified
+    # version. A genuine retry MUST reuse its original idempotency key —
+    # that is what the key is for.
+    existing_by_version = db.scalar(
         select(OfferAccessRequirementClassification).where(
             OfferAccessRequirementClassification.offer_version_id == version.id
         )
     )
-    if existing is not None:
-        if (
-            existing.idempotency_key == key
-            and existing.new_access_requirement == proposed
-        ):
-            return OfferAccessRequirementClassificationResult(
-                offer_version_id=version.id,
-                previous_access_requirement=existing.previous_access_requirement,
-                new_access_requirement=existing.new_access_requirement,
-                replayed=True,
-            )
+    if existing_by_version is not None:
         raise _error(
             "already_classified",
             "Only an unclassified offer version may be reviewed-classified; "
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
-            current_access_requirement=current.value,
+            current_access_requirement=existing_by_version.new_access_requirement.value,
         )
-    if current is not AccessRequirement.unclassified:
+    if version.access_requirement is not AccessRequirement.unclassified:
         raise _error(
             "already_classified",
             "Only an unclassified offer version may be reviewed-classified; "
             "real-to-real and real-to-unclassified changes are refused.",
             offer_version_id=str(version.id),
-            current_access_requirement=current.value,
+            current_access_requirement=version.access_requirement.value,
         )
 
     preview = preview_classify_offer_version_access_requirement(db, command.query)
@@ -376,7 +587,6 @@ def _classify(
             "The offer version changed after review; preview it again.",
         )
 
-    reason = (command.context.reason or "").strip()
     review_reference = command.query.review_reference.strip()
     version.access_requirement = proposed
     db.flush()
@@ -389,7 +599,7 @@ def _classify(
         reason=reason,
         preview_fingerprint=preview.preview_fingerprint,
         idempotency_key=key,
-        classified_by=command.context.actor,
+        classified_by=actor,
         command_id=command.context.command_id,
         correlation_id=command.context.correlation_id,
     )
@@ -406,7 +616,7 @@ def _classify(
         "new_access_requirement": proposed.value,
         "review_reference": review_reference,
         "reason": reason,
-        "authenticated_principal": command.context.actor,
+        "authenticated_principal": actor,
     }
     stage_audit_event(
         db,
@@ -414,7 +624,7 @@ def _classify(
         entity_type="offer_version",
         entity_id=str(version.id),
         actor_type=AuditActorType.user,
-        actor_id=command.context.actor,
+        actor_id=actor,
         request_id=str(command.context.correlation_id),
         metadata=evidence,
     )
@@ -422,7 +632,7 @@ def _classify(
         db,
         EventType.catalog_offer_access_requirement_classified,
         evidence,
-        actor=command.context.actor,
+        actor=actor,
     )
     return OfferAccessRequirementClassificationResult(
         offer_version_id=version.id,
@@ -433,7 +643,9 @@ def _classify(
 
 
 __all__ = [
+    "ADMISSION_SCOPE",
     "CLASSIFY_PERMISSION",
+    "AdmitOfferVersionCommand",
     "ClassifyOfferAccessRequirementCommand",
     "OWNER",
     "OfferAccessRequirementClassificationPreview",
@@ -442,9 +654,11 @@ __all__ = [
     "PreviewClassifyOfferAccessRequirementQuery",
     "UnclassifiedOfferVersionRow",
     "UnclassifiedOfferVersionsWorklist",
+    "admit_offer_version",
     "assert_access_requirement_immutable",
     "classify_offer_version_access_requirement",
     "list_unclassified_offer_versions",
     "preview_classify_offer_version_access_requirement",
+    "principal_label",
     "validate_admission_access_requirement",
 ]

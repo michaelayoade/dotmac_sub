@@ -6,28 +6,32 @@ Dry-run first, three modes:
     # 1. Default: deterministic, paginated worklist of unclassified rows.
     python -m scripts.catalog.classify_offer_access_requirement
 
-    # 2. Targeted preview (no --apply): binds the exact fingerprint.
+    # 2. Targeted preview (no --apply): binds the exact fingerprint. If this
+    #    exact transition was already applied, the preview reflects that
+    #    recorded outcome instead of erroring — reusing the SAME
+    #    --idempotency-key at --apply time then replays it.
     python -m scripts.catalog.classify_offer_access_requirement \\
         --offer-version-id ... --proposed network_access \\
         --review-reference JIRA-1234
 
     # 3. Apply: requires the exact fingerprint from step 2, a REAL
-    #    authenticated staff principal, and an idempotency key. Gated by
-    #    catalog:offer_access_requirement:classify — a principal without it
-    #    (and without an admin/"*" wildcard grant) is refused.
+    #    authenticated staff principal, and an idempotency key.
     python -m scripts.catalog.classify_offer_access_requirement \\
         --offer-version-id ... --proposed network_access \\
         --review-reference JIRA-1234 --apply \\
         --expected-preview-fingerprint <sha256> \\
-        --actor-system-user-id <uuid> --actor "staff:<uuid>" \\
-        --reason "confirmed with network ops" --idempotency-key <key>
+        --actor-system-user-id <uuid> \\
+        --reason "confirmed with network ops" --idempotency-key <key> --confirm
 
-Authentication is a REAL staff principal: ``--actor-system-user-id`` must name
-an active ``SystemUser`` row, and the permission check reads that principal's
-actual RBAC roles (``system_user_role_names`` + ``has_permission``) — not a
-bare host-trust actor string. A caller without the
+Authentication is a REAL staff principal, and identity is never a free-text
+argument: ``--actor-system-user-id`` is the ONLY identity input, and the
+string recorded as ``classified_by``/audit actor/event actor is always
+derived from that verified id (``principal_label``) — there is no separate
+``--actor`` argument to type a different name into. The
 ``catalog:offer_access_requirement:classify`` permission (or an admin/``*``
-wildcard grant) is refused at ``--apply`` time.
+wildcard grant) is re-verified fresh, INSIDE the command's own transaction,
+at apply time — a preview-time check would be a stale look-then-act race, so
+none is performed here; the service is the sole source of truth.
 """
 
 from __future__ import annotations
@@ -37,20 +41,17 @@ import json
 from uuid import UUID
 
 from app.models.catalog import AccessRequirement
-from app.models.system_user import SystemUser
-from app.services.auth_dependencies import has_permission
 from app.services.catalog.offer_access_requirement import (
     CLASSIFY_PERMISSION,
     ClassifyOfferAccessRequirementCommand,
-    OfferAccessRequirementError,
     PreviewClassifyOfferAccessRequirementQuery,
     classify_offer_version_access_requirement,
     list_unclassified_offer_versions,
     preview_classify_offer_version_access_requirement,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
-from app.services.system_user_assignments import system_user_role_names
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -72,29 +73,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--expected-preview-fingerprint")
     parser.add_argument("--command-id", type=UUID)
-    parser.add_argument("--actor")
     parser.add_argument("--actor-system-user-id", type=UUID)
     parser.add_argument("--idempotency-key")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--offset", type=int, default=0)
     return parser
-
-
-def _permission_granted(db, actor_system_user_id: UUID | None) -> bool:
-    if actor_system_user_id is None:
-        return False
-    user = db.get(SystemUser, actor_system_user_id)
-    if user is None or not user.is_active:
-        return False
-    return has_permission(
-        {
-            "principal_id": str(actor_system_user_id),
-            "principal_type": "system_user",
-            "roles": set(system_user_role_names(db, actor_system_user_id)),
-        },
-        db,
-        CLASSIFY_PERMISSION,
-    )
 
 
 def _worklist_dict(limit: int, offset: int) -> dict[str, object]:
@@ -126,6 +109,7 @@ def _preview_dict(preview) -> dict[str, object]:  # noqa: ANN001
         "row_updated_at": preview.row_updated_at.isoformat(),
         "review_reference": preview.review_reference,
         "preview_fingerprint": preview.preview_fingerprint,
+        "already_applied": preview.already_applied,
     }
 
 
@@ -157,7 +141,6 @@ def main() -> int:
     try:
         with db_session_adapter.read_session() as db:
             preview = preview_classify_offer_version_access_requirement(db, query)
-            permission_granted = _permission_granted(db, args.actor_system_user_id)
 
         if not args.apply:
             print(
@@ -173,7 +156,6 @@ def main() -> int:
                 args.confirm,
                 args.expected_preview_fingerprint,
                 args.command_id,
-                args.actor,
                 args.actor_system_user_id,
                 args.reason,
                 args.idempotency_key,
@@ -185,9 +167,8 @@ def main() -> int:
                         "applied": False,
                         "error": (
                             "--apply requires --confirm, --expected-preview-"
-                            "fingerprint, --command-id, --actor, "
-                            "--actor-system-user-id, --reason, and "
-                            "--idempotency-key"
+                            "fingerprint, --command-id, --actor-system-user-id, "
+                            "--reason, and --idempotency-key"
                         ),
                         "preview": _preview_dict(preview),
                     },
@@ -203,17 +184,20 @@ def main() -> int:
                     context=CommandContext(
                         command_id=args.command_id,
                         correlation_id=args.command_id,
-                        actor=args.actor,
+                        # A placeholder; the service records the AUTHENTICATED
+                        # principal (derived from authorized_system_user_id)
+                        # as the actor of record, never this string.
+                        actor=f"system_user:{args.actor_system_user_id}",
                         scope=CLASSIFY_PERMISSION,
                         reason=args.reason,
                         idempotency_key=args.idempotency_key,
                     ),
                     query=query,
                     expected_preview_fingerprint=args.expected_preview_fingerprint,
-                    permission_granted=permission_granted,
+                    authorized_system_user_id=args.actor_system_user_id,
                 ),
             )
-    except OfferAccessRequirementError as exc:
+    except DomainError as exc:
         print(
             json.dumps(
                 {
