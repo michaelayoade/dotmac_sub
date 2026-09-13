@@ -815,6 +815,7 @@ def _project_tasks(
             or_(*scopes),
             Project.is_active.is_(True),
             ProjectTask.is_active.is_(True),
+            projects.current_project_task_plan_clause(),
             ProjectTask.status.in_(projects.active_project_task_status_values()),
         )
     )

@@ -1837,6 +1837,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.projects",
         owns=(
             "Project and ProjectTask identity and lifecycle",
+            "ProjectTemplate task-plan definition and application",
             "project customer-account eligibility",
             "project infrastructure relationship",
             "project creation customer email consequence",
@@ -1883,6 +1884,15 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 ConcernContract(
                     name="Project and ProjectTask identity and lifecycle",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical project aggregate",
+                        "authorized project command",
+                    ),
+                    canonical_writer="operations.project_lifecycle",
+                ),
+                ConcernContract(
+                    name="ProjectTemplate task-plan definition and application",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical project aggregate",
@@ -2016,7 +2026,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="canonical project aggregate",
                     owner="operations.project_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="locked native Project, ProjectTask, ProjectTaskAssignee, dependency, comment, and SLA records keyed only by native UUIDs",
+                    source="locked native Project, ProjectTask, ProjectTemplate, template revision, hierarchy, dependency, assignee, comment, and SLA records keyed only by native UUIDs",
                 ),
                 AuthorityInput(
                     name="project transition protocol",
@@ -2125,6 +2135,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "project_task.updated",
                     "project_task.completed",
                     "project_task.dependencies_replaced",
+                    "project_template.plan_replaced",
+                    "project.template_applied",
                     "project.assignment_changed",
                     "project.infrastructure_changed",
                 ),
