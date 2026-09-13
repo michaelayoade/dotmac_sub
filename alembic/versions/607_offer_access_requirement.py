@@ -137,10 +137,18 @@ def downgrade() -> None:
         # between the count and the destructive DDL could commit real data
         # that the drop then destroys anyway — a check that does not hold a
         # lock across its own "then act" is not a guarantee.
-        if _CLASSIFICATIONS_TABLE in table_names:
-            op.execute(f"LOCK TABLE {_CLASSIFICATIONS_TABLE} IN ACCESS EXCLUSIVE MODE")
+        #
+        # Lock order MUST match the runtime writer's order
+        # (``offer_access_requirement._classify``: it locks
+        # ``offer_versions`` first via ``lock_for_update``, then only later
+        # inserts into the classifications table). Locking these two tables
+        # in the opposite order here would let a concurrent classifier and
+        # this downgrade each hold one lock and wait on the other —
+        # a classic deadlock, not merely a slow migration.
         if "offer_versions" in table_names:
             op.execute("LOCK TABLE offer_versions IN ACCESS EXCLUSIVE MODE")
+        if _CLASSIFICATIONS_TABLE in table_names:
+            op.execute(f"LOCK TABLE {_CLASSIFICATIONS_TABLE} IN ACCESS EXCLUSIVE MODE")
 
     if _CLASSIFICATIONS_TABLE in table_names:
         classified_count = bind.execute(

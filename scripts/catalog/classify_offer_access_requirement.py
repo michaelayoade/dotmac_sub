@@ -23,15 +23,24 @@ Dry-run first, three modes:
         --actor-system-user-id <uuid> \\
         --reason "confirmed with network ops" --idempotency-key <key> --confirm
 
-Authentication is a REAL staff principal, and identity is never a free-text
-argument: ``--actor-system-user-id`` is the ONLY identity input, and the
-string recorded as ``classified_by``/audit actor/event actor is always
-derived from that verified id (``principal_label``) — there is no separate
-``--actor`` argument to type a different name into. The
+``--actor-system-user-id`` is the operator's CLAIMED identity, never a
+free-text label: it is the ONLY identity input (there is no separate
+``--actor`` argument to type a different display name into), and it is
+resolved against real RBAC grants via ``has_permission``/
+``system_user_role_names`` — re-verified fresh, INSIDE the command's own
+transaction, immediately before the write — before the owner ever treats the
+action as authorized. This CLI does not itself verify who is really typing
+the command: host or container shell access to run it at all is this
+script's authentication boundary, the same trust model documented in
+``scripts/billing/correct_customer_subledger_opening.py`` and its siblings
+(``scripts/support/issue_inbox_completion_override.py``,
+``scripts/billing/reconcile_prepaid_drafts.py``,
+``scripts/billing/repair_prepaid_funding_consequences.py``). What IS
+guaranteed: the string recorded as ``classified_by``/audit actor/event actor
+is always derived from the RBAC-verified id (``principal_label``), never
+from an unverified claim, and a claimed id that does not hold the
 ``catalog:offer_access_requirement:classify`` permission (or an admin/``*``
-wildcard grant) is re-verified fresh, INSIDE the command's own transaction,
-at apply time — a preview-time check would be a stale look-then-act race, so
-none is performed here; the service is the sole source of truth.
+wildcard grant) is refused.
 """
 
 from __future__ import annotations

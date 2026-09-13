@@ -33,11 +33,15 @@ from app.schemas.catalog import (
     OfferVersionUpdate,
 )
 from app.services import catalog as catalog_service
+from app.services.catalog import offer_access_requirement
 from app.services.catalog.offer_access_requirement import (
+    ADMISSION_SCOPE,
     CLASSIFY_PERMISSION,
+    AdmitOfferVersionCommand,
     ClassifyOfferAccessRequirementCommand,
     OfferAccessRequirementError,
     PreviewClassifyOfferAccessRequirementQuery,
+    admit_offer_version,
     classify_offer_version_access_requirement,
     list_unclassified_offer_versions,
     preview_classify_offer_version_access_requirement,
@@ -618,3 +622,233 @@ def test_classify_refuses_a_different_key_after_a_real_transition(db_session):
         )
     db_session.rollback()
     assert excinfo.value.code.endswith("already_classified")
+
+
+def test_classify_reverifies_permission_after_the_row_lock_not_only_at_entry(
+    db_session, monkeypatch
+):
+    """Regression for the permission-revocation race: before this fix,
+    ``_verify_classify_permission`` ran exactly ONCE, at the top of
+    ``_classify``, before the offer version was locked. This asserts it now
+    runs a SECOND time — after the lock, immediately before the write — so a
+    grant revoked between the first check and the commit can never be used
+    to complete the write. Fails before the fix (call count 1, not 2)."""
+
+    offer = _make_offer(db_session)
+    version = _make_version(
+        db_session, offer, access_requirement=AccessRequirement.unclassified
+    )
+    user = _admin_system_user(db_session)
+    preview = _preview(db_session, version, AccessRequirement.network_access)
+
+    calls: list[object] = []
+    real_verify = offer_access_requirement._verify_classify_permission
+
+    def _counting_verify(db, system_user_id):
+        calls.append(system_user_id)
+        return real_verify(db, system_user_id)
+
+    monkeypatch.setattr(
+        offer_access_requirement, "_verify_classify_permission", _counting_verify
+    )
+
+    outcome = classify_offer_version_access_requirement(
+        db_session,
+        ClassifyOfferAccessRequirementCommand(
+            context=_context(),
+            query=PreviewClassifyOfferAccessRequirementQuery(
+                offer_version_id=version.id,
+                proposed_access_requirement=AccessRequirement.network_access,
+                review_reference="JIRA-42",
+            ),
+            expected_preview_fingerprint=preview.preview_fingerprint,
+            authorized_system_user_id=user.id,
+        ),
+    )
+    db_session.rollback()
+    assert outcome.replayed is False
+    assert len(calls) == 2
+    assert calls == [user.id, user.id]
+
+
+def test_classify_refuses_a_replay_with_a_different_review_reference(db_session):
+    """Regression for the replay/review_reference gap: previewing and then
+    applying with the SAME idempotency key but a DIFFERENT review_reference
+    than the one actually recorded must not silently substitute the stored
+    reference — it must be refused. Fails before the fix (the preview
+    silently returned the stored reference regardless of what was supplied)."""
+
+    offer = _make_offer(db_session)
+    version = _make_version(
+        db_session, offer, access_requirement=AccessRequirement.unclassified
+    )
+    user = _admin_system_user(db_session)
+    fixed_key = f"fixed-key-{uuid4()}"
+
+    first_preview = _preview(db_session, version, AccessRequirement.network_access)
+    first_query = PreviewClassifyOfferAccessRequirementQuery(
+        offer_version_id=version.id,
+        proposed_access_requirement=AccessRequirement.network_access,
+        review_reference="JIRA-42",
+    )
+    classify_offer_version_access_requirement(
+        db_session,
+        ClassifyOfferAccessRequirementCommand(
+            context=_context(idempotency_key=fixed_key),
+            query=first_query,
+            expected_preview_fingerprint=first_preview.preview_fingerprint,
+            authorized_system_user_id=user.id,
+        ),
+    )
+    db_session.rollback()
+
+    # Preview again with a DIFFERENT review_reference for the same already-
+    # applied transition.
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        _preview(db_session, version, AccessRequirement.network_access, "JIRA-99")
+    db_session.rollback()
+    assert excinfo.value.code.endswith("review_reference_mismatch")
+
+
+def test_classify_refuses_an_oversized_idempotency_key(db_session):
+    offer = _make_offer(db_session)
+    version = _make_version(
+        db_session, offer, access_requirement=AccessRequirement.unclassified
+    )
+    user = _admin_system_user(db_session)
+    preview = _preview(db_session, version, AccessRequirement.network_access)
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        classify_offer_version_access_requirement(
+            db_session,
+            ClassifyOfferAccessRequirementCommand(
+                context=_context(idempotency_key="x" * 121),
+                query=PreviewClassifyOfferAccessRequirementQuery(
+                    offer_version_id=version.id,
+                    proposed_access_requirement=AccessRequirement.network_access,
+                    review_reference="JIRA-42",
+                ),
+                expected_preview_fingerprint=preview.preview_fingerprint,
+                authorized_system_user_id=user.id,
+            ),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("idempotency_key_too_long")
+
+
+def test_preview_refuses_an_oversized_review_reference(db_session):
+    offer = _make_offer(db_session)
+    version = _make_version(
+        db_session, offer, access_requirement=AccessRequirement.unclassified
+    )
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        _preview(db_session, version, AccessRequirement.network_access, "x" * 201)
+    db_session.rollback()
+    assert excinfo.value.code.endswith("review_reference_too_long")
+
+
+# --------------------------------------------------------------------------
+# Admission authorization and duplicate (offer_id, version_number) refusal
+# --------------------------------------------------------------------------
+
+
+def _admit_command(offer, version_number, *, actor_id=None, actor_type=None):
+    command_id = uuid4()
+    return AdmitOfferVersionCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=(f"{actor_type}:{actor_id}" if actor_id else "system:test"),
+            scope=ADMISSION_SCOPE,
+            reason="test admission",
+        ),
+        payload=OfferVersionCreate(
+            offer_id=offer.id,
+            version_number=version_number,
+            name=f"Fiber 100 v{version_number}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            access_requirement=AccessRequirement.unclassified,
+        ),
+        actor_id=actor_id,
+        actor_type=actor_type,
+    )
+
+
+def test_admit_with_no_claimed_actor_is_treated_as_system_initiated(db_session):
+    """Existing internal/system-initiated convention is preserved: no actor
+    claimed at all is not RBAC-gated (matches every pre-existing caller of
+    ``offer_versions.create``/``admit_offer_version`` with no actor, e.g.
+    ``tests/conftest.py``'s shared ``catalog_offer`` fixture)."""
+
+    offer = _make_offer(db_session)
+    version = admit_offer_version(db_session, _admit_command(offer, 1))
+    db_session.rollback()
+    assert version.access_requirement is AccessRequirement.unclassified
+
+
+def test_admit_denies_an_unprivileged_claimed_actor(db_session):
+    """Regression for the actor-spoofing gap: before this fix, a caller
+    could claim ANY actor_id/actor_type and it was used only for the audit
+    trail, never verified. An unprivileged system_user's claim is now
+    refused."""
+
+    offer = _make_offer(db_session)
+    user = _unprivileged_system_user(db_session)
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(offer, 1, actor_id=str(user.id), actor_type="system_user"),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
+
+
+def test_admit_accepts_a_privileged_claimed_actor(db_session):
+    offer = _make_offer(db_session)
+    user = _admin_system_user(db_session)
+
+    version = admit_offer_version(
+        db_session,
+        _admit_command(offer, 1, actor_id=str(user.id), actor_type="system_user"),
+    )
+    db_session.rollback()
+    assert version.offer_id == offer.id
+
+
+def test_admit_refuses_a_partially_claimed_actor(db_session):
+    offer = _make_offer(db_session)
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session, _admit_command(offer, 1, actor_id="not-really-an-actor")
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
+
+
+def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
+    """Regression: before this fix, retrying an admission with the SAME
+    (offer_id, version_number) silently created a second row — there was no
+    uniqueness check anywhere in ``_admit`` and no database constraint
+    either. This must now be a typed conflict, and no second row is
+    created."""
+
+    offer = _make_offer(db_session)
+    admit_offer_version(db_session, _admit_command(offer, 1))
+    db_session.rollback()
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(db_session, _admit_command(offer, 1))
+    db_session.rollback()
+    assert excinfo.value.code.endswith("duplicate_version_number")
+
+    rows = db_session.scalars(
+        select(OfferVersion).where(
+            OfferVersion.offer_id == offer.id,
+            OfferVersion.version_number == 1,
+        )
+    ).all()
+    db_session.rollback()
+    assert len(rows) == 1

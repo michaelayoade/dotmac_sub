@@ -27,8 +27,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -84,6 +84,14 @@ _REAL_CLASSIFICATIONS = (
     AccessRequirement.network_access,
     AccessRequirement.no_network_access,
 )
+
+#: Match ``offer_access_requirement_classifications.idempotency_key``/
+#: ``.review_reference`` (``app/models/catalog.py``'s ``String(120)``/
+#: ``String(200)`` columns) exactly. Checked here, before either value
+#: reaches the database, so an oversized CLI/API input is a typed
+#: validation error instead of a raw database error.
+_IDEMPOTENCY_KEY_MAX_LENGTH = 120
+_REVIEW_REFERENCE_MAX_LENGTH = 200
 
 
 class OfferAccessRequirementError(DomainError):
@@ -153,6 +161,113 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
             "Classification requires the catalog:offer_access_requirement:"
             "classify permission.",
         )
+
+
+def _verify_admission_permission(
+    db: Session, *, actor_id: str | None, actor_type: str | None
+) -> None:
+    """Verify a CLAIMED admission identity against real RBAC grants.
+
+    ``AdmitOfferVersionCommand.actor_id``/``.actor_type`` previously reached
+    this command as pure audit labels: whatever string the adapter passed
+    was written to the audit trail and trusted for nothing else. But
+    ``admit_offer_version`` is itself a public command
+    (``docs/CODING_STANDARD.md`` § 2's "validates authorization scope"
+    requirement applies to the command, not only the HTTP route that
+    happens to front it today) — a caller that invokes it directly, bypassing
+    ``app/api/catalog.py``'s ``_require_billing_catalog_write`` dependency,
+    must not be able to admit a version merely by attaching a
+    plausible-looking ``actor_id``/``actor_type`` pair with no RBAC behind it.
+
+    When BOTH are supplied, this re-checks the claim, fresh, against live
+    RBAC rows for ``ADMISSION_SCOPE`` — the same never-trust-the-caller's-own-
+    determination discipline as ``_verify_classify_permission``. Today only
+    ``system_user`` principals can hold this permission (the admin/``*``
+    wildcard bypass still applies via ``has_permission``'s existing "admin"
+    role shortcut); any other claimed ``actor_type`` is refused.
+
+    No identity claimed at all (``actor_id`` and ``actor_type`` both
+    ``None``) is treated as an internal, system-initiated admission — this
+    is the existing convention ``OfferVersions.create`` already falls back
+    to (``actor="system:offer_version_admission"``) for callers with no
+    authenticated end-user context (seed data, fixtures, internal tooling);
+    it is not new here, and is deliberately NOT RBAC-gated. A partially
+    supplied pair (one of the two present) is always refused: it can only be
+    an unverifiable claim, never a legitimate "no actor" case.
+    """
+
+    if actor_id is None and actor_type is None:
+        return
+    if not actor_id or not actor_type:
+        raise _error(
+            "permission_denied",
+            "A partially-specified admission actor is refused; supply both "
+            "actor_id and actor_type, or neither.",
+        )
+    if actor_type != "system_user":
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires an authenticated staff "
+            "(system_user) principal.",
+        )
+    try:
+        system_user_id = UUID(str(actor_id))
+    except ValueError as exc:
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires a real staff principal id.",
+        ) from exc
+    user = db.get(SystemUser, system_user_id)
+    if user is None or not user.is_active:
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires an active, authenticated "
+            "staff principal.",
+        )
+    granted = has_permission(
+        {
+            "principal_id": str(system_user_id),
+            "principal_type": "system_user",
+            "roles": set(system_user_role_names(db, system_user_id)),
+        },
+        db,
+        ADMISSION_SCOPE,
+    )
+    if not granted:
+        raise _error(
+            "permission_denied",
+            f"Offer version admission requires the {ADMISSION_SCOPE} "
+            "permission.",
+        )
+
+
+def _lock_key(*parts: object) -> int:
+    """Stable signed-bigint advisory-lock key for one tuple of parts.
+
+    sha256-derived (never the builtin ``hash``, which is per-process salted)
+    so every process/worker derives the same key for the same parts —
+    mirrors ``app/services/radio_registration.py``'s ``mac_lock_key``.
+    """
+
+    digest = hashlib.sha256(
+        "|".join(str(part) for part in parts).encode("utf-8")
+    ).digest()[:8]
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _acquire_xact_lock(db: Session, *parts: object) -> None:
+    """Transaction-scoped advisory lock, released at commit/rollback.
+
+    No-op on non-PostgreSQL engines (SQLite tests), mirroring
+    ``app/services/radio_registration.py::acquire_mac_lock`` and
+    ``app/services/crm_subscriber_provisioning.py::_serialize_key``.
+    """
+
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+    if dialect_name != "postgresql":
+        return
+    db.execute(select(func.pg_advisory_xact_lock(_lock_key(*parts))))
 
 
 # --------------------------------------------------------------------------
@@ -226,7 +341,40 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
     payload = command.payload
     offer = db.get(CatalogOffer, payload.offer_id)
     if not offer:
-        raise HTTPException(status_code=404, detail="Offer not found")
+        raise _error(
+            "offer_not_found",
+            "Offer not found.",
+            offer_id=str(payload.offer_id),
+        )
+
+    _verify_admission_permission(
+        db, actor_id=command.actor_id, actor_type=command.actor_type
+    )
+
+    # Serialize concurrent admissions targeting the SAME (offer_id,
+    # version_number) before either one can observe the other's uncommitted
+    # existence check — without this lock, two racing retries of one
+    # command (e.g. a client's retried POST after a dropped response) could
+    # both pass the lookup below and both insert, creating a duplicate
+    # version rather than a safe no-op/typed conflict.
+    _acquire_xact_lock(
+        db, "offer_access_requirement:admit", payload.offer_id, payload.version_number
+    )
+    existing = db.scalar(
+        select(OfferVersion).where(
+            OfferVersion.offer_id == payload.offer_id,
+            OfferVersion.version_number == payload.version_number,
+        )
+    )
+    if existing is not None:
+        raise _error(
+            "duplicate_version_number",
+            "This offer already has a version with this version_number; a "
+            "retried admission must not resubmit an existing version_number "
+            "as a new row.",
+            offer_id=str(payload.offer_id),
+            version_number=payload.version_number,
+        )
 
     data = payload.model_dump()
     data["access_requirement"] = validate_admission_access_requirement(
@@ -258,7 +406,20 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> OfferVersion:
 
     version = OfferVersion(**data)
     db.add(version)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        # Defense in depth for a race the advisory lock above should already
+        # have serialized (e.g. a future DB-level uniqueness constraint, or
+        # a writer that bypasses this command's lock): a raw constraint
+        # violation still surfaces as this command's own typed conflict,
+        # never a raw database error.
+        raise _error(
+            "duplicate_version_number",
+            "This offer already has a version with this version_number.",
+            offer_id=str(payload.offer_id),
+            version_number=payload.version_number,
+        ) from exc
     billing_governance.stage_billing_catalog_change(
         db,
         action="version_created",
@@ -418,6 +579,12 @@ def preview_classify_offer_version_access_requirement(
             "missing_review_reference",
             "Classification requires a durable review reference.",
         )
+    if len(review_reference) > _REVIEW_REFERENCE_MAX_LENGTH:
+        raise _error(
+            "review_reference_too_long",
+            "review_reference exceeds the stored column's maximum length.",
+            max_length=_REVIEW_REFERENCE_MAX_LENGTH,
+        )
     if query.proposed_access_requirement not in _REAL_CLASSIFICATIONS:
         raise _error(
             "invalid_target_classification",
@@ -440,6 +607,21 @@ def preview_classify_offer_version_access_requirement(
     )
     if existing is not None:
         if existing.new_access_requirement == query.proposed_access_requirement:
+            # An already-applied transition previews as replayable ONLY when
+            # the caller's review_reference matches what was actually
+            # recorded. Silently substituting the STORED reference here
+            # (ignoring what the caller supplied) would let a caller "replay"
+            # against a review reference that was never reviewed — the
+            # command's documented "same material inputs" guarantee.
+            if existing.review_reference != review_reference:
+                raise _error(
+                    "review_reference_mismatch",
+                    "This offer version was already classified under a "
+                    "different review reference; a replay must supply the "
+                    "exact review reference recorded on the original "
+                    "classification.",
+                    offer_version_id=str(version.id),
+                )
             return OfferAccessRequirementClassificationPreview(
                 offer_version_id=version.id,
                 current_access_requirement=existing.previous_access_requirement,
@@ -507,12 +689,26 @@ def _classify(
             "missing_idempotency_key",
             "Classification requires an idempotency key.",
         )
+    if len(key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
+        raise _error(
+            "idempotency_key_too_long",
+            "idempotency_key exceeds the stored column's maximum length.",
+            max_length=_IDEMPOTENCY_KEY_MAX_LENGTH,
+        )
     reason = (command.context.reason or "").strip()
     if not reason:
         raise _error(
             "missing_reason",
             "Classification requires a reason.",
         )
+
+    # Serialize every command sharing this idempotency key BEFORE either one
+    # can observe the other's uncommitted state. Without this, two
+    # concurrent commands with the SAME key but DIFFERENT offer versions
+    # each lock a different OfferVersion row below and can both pass the
+    # existing_by_key lookup, with the loser hitting the unique-constraint
+    # flush as a raw database error instead of a typed conflict.
+    _acquire_xact_lock(db, "offer_access_requirement:classify", key)
 
     version = lock_for_update(db, OfferVersion, command.query.offer_version_id)
     if version is None:
@@ -522,6 +718,7 @@ def _classify(
             offer_version_id=str(command.query.offer_version_id),
         )
     proposed = command.query.proposed_access_requirement
+    review_reference = command.query.review_reference.strip()
 
     # The idempotency key is globally unique (one durable record per
     # command), so a key reused for a different version or a different
@@ -540,6 +737,10 @@ def _classify(
             == command.expected_preview_fingerprint
             and existing_by_key.reason == reason
             and existing_by_key.classified_by == actor
+            # A key reused with the SAME target but a DIFFERENT
+            # review_reference is not a valid replay: the documented
+            # "same material inputs" guarantee covers review_reference too.
+            and existing_by_key.review_reference == review_reference
         )
         if exact_replay:
             return OfferAccessRequirementClassificationResult(
@@ -587,7 +788,17 @@ def _classify(
             "The offer version changed after review; preview it again.",
         )
 
-    review_reference = command.query.review_reference.strip()
+    # Re-verify permission again, immediately before the write, under the
+    # row lock acquired above. The check at the top of this function is a
+    # fast fail; only THIS second check — taken right before the mutation,
+    # against the live row, inside the same transaction as the write it
+    # gates — closes the window where the grant could have been revoked (or
+    # the principal deactivated) between the first check and now. Ordinary
+    # READ COMMITTED does not stabilize this for us just because it is the
+    # same transaction: a fresh statement here reads the current committed
+    # state, not a snapshot from the top of the function.
+    _verify_classify_permission(db, command.authorized_system_user_id)
+
     version.access_requirement = proposed
     db.flush()
 
@@ -604,7 +815,20 @@ def _classify(
         correlation_id=command.context.correlation_id,
     )
     db.add(classification)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        # Defense in depth for a race the advisory lock above should already
+        # have serialized: a raw unique-constraint violation on
+        # idempotency_key or the one-row-per-version constraint still
+        # surfaces as this command's own typed conflict, never a raw
+        # database error.
+        raise _error(
+            "idempotency_conflict",
+            "This idempotency key or offer version was already used for a "
+            "different classification command.",
+            offer_version_id=str(version.id),
+        ) from exc
 
     evidence = {
         "schema_version": 1,
