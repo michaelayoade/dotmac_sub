@@ -25,6 +25,7 @@ from app.models.audit import AuditActorType
 from app.models.auth import AuthProvider, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.dispatch import TechnicianProfile
+from app.models.idempotency import IdempotencyKey
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
@@ -52,6 +53,7 @@ ERP_HR_ROLE_SOURCE = "erp_hr"
 STAFF_ASSIGN_SCOPE = "rbac:assign"
 STAFF_PROFILE_SCOPE = "profile:self"
 STAFF_LOGIN_IDENTITY_MAX_LENGTH = 150
+_CREATE_ONLY_IDEMPOTENCY_SCOPE = "staff.provision.create_only.v1"
 
 _EMAIL_ADAPTER = TypeAdapter(EmailStr)
 
@@ -119,6 +121,13 @@ class StaffIdentityField(str, Enum):
     phone = "phone"
 
 
+class ExistingStaffAccountPolicy(str, Enum):
+    """Whether ERP provisioning may reconcile an identity that already exists."""
+
+    reconcile = "reconcile"
+    reject = "reject"
+
+
 @dataclass(frozen=True)
 class ProvisionStaffAccountCommand:
     """ERP HR request to create or reconcile one staff principal."""
@@ -129,6 +138,9 @@ class ProvisionStaffAccountCommand:
     last_name: str
     role_names: tuple[str, ...]
     send_invite: bool = True
+    existing_account_policy: ExistingStaffAccountPolicy = (
+        ExistingStaffAccountPolicy.reconcile
+    )
 
 
 @dataclass(frozen=True)
@@ -1057,9 +1069,56 @@ def _provision(
     desired_roles = _role_names(command.role_names)
     _acquire_identity_lock(db, email)
 
+    reservation_key = None
+    if (
+        command.existing_account_policy is ExistingStaffAccountPolicy.reject
+        and command.context.idempotency_key
+    ):
+        reservation_key = hashlib.sha256(
+            f"{command.context.actor}:{command.context.idempotency_key}".encode()
+        ).hexdigest()
+        reservation = db.execute(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _CREATE_ONLY_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == reservation_key,
+            )
+        ).scalar_one_or_none()
+        if reservation is not None:
+            try:
+                reserved_user_id = UUID(str(reservation.ref_id))
+            except (TypeError, ValueError) as exc:
+                raise _error(
+                    "identity_conflict",
+                    "Create-only replay evidence is invalid; no changes were made.",
+                ) from exc
+            reserved_user = db.get(SystemUser, reserved_user_id)
+            if reserved_user is None or reserved_user.email != email:
+                raise _error(
+                    "identity_conflict",
+                    "The idempotency key belongs to another staff identity.",
+                )
+            return _outcome(
+                reserved_user,
+                role_names=assignment_service.system_user_role_names(
+                    db, reserved_user.id
+                ),
+                created=False,
+                changed=False,
+                invite_requested=False,
+                context=command.context,
+            )
+
     user = db.execute(
         select(SystemUser).where(SystemUser.email == email).with_for_update()
     ).scalar_one_or_none()
+    if (
+        user is not None
+        and command.existing_account_policy is ExistingStaffAccountPolicy.reject
+    ):
+        raise _error(
+            "identity_conflict",
+            "Staff identity already exists; create-only provisioning made no changes.",
+        )
     created = user is None
     if user is None:
         user = _create_principal(
@@ -1070,6 +1129,14 @@ def _provision(
             context=command.context,
             binding_source="auth.staff_provisioning:erp_hr",
         )
+        if reservation_key is not None:
+            db.add(
+                IdempotencyKey(
+                    scope=_CREATE_ONLY_IDEMPOTENCY_SCOPE,
+                    key=reservation_key,
+                    ref_id=str(user.id),
+                )
+            )
 
     role_result = _sync_roles(db, user=user, role_names=desired_roles)
     invite_requested = bool(created and command.send_invite)

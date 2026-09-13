@@ -18034,6 +18034,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/staff-accounts/{user_id}/nextcloud-talk/disable": {
+   "params": [
+    "header:Idempotency-Key",
+    "header:authorization",
+    "header:x-api-key",
+    "path:user_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2096ff3b53e7",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/subscriber-custom-fields": {
    "params": [
     "header:authorization",
@@ -19195,6 +19208,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "PUT /api/v1/staff-accounts/{user_id}/nextcloud-talk": {
+   "params": [
+    "header:Idempotency-Key",
+    "header:authorization",
+    "header:x-api-key",
+    "path:user_id!"
+   ],
+   "request": "605c4b2465e6",
+   "responses": {
+    "200": "0e21bc5b4b9f",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "PUT /api/v1/staff-accounts/{user_id}/roles": {
    "params": [
     "header:Idempotency-Key",
@@ -19521,6 +19547,7 @@
   "EtaUpdateCreate": "3b90f58a7082",
   "EtaUpdateRead": "daaf62739ccf",
   "ExecutionMethod": "44ddf7e0d39d",
+  "ExistingStaffAccountPolicy": "0c283b6aefa0",
   "ExpenseRequestStatus": "afa9c66cd8ca",
   "ExternalEntityType": "a15467b5560e",
   "ExternalReferenceCreate": "e15ea6e3a712",
@@ -20512,9 +20539,12 @@
   "SplitterPortUpdate": "199be4a28b22",
   "SplitterRead": "462df98254d1",
   "SplitterUpdate": "fc09a009fc39",
-  "StaffAccountCreate": "b6432e3a2f81",
+  "StaffAccountCreate": "b04ecddd0616",
   "StaffAccountErpDepartmentRead": "8428a34c2b00",
   "StaffAccountErpDepartmentUpdate": "d0e389a1811d",
+  "StaffAccountNextcloudTalkDisableRead": "f89c96b313ed",
+  "StaffAccountNextcloudTalkRead": "b524fd4ee44a",
+  "StaffAccountNextcloudTalkUpdate": "d5a64a378c94",
   "StaffAccountRead": "cebf0aa826aa",
   "StaffAccountRolesUpdate": "cea929707cae",
   "StateKind": "c193abe43198",
