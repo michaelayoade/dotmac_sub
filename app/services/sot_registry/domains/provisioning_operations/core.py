@@ -1353,8 +1353,9 @@ SERVICES: tuple[SOTService, ...] = (
                 new_owner="operations.expense_requests",
                 verification=(
                     "Work-order-bound submission, approval-only release, private receipt "
-                    "delivery, partial-failure replay, explicit dead-event recovery, "
-                    "conflict, requester-history, and identity-repair tests pass."
+                    "delivery, typed payment delivery and write-back, partial-failure "
+                    "replay, explicit dead-event recovery, conflict, requester-history, "
+                    "and identity-repair tests pass."
                 ),
                 cutover_gate=(
                     "Mobile clients use the typed submit, decision, and payment "

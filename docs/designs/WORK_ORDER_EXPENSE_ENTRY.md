@@ -122,6 +122,11 @@ payment command for an approved expense. The Field app never calls Paystack or
 marks the claim paid. ERP creates and initiates the transfer, and Sub projects
 `queued`, `pending`, `processing`, `indeterminate`, `failed`, `completed`, and
 the resulting `paid` claim fact from ERP responses and polling.
+`initiate_payment` is delivered only through the typed ERP payment
+command/outcome capability. The generic path sender is not a payment transport.
+Until ERP accepts that command, Field labels the local state as queued and
+waiting for ERP. Rejected and dead payment deliveries retain only allowlisted
+diagnostic evidence and never imply that a transfer was attempted.
 
 Verification requires a live connection and expires after 30 minutes. Mobile
 may save the ordinary non-sensitive draft, but it must not persist raw account

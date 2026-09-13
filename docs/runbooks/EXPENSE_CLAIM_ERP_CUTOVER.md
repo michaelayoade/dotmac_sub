@@ -67,8 +67,11 @@
    approver and contains the expected masked destination. Do not inspect or
    report the full account number.
 6. With a dedicated payment-authorized manager, select **Pay expense** and verify
-   one payment event is staged. Confirm ERP creates one payment intent and reports
-   `PROCESSING` (or `COMPLETED` for an immediate success).
+   one `work-order-expense-payment.v1` event is staged, then delivered through
+   the typed `initiate_expense_payment` capability. Confirm ERP creates one
+   payment intent and reports `PROCESSING` (or `COMPLETED` for an immediate
+   success). A queued Sub event is waiting for ERP and is not proof that ERP
+   created an intent.
 7. Exercise the webhook or polling path and verify `COMPLETED` changes the ERP
    claim and both Field views to `PAID`. Exercise an indeterminate sandbox result
    and verify no automatic duplicate transfer is attempted.
