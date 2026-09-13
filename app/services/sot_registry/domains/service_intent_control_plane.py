@@ -32,6 +32,187 @@ DOMAIN = DomainSOT(
             owns=("catalog policy lookup", "offer policy interpretation"),
         ),
         SOTService(
+            name="service_intent.offer_access_requirement",
+            module="app.services.catalog.offer_access_requirement",
+            owns=(
+                "access-classified offer-version admission",
+                "immutable access requirement for an exact offer version",
+                "reviewed classification of legacy/unclassified versions",
+            ),
+            depends_on=(
+                "service_intent.catalog_policy",
+                "auth.permission_gate",
+                "observability.audit_log",
+                "events.dispatcher",
+            ),
+            notes=(
+                "Release 1 of an expand/contract rollout: offer_versions."
+                "access_requirement is required and explicit on every new "
+                "admission, with unclassified an accepted explicit value and "
+                "a temporary DB default that exists only to initialize "
+                "historical rows. Release 2 (rejecting unclassified at "
+                "admission and dropping the DB default) is separate, later "
+                "work. service_intent.catalog_policy and "
+                "app/services/catalog/policies.py are a deliberately separate, "
+                "untouched owner; this module never imports or writes them. "
+                "See docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="access-classified offer-version admission",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "explicit access-requirement classification",
+                            "canonical offer identity",
+                        ),
+                        canonical_writer="service_intent.offer_access_requirement",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "immutable access requirement for an exact offer version"
+                        ),
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=("canonical offer-version record",),
+                        canonical_writer="service_intent.offer_access_requirement",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "reviewed classification of legacy/unclassified versions"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authenticated reviewed classification command",
+                            "canonical offer-version record",
+                        ),
+                        canonical_writer="service_intent.offer_access_requirement",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="explicit access-requirement classification",
+                        owner="service_intent.offer_access_requirement",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "OfferVersionCreate.access_requirement supplied "
+                            "explicitly by the billing-catalog-write caller; "
+                            "no application-level fallback"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical offer identity",
+                        owner="service_intent.catalog_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact CatalogOffer identity referenced by offer_id",
+                    ),
+                    AuthorityInput(
+                        name="canonical offer-version record",
+                        owner="service_intent.offer_access_requirement",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "offer_versions.access_requirement, immutable once "
+                            "set to a real classification"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authenticated reviewed classification command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed target offer version, proposed real "
+                            "classification, authenticated principal, reason, "
+                            "review reference, preview fingerprint, and "
+                            "idempotency key gated by "
+                            "catalog:offer_access_requirement:classify"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "classify_offer_version_access_requirement enters one "
+                        "root owner transaction; admission is a single-row "
+                        "insert already atomic under the caller's existing "
+                        "offer-version creation transaction."
+                    ),
+                    locking=(
+                        "The reviewed command locks the exact offer version "
+                        "before comparing its reviewed fingerprint."
+                    ),
+                    idempotency=(
+                        "One classification row per offer version, unique on "
+                        "idempotency key; an exact-key, exact-target replay "
+                        "returns the recorded outcome instead of "
+                        "retransitioning the row."
+                    ),
+                    retries=(
+                        "A stale preview fails closed and is retried only "
+                        "from a fresh preview; every other refusal is "
+                        "terminal for that command."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "service_intent.offer_access_requirement"
+                        ),
+                        "service_intent.offer_access_requirement.invalid_access_requirement",
+                        "service_intent.offer_access_requirement.immutable_access_requirement",
+                        "service_intent.offer_access_requirement.invalid_worklist_page",
+                        "service_intent.offer_access_requirement.missing_review_reference",
+                        "service_intent.offer_access_requirement.invalid_target_classification",
+                        "service_intent.offer_access_requirement.offer_version_not_found",
+                        "service_intent.offer_access_requirement.already_classified",
+                        "service_intent.offer_access_requirement.missing_idempotency_key",
+                        "service_intent.offer_access_requirement.permission_denied",
+                        "service_intent.offer_access_requirement.stale_preview",
+                    ),
+                    mapping_owner="app.api.catalog",
+                    retryable_codes=(
+                        "service_intent.offer_access_requirement.stale_preview",
+                    ),
+                    fail_closed_on=(
+                        "an already-classified target (real-to-real or "
+                        "real-to-unclassified)",
+                        "a proposed target of unclassified",
+                        "a stale reviewed fingerprint",
+                        "a missing offer version",
+                        "a missing idempotency key",
+                        "an ungranted classify permission",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("catalog.offer_access_requirement_classified",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "The event carries the exact offer version, previous "
+                        "and new access requirement, review reference, "
+                        "command/correlation identifiers, and authenticated "
+                        "principal."
+                    ),
+                    replay=(
+                        "An exact idempotency-key and target replay returns "
+                        "the recorded outcome and never re-emits a second "
+                        "transition for the same offer version."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="service_intent.offer_access_requirement",
+                ),
+                steward="commercial operations",
+                design_refs=(
+                    "docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_offer_access_requirement.py",
+                    "tests/architecture/test_offer_access_requirement_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="service_intent.ip_block_catalog",
             module="app.services.catalog.ip_block_choices",
             owns=(

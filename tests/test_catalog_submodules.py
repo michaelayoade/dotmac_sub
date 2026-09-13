@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.catalog import (
+    AccessRequirement,
     AccessType,
     AddOnType,
     BillingCycle,
@@ -285,6 +286,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="Fiber 50 v1",
@@ -301,6 +303,7 @@ class TestOfferVersions:
             catalog_service.offer_versions.create(
                 db_session,
                 OfferVersionCreate(
+                    access_requirement=AccessRequirement.unclassified,
                     offer_id=uuid.uuid4(),
                     version_number=1,
                     name="Ghost v1",
@@ -316,6 +319,7 @@ class TestOfferVersions:
         catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -340,6 +344,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -360,6 +365,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -384,6 +390,7 @@ class TestOfferVersionPrices:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -418,6 +425,7 @@ class TestOfferVersionPrices:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -1624,6 +1632,7 @@ class TestSubscriptions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=first_offer.id,
                 version_number=1,
                 name="Plan A v1",

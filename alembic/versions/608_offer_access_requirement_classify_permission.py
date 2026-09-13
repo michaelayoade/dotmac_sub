@@ -1,0 +1,99 @@
+"""Register catalog:offer_access_requirement:classify. Not seeded into any role.
+
+Idempotent: reruns update the existing row rather than duplicating it. This
+migration deliberately does NOT insert into role_permissions — the reviewed
+classification CLI is the only intended caller, gated by a real staff
+principal or a scoped machine credential (see
+scripts/catalog/classify_offer_access_requirement.py). Normal wildcard/admin
+RBAC access (``*`` or the ``admin`` role) continues to satisfy this permission
+exactly as it does every other permission in this system; that is existing
+RBAC behavior, not a grant this migration adds.
+
+Revision ID: 608_offer_access_requirement_classify_permission
+Revises: 607_offer_access_requirement
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision: str = "608_offer_access_requirement_classify_permission"
+down_revision: str | None = "607_offer_access_requirement"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+PERMISSION_KEY = "catalog:offer_access_requirement:classify"
+PERMISSION_DESCRIPTION = (
+    "Apply the reviewed access-requirement classification command to an "
+    "unclassified offer version"
+)
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    table_names = set(sa.inspect(bind).get_table_names())
+    if "permissions" not in table_names:
+        return
+    now = datetime.now(UTC)
+    permission_id = bind.execute(
+        sa.text("SELECT id FROM permissions WHERE key = :key"),
+        {"key": PERMISSION_KEY},
+    ).scalar()
+    if permission_id:
+        bind.execute(
+            sa.text(
+                """
+                UPDATE permissions
+                SET description = :description, is_active = true,
+                    updated_at = :now
+                WHERE key = :key
+                """
+            ),
+            {"key": PERMISSION_KEY, "description": PERMISSION_DESCRIPTION, "now": now},
+        )
+    else:
+        bind.execute(
+            sa.text(
+                """
+                INSERT INTO permissions (
+                    id, key, description, is_active, is_ui_assignable,
+                    created_at, updated_at
+                ) VALUES (:id, :key, :description, true, true, :now, :now)
+                """
+            ),
+            {
+                "id": str(uuid4()),
+                "key": PERMISSION_KEY,
+                "description": PERMISSION_DESCRIPTION,
+                "now": now,
+            },
+        )
+    # Deliberately no role_permissions insert: this permission is not seeded
+    # into any role by default.
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    table_names = set(sa.inspect(bind).get_table_names())
+    if "permissions" not in table_names:
+        return
+    if "role_permissions" in table_names:
+        bind.execute(
+            sa.text(
+                """
+                DELETE FROM role_permissions rp
+                USING permissions p
+                WHERE rp.permission_id = p.id AND p.key = :key
+                """
+            ),
+            {"key": PERMISSION_KEY},
+        )
+    bind.execute(
+        sa.text("DELETE FROM permissions WHERE key = :key"), {"key": PERMISSION_KEY}
+    )
