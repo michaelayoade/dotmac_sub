@@ -2698,16 +2698,52 @@ def team_inbox_contact_link(
 ):
     _prepare_mutation(db)
     try:
+        actor_person_id = _actor_uuid_from_request(request)
+        if target_type == "subscriber":
+            try:
+                target_id = _uuid_form_value(subscriber_id_manual or subscriber_id)
+            except ValueError as exc:
+                raise team_inbox_contact_links.ContactLinkError(
+                    "Choose a valid Customer."
+                ) from exc
+            target_kind = team_inbox_contact_links.ContactLinkTargetType.subscriber
+        elif target_type == "reseller":
+            try:
+                target_id = _uuid_form_value(reseller_id_manual or reseller_id)
+            except ValueError as exc:
+                raise team_inbox_contact_links.ContactLinkError(
+                    "Choose a valid reseller."
+                ) from exc
+            target_kind = team_inbox_contact_links.ContactLinkTargetType.reseller
+        else:
+            raise team_inbox_contact_links.ContactLinkError(
+                "Choose whether this contact belongs to a Customer or reseller."
+            )
+        if target_id is None:
+            raise team_inbox_contact_links.ContactLinkError(
+                "Choose the Customer or reseller to link."
+            )
+        context = CommandContext.system(
+            actor=(
+                f"person:{actor_person_id}"
+                if actor_person_id is not None
+                else "system:team-inbox-admin"
+            ),
+            scope="team-inbox:contact-link",
+            reason="apply reviewed Team Inbox contact association",
+        )
         outcome = team_inbox_commands.link_contact(
             db,
-            conversation_id=conversation_id,
-            target_type=target_type,
-            subscriber_id=subscriber_id,
-            reseller_id=reseller_id,
-            subscriber_id_manual=subscriber_id_manual,
-            reseller_id_manual=reseller_id_manual,
-            actor_person_id=_actor_id_from_request(request),
-            note=note,
+            team_inbox_commands.LinkContactCommand(
+                context=context,
+                conversation_id=conversation_id,
+                target=team_inbox_contact_links.ContactLinkTarget(
+                    target_type=target_kind,
+                    target_id=target_id,
+                ),
+                actor_person_id=actor_person_id,
+                note=note,
+            ),
         )
     except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
@@ -2724,7 +2760,7 @@ def team_inbox_contact_link(
         status="success",
         message=(
             f"Linked {outcome.channel_type.replace('_', ' ')} contact to "
-            f"{outcome.target}."
+            f"{outcome.target.target_type.value}."
         ),
     )
 

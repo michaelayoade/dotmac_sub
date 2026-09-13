@@ -203,6 +203,14 @@ narrow an exact normalized phone match with an exact normalized observed name;
 a name mismatch remains ambiguous. Historical rows without reviewed or uniquely
 resolved contact evidence remain unlinked for explicit reconciliation.
 
+Contact-route writes serialize on the normalized channel endpoint before they
+lock conversation and route rows. Reapplying the same target reuses the active
+route and repairs only missing conversation projections. A reviewed different
+target preserves the prior row as inactive, flushes that deactivation before
+inserting its replacement, and leaves the partial unique index as the final
+one-active-route arbiter. Route evidence that changes during review fails
+closed and requires a fresh drawer.
+
 When the sender represents someone else, the operator instead selects the exact
 conversation participant, a represented existing Customer or Party-backed
 Lead, and a required reason. The contact-resolution owner links a Customer only

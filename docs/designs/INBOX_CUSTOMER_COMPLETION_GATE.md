@@ -37,6 +37,10 @@ checks, audit evidence, and readiness refresh.
   is a Lead.
 - Conflicting identity evidence is ambiguous; no identity is unresolved.
 - A reviewed contact link always outranks newly observed display data.
+- An active conversation-to-Lead link contributes its recorded Party to the
+  structural identity comparison. A Customer and Lead for the same Party stay
+  classified as Customer; different Parties are ambiguous and resolution
+  fails closed.
 - Without a reviewed link, an observed name may narrow an exact normalized
   phone match only by exact normalized Customer-name equality. A mismatch is
   ambiguous and requires the agent to choose an existing Customer or a Lead.

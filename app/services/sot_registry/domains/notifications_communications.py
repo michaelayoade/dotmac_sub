@@ -2701,6 +2701,36 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Operator adapters enter the Team Inbox command coordinator once; "
+                        "reviewed repair enters the contact-resolution owner once; the "
+                        "contact writer remains flush-only inside either boundary."
+                    ),
+                    locking=(
+                        "Normalize the exact channel endpoint, acquire its PostgreSQL "
+                        "transaction advisory lock, then lock the conversation, active "
+                        "contact route, selected target, and eligible historical "
+                        "conversations in stable order."
+                    ),
+                    idempotency=(
+                        "An active route already pointing at the selected target is reused; "
+                        "only missing conversation projections are repaired. A reviewed "
+                        "different target preserves the old inactive row and creates one "
+                        "replacement guarded by active-route uniqueness."
+                    ),
+                    retries=(
+                        "Retry only the complete owner or coordinator command after rollback. "
+                        "Stale route evidence is a domain refusal; the partial unique index "
+                        "remains the final concurrent-winner arbiter."
+                    ),
+                ),
+                domain_error_codes=(
+                    "communications.team_inbox_contact_resolution.owner_command_required",
+                    "communications.team_inbox_contact_resolution.stale_contact_route",
+                    "communications.team_inbox_contact_resolution.stale_contact_link",
+                ),
                 event_types=("team_inbox.contact_link_changed.v1",),
                 projections=(
                     "InboxContactLink canonical contact-point projection",

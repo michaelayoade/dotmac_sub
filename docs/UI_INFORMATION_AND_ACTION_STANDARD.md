@@ -477,6 +477,13 @@ implementation.
   server command links only the exact selected UUID after explicit submission.
 - Successful actions return to the exact originating conversation and trigger
   a fresh drawer query; read failure never replays the mutation.
+- A structural conversation-to-Lead link remains visible as `Origin Lead` even
+  when the channel supplies no Party-bound contact point. Conflicting
+  Subscriber, participant, intake, or Lead Parties show identity review while
+  retaining a read path to the exact linked Lead.
+- Reapplying the same reviewed Customer endpoint link is an idempotent success.
+  Replacing a different active endpoint target preserves the prior evidence;
+  stale reviewed route evidence is refused and the drawer must be refreshed.
 - The drawer keeps customer identity visible while Details and Conversations
   tabs provide progressive disclosure. The Conversations badge is the
   authoritative full count of matching previous active and resolved
