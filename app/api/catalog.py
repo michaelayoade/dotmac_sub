@@ -143,7 +143,7 @@ def _require_offer_version_admission(
     translation point from this route's shape into what the owner accepts.
     """
 
-    load_permission_keys(auth, db)
+    credential_kind = auth.get("credential_kind")
     claims = offer_access_requirement.AdmissionAuthorizationClaims(
         principal_id=str(auth.get("principal_id")),
         principal_type=str(auth.get("principal_type") or "subscriber"),
@@ -154,8 +154,23 @@ def _require_offer_version_admission(
         # auth_dependencies._machine_principal) reaches the owner's
         # shadow/would-refuse branch instead of being enforced against and
         # refused before MachineCredentialPrincipal is ever constructed.
-        credential_kind=auth.get("credential_kind"),
+        credential_kind=credential_kind,
     )
+    if credential_kind != "machine":
+        # load_permission_keys queries live RBAC tables purely to cache
+        # the principal's effective permission set for UI hiding — there
+        # is no UI to cache for a machine caller. Round 15 finding 1:
+        # skipped specifically for "machine", because
+        # effective_permission_keys' non-system_user branch queries
+        # SubscriberRole/SubscriberPermission keyed by principal_id — for
+        # a machine credential that is an unrelated table this route has
+        # no business touching at all, and an outage or lock on it must
+        # never block or 500 an admission the shadow path exists to let
+        # through regardless. Skipping this call is what makes that true:
+        # after this point, the ONLY thing a machine claim's authorization
+        # decision touches is the pure, in-memory scope check inside
+        # authorize_offer_version_admission's shadow branch.
+        load_permission_keys(auth, db)
     try:
         offer_access_requirement.authorize_offer_version_admission(
             db, claims, request_id=_request_id(request)

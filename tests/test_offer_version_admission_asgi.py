@@ -761,3 +761,62 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
         )
     db_session.rollback()
     assert excinfo.value.code.endswith("permission_denied")
+
+
+def test_machine_admission_never_touches_subscriber_permission_tables(
+    db_session, monkeypatch
+):
+    """Round 15 finding 1: the machine defect had moved one layer OUT
+    rather than closed. ``_shadow_check_machine_credential_admission`` was
+    fixed (round 14) to read only captured scopes and never raise — but
+    ``_require_offer_version_admission`` still called ``load_permission_
+    keys`` UNCONDITIONALLY before constructing claims, and for a machine
+    principal (``principal_type == "api_key"``), ``effective_permission_
+    keys`` takes the non-system-user branch and queries ``SubscriberRole``/
+    ``SubscriberPermission`` using the machine credential's UUID. If that
+    table were locked or unavailable while catalog tables stayed healthy,
+    a machine POST would block or 500 BEFORE the shadow check was ever
+    reached — the mounted machine path still neither read only captured
+    scopes nor never refused, and the earlier mounted test (a healthy
+    database) could not expose it.
+
+    OBSERVED: the mounted app, via a real, issued HTTP POST request, with
+    ``load_permission_keys`` forced to raise if called at all.
+
+    Break condition: fails (an error instead of 201) if
+    ``_require_offer_version_admission`` ever goes back to calling
+    ``load_permission_keys`` unconditionally, before checking
+    ``credential_kind``."""
+
+    def _load_permission_keys_that_must_not_be_called(auth, db):
+        raise AssertionError(
+            "load_permission_keys must not be called for a machine "
+            "credential — it queries SubscriberRole/SubscriberPermission "
+            "using the machine credential's UUID, a table this path has "
+            "no business touching"
+        )
+
+    monkeypatch.setattr(
+        api_catalog,
+        "load_permission_keys",
+        _load_permission_keys_that_must_not_be_called,
+    )
+
+    app = _mounted_app(db_session)
+    app.dependency_overrides[require_user_auth] = lambda: _machine_auth(scopes=[])
+    client = TestClient(app)
+    offer = _offer(db_session)
+
+    response = client.post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 1,
+            "name": "v1",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert response.status_code == 201
