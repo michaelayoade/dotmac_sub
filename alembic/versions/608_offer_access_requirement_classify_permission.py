@@ -130,17 +130,22 @@ def downgrade() -> None:
             "re-run the downgrade."
         )
 
-    if "role_permissions" in table_names:
-        bind.execute(
-            sa.text(
-                """
-                DELETE FROM role_permissions rp
-                USING permissions p
-                WHERE rp.permission_id = p.id AND p.key = :key
-                """
-            ),
-            {"key": PERMISSION_KEY},
+    # A role grant (created through the RBAC admin UI, post-deployment) is
+    # just as real as a direct grant — this permission's is_ui_assignable
+    # flag makes both shapes possible, and this migration seeds neither.
+    role_grants = _direct_grant_count(
+        bind, table_names, "role_permissions", PERMISSION_KEY
+    )
+    if role_grants:
+        raise DowngradeRefused(
+            f"{role_grants} role_permissions grant(s) of {PERMISSION_KEY!r} "
+            "still exist; this permission is UI-assignable to a role as well "
+            "as directly, and this migration never seeded one itself, so any "
+            "such row is real post-deployment operator configuration. "
+            "Downgrading would silently delete it. Remove the role grant(s) "
+            "first, then re-run the downgrade."
         )
+
     bind.execute(
         sa.text("DELETE FROM permissions WHERE key = :key"), {"key": PERMISSION_KEY}
     )

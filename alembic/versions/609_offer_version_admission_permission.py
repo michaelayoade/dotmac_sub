@@ -4,8 +4,11 @@ Idempotent: reruns update the existing row rather than duplicating it. This
 mirrors 608_offer_access_requirement_classify_permission's exact pattern:
 this migration seeds the permission row only.
 
-Admission authorization is decided at the route layer
-(``app/api/catalog.py``). The route ALSO sits under this router's own
+Admission authorization is checked at TWO independent layers: the route
+layer (``app/api/catalog.py``) AND a fresh, in-transaction re-check inside
+``service_intent.offer_access_requirement``'s own command
+(``_verify_admission_authorization``) — see that module's docstring. The
+route ALSO sits under this router's own
 ``catalog:write`` gate (``require_method_permission("catalog:read",
 "catalog:write")``, applied to every mutating route in that file, unrelated
 to and pre-dating this permission), so the actual effective requirement is
@@ -142,17 +145,22 @@ def downgrade() -> None:
             "re-run the downgrade."
         )
 
-    if "role_permissions" in table_names:
-        bind.execute(
-            sa.text(
-                """
-                DELETE FROM role_permissions rp
-                USING permissions p
-                WHERE rp.permission_id = p.id AND p.key = :key
-                """
-            ),
-            {"key": PERMISSION_KEY},
+    # A role grant (created through the RBAC admin UI, post-deployment) is
+    # just as real as a direct grant — this permission's is_ui_assignable
+    # flag makes both shapes possible, and this migration seeds neither.
+    role_grants = _direct_grant_count(
+        bind, table_names, "role_permissions", PERMISSION_KEY
+    )
+    if role_grants:
+        raise DowngradeRefused(
+            f"{role_grants} role_permissions grant(s) of {PERMISSION_KEY!r} "
+            "still exist; this permission is UI-assignable to a role as well "
+            "as directly, and this migration never seeded one itself, so any "
+            "such row is real post-deployment operator configuration. "
+            "Downgrading would silently delete it. Remove the role grant(s) "
+            "first, then re-run the downgrade."
         )
+
     bind.execute(
         sa.text("DELETE FROM permissions WHERE key = :key"), {"key": PERMISSION_KEY}
     )
