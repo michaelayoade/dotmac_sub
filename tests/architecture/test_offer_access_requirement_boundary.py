@@ -450,7 +450,11 @@ def test_billing_write_is_checked_from_exactly_one_place_in_this_module():
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
-        if any(_checks_billing_write(call) for call in ast.walk(node) if isinstance(call, ast.Call)):
+        if any(
+            _checks_billing_write(call)
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        ):
             checking_functions.add(node.name)
 
     assert checking_functions == {"_admission_permission_granted"}, (
@@ -460,47 +464,23 @@ def test_billing_write_is_checked_from_exactly_one_place_in_this_module():
     )
 
 
-def test_admission_command_makes_a_real_authorization_decision():
-    """Round 11 replaced the single-layer design this test used to assert
-    ("the command makes no authorization decision at all") with a two-layer
-    one: the route's ``require_any_permission`` gate stays, AND the command
-    itself now re-verifies the identical compound rule, fresh, inside its
-    own transaction, via ``_verify_admission_authorization`` — see that
-    function's and the module's own docstrings. Keeping the old assertion
-    would describe something false about the current, correct architecture;
-    this replaces it with a check of what is actually true today:
-
-    - the pre-round-11 function name never reappears (regression guard
-      against silently reintroducing the OLD, single-layer shape under its
-      old name);
-    - the new two-layer function is not just defined but actually CALLED
-      from ``_admit`` (a defined-but-dead function would let this pass
-      while the real command still made no decision) — proven via AST
-      inspection, not merely a substring search that a comment could
-      satisfy just as easily as a real call.
-    """
-
-    owner = _source("app/services/catalog/offer_access_requirement.py")
-    assert "_verify_admission_permission" not in owner
-    assert "def _verify_admission_authorization" in owner
-    assert "def _verify_classify_permission" in owner
-
-    tree = ast.parse(owner)
-    admit_function = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_admit"
-    )
-    calls_verify_admission_authorization = any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_verify_admission_authorization"
-        for node in ast.walk(admit_function)
-    )
-    assert calls_verify_admission_authorization, (
-        "_admit must actually call _verify_admission_authorization, not "
-        "merely define it"
-    )
+#: A name-matching AST guard used to live here, asserting that a specific
+#: helper existed and was called from ``_admit``. It went blind the moment
+#: the helper it named was renamed
+#: (``_verify_admission_permission`` -> ``_verify_admission_authorization``)
+#: while the property it meant to protect ("the command makes a real
+#: authorization decision") stayed true — a guard built from a spelling
+#: cannot survive a rename, and a rename is exactly what happened. It is
+#: deliberately NOT re-pointed at the current name; that would only
+#: reproduce the same blind spot under a new label.
+#:
+#: The replacement lives in ``tests/test_offer_access_requirement.py::
+#: test_authorization_owner_refuses_identically_through_route_and_command``.
+#: It injects a sentinel refusal at the shared authorization owner
+#: (monkeypatching ``erp_staff_access.staff_write_restricted``) and drives
+#: BOTH the route's admission dependency and a direct ``admit_offer_version``
+#: call through it — it fails if EITHER adapter stops delegating to the one
+#: owner, regardless of what anything is named.
 
 
 #: There is no production call site allowed to construct ``SystemAdmission``

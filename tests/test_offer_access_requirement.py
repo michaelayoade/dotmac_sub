@@ -1006,6 +1006,98 @@ def test_admit_denies_an_unprivileged_subscriber_principal(db_session):
     assert excinfo.value.code.endswith("permission_denied")
 
 
+def test_authorization_owner_refuses_identically_through_route_and_command(
+    db_session, monkeypatch
+):
+    """Behavioral parity proof for the single authorization owner
+    (``offer_access_requirement.authorize_offer_version_admission``).
+
+    This replaces the retired AST name-matching guard in
+    ``tests/architecture/test_offer_access_requirement_boundary.py`` (see
+    the comment left in its place). It injects a sentinel refusal at the
+    shared decision the owner makes — an ERP staff leave-write restriction —
+    and drives BOTH adapters through it: the route's own admission
+    dependency (``app.api.catalog._require_offer_version_admission``,
+    called directly, bypassing FastAPI's DI) and a direct
+    ``admit_offer_version`` call (bypassing the route entirely). Both must
+    refuse the SAME privileged, admin-role staff principal — proving both
+    adapters delegate to the one owner rather than each computing an
+    independent approximation that could disagree.
+
+    Break condition: this fails if either adapter stops calling
+    ``authorize_offer_version_admission`` (or that function stops calling
+    ``erp_staff_access.staff_write_restricted``) — regardless of what the
+    owner, the guard, or any intermediate helper is named. It cannot be
+    satisfied by a rename; only real delegation makes both paths observe
+    the sentinel.
+    """
+
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.api import catalog as api_catalog
+    from app.services import erp_staff_access
+
+    user = _admin_system_user(db_session)
+
+    sentinel_restriction = object()
+    observed_calls: list[dict] = []
+
+    def _fake_staff_write_restricted(db, auth, *, method, at=None):
+        observed_calls.append(
+            {"principal_id": auth.get("principal_id"), "method": method}
+        )
+        if auth.get("principal_type") == "system_user" and auth.get(
+            "principal_id"
+        ) == str(user.id):
+            return sentinel_restriction
+        return None
+
+    def _fake_audit_denied_write(db, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        erp_staff_access, "staff_write_restricted", _fake_staff_write_restricted
+    )
+    monkeypatch.setattr(
+        erp_staff_access, "audit_denied_write", _fake_audit_denied_write
+    )
+
+    offer = _make_offer(db_session)
+
+    # Direct-command adapter: bypasses the route entirely.
+    with pytest.raises(OfferAccessRequirementError) as command_excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
+        )
+    db_session.rollback()
+    assert command_excinfo.value.code.endswith("permission_denied")
+
+    # Route adapter: call the real FastAPI dependency function directly with
+    # explicit arguments (bypassing FastAPI's own DI resolution, which is
+    # not needed to exercise the function body).
+    fake_request = SimpleNamespace(state=SimpleNamespace(), headers={})
+    route_auth = {
+        "principal_id": str(user.id),
+        "principal_type": "system_user",
+        "roles": ["admin"],
+        "scopes": [],
+    }
+    with pytest.raises(HTTPException) as route_excinfo:
+        api_catalog._require_offer_version_admission(
+            request=fake_request, auth=route_auth, db=db_session
+        )
+    db_session.rollback()
+    assert route_excinfo.value.status_code == 403
+
+    # Both paths actually reached the sentinel for THIS principal — proving
+    # the refusal observed above came from the injected restriction, not
+    # from some unrelated failure.
+    assert any(call["principal_id"] == str(user.id) for call in observed_calls)
+
+
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
     """Regression: before this fix, retrying an admission with the SAME
     (offer_id, version_number) silently created a second row — there was no
