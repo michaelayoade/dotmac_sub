@@ -1088,13 +1088,20 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     Round 12 findings 2 and 3 showed the ORIGINAL version of this test
     masked the two defects it was meant to disprove:
 
-    - It called ``_require_offer_version_admission`` directly, skipping the
-      router's own PRE-EXISTING blanket ``catalog:write`` gate
-      (``require_method_permission``), which independently applies the
-      SAME staff leave-write check via older plumbing BEFORE the admission
-      dependency is ever reached. This version drives the REAL graph — the
-      router gate included — proving the actual production request path
-      refuses, not just the inner function in isolation.
+    - It called ``_require_offer_version_admission`` directly without
+      proving anything about the REAL request graph, at a time when the
+      router's own pre-existing blanket ``catalog:write`` gate
+      (``require_method_permission``) independently applied the SAME
+      staff leave-write check, via older plumbing, BEFORE the admission
+      dependency was ever reached — a genuine two-decision-maker HTTP
+      graph the test's own shape could not see. The fix (this same round)
+      was structural, not just a better test: the admission routes now
+      live on ``admission_router`` (``app/api/catalog.py``), which
+      deliberately carries NO blanket dependency, so
+      ``_require_offer_version_admission`` — and therefore the owner — is
+      the ONLY gate those two routes have. This test proves that structure
+      holds (the routes really are registered on the exempt router) and
+      that the endpoint dependency itself refuses.
     - It replaced ``erp_staff_access.audit_denied_write`` with a no-op,
       hiding that a direct-command denial's staged audit record was
       deleted by the very rollback the denial causes. This version lets
@@ -1103,12 +1110,13 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
 
     Break condition: fails if either adapter stops calling
     ``authorize_offer_version_admission`` (or that function stops calling
-    ``erp_staff_access.staff_write_restricted``), if the router gate stops
-    independently enforcing the leave restriction ahead of the admission
-    dependency, or if the direct-command denial's audit record stops
+    ``erp_staff_access.staff_write_restricted``); if ``create_offer_version``/
+    ``update_offer_version`` are ever moved back onto the blanket-gated
+    ``router`` (reintroducing the two-decision-maker graph this round
+    closed); or if the direct-command denial's audit record stops
     surviving the transaction rollback the denial itself triggers. None of
-    this can be satisfied by a rename; only real delegation and a real
-    committed audit row make it pass.
+    this can be satisfied by a rename; only real delegation, the actual
+    router registration, and a real committed audit row make it pass.
     """
 
     from types import SimpleNamespace
@@ -1118,7 +1126,7 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
 
     from app.api import catalog as api_catalog
     from app.models.audit import AuditEvent
-    from app.services import auth_dependencies, erp_staff_access
+    from app.services import erp_staff_access
 
     user = _admin_system_user(db_session)
 
@@ -1167,7 +1175,25 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
         "survive the transaction rollback the denial itself causes"
     )
 
-    # --- Route adapter: the REAL dependency graph, router gate included. ---
+    # --- Structural proof: the admission routes really are exempt from
+    # router's blanket gate, not merely documented as exempt. ---
+    admission_route_paths = {
+        route.path for route in api_catalog.admission_router.routes
+    }
+    assert "/offer-versions" in admission_route_paths
+    assert "/offer-versions/{version_id}" in admission_route_paths
+    assert api_catalog.admission_router.dependencies == [], (
+        "admission_router must carry NO blanket dependency of its own — "
+        "_require_offer_version_admission (and therefore the owner) must "
+        "be the ONLY gate on these two routes, not one of two"
+    )
+    router_route_paths = {route.path for route in api_catalog.router.routes}
+    assert "/offer-versions" not in router_route_paths, (
+        "create_offer_version must not be registered on the blanket-gated "
+        "router — that would reintroduce the two-decision-maker HTTP graph"
+    )
+
+    # --- Route adapter: the ONLY gate these routes have. ---
     route_auth = {
         "principal_id": str(user.id),
         "principal_type": "system_user",
@@ -1177,19 +1203,6 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     real_request = Request(
         {"type": "http", "method": "POST", "path": "/offer-versions", "headers": []}
     )
-
-    router_gate = auth_dependencies.require_method_permission(
-        "catalog:read", offer_access_requirement.WRITE_PERMISSION
-    )
-    with pytest.raises(HTTPException) as router_excinfo:
-        router_gate(request=real_request, auth=dict(route_auth), db=db_session)
-    db_session.rollback()
-    assert router_excinfo.value.status_code == 403
-
-    # The endpoint dependency also refuses on its own — necessary for any
-    # caller that reaches it without the router gate running first (a
-    # differently-mounted route, a future refactor), not merely relying on
-    # the router gate to be the only thing that ever catches this.
     with pytest.raises(HTTPException) as route_excinfo:
         api_catalog._require_offer_version_admission(
             request=real_request, auth=dict(route_auth), db=db_session

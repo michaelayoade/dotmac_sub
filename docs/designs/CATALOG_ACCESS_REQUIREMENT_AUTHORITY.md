@@ -75,24 +75,25 @@ isolation.
   Because both delegate to the same function, there is exactly one
   implementation of the rule to keep correct, not two that can silently
   disagree.
-  This router ALSO carries its own pre-existing, admission-unrelated
-  `catalog:write` gate (`require_method_permission("catalog:read",
-  "catalog:write")`, applied to every mutating route in the file, including
-  offers/offer-prices/add-on-prices) — stated precisely rather than
-  glossed over: for an HTTP caller who already holds `catalog:write`, THAT
-  gate's own `require_permission` independently applies the SAME
-  `erp_staff_access` leave-restriction check before `_require_offer_version_
-  admission` (and therefore the owner) is ever reached, using older,
-  separate plumbing (a bare-string HTTPException detail, and an audit write
-  it commits inline rather than staging). It cannot produce a DIFFERENT
-  verdict — both call the identical `erp_staff_access.staff_write_
-  restricted` — but it is a genuinely earlier, separate checkpoint, not a
-  second copy of the owner's decision; removing it is out of scope here
-  (it is shared, file-wide infrastructure, not owned by this module) and it
-  does not run at all for a caller who reaches the owner directly (a
-  background job, CLI, or other direct `admit_offer_version` caller bypasses
-  it entirely, which is exactly why the owner's own leave-check exists and
-  is not redundant for that path).
+  The two admission routes are mounted on their OWN router
+  (`app/api/catalog.py`'s `admission_router`), deliberately carrying NO
+  blanket router-level dependency (round 12 finding 2 fix). Every OTHER
+  mutating route in `app/api/catalog.py` (offers, offer-prices,
+  add-on-prices, ...) still sits under `router`'s own pre-existing,
+  admission-unrelated `catalog:write` gate
+  (`require_method_permission("catalog:read", "catalog:write")`), whose
+  `require_permission` independently applies the same `erp_staff_access`
+  leave-restriction check via older, separate plumbing (a bare-string
+  HTTPException detail, and an audit write it commits inline rather than
+  staging) — that pre-existing mechanism is untouched and still correct for
+  those routes, and it cannot produce a DIFFERENT verdict from the owner's
+  own check (both call the identical `erp_staff_access.staff_write_
+  restricted`). It simply never runs at all for `POST`/`PATCH
+  /offer-versions`, because those two routes are exempt from that blanket
+  gate: `_require_offer_version_admission` is their ONLY dependency, so the
+  owner is the one and only decision-maker on both the route and the direct
+  command, with nothing upstream that could refuse first via different
+  plumbing.
   `AdmitOfferVersionCommand` takes a REQUIRED, typed `AdmissionPrincipal`
   (`StaffPrincipal` | `ApiKeyPrincipal` | `SubscriberPrincipal` |
   `MachineCredentialPrincipal` | `SystemAdmission`), validated at

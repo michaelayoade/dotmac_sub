@@ -85,6 +85,24 @@ router = APIRouter(
     ]
 )
 
+#: The offer-version ADMISSION routes (``POST``/``PATCH /offer-versions``)
+#: live on their OWN router, deliberately carrying NO blanket dependency —
+#: unlike ``router`` above. Round 12 finding 2: the main router's blanket
+#: ``catalog:write`` gate (``require_method_permission``) independently
+#: applies the ERP staff leave-write restriction via its own, older
+#: plumbing, so a leave-restricted staff request was refused THERE, before
+#: ``_require_offer_version_admission`` — and therefore the single
+#: authorization owner, ``authorize_offer_version_admission`` — was ever
+#: reached. Mounting these two routes on a router with no blanket gate
+#: means their ONLY dependency is ``_require_offer_version_admission``,
+#: which fully delegates the whole decision (compound permission AND
+#: leave-restriction) to that one owner — the real HTTP request path now
+#: has exactly one decision-maker, not an earlier one and a later one that
+#: happen to agree. Mounted in ``app/main.py``'s router table under the
+#: same ``/api/v1`` prefix and the same ``"user"`` (bare authentication)
+#: dependency mode as ``router`` — see that table for the mount entry.
+admission_router = APIRouter()
+
 _require_billing_catalog_write = require_permission(
     offer_access_requirement.BILLING_WRITE_PERMISSION
 )
@@ -109,13 +127,16 @@ def _require_offer_version_admission(
     a bare permission primitive — silently disagreed about an active staff
     leave restriction: refused over HTTP, allowed direct to the command).
 
-    This router's own blanket ``catalog:write`` gate above
-    (``require_method_permission``) still runs for every route in this file
-    including this one, and independently applies the identical staff
-    leave-restriction check BEFORE this dependency is ever reached for any
-    caller holding ``catalog:write`` — see ``authorize_offer_version_
-    admission``'s own docstring for the precise, stated-not-glossed-over
-    relationship between that pre-existing router gate and this owner.
+    This is the ONLY gate on this route (round 12 finding 2 fix): the two
+    offer-version admission routes are mounted on ``admission_router``
+    (above), deliberately carrying NO blanket router-level dependency,
+    specifically so ``router``'s own pre-existing ``catalog:write`` gate
+    (``require_method_permission``) — which independently applies the same
+    staff leave-restriction via its own, older plumbing — cannot run ahead
+    of this function and produce an earlier, separately-mechanized refusal
+    for the same underlying reason. Every mutating route on ``router``
+    itself still carries that blanket gate unchanged; only these two routes
+    are exempt from it, because they have their own complete gate instead.
 
     The route's cached/session ``auth`` dict is translated into the typed
     ``AdmissionAuthorizationClaims`` boundary here — the one, explicit
@@ -914,7 +935,7 @@ def delete_subscription_add_on(
     catalog_service.subscription_add_ons.delete(db, subscription_add_on_id)
 
 
-@router.post(
+@admission_router.post(
     "/offer-versions",
     response_model=OfferVersionRead,
     status_code=status.HTTP_201_CREATED,
@@ -971,7 +992,7 @@ def list_offer_versions(
     )
 
 
-@router.patch(
+@admission_router.patch(
     "/offer-versions/{version_id}",
     response_model=OfferVersionRead,
     tags=["offer-versions"],
