@@ -474,13 +474,14 @@ def test_billing_write_is_checked_from_exactly_one_place_in_this_module():
 #: deliberately NOT re-pointed at the current name; that would only
 #: reproduce the same blind spot under a new label.
 #:
-#: The replacement lives in ``tests/test_offer_access_requirement.py::
+#: The replacement lives in ``tests/test_offer_version_admission_asgi.py::
 #: test_authorization_owner_refuses_identically_through_route_and_command``.
 #: It injects a sentinel refusal at the shared authorization owner
 #: (monkeypatching ``erp_staff_access.staff_write_restricted``) and drives
-#: BOTH the route's admission dependency and a direct ``admit_offer_version``
-#: call through it — it fails if EITHER adapter stops delegating to the one
-#: owner, regardless of what anything is named.
+#: BOTH a real, mounted HTTP request through the route's admission
+#: dependency and a direct ``admit_offer_version`` call through it — it
+#: fails if EITHER adapter stops delegating to the one owner, regardless
+#: of what anything is named.
 
 
 #: There is no production call site allowed to construct ``SystemAdmission``
@@ -901,14 +902,35 @@ def test_608_and_609_downgrade_lock_every_grant_table_before_counting_it():
                 f"{migration_path}: {lock_text!r} must precede the first count query"
             )
 
-        # Sensitivity: planting a removal of any ONE lock (leaving the
-        # other two intact) must be caught.
+        # Sensitivity, round 15 finding 8 correction: the PRIOR version of
+        # this block only asserted that ``.replace()`` removed the string
+        # from ``planted`` — it never re-ran the actual "locked before
+        # counting" check against the planted source, so it proved the
+        # standard library's ``str.replace`` works, not that this test
+        # would catch a real removal. This re-applies the SAME check the
+        # real source had to pass above, to each planted variant, and
+        # requires it to FAIL.
+        def _locked_before_first_count(
+            source: str, expected_lock_texts: tuple[str, ...] = lock_texts
+        ) -> bool:
+            count_index = source.find("_direct_grant_count(")
+            if count_index == -1:
+                return False
+            for lock_text in expected_lock_texts:
+                lock_index = source.find(lock_text)
+                if lock_index == -1 or lock_index >= count_index:
+                    return False
+            return True
+
+        assert _locked_before_first_count(downgrade_source), (
+            f"{migration_path}: the real, unmodified source unexpectedly "
+            "failed its own lock-before-count check"
+        )
         for lock_text in lock_texts:
             planted = downgrade_source.replace(lock_text, "-- lock removed")
-            remaining_locks = [text for text in lock_texts if text in planted]
-            assert len(remaining_locks) == len(lock_texts) - 1, (
-                f"{migration_path}: planted removal of {lock_text!r} did "
-                "not actually remove it from the checked source"
+            assert not _locked_before_first_count(planted), (
+                f"{migration_path}: planted removal of {lock_text!r} was "
+                "not caught by the lock-before-count check"
             )
 
 
