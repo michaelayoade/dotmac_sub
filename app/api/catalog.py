@@ -155,6 +155,7 @@ def _require_offer_version_admission(
             db, claims, request_id=_request_id(request)
         )
     except OfferAccessRequirementError as exc:
+        offer_access_requirement.record_leave_denial_evidence(db, exc)
         raise _offer_access_requirement_http_error(exc) from exc
     finish_read_transaction(db)
     return auth

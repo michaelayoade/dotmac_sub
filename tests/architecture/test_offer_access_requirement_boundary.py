@@ -673,12 +673,43 @@ def test_offer_versions_create_delegates_the_actual_persist_to_the_new_owner():
 
 
 def test_offer_access_requirement_owner_actually_performs_the_write():
+    """Round 13 correction: the earlier version of this test banned
+    ``db.commit(``/``db.rollback(`` anywhere in the WHOLE file. That is too
+    broad — ``record_leave_denial_evidence`` legitimately commits, but only
+    in a transaction it is documented to own AFTER an owner-command
+    transaction has already unwound, never inside one (that was the exact
+    round-13 bug: an in-transaction ``db.commit()`` inside
+    ``authorize_offer_version_admission``, rejected by
+    ``owner_commands._reject_helper_commit``, which turned a
+    ``permission_denied`` refusal into ``nested_transaction_completion``
+    while still losing the audit evidence).
+
+    Scoped to the actual owner-managed transaction functions instead: ONLY
+    ``_admit``, ``_classify``, ``authorize_offer_version_admission``, and
+    ``_verify_admission_authorization`` (the ones that either run inside
+    ``execute_owner_command``'s transaction or are the shared decision this
+    round moved the commit responsibility OUT of) may never call
+    ``db.commit(``/``db.rollback(`` themselves — completing or discarding
+    the transaction is exclusively the public command boundary's job."""
+
     owner = _source("app/services/catalog/offer_access_requirement.py")
     assert "execute_owner_command(" in owner
     assert "OfferVersion(**data)" in owner
     assert "db.add(version)" in owner
-    assert "db.commit(" not in owner
-    assert "db.rollback(" not in owner
+
+    for function_name in (
+        "_admit",
+        "_classify",
+        "authorize_offer_version_admission",
+        "_verify_admission_authorization",
+    ):
+        function_source = _function_source(owner, function_name)
+        assert "db.commit(" not in function_source, (
+            f"{function_name} must never commit its own transaction"
+        )
+        assert "db.rollback(" not in function_source, (
+            f"{function_name} must never roll back its own transaction"
+        )
 
 
 def test_classify_command_carries_no_free_text_actor_field():
