@@ -122,6 +122,27 @@ def _auth_for(user: SystemUser) -> dict:
     }
 
 
+def _machine_auth(
+    *, credential_id: uuid.UUID | None = None, scopes: list[str] | None = None
+) -> dict:
+    """The auth shape ``auth_dependencies._machine_principal`` actually
+    produces: ``principal_type == "api_key"`` with the ``credential_kind
+    == "machine"`` stamp. Round 14 finding 2: every OTHER request in this
+    file goes through ``_auth_for`` above, which is always a staff
+    principal and never sets ``credential_kind`` — so none of them could
+    ever exercise, or notice the loss of, the machine-credential shadow
+    path this file exists to protect. This is the one auth shape that
+    can."""
+
+    return {
+        "principal_id": str(credential_id or uuid.uuid4()),
+        "principal_type": "api_key",
+        "credential_kind": "machine",
+        "roles": [],
+        "scopes": list(scopes or ()),
+    }
+
+
 def _offer(db_session):
     return catalog_service.offers.create(
         db_session,
@@ -359,4 +380,59 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
         "request, but before the mutation, must still refuse the write — "
         "this is the exact window OfferVersions.update's immediate-"
         "pre-mutation recheck exists to close"
+    )
+
+
+def test_machine_admission_succeeds_via_shadow_mode_through_the_mounted_route(
+    db_session,
+):
+    """Round 14 finding 2: the ONLY test in this file (before this one)
+    that could ever exhibit the round-13 regression this file exists to
+    catch. Every other request here goes through ``_auth_for`` — always a
+    staff principal, never a ``credential_kind`` — so deleting the
+    ``credential_kind=auth.get("credential_kind")`` propagation at
+    ``app/api/catalog.py``'s ``_require_offer_version_admission`` left
+    every plant in this file, the resolver test, the authentication-stamp
+    AST test, and the direct machine-command tests in
+    ``tests/test_offer_access_requirement.py`` green, while a real kernel
+    machine credential was silently enforced as an ordinary API key and
+    refused with a 403 BEFORE ``_admission_principal`` ever built a
+    ``MachineCredentialPrincipal`` at all.
+
+    A machine credential holding scopes that satisfy NOTHING in the
+    compound rule still gets a real 201 through the real mounted route —
+    shadow mode never refuses (Michael's ruling; see
+    ``MachineCredentialPrincipal``'s own docstring).
+
+    Break condition: fails (403 instead of 201) if ``_require_offer_
+    version_admission`` stops threading ``credential_kind`` from the auth
+    dict into ``AdmissionAuthorizationClaims``, if
+    ``authorize_offer_version_admission`` stops branching on
+    ``claims.credential_kind == "machine"`` before enforcing the compound
+    rule, or if ``_admission_principal`` stops recognizing
+    ``credential_kind == "machine"`` at all."""
+
+    app = _mounted_app(db_session)
+    app.dependency_overrides[require_user_auth] = lambda: _machine_auth(scopes=[])
+    client = TestClient(app)
+    offer = _offer(db_session)
+
+    response = client.post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 1,
+            "name": "v1",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert response.status_code == 201, (
+        "a machine credential with no satisfying scopes must still be "
+        "admitted under the shadow/compatibility path — a 403 here means "
+        "credential_kind never reached the authorization decision, "
+        "reintroducing the exact lockout this branch already committed "
+        "a fix for once"
     )
