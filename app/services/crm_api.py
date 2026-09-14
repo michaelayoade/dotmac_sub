@@ -2067,8 +2067,11 @@ def create_subscription(
                 # decision to terminate, and it is not part of the
                 # recoverable-deletion tombstone system either. It is an
                 # administrative correction of an error that should never
-                # have persisted, so no credit is owed.
-                credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
+                # have persisted, so no credit is owed —
+                # ADMINISTRATIVE_CORRECTION, not ADMINISTRATIVE_TERMINATION
+                # (a real termination) or ADMINISTRATIVE_RECOVERABLE_DELETION
+                # (this is not tombstone/recovery evidence).
+                credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
             )
             invoice.is_active = False
             session.commit()

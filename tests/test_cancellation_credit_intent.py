@@ -25,12 +25,19 @@ def test_administrative_termination_is_evaluated() -> None:
     )
 
 
-def test_administrative_recoverable_deletion_is_the_only_suppressing_intent() -> None:
+def test_administrative_correction_is_evaluated_for_no_credit() -> None:
     assert not cancellation_credit_intent_should_evaluate(
-        CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION
+        CancellationCreditIntent.ADMINISTRATIVE_CORRECTION
     )
+
+
+def test_recoverable_deletion_and_correction_are_the_only_suppressing_intents() -> None:
+    suppressing = {
+        CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION,
+        CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
+    }
     for intent in CancellationCreditIntent:
-        if intent is CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION:
+        if intent in suppressing:
             assert not cancellation_credit_intent_should_evaluate(intent)
         else:
             assert cancellation_credit_intent_should_evaluate(intent)
@@ -69,6 +76,7 @@ def test_cancel_subscription_suppresses_credit_only_for_recoverable_deletion(
         (CancellationCreditIntent.CUSTOMER_REQUESTED_TERMINATION, True),
         (CancellationCreditIntent.ADMINISTRATIVE_TERMINATION, True),
         (CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION, False),
+        (CancellationCreditIntent.ADMINISTRATIVE_CORRECTION, False),
     ):
         subscription = _make_subscription(
             db_session, subscriber, offer, status=SubscriptionStatus.active
