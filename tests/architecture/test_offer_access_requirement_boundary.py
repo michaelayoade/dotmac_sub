@@ -727,14 +727,70 @@ def test_catalog_policy_is_left_completely_untouched():
     )
 
 
-def test_migration_downgrade_locks_before_counting():
+def test_migration_downgrade_locks_each_table_before_counting_that_table():
+    """Round 12 finding 6: the prior version of this test compared only the
+    FIRST ``LOCK TABLE`` occurrence against the FIRST ``SELECT count(*)``
+    occurrence — true for the file as a whole even if ONE of the two locks
+    were deleted, so long as the other lock still happened to precede
+    whichever count came first in the source. Deleting ``607``'s
+    ``offer_versions`` lock while leaving the classifications lock in place
+    (or vice versa) would still have passed.
+
+    This checks EACH count query is preceded by an ACCESS EXCLUSIVE lock on
+    the EXACT table it counts, and proves that both ways: planting a
+    removal of either lock alone is caught, and the real, legitimate
+    ordering (both locks acquired up front, in the fixed deadlock-avoiding
+    order, before either count) is not flagged.
+    """
+
     migration = _source("alembic/versions/607_offer_access_requirement.py")
-    lock_index = migration.index("LOCK TABLE")
-    count_index = migration.index("SELECT count(*)")
-    assert lock_index < count_index, (
-        "downgrade must acquire its locks before the first count query"
+    downgrade_source = _function_source(migration, "downgrade")
+
+    # offer_versions is a literal table name; the classifications table is
+    # referenced via the f-string placeholder {_CLASSIFICATIONS_TABLE} in
+    # BOTH its lock and its count statement's source text.
+    checks = (
+        (
+            "LOCK TABLE offer_versions IN ACCESS EXCLUSIVE MODE",
+            "SELECT count(*) FROM offer_versions",
+        ),
+        (
+            "LOCK TABLE {_CLASSIFICATIONS_TABLE} IN ACCESS EXCLUSIVE MODE",
+            "SELECT count(*) FROM {_CLASSIFICATIONS_TABLE}",
+        ),
     )
-    assert "ACCESS EXCLUSIVE MODE" in migration
+
+    def _locked_before_its_own_count(
+        source: str, lock_text: str, count_text: str
+    ) -> bool:
+        count_index = source.find(count_text)
+        if count_index == -1:
+            return True  # nothing to protect if this table is never counted
+        lock_index = source.find(lock_text)
+        return lock_index != -1 and lock_index < count_index
+
+    for lock_text, count_text in checks:
+        assert _locked_before_its_own_count(downgrade_source, lock_text, count_text), (
+            f"{count_text!r} must be preceded by {lock_text!r} in downgrade()"
+        )
+
+    # Sensitivity, both directions: planting a removal of EITHER lock alone
+    # (leaving the other lock and both counts intact) must be caught, even
+    # though "a LOCK TABLE statement exists somewhere before a count"
+    # remains true for the file as a whole.
+    for lock_text, count_text in checks:
+        planted = downgrade_source.replace(lock_text, "-- lock removed")
+        assert not _locked_before_its_own_count(planted, lock_text, count_text), (
+            f"planted removal of {lock_text!r} was not caught"
+        )
+
+    # Near-miss: the real, unmodified ordering must not be flagged.
+    assert downgrade_source.index(
+        "LOCK TABLE offer_versions IN ACCESS EXCLUSIVE MODE"
+    ) < downgrade_source.index("SELECT count(*) FROM offer_versions")
+    assert downgrade_source.index(
+        "LOCK TABLE {_CLASSIFICATIONS_TABLE} IN ACCESS EXCLUSIVE MODE"
+    ) < downgrade_source.index("SELECT count(*) FROM {_CLASSIFICATIONS_TABLE}")
 
 
 def _function_source(module_source: str, function_name: str) -> str:
