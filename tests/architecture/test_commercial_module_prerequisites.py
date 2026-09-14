@@ -636,6 +636,22 @@ def _dotmac_ro_scan_targets(root: Path) -> tuple[Path, ...]:
     return tuple(targets)
 
 
+#: The ONE literal phrase every refusal branch in
+#: `_read_verified_tracked_bytes` emits, regardless of which platform-
+#: specific `errno` (or no errno at all, for the non-regular-leaf case)
+#: produced the refusal. A test asserting THIS marker is asserting the
+#: security PROPERTY — "refused, not silently skipped, not left to hang,
+#: not left to propagate as a raw OSError" — instead of one platform's
+#: mechanism. CI on the hosted (Linux) runner found that
+#: `test_the_scan_refuses_an_ancestor_symlink_not_just_the_leaf` had
+#: asserted `match="without following a"`, which is emitted ONLY by the
+#: ELOOP branch; the identical logical refusal lands in the generic
+#: branch on Linux instead (`ENOTDIR`, not `ELOOP`, for a symlinked
+#: ancestor opened with `O_DIRECTORY`), and the test failed on a correct
+#: guard. This marker exists so that mistake cannot recur.
+_SCAN_REFUSAL_MARKER = "scan refusal, not a silent skip"
+
+
 def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
     """Read `path`'s bytes with no symlink anywhere between `root` and the leaf.
 
@@ -706,6 +722,20 @@ def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
                 next_fd = os.open(part, flags, dir_fd=dir_fd)
             except OSError as exc:
                 component = root.joinpath(*relative_parts[: index + 1])
+                # `errno` differs by PLATFORM and by which flag combination
+                # tripped it, for the identical logical defect: opening a
+                # symlinked ancestor with `O_NOFOLLOW | O_DIRECTORY` raises
+                # `ELOOP` on macOS but `ENOTDIR` on Linux (confirmed by CI on
+                # the hosted runner — this repository's own history, not a
+                # hypothetical). A leaf-level `O_NOFOLLOW` symlink, and a
+                # missing path, may differ the same way on some platform this
+                # scan hasn't run on yet. Every branch below therefore emits
+                # the SAME literal marker phrase
+                # (`_SCAN_REFUSAL_MARKER`) regardless of which specific
+                # errno produced it, so a caller — and a test — can assert
+                # the PROPERTY ("this was refused, not silently skipped or
+                # left to propagate as a raw OSError") without encoding any
+                # one platform's mechanism.
                 if exc.errno == errno.ENOENT:
                     raise AssertionError(
                         f"{path} is a tracked path missing on disk at "
@@ -713,8 +743,7 @@ def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
                         "unfetched gitlink/submodule, or a "
                         "sparse-checkout exclusion); this scan's "
                         "completeness requires every tracked path to "
-                        "actually be present, and a missing one is "
-                        "refused rather than silently skipped"
+                        f"actually be present — {_SCAN_REFUSAL_MARKER}"
                     ) from exc
                 if exc.errno == errno.ELOOP:
                     raise AssertionError(
@@ -722,13 +751,11 @@ def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
                         f"symlink at {component}; this scan's completeness "
                         "requires no symlink anywhere between the scan "
                         "root and the leaf — not just the leaf itself — "
-                        "and refuses rather than silently reading "
-                        "substituted content"
+                        f"{_SCAN_REFUSAL_MARKER}"
                     ) from exc
                 raise AssertionError(
                     f"{path} could not be opened at {component} ({exc}); "
-                    "this scan cannot see inside it, and it is refused "
-                    "rather than silently skipped"
+                    f"this scan cannot see inside it — {_SCAN_REFUSAL_MARKER}"
                 ) from exc
             os.close(dir_fd)
             dir_fd = next_fd
@@ -738,8 +765,8 @@ def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
             raise AssertionError(
                 f"{path} is tracked but is not a regular file (e.g. a "
                 "gitlink/submodule, or a FIFO/device/socket substituted "
-                "for it); this scan cannot see inside it, and it is "
-                "refused rather than silently skipped or hung on"
+                f"for it); this scan cannot see inside it — "
+                f"{_SCAN_REFUSAL_MARKER}"
             )
 
         chunks: list[bytes] = []
@@ -1426,15 +1453,26 @@ def test_the_scan_refuses_a_symlinked_leaf(tmp_path) -> None:
     Neither fixture path contains the word "symlink" — if it did, deleting
     the `ELOOP` branch entirely would still leave the generic fallback
     branch's message (which embeds the path) satisfying a `match="symlink"`
-    assertion for the wrong reason. The match string here
-    ("without following a") appears ONLY in the `ELOOP` branch's message.
+    assertion for the wrong reason.
+
+    This asserts `_SCAN_REFUSAL_MARKER`, not branch-specific wording like
+    "without following a" (the `ELOOP` branch's own phrase) — CI on the
+    hosted (Linux) runner found that the sibling ancestor-symlink test
+    below asserted exactly that branch-specific phrase, and a symlinked
+    ancestor opened with `O_DIRECTORY` raises `ENOTDIR` on Linux instead of
+    `ELOOP`, landing in the GENERIC branch and failing a correct guard. A
+    plain leaf-level `O_NOFOLLOW` (no `O_DIRECTORY`, this test's case) is
+    expected to raise `ELOOP` consistently, but asserting the shared
+    marker instead of the mechanism makes that expectation irrelevant:
+    this test passes regardless of which branch actually fires on
+    whichever platform runs it.
     """
     real_target = tmp_path / "aliased_target.sql"
     real_target.write_text("nothing to do with the legacy role\n")
     leaf_via_alias = tmp_path / "leaf_via_alias.sql"
     leaf_via_alias.symlink_to(real_target)
 
-    with pytest.raises(AssertionError, match="without following a"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([leaf_via_alias], "dotmac_ro", tmp_path)
 
 
@@ -1444,11 +1482,13 @@ def test_the_scan_refuses_a_missing_tracked_path(tmp_path) -> None:
     No file is ever created at this path — it stands in for a dangling
     symlink target, an unfetched gitlink/submodule, or a sparse-checkout
     exclusion. `_files_containing` must raise rather than silently treating
-    the missing path as "nothing to scan."
+    the missing path as "nothing to scan." Asserts `_SCAN_REFUSAL_MARKER`
+    rather than branch-specific wording, for the same reason given in
+    `test_the_scan_refuses_a_symlinked_leaf`.
     """
     missing = tmp_path / "never_created.sql"
 
-    with pytest.raises(AssertionError, match="missing on disk"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([missing], "dotmac_ro", tmp_path)
 
 
@@ -1459,11 +1499,16 @@ def test_the_scan_refuses_a_non_regular_leaf(tmp_path) -> None:
     regular-file content behind it; a real submodule directory is the
     concrete case, stood in for here by a plain directory at that path.
     `_files_containing` must raise rather than silently skipping it.
+    Asserts `_SCAN_REFUSAL_MARKER` rather than branch-specific wording, for
+    the same reason given in `test_the_scan_refuses_a_symlinked_leaf` —
+    this branch is not errno-dependent today, but the marker keeps every
+    refusal test in this file uniform and immune to the same class of
+    platform surprise regardless.
     """
     non_regular = tmp_path / "looks_like_a_submodule"
     non_regular.mkdir()
 
-    with pytest.raises(AssertionError, match="not a regular file"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([non_regular], "dotmac_ro", tmp_path)
 
 
@@ -1481,6 +1526,16 @@ def test_the_scan_refuses_an_ancestor_symlink_not_just_the_leaf(tmp_path) -> Non
 
     Neither fixture path contains the word "symlink", for the same reason
     given in `test_the_scan_refuses_a_symlinked_leaf`.
+
+    This asserts `_SCAN_REFUSAL_MARKER`, not `ELOOP`-specific wording. CI on
+    the hosted (Linux) runner failed this exact test when it asserted
+    `match="without following a"`: opening a symlinked ancestor with
+    `O_NOFOLLOW | O_DIRECTORY` raises `ELOOP` on macOS (where this guard
+    was written) but `ENOTDIR` on Linux (confirmed by that CI failure) —
+    landing in the GENERIC fallback branch there instead, which does not
+    contain that phrase. The guard refused correctly either way; only the
+    test's assertion named one platform's mechanism. Asserting the shared
+    marker instead asserts the actual security property under test.
     """
     real_directory = tmp_path / "real_directory"
     real_directory.mkdir()
@@ -1492,7 +1547,7 @@ def test_the_scan_refuses_an_ancestor_symlink_not_just_the_leaf(tmp_path) -> Non
 
     tracked_looking_path = ancestor_via_alias / "leaf.sql"
 
-    with pytest.raises(AssertionError, match="without following a"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([tracked_looking_path], "dotmac_ro", tmp_path)
 
 
@@ -1505,11 +1560,13 @@ def test_the_scan_refuses_a_fifo_leaf_without_hanging(tmp_path) -> None:
     a real FIFO with no writer. `_files_containing` must refuse immediately
     (via `O_NONBLOCK` on the leaf's open) rather than hang: a guard that
     hangs produces no verdict at all, which is worse than one that fails.
+    Asserts `_SCAN_REFUSAL_MARKER` rather than branch-specific wording, for
+    the same reason given in `test_the_scan_refuses_a_symlinked_leaf`.
     """
     fifo_leaf = tmp_path / "fifo_leaf.sql"
     os.mkfifo(fifo_leaf)
 
-    with pytest.raises(AssertionError, match="not a regular file"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([fifo_leaf], "dotmac_ro", tmp_path)
 
 
@@ -1524,12 +1581,20 @@ def test_the_scan_refuses_via_the_generic_branch_for_an_uncategorized_os_error(
     deeper path makes the intermediate `open(..., O_DIRECTORY)` fail with
     `ENOTDIR` — an errno this scan does not specifically name — and it must
     still raise a refusal through the generic fallback branch rather than
-    let a raw `OSError` propagate or silently skip the path.
+    let a raw `OSError` propagate or silently skip the path. `ENOTDIR` for
+    an `O_DIRECTORY` open against a plain regular file is POSIX-guaranteed
+    and platform-consistent, unlike the symlink-plus-`O_DIRECTORY` case
+    above — but this still asserts `_SCAN_REFUSAL_MARKER`, not
+    `"could not be opened"` (the generic branch's own specific wording),
+    for uniformity with every other refusal test in this file: the
+    property under test is "an AssertionError, not a raw OSError, and not
+    a silent skip," which the shared marker proves without also claiming
+    to identify which branch fired.
     """
     regular_file = tmp_path / "regular_file_pretending_to_be_a_directory"
     regular_file.write_text("an ordinary file, not a directory\n")
 
     tracked_looking_path = regular_file / "leaf.sql"
 
-    with pytest.raises(AssertionError, match="could not be opened"):
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _files_containing([tracked_looking_path], "dotmac_ro", tmp_path)
