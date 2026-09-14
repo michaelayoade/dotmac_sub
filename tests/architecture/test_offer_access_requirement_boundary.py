@@ -701,7 +701,7 @@ def test_offer_access_requirement_owner_actually_performs_the_write():
         "_admit",
         "_classify",
         "authorize_offer_version_admission",
-        "_verify_admission_authorization",
+        "verify_admission_authorization",
     ):
         function_source = _function_source(owner, function_name)
         assert "db.commit(" not in function_source, (
