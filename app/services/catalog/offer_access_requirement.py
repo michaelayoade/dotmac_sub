@@ -557,22 +557,22 @@ def authorize_offer_version_admission(
     caller reaching this command directly must not get a MORE permissive
     answer than the route would have given the identical principal.
 
-    STATED PRECISELY, not glossed over: this is NOT the only leave-
-    restriction checkpoint a real HTTP request passes through.
-    ``app/api/catalog.py``'s router carries its OWN pre-existing, admission-
-    unrelated ``catalog:write`` gate (``require_method_permission``, applied
-    to every mutating route in the file) whose ``require_permission``
-    independently invokes the identical ``erp_staff_access.staff_write_
-    restricted`` check BEFORE this function is ever reached, for any caller
-    who holds ``catalog:write`` — using older, separate plumbing (a bare-
-    string HTTPException detail, and an inline-committed audit write rather
-    than this function's staged one). It cannot produce a DIFFERENT
-    verdict (both call the same underlying primitive), but it IS a
-    genuinely earlier, separate checkpoint for the ROUTE path specifically;
-    this function's own leave-check is what actually enforces the
-    restriction for a caller who reaches ``admit_offer_version`` directly
-    (a background job, CLI, or other non-route caller bypasses the router
-    entirely, so nothing upstream of this function would catch it there).
+    ONLY GATE ON THE HTTP PATH TOO (round 12 finding 2 fix): the offer-
+    version admission routes are mounted on ``app/api/catalog.py``'s
+    ``admission_router``, which deliberately carries NO blanket router-level
+    dependency — unlike this file's other catalog routes, which sit under a
+    pre-existing, admission-unrelated ``catalog:write`` gate
+    (``require_method_permission``) whose own ``require_permission``
+    independently applies the identical ``erp_staff_access.staff_write_
+    restricted`` check via older, separate plumbing (a bare-string
+    HTTPException detail, and an inline-committed audit write). That older
+    check cannot produce a DIFFERENT verdict from this one (both call the
+    same underlying primitive) and never runs ahead of this function for
+    these two routes specifically, because they are exempt from that
+    blanket gate — this function is the one and only decision-maker for
+    both the route and a caller who reaches ``admit_offer_version``
+    directly (a background job, CLI, or other non-route caller, which
+    bypasses the router entirely regardless).
 
     The staged ``audit_denied_write`` record is committed HERE, before
     raising, rather than left to the caller's own transaction — a direct-
