@@ -242,23 +242,42 @@ def test_admission_route_actually_carries_the_authorization_dependency(db_sessio
     assert api_catalog._require_offer_version_admission in resolved_dependency_callables
 
 
-def test_removing_the_admission_dependency_lets_an_unauthorized_request_through(
+def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
     db_session,
 ):
-    """The planted removal, proven behaviorally rather than merely
-    described. OBSERVED: the mounted app, via two real, issued HTTP
-    requests to two different apps — the real one (refuses) and a second
-    app built by registering the IDENTICAL handler function with its
-    admission dependency replaced by bare authentication (succeeds) — the
-    literal shape of "someone deletes ``Depends(_require_offer_version_
-    admission)``" from the route.
+    """The planted removal, proven behaviorally. OBSERVED: the mounted
+    app, via real, issued HTTP requests to two apps — the real one
+    (refuses) and a second app built by registering the IDENTICAL handler
+    logic with the admission dependency replaced by bare authentication.
 
-    This is the sensitivity proof for the structural test above: it does
-    not just show the dependency is present, it shows what happens when it
-    is not, using the SAME service call the real route makes.
+    NARROWED CLAIM (round 14 finding 6): the earlier version of this test
+    had the unguarded clone resolve ``SystemAdmission`` — the documented,
+    allowlist-confined "no real principal" escape hatch — as its principal.
+    That 201 proved dependency removal PLUS an authorization BYPASS (a
+    principal type that skips even the command's own recheck), not literal
+    dependency removal in isolation; a docstring claiming it proved the
+    latter asserted more than the fixture established. This version proves
+    two DIFFERENT, narrower things, each honestly scoped to what its own
+    fixture does:
+
+    1. Removing the dependency AND resolving via ``SystemAdmission``
+       bypasses BOTH layers — this is exactly why ``SystemAdmission``
+       construction is independently confined to an AST-checked allowlist
+       elsewhere (``tests/architecture/test_offer_access_requirement_
+       boundary.py``'s ``test_system_admission_construction_is_confined_
+       to_the_declared_allowlist``); this route deliberately is not on
+       that allowlist, which is the point.
+    2. Removing ONLY the route dependency, while still resolving a REAL,
+       typed, unprivileged ``StaffPrincipal`` (the shape an actual caller
+       reaching an unguarded route would have), does NOT bypass
+       authorization — ``admit_offer_version``'s own in-transaction
+       ``verify_admission_authorization`` recheck still refuses. This is
+       defense in depth actually holding, not a vulnerability; the test
+       asserts 403 here, not 201.
     """
 
     user = _system_user(db_session)
+    unprivileged_user = _system_user(db_session)
     offer = _offer(db_session)
 
     # The real, guarded app: refuses.
@@ -279,31 +298,39 @@ def test_removing_the_admission_dependency_lets_an_unauthorized_request_through(
     )
     assert guarded_response.status_code == 403
 
-    # The planted removal: the identical create_offer_version handler,
-    # registered directly with no admission dependency at all — only bare
-    # authentication, which the override below still satisfies.
+    # The planted removal: a handler with the SAME service call the real
+    # route makes, registered directly with no admission dependency at
+    # all — only bare authentication, which the override below satisfies.
     from app.schemas.catalog import OfferVersionCreate
 
-    unguarded_app = FastAPI()
+    def _make_unguarded_app(principal_factory):
+        unguarded_app = FastAPI()
 
-    def _unguarded_create_offer_version(
-        payload: OfferVersionCreate,
-        db=Depends(get_db),
-        auth: dict = Depends(require_user_auth),
-    ):
-        principal = offer_access_requirement.SystemAdmission(
-            reason="round 13 finding 4 sensitivity plant — no admission "
-            "dependency guards this handler on purpose"
+        def _unguarded_create_offer_version(
+            payload: OfferVersionCreate,
+            db=Depends(get_db),
+            auth: dict = Depends(require_user_auth),
+        ):
+            return catalog_service.offer_versions.create(
+                db, payload, principal=principal_factory()
+            )
+
+        unguarded_app.add_api_route(
+            "/api/v1/offer-versions", _unguarded_create_offer_version, methods=["POST"]
         )
-        return catalog_service.offer_versions.create(db, payload, principal=principal)
+        unguarded_app.dependency_overrides[get_db] = lambda: db_session
+        unguarded_app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
+        return unguarded_app
 
-    unguarded_app.add_api_route(
-        "/api/v1/offer-versions", _unguarded_create_offer_version, methods=["POST"]
+    # (1) Dependency removal + SystemAdmission: bypasses both layers.
+    system_admission_app = _make_unguarded_app(
+        lambda: offer_access_requirement.SystemAdmission(
+            reason="round 14 finding 6 sensitivity plant — no admission "
+            "dependency guards this handler, and SystemAdmission carries "
+            "no RBAC identity for the command's own recheck to refuse"
+        )
     )
-    unguarded_app.dependency_overrides[get_db] = lambda: db_session
-    unguarded_app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
-    unguarded_client = TestClient(unguarded_app)
-    unguarded_response = unguarded_client.post(
+    system_admission_response = TestClient(system_admission_app).post(
         "/api/v1/offer-versions",
         json={
             "offer_id": str(offer.id),
@@ -315,10 +342,38 @@ def test_removing_the_admission_dependency_lets_an_unauthorized_request_through(
             "access_requirement": "unclassified",
         },
     )
-    assert unguarded_response.status_code == 201, (
-        "the unguarded clone must succeed where the real route refuses — "
-        "that contrast IS the proof that the real route's dependency is "
-        "what stands between an unauthorized caller and a written row"
+    assert system_admission_response.status_code == 201, (
+        "removing the dependency AND resolving via SystemAdmission bypasses "
+        "both authorization layers — this is why SystemAdmission "
+        "construction is independently confined to an allowlist elsewhere"
+    )
+
+    # (2) Dependency removal alone, with a real, unprivileged StaffPrincipal:
+    # the command's own recheck still refuses. Defense in depth holds.
+    staff_app = _make_unguarded_app(
+        lambda: offer_access_requirement.StaffPrincipal(
+            system_user_id=unprivileged_user.id
+        )
+    )
+    staff_response = TestClient(staff_app).post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 3,
+            "name": "v3",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert staff_response.status_code == 403, (
+        "removing ONLY the route dependency, with a real unprivileged "
+        "principal, must still be refused by the command's own "
+        "in-transaction recheck — if this ever returns 201, the command "
+        "stopped enforcing independently of the route, and the route "
+        "dependency alone was silently carrying all of admission's "
+        "authorization"
     )
 
 
@@ -338,21 +393,33 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
     TOCTOU/revocation race in one process is to inject the "concurrent"
     revocation AT the exact seam between the two decisions under test, then
     verify the LATER decision (the one actually being tested) observes the
-    committed change. The seam here is ``_admission_principal`` — called by
-    ``update_offer_version`` immediately AFTER
-    ``_require_offer_version_admission`` has already authorized the
-    request, and immediately BEFORE ``OfferVersions.update``'s own recheck
-    runs. Wrapping it to commit a real revocation, via the real ORM, before
-    returning the principal is the smallest possible injection: everything
-    else — the route, both dependency resolutions, and the recheck itself —
-    runs unmodified and for real.
+    committed change.
+
+    PLACEMENT, not just existence (round 14 finding 6): the earlier version
+    of this test injected the revocation in ``_admission_principal``, which
+    the ROUTE calls BEFORE ``OfferVersions.update`` is ever entered — so a
+    recheck moved to the very TOP of ``update`` would have observed the
+    revocation just as well as the real, immediately-pre-mutation
+    placement, and the test could not have told the two apart. This
+    version injects the revocation from INSIDE ``OfferVersions.update``
+    itself — wrapping ``catalog_billing_governance.
+    assert_offer_version_update_safe``, the read-only validation call that
+    runs immediately before ``verify_admission_authorization`` in the real
+    function, several statements after ``update`` was entered. A recheck
+    moved to the top of ``update`` (before this validation call) would run
+    BEFORE the revocation lands and would NOT observe it, returning 200;
+    the real, immediately-pre-mutation placement runs AFTER it and does,
+    returning 403. That contrast is what distinguishes "checked somewhere
+    in update" from "checked immediately before the mutation" — the claim
+    this test actually makes.
 
     Break condition: this fails (a 200 where it must be 403) if
     ``OfferVersions.update`` stops calling ``verify_admission_authorization``
-    immediately before its mutation, or if that call is ever moved back to
-    only running once, at the top of the route, before the window this
-    test opens.
+    AFTER its read-only validation and immediately before its mutation, or
+    if that call is ever moved earlier than the injection point below.
     """
+
+    from app.services import catalog_billing_governance
 
     user = _system_user(db_session)
     _grant_direct_permission(
@@ -380,24 +447,28 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
     assert create_response.status_code == 201
     version_id = create_response.json()["id"]
 
-    real_admission_principal = api_catalog._admission_principal
+    real_assert_update_safe = (
+        catalog_billing_governance.assert_offer_version_update_safe
+    )
 
-    def _admission_principal_that_revokes_mid_request(auth):
-        # Runs AFTER _require_offer_version_admission has already
-        # authorized this exact PATCH request, and BEFORE OfferVersions
-        # .update's own recheck — the precise window round 13 finding 3
-        # closes. Revokes and COMMITS for real, simulating a concurrent
-        # transaction landing in that window.
-        principal = real_admission_principal(auth)
+    def _assert_update_safe_that_revokes_mid_update(db, version, changes):
+        # Runs FROM INSIDE OfferVersions.update, after it has already
+        # started executing (past its own entry and the earlier
+        # immutability checks) and immediately BEFORE
+        # verify_admission_authorization's recheck — the precise window
+        # round 13 finding 3 closes, and the one a check moved to the top
+        # of update() would NOT observe. Revokes and COMMITS for real,
+        # simulating a concurrent transaction landing in that window.
+        result = real_assert_update_safe(db, version, changes)
         _revoke_direct_permission(
             db_session, user, offer_access_requirement.ADMISSION_SCOPE
         )
-        return principal
+        return result
 
     monkeypatch.setattr(
-        api_catalog,
-        "_admission_principal",
-        _admission_principal_that_revokes_mid_request,
+        catalog_billing_governance,
+        "assert_offer_version_update_safe",
+        _assert_update_safe_that_revokes_mid_update,
     )
 
     patch_response = client.patch(
@@ -405,10 +476,10 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
         json={"name": "renamed after revocation"},
     )
     assert patch_response.status_code == 403, (
-        "a grant revoked after the route's own dependency authorized the "
-        "request, but before the mutation, must still refuse the write — "
-        "this is the exact window OfferVersions.update's immediate-"
-        "pre-mutation recheck exists to close"
+        "a grant revoked mid-update, immediately before "
+        "verify_admission_authorization's recheck, must still refuse the "
+        "write — a recheck moved to the TOP of update() would have missed "
+        "this revocation and returned 200 instead"
     )
 
 
