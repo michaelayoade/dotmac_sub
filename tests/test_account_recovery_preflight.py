@@ -25,6 +25,8 @@ from app.models.account_recovery import AccountRecoveryRecord
 from app.models.catalog import AddOn, AddOnType, SubscriptionAddOn, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.services import account_recovery
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from tests.test_account_lifecycle import _make_offer, _make_subscriber, _make_subscription
 
 
@@ -35,14 +37,22 @@ def _add_on(db: Session) -> AddOn:
     return add_on
 
 
-def _command(account_id) -> account_recovery.RequestRecoverableDeletionCommand:
+def _command(
+    account_id, *, idempotency_key: str | None = None, reason: str = "test"
+) -> account_recovery.RequestRecoverableDeletionCommand:
+    command_id = uuid.uuid4()
     return account_recovery.RequestRecoverableDeletionCommand(
         account_id=account_id,
-        command_id=uuid.uuid4(),
-        correlation_id=uuid.uuid4(),
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor="admin",
+            scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+            reason=reason,
+            idempotency_key=idempotency_key or f"request-deletion:{command_id}",
+        ),
         requested_by="admin",
         deleted_by="admin",
-        reason="test",
     )
 
 
@@ -58,9 +68,9 @@ def test_active_add_on_blocks_deletion_with_zero_mutation(db_session) -> None:
     )
     db_session.commit()
 
-    outcome = account_recovery.request_recoverable_deletion(
-        db_session, _command(subscriber.id)
-    )
+    command = _command(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = account_recovery.request_recoverable_deletion(db_session, command)
 
     assert isinstance(outcome, account_recovery.DeletionPreflightBlocked)
     assert outcome.unsupported_consequences == ("add_on",)
@@ -96,9 +106,9 @@ def test_ended_add_on_does_not_block_deletion(db_session) -> None:
     )
     db_session.commit()
 
-    outcome = account_recovery.request_recoverable_deletion(
-        db_session, _command(subscriber.id)
-    )
+    command = _command(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = account_recovery.request_recoverable_deletion(db_session, command)
 
     assert isinstance(outcome, account_recovery.DeletionTombstone)
 
@@ -119,9 +129,9 @@ def test_active_enforcement_lock_blocks_deletion_with_zero_mutation(db_session) 
     )
     db_session.commit()
 
-    outcome = account_recovery.request_recoverable_deletion(
-        db_session, _command(subscriber.id)
-    )
+    command = _command(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = account_recovery.request_recoverable_deletion(db_session, command)
 
     assert isinstance(outcome, account_recovery.DeletionPreflightBlocked)
     assert outcome.unsupported_consequences == ("enforcement_lock",)
@@ -156,9 +166,9 @@ def test_resolved_enforcement_lock_does_not_block_deletion(db_session) -> None:
     )
     db_session.commit()
 
-    outcome = account_recovery.request_recoverable_deletion(
-        db_session, _command(subscriber.id)
-    )
+    command = _command(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = account_recovery.request_recoverable_deletion(db_session, command)
 
     assert isinstance(outcome, account_recovery.DeletionTombstone)
 
@@ -179,8 +189,8 @@ def test_already_canceled_subscription_is_never_preflight_checked(db_session) ->
     )
     db_session.commit()
 
-    outcome = account_recovery.request_recoverable_deletion(
-        db_session, _command(subscriber.id)
-    )
+    command = _command(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = account_recovery.request_recoverable_deletion(db_session, command)
 
     assert isinstance(outcome, account_recovery.DeletionTombstone)

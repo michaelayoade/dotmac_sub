@@ -18,6 +18,7 @@ from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services.audit_helpers import log_audit_event
+from app.services.owner_commands import CommandContext
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
     resolve_form_customer_ids,
@@ -295,25 +296,46 @@ def update_subscriber_from_form(
 
 
 def _request_recoverable_deletion(
-    db: Session, subscriber_id: UUID, actor_id: str | None
+    db: Session,
+    subscriber_id: UUID,
+    actor_id: str | None,
+    *,
+    idempotency_key: str,
 ) -> None:
+    """Route the deletion through the owner-command boundary.
+
+    ``request_recoverable_deletion`` itself enters
+    :func:`app.services.owner_commands.execute_owner_command`, which owns
+    the transaction — this adapter never calls ``db.commit()``.
+    ``idempotency_key`` has no default: this action has no natural
+    review-step fingerprint to derive one from (unlike restore/rebaseline),
+    so the caller must supply a key that is stable across a genuine retry of
+    the SAME deletion attempt and distinct from any later, separate
+    deletion attempt on this account (e.g. after a full restore).
+    """
     actor = actor_id or "system_restore_tool"
-    command = account_recovery.RequestRecoverableDeletionCommand(
-        account_id=subscriber_id
-        if isinstance(subscriber_id, UUID)
-        else UUID(str(subscriber_id)),
+    account_id = (
+        subscriber_id if isinstance(subscriber_id, UUID) else UUID(str(subscriber_id))
+    )
+    context = CommandContext(
         command_id=uuid4(),
         correlation_id=uuid4(),
+        actor=actor,
+        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+        reason="Administrative recoverable deletion via subscriber admin action",
+        idempotency_key=idempotency_key,
+    )
+    command = account_recovery.RequestRecoverableDeletionCommand(
+        account_id=account_id,
+        context=context,
         requested_by=actor,
         deleted_by=actor,
-        reason="Administrative recoverable deletion via subscriber admin action",
     )
     try:
         outcome = account_recovery.request_recoverable_deletion(db, command)
     except account_recovery.AccountRecoveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(outcome, account_recovery.DeletionPreflightBlocked):
-        db.commit()
         raise HTTPException(
             status_code=409,
             detail=(
@@ -322,11 +344,14 @@ def _request_recoverable_deletion(
                 f"subscription(s) {', '.join(str(i) for i in outcome.blocked_subscription_ids)}."
             ),
         )
-    db.commit()
 
 
 def delete_subscriber(
-    db: Session, subscriber_id: UUID, actor_id: str | None = None
+    db: Session,
+    subscriber_id: UUID,
+    actor_id: str | None = None,
+    *,
+    idempotency_key: str,
 ) -> None:
     subscriber = subscriber_service.subscribers.get(
         db=db, subscriber_id=str(subscriber_id)
@@ -335,7 +360,9 @@ def delete_subscriber(
         raise HTTPException(
             status_code=409, detail="Deactivate subscriber before deleting."
         )
-    _request_recoverable_deletion(db, subscriber_id, actor_id)
+    _request_recoverable_deletion(
+        db, subscriber_id, actor_id, idempotency_key=idempotency_key
+    )
 
 
 def bulk_set_subscriber_status(

@@ -749,43 +749,71 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 transaction=TransactionContract(
-                    mode=TransactionMode.PARTICIPANT,
+                    mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
                         "Each command (request_recoverable_deletion, "
-                        "restore_account, rebaseline_recovery_evidence) runs "
-                        "inside the caller's own Session and commits only when "
-                        "the caller commits — currently "
-                        "web_system_restore_tool.py's adapter functions."
+                        "restore_account, rebaseline_recovery_evidence) enters "
+                        "execute_owner_command exactly once; the executor opens "
+                        "the root transaction, commits it on a clean return, and "
+                        "rolls it back on any exception. Adapters "
+                        "(web_system_restore_tool.py, web_subscriber_actions.py, "
+                        "app/web/admin/system.py) construct the typed command and "
+                        "its CommandContext and never call db.commit() themselves."
                     ),
                     locking=(
                         "The Subscriber locks first, then the current open/blocked "
                         "AccountRecoveryRecord, then every affected Subscription in "
                         "stable UUID order — the same order for tombstoning and "
                         "restoration so the two can never deadlock against each "
-                        "other."
+                        "other. The reserved IdempotencyKey row is locked with "
+                        "SELECT ... FOR UPDATE before either order, serializing a "
+                        "concurrent replay against the in-flight original."
                     ),
                     idempotency=(
-                        "command_id is unique per deletion generation; a second "
-                        "open-generation request for an already-open account fails "
-                        "rather than creating a duplicate. Restoration and "
-                        "re-baselining are fingerprint-bound: a stale or mismatched "
-                        "confirmation_fingerprint is refused with zero mutation."
+                        "Every command carries a required CommandContext."
+                        "idempotency_key, reserved as a row in the shared "
+                        "idempotency_keys table (scoped per command kind). A "
+                        "retry presenting the SAME key returns the ORIGINAL typed "
+                        "outcome — replayed by re-reading the now-canonical "
+                        "AccountRecoveryRecord/snapshot state, never a cached "
+                        "decision — while a later reuse of that key with a "
+                        "DIFFERENT input fingerprint (account, actor, reason, "
+                        "confirmation_fingerprint, or affected_resource_types, "
+                        "depending on the command) fails closed as a typed "
+                        "idempotency_input_conflict rather than silently "
+                        "re-executing or raising a raw integrity error. A second "
+                        "open-generation request for an already-open account "
+                        "still fails as generation_already_open — that check is "
+                        "eligibility, not replay. Restoration and re-baselining "
+                        "remain additionally fingerprint-bound: a stale or "
+                        "mismatched confirmation_fingerprint is refused with zero "
+                        "mutation."
                     ),
                     retries=(
                         "Adapters retry a transient transaction failure with the "
-                        "same typed command. A missing account, a missing open "
-                        "generation, and a fingerprint mismatch fail closed and are "
-                        "not retryable."
+                        "same typed command and the same idempotency_key. A "
+                        "missing account, a missing open generation, a "
+                        "fingerprint mismatch, and an idempotency_input_conflict "
+                        "fail closed and are not retryable with the same key."
                     ),
                 ),
                 errors=ErrorContract(
                     domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "customer.account_recovery"
+                        ),
                         "customer.account_recovery.account_not_found",
                         "customer.account_recovery.no_open_generation",
                         "customer.account_recovery.generation_already_open",
                         "customer.account_recovery.fingerprint_mismatch",
                         "customer.account_recovery.rebaseline_would_narrow_evidence",
                         "customer.account_recovery.unknown_resource_type",
+                        "customer.account_recovery.command_scope_mismatch",
+                        "customer.account_recovery.invalid_idempotency_key",
+                        "customer.account_recovery.idempotency_account_mismatch",
+                        "customer.account_recovery.idempotency_conflict",
+                        "customer.account_recovery.idempotency_input_conflict",
+                        "customer.account_recovery.invalid_replay_evidence",
                     ),
                     mapping_owner="admin web adapter (app/web/admin/system.py)",
                     fail_closed_on=(
@@ -795,6 +823,9 @@ DOMAIN = DomainSOT(
                         "an affected resource type with no registered participant",
                         "a re-baseline that would narrow previously-recorded "
                         "evidence",
+                        "an idempotency key reused with a materially different "
+                        "command",
+                        "a command presented outside its required write scope",
                     ),
                 ),
                 events=EventContract(
