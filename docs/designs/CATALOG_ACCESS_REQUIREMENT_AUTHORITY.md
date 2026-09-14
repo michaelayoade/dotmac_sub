@@ -69,7 +69,7 @@ isolation.
   restriction (`app/services/erp_staff_access.py`), never just the leaf
   permission grant. TWO call sites delegate to it rather than each deciding
   independently: `app/api/catalog.py`'s `_require_offer_version_admission`
-  route dependency, and the command's own `_verify_admission_authorization`
+  route dependency, and the command's own `verify_admission_authorization`
   (called from `_admit`, inside its transaction, twice — once after the
   advisory locks are acquired, once again immediately before the INSERT).
   Because both delegate to the same function, there is exactly one
@@ -129,7 +129,7 @@ isolation.
   versus `ApiKeyPrincipal`. `MachineCredentialPrincipal` is the exact,
   non-growing compatibility path for a migration in progress: no inventory
   of active machine callers and their granted scopes exists yet, so
-  `_verify_admission_authorization` runs its decision in SHADOW/WOULD-REFUSE
+  `verify_admission_authorization` runs its decision in SHADOW/WOULD-REFUSE
   mode only (evaluates and logs, never refuses) until that inventory, a
   scope migration, and a reviewed enforcement switch land — hard-enforcing
   today would be an uncensused, silent access retirement of a caller

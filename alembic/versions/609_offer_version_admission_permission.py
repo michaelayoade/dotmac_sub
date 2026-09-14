@@ -7,7 +7,7 @@ this migration seeds the permission row only.
 Admission authorization is checked at TWO independent layers: the route
 layer (``app/api/catalog.py``) AND a fresh, in-transaction re-check inside
 ``service_intent.offer_access_requirement``'s own command
-(``_verify_admission_authorization``) — see that module's docstring. The
+(``verify_admission_authorization``) — see that module's docstring. The
 route ALSO sits under this router's own
 ``catalog:write`` gate (``require_method_permission("catalog:read",
 "catalog:write")``, applied to every mutating route in that file, unrelated

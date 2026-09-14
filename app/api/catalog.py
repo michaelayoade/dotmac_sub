@@ -120,7 +120,7 @@ def _require_offer_version_admission(
     offer_version:admission)`` rule AND the ERP staff leave-write
     restriction — to ``offer_access_requirement.authorize_offer_version_
     admission``, the ONE owner of this decision. This command's own
-    in-transaction re-check (``_verify_admission_authorization``) delegates
+    in-transaction re-check (``verify_admission_authorization``) delegates
     to the exact same owner function, so there is one decision, not two
     independently-maintained ones that could drift apart (the prior shape —
     this route composing ``require_any_permission`` while the command called
@@ -179,7 +179,7 @@ def _admission_principal(
     The route dependency above already authorized the request; this
     resolves the principal for BOTH audit/attribution AND the command's own
     defense-in-depth RBAC re-check
-    (``offer_access_requirement._verify_admission_authorization``). An
+    (``offer_access_requirement.verify_admission_authorization``). An
     authenticated route caller is always a real system_user, api_key, or
     subscriber principal, so this fails closed rather than falling back to
     ``SystemAdmission`` (that fallback is reserved for internal/test callers

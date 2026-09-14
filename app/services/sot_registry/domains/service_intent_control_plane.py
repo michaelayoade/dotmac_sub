@@ -179,7 +179,7 @@ DOMAIN = DomainSOT(
                         "risk. Admission holds a transaction-scoped advisory "
                         "lock keyed on (offer_id, version_number), and after "
                         "acquiring it, re-verifies the identical authorization "
-                        "decision itself (_verify_admission_authorization, "
+                        "decision itself (verify_admission_authorization, "
                         "delegating to the single owner authorize_offer_"
                         "version_admission — the compound catalog:write AND "
                         "(catalog:billing_write OR catalog:offer_version:"

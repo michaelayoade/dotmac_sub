@@ -25,7 +25,7 @@ admission)`` permission rule, AND the ERP staff leave-write restriction
 grant. TWO call sites DELEGATE to this one owner rather than each deciding
 independently: ``app/api/catalog.py``'s route dependency
 (``_require_offer_version_admission``), and this module's own
-``_verify_admission_authorization``, called from ``_admit`` inside the same
+``verify_admission_authorization``, called from ``_admit`` inside the same
 transaction as the write, re-verifying against the live database for
 whichever principal was supplied (never a trusted caller-supplied flag).
 Because both delegate to the same function, there is exactly one decision
@@ -285,7 +285,7 @@ class StaffPrincipal:
     catalog:offer_version:admission)`` (combined with the router's own
     ``catalog:write`` gate) before this command ever runs; this id is ALSO
     re-verified against the identical compound permission inside the
-    command itself (``_verify_admission_authorization``), as defense in
+    command itself (``verify_admission_authorization``), as defense in
     depth for a caller that reaches this command directly. It remains the
     recorded audit/attribution identity either way."""
 
@@ -328,32 +328,42 @@ class MachineCredentialPrincipal:
     at the HTTP layer for backward compatibility — see
     ``app/api/catalog.py``'s ``_admission_principal``).
 
-    THIS IS THE EXACT, NON-GROWING COMPATIBILITY PATH for the
-    machine-credential authorization migration Michael ruled on: no
-    inventory of active machine callers and their granted scopes exists yet,
-    so hard-enforcing the compound admission rule against them today would
-    be an uncensused, silent access retirement (exactly what this migration
-    must not do) rather than a reviewed one. Until that inventory, a scope
-    migration, and an explicit enforcement decision land,
-    ``_verify_admission_authorization`` runs this principal's authorization
-    decision in SHADOW / WOULD-REFUSE mode only: it computes and logs
-    whether ``authorize_offer_version_admission`` would have refused, using
-    the scopes captured at authentication time (below), but never raises —
-    admission proceeds regardless, identical to every machine credential's
-    behavior before this module had any command-level check at all. This is
-    the ONE and ONLY principal type this module treats this way: the
-    isinstance branch in ``_verify_admission_authorization`` names exactly
-    this type, and
+    THIS IS THE EXACT, NON-GROWING COMPATIBILITY PATH for machine-credential
+    admission, and — per Michael's ruling — SHADOW MODE IS ITS TERMINAL
+    STATE on this branch, not a staging step toward a flag flip. A
+    cross-repository census established that the published Kernel
+    (``dotmac-kernel==0.1.0a94``, Sub's actual pin) cannot supply what real
+    enforcement would need: the ``MachinePrincipal`` it returns carries
+    ``credential_id``/``tenant_id``/``label``/``scopes``, but no
+    ``application`` field (at this pin) and no expiry/revocation evidence
+    on the principal at all (checked inside ``authenticate_machine``, but
+    not surfaced) — Sub would have to reinterpret raw authentication facts
+    Kernel owns to fill that gap, which is exactly the wrong place for that
+    decision to live. Enforcement here waits for a Kernel successor that
+    publishes a verified machine principal carrying identity, kind,
+    attribution, effective leaf scopes, expiry, and revocation evidence
+    (recorded in Knowledge:
+    ``dotmac-kernel-verified-machine-authentication-successor-contract``).
+    Until that contract exists and is adopted, ``authorize_offer_version_
+    admission`` runs this principal's authorization decision in SHADOW /
+    WOULD-REFUSE mode only: it computes and logs whether the compound rule
+    would have refused, using the scopes captured at authentication time
+    (below), but never raises — admission proceeds regardless, identical
+    to every machine credential's behavior before this module had any
+    command-level check at all. This is the ONE and ONLY principal type
+    this module treats this way: the ``credential_kind == "machine"``
+    branch in ``authorize_offer_version_admission`` names exactly this
+    case, and
     ``test_machine_credential_is_the_only_shadow_mode_principal`` fails the
     build if that set ever silently grows to cover another principal type.
 
     ``scopes`` is a SNAPSHOT taken at authentication time, not a live
     re-read — this module has no live query surface into the kernel's
-    ``machine_credentials`` table, so even after real enforcement lands, a
-    scope revoked between authentication and this command's transaction
-    would not be observed by this snapshot alone (see the broader residual
-    premise documented on ``_verify_admission_authorization``, which applies
-    identically here once enforcement is turned on).
+    credential/scope storage, and building one to work around the missing
+    contract is exactly the workaround this ruling forbids. A scope revoked
+    between authentication and this command's transaction is not observed
+    by this snapshot; that gap stays open until the successor contract
+    lands, not something this module can safely close on its own.
     """
 
     credential_id: UUID
@@ -375,7 +385,7 @@ class SystemAdmission:
     inside that allowed module can still construct one. It exists to make an
     unreviewed new "no actor" admission path visible in review, not to
     cryptographically bind identity. It carries no RBAC identity to
-    re-verify, so ``_verify_admission_authorization`` exempts it outright.
+    re-verify, so ``verify_admission_authorization`` exempts it outright.
     """
 
     reason: str
@@ -383,7 +393,7 @@ class SystemAdmission:
 
 #: The closed set of ways an admission can be attributed. Recorded for
 #: audit/attribution; every member except ``SystemAdmission`` is ALSO
-#: re-verified against RBAC by ``_verify_admission_authorization`` — see
+#: re-verified against RBAC by ``verify_admission_authorization`` — see
 #: ``AdmitOfferVersionCommand.principal``'s docstring.
 AdmissionPrincipal = (
     StaffPrincipal
@@ -562,7 +572,7 @@ def authorize_offer_version_admission(
     ``audit_denied_write``).
 
     ``app/api/catalog.py``'s route dependency and this module's own
-    in-transaction command re-check (``_verify_admission_authorization``)
+    in-transaction command re-check (``verify_admission_authorization``)
     both DELEGATE to this ONE function rather than each independently
     deciding — there is exactly one decision, so there is nothing for the
     two call sites to disagree about, and no name-matching guard is needed
@@ -591,7 +601,7 @@ def authorize_offer_version_admission(
 
     THIS FUNCTION NEVER COMMITS AND NEVER WRITES AUDIT EVIDENCE ITSELF
     (round 13 correction of an earlier, wrong fix): an in-transaction
-    ``db.commit()`` here, when called from ``_verify_admission_authorization``
+    ``db.commit()`` here, when called from ``verify_admission_authorization``
     inside ``execute_owner_command``'s owned transaction, is rejected by
     that boundary's own ``before_commit`` guard
     (``_reject_helper_commit`` in ``app/services/owner_commands.py``) —
@@ -727,12 +737,15 @@ def _shadow_check_machine_credential_admission(
 ) -> None:
     """SHADOW / WOULD-REFUSE evaluation for a machine-credential admission —
     evaluates and LOGS what the enforced compound rule would have decided;
-    NEVER raises, and NEVER refuses. A machine credential that ``origin/
-    main`` authorized (no command-level check existed before this module
-    had one at all) must still succeed here — hard enforcement, before an
-    inventory of active machine callers and their granted scopes exists,
-    would be an uncensused, silent access retirement, which is exactly what
-    this migration must not do.
+    NEVER raises, and NEVER refuses. This is the TERMINAL state for a
+    machine credential on this branch, not a staging step (see
+    ``MachineCredentialPrincipal``'s own docstring for the full ruling):
+    the published Kernel Sub actually depends on cannot yet supply a
+    verified machine principal carrying the identity, attribution, scope,
+    expiry, and revocation evidence real enforcement would require, so a
+    machine credential that ``origin/main`` authorized must still succeed
+    here — hard-enforcing today, with what this module can actually see,
+    would be an uncensused, silent access retirement.
 
     Works ONLY from what this module can actually see: ``claims.scopes``,
     the snapshot captured at authentication time
@@ -740,15 +753,13 @@ def _shadow_check_machine_credential_admission(
     stamp) and threaded through by BOTH callers — the route
     (``app/api/catalog.py``'s ``_require_offer_version_admission``, from
     the live HTTP auth dict) and the command
-    (``_verify_admission_authorization``, from the typed
+    (``verify_admission_authorization``, from the typed
     ``MachineCredentialPrincipal``). This module has no live query surface
-    into the kernel's own credential/scope storage (``dotmac_kernel`` is
-    not vendored or importable in this codebase — the inventory and any
-    live re-read are a cross-repository slice for later, not something
-    this function can safely attempt), so the logged decision is
-    necessarily a point-in-time approximation, not a live re-verification —
-    consistent with this being a diagnostic/inventory aid, not an
-    enforcement path.
+    into the kernel's own credential/scope storage, and building one to
+    work around the missing successor contract is exactly the workaround
+    Michael's ruling forbids — the logged decision is necessarily a
+    point-in-time approximation, a diagnostic/inventory aid, never a live
+    re-verification.
     """
 
     would_be_granted = _admission_permission_granted(claims.as_dict(), db)
@@ -770,18 +781,22 @@ def _shadow_check_machine_credential_admission(
     )
 
 
-def _verify_admission_authorization(
-    db: Session, command: AdmitOfferVersionCommand
+def verify_admission_authorization(
+    db: Session, principal: AdmissionPrincipal, *, request_id: str | None = None
 ) -> None:
-    """Re-verify the admission authorization decision INSIDE this command's
-    own transaction — defense in depth on top of the route-level gate
-    (``app/api/catalog.py``'s ``require_method_permission`` router gate plus
-    its own delegate-to-the-owner dependency), which stays in place and is
-    not removed by this check. A caller that constructs this command
-    directly (bypassing the route) is now held to the IDENTICAL decision,
-    made by the SAME owner function (``authorize_offer_version_admission``)
-    the route delegates to — not a second, independently-maintained
-    approximation of it.
+    """Re-verify the admission/mutation authorization decision INSIDE the
+    caller's own transaction — defense in depth on top of the route-level
+    gate (``app/api/catalog.py``'s ``_require_offer_version_admission``),
+    which stays in place and is not removed by this check. A caller that
+    reaches this directly (bypassing the route) is held to the IDENTICAL
+    decision, made by the SAME owner function
+    (``authorize_offer_version_admission``) the route delegates to — not a
+    second, independently-maintained approximation of it. PUBLIC (not
+    underscore-prefixed) because both ``_admit`` (admission) and
+    ``OfferVersions.update`` (``app/services/catalog/offers.py`` — every
+    other mutation of an already-admitted row) call it; this is the ONE
+    reusable live-claims rebuild + owner delegation, not two separately
+    maintained copies of the same per-principal-type resolution.
 
     ``SystemAdmission`` is exempt — see its own docstring; it carries no
     RBAC identity to check.
@@ -790,33 +805,33 @@ def _verify_admission_authorization(
     are acquired (before any existence check), and again immediately before
     the ``OfferVersion`` INSERT, narrowing the window between a permission
     read and the write it gates — the same two-checkpoint discipline
-    ``_classify`` already uses.
+    ``_classify`` already uses. ``OfferVersions.update`` calls it ONCE,
+    immediately before its own mutation (see that function for why a
+    single check suffices there).
 
-    RESIDUAL PREMISE, stated precisely rather than left implicit: the
-    advisory locks held during this transaction (``offer_access_
-    requirement:admit[_idempotency]``) serialize concurrent ADMISSIONS
-    against the SAME idempotency key or the SAME (offer_id, version_number)
-    target — they do not lock the principal's own authorization state
+    RESIDUAL PREMISE, stated precisely rather than left implicit: neither
+    caller locks the principal's own authorization state
     (``system_users``/``roles``/``role_permissions``/``permissions``/
-    ``subscriber_roles``/``subscriber_permissions``/``api_keys`` rows). A
-    revoke of the exact grant that made THIS check pass, committed by
-    another transaction in the narrow window between the second check above
-    and this transaction's own commit, is not observed — the admission
-    still proceeds and persists under what is, by the time it lands,
-    already-revoked authority. This is the identical class of residual
-    window ``_classify`` documents and accepts for the same reason: closing
-    it fully would require row-locking the entire RBAC surface (six-plus
-    tables, several of them shared by every other authorization check in
-    the system) for the duration of every admission, which is judged
-    disproportionate given that the admitting principal is recorded
-    (audit/attribution — never anonymous) and the resulting row is
-    ordinary, visible, correctable data: an operator can deactivate or
-    correct it through the existing offer-version admin/repair paths like
-    any other wrongly-created row, it is not a silent or unrecoverable
-    state. The window is one commit wide, not open-ended.
+    ``subscriber_roles``/``subscriber_permissions``/``api_keys`` rows) —
+    admission's advisory locks only serialize concurrent admissions of the
+    SAME idempotency key or (offer_id, version_number) target, and an
+    update holds no lock of its own kind at all. A revoke of the exact
+    grant that made THIS check pass, committed by another transaction in
+    the narrow window between this check and the caller's own commit, is
+    not observed — the write still proceeds and persists under what is, by
+    the time it lands, already-revoked authority. This is the identical
+    class of residual window ``_classify`` documents and accepts for the
+    same reason: closing it fully would require row-locking the entire
+    RBAC surface (six-plus tables, several of them shared by every other
+    authorization check in the system) for the duration of every admission
+    or update, which is judged disproportionate given that the acting
+    principal is recorded (audit/attribution — never anonymous) and the
+    resulting row is ordinary, visible, correctable data: an operator can
+    deactivate or correct it through the existing offer-version
+    admin/repair paths like any other wrongly-mutated row, it is not a
+    silent or unrecoverable state. The window is one commit wide, not
+    open-ended.
     """
-
-    principal = command.principal
 
     if isinstance(principal, SystemAdmission):
         return
@@ -903,9 +918,7 @@ def _verify_admission_authorization(
             retryable=False,
         )
 
-    authorize_offer_version_admission(
-        db, claims, request_id=str(command.context.correlation_id)
-    )
+    authorize_offer_version_admission(db, claims, request_id=request_id)
 
 
 def _lock_key(*parts: object) -> int:
@@ -989,7 +1002,7 @@ class AdmitOfferVersionCommand:
     #: ``catalog:write`` gate together with the route's
     #: ``require_any_permission(catalog:billing_write,
     #: catalog:offer_version:admission)`` dependency), AND this command's own
-    #: ``_verify_admission_authorization`` (called from ``_admit``), which
+    #: ``verify_admission_authorization`` (called from ``_admit``), which
     #: re-derives and checks the identical compound rule against the live
     #: database for whichever principal is supplied — never a caller-
     #: asserted boolean. ``SystemAdmission`` is exempt (see its docstring).
@@ -1100,7 +1113,9 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
     # lock" discipline classify's own _verify_classify_permission follows.
     # This is defense in depth on top of the route-level gate, which stays
     # in place; it is not a substitute for it.
-    _verify_admission_authorization(db, command)
+    verify_admission_authorization(
+        db, command.principal, request_id=str(command.context.correlation_id)
+    )
 
     fingerprint = _admission_fingerprint(payload)
     if key:
@@ -1184,9 +1199,11 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
     # transaction) between the first check and the INSERT. This mirrors
     # _classify's own "verify at the top, verify again right before the
     # mutation" discipline. It narrows the window; it does not close it —
-    # see _verify_admission_authorization's docstring for the precise,
+    # see verify_admission_authorization's docstring for the precise,
     # honestly-stated residual premise this does NOT eliminate.
-    _verify_admission_authorization(db, command)
+    verify_admission_authorization(
+        db, command.principal, request_id=str(command.context.correlation_id)
+    )
 
     version = OfferVersion(**data)
     db.add(version)
@@ -1761,4 +1778,5 @@ __all__ = [
     "principal_label",
     "record_leave_denial_evidence",
     "validate_admission_access_requirement",
+    "verify_admission_authorization",
 ]
