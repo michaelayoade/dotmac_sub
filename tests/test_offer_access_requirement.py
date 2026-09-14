@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.models.auth import ApiKey
 from app.models.catalog import (
     AccessRequirement,
     AccessType,
@@ -25,7 +26,8 @@ from app.models.catalog import (
     PriceBasis,
     ServiceType,
 )
-from app.models.rbac import Role, SystemUserRole
+from app.models.rbac import Role, SubscriberRole, SystemUserRole
+from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.catalog import (
     CatalogOfferCreate,
@@ -43,6 +45,7 @@ from app.services.catalog.offer_access_requirement import (
     OfferAccessRequirementError,
     PreviewClassifyOfferAccessRequirementQuery,
     StaffPrincipal,
+    SubscriberPrincipal,
     SystemAdmission,
     admit_offer_version,
     classify_offer_version_access_requirement,
@@ -118,6 +121,55 @@ def _unprivileged_system_user(db_session) -> SystemUser:
     db_session.add(user)
     db_session.commit()
     return user
+
+
+def _make_subscriber(db_session) -> Subscriber:
+    from app.services.subscriber import _default_reseller_id
+
+    subscriber = Subscriber(
+        first_name="Test",
+        last_name="Subscriber",
+        email=f"subscriber-{uuid4().hex[:8]}@example.com",
+        reseller_id=_default_reseller_id(db_session),
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    db_session.refresh(subscriber)
+    return subscriber
+
+
+def _admin_subscriber(db_session) -> Subscriber:
+    """A real, active subscriber mapped to the ``admin`` role — the seeded
+    subscriber-admin path Decision 2 preserves
+    (``scripts/seed/seed_rbac.py``, ``app/services/subscriber_assignments.py``,
+    ``app/services/auth_flow.py``'s login role resolution)."""
+
+    subscriber = _make_subscriber(db_session)
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SubscriberRole(subscriber_id=subscriber.id, role_id=role.id))
+    db_session.commit()
+    return subscriber
+
+
+def _unprivileged_subscriber(db_session) -> Subscriber:
+    """A real, active subscriber with NO role granting the compound
+    admission permission."""
+
+    return _make_subscriber(db_session)
+
+
+def _admission_api_key(db_session, *, scopes: list[str]) -> ApiKey:
+    api_key = ApiKey(
+        key_hash=f"test-hash-{uuid4().hex}",
+        scopes=scopes,
+        is_active=True,
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    db_session.refresh(api_key)
+    return api_key
 
 
 def _context(**overrides):
@@ -825,24 +877,24 @@ def test_admit_with_system_admission_is_not_rbac_gated(db_session):
     assert result.offer_version.access_requirement is AccessRequirement.unclassified
 
 
-def test_admit_records_an_unprivileged_staff_principal_without_checking_rbac(
-    db_session,
-):
-    """Regression for the redesign: the command no longer verifies the
-    claimed principal against RBAC at all — an unprivileged system_user's
-    admission still succeeds, because authorization was already decided
-    (or refused) at the route before this command was ever constructed.
-    The principal is recorded for attribution only."""
+def test_admit_denies_an_unprivileged_staff_principal(db_session):
+    """Decision 1 (round 11): the command now re-verifies the claimed
+    principal against RBAC itself, inside its own transaction. An
+    unprivileged system_user — no catalog:write, no catalog:billing_write
+    or catalog:offer_version:admission — is refused here even though this
+    call bypasses the route entirely, proving the check is real command-level
+    enforcement, not merely the route's."""
 
     offer = _make_offer(db_session)
     user = _unprivileged_system_user(db_session)
 
-    result = admit_offer_version(
-        db_session,
-        _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
-    )
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
+        )
     db_session.rollback()
-    assert result.offer_version.offer_id == offer.id
+    assert excinfo.value.code.endswith("permission_denied")
 
 
 def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
@@ -857,15 +909,74 @@ def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
     assert result.offer_version.offer_id == offer.id
 
 
-def test_admit_accepts_an_api_key_principal(db_session):
+def test_admit_denies_an_api_key_with_no_matching_scope(db_session):
+    """An API key that carries no scope satisfying the compound rule is
+    refused by the command's own re-check, not merely a spoofable random id
+    (this test previously used ``ApiKeyPrincipal(api_key_id=uuid4())`` with
+    no backing row at all, which the redesigned command now also refuses —
+    a nonexistent key is refused the same as an existing, underscoped one)."""
+
     offer = _make_offer(db_session)
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=uuid4())),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
+
+
+def test_admit_accepts_an_api_key_with_the_compound_scope(db_session):
+    """An active API key whose scopes satisfy catalog:write AND
+    catalog:offer_version:admission is accepted."""
+
+    offer = _make_offer(db_session)
+    api_key = _admission_api_key(db_session, scopes=["catalog:write", ADMISSION_SCOPE])
 
     result = admit_offer_version(
         db_session,
-        _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=uuid4())),
+        _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=api_key.id)),
     )
     db_session.rollback()
     assert result.offer_version.offer_id == offer.id
+
+
+def test_admit_accepts_a_subscriber_principal_mapped_to_the_admin_role(db_session):
+    """Decision 2 (round 11): a subscriber mapped to the ``admin`` role via
+    the seeded subscriber-admin path is a preserved, supported caller — not
+    silently refused."""
+
+    offer = _make_offer(db_session)
+    subscriber = _admin_subscriber(db_session)
+
+    result = admit_offer_version(
+        db_session,
+        _admit_command(
+            offer, 1, principal=SubscriberPrincipal(subscriber_id=subscriber.id)
+        ),
+    )
+    db_session.rollback()
+    assert result.offer_version.offer_id == offer.id
+
+
+def test_admit_denies_an_unprivileged_subscriber_principal(db_session):
+    """A subscriber with no role granting the compound admission permission
+    is refused by the command's own re-check, matching the other principal
+    types' negative tests."""
+
+    offer = _make_offer(db_session)
+    subscriber = _unprivileged_subscriber(db_session)
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(
+                offer, 1, principal=SubscriberPrincipal(subscriber_id=subscriber.id)
+            ),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
 
 
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):

@@ -62,8 +62,8 @@ isolation.
 - `unclassified` is never read as, defaulted to, or treated like PPPoE or any
   connection-type fallback anywhere in the codebase — see the architecture
   guard below.
-- Admission authorization is decided ENTIRELY at the route layer
-  (`app/api/catalog.py`'s `require_any_permission(catalog:billing_write,
+- Admission authorization is checked at TWO independent layers. The ROUTE
+  layer (`app/api/catalog.py`'s `require_any_permission(catalog:billing_write,
   catalog:offer_version:admission)` dependency on `POST`/`PATCH
   /offer-versions`) — matching this repo's own existing pattern in
   `app/services/billing/subledger_opening.py`. That dependency is NOT the
@@ -77,11 +77,22 @@ isolation.
   established, pre-existing pattern (every other `catalog:billing_write`
   route in this file — offers, offer-prices, add-on-prices — already
   requires `catalog:write` too), not a regression introduced by admission.
-  `AdmitOfferVersionCommand` makes NO authorization decision of its own: it
-  takes a REQUIRED, typed `AdmissionPrincipal` (`StaffPrincipal` |
-  `ApiKeyPrincipal` | `SystemAdmission`), validated at construction
-  (`__post_init__`) to actually be one of those three, and recorded purely
-  for audit/attribution, never re-checked against RBAC. `catalog:offer_
+  The COMMAND layer re-derives and checks the identical compound rule a
+  second time, inside `_admit`'s own transaction
+  (`offer_access_requirement._verify_admission_authorization`), for
+  whichever principal was supplied — a real RBAC/scope re-check against the
+  live database, not a caller-asserted boolean (unlike
+  `subledger_opening.py`'s `permission_granted` attestation, which this
+  module deliberately does not adopt for the actual enforcement: an
+  attestation only proves the caller CLAIMED authorization was checked,
+  never that it was). Both layers stay; removing either regresses the
+  command to single-layer enforcement.
+  `AdmitOfferVersionCommand` takes a REQUIRED, typed `AdmissionPrincipal`
+  (`StaffPrincipal` | `ApiKeyPrincipal` | `SubscriberPrincipal` |
+  `SystemAdmission`), validated at construction (`__post_init__`) to
+  actually be one of those four. It is recorded for audit/attribution AND
+  (for every member except `SystemAdmission`) re-verified against RBAC
+  inside the command. `catalog:offer_
   version:admission` (`alembic/versions/609_offer_version_admission_
   permission.py`) is a genuine, narrower, OPT-IN alternative to `catalog:
   billing_write` — a caller holding either (in addition to `catalog:write`)
@@ -89,20 +100,22 @@ isolation.
   (mirroring 608's pattern exactly) and copies no grants: there is no
   existing-caller regression to prevent, because nobody's existing
   `catalog:billing_write` access is narrowed or removed.
-  `app/api/catalog.py`'s `_admission_principal` narrows the attributable
+  `app/api/catalog.py`'s `_admission_principal` resolves the attributable
   principal on BOTH routes (POST and PATCH, identically) to an authenticated
-  `system_user`/`api_key` — a deliberate, documented tightening, not a
-  silent regression: no other principal type could ever have reached either
-  route, because both already require `catalog:write`, which is admin-only
-  and never UI-assignable to a non-admin role
-  (`scripts/seed/seed_rbac.py`'s `ADMIN_ONLY_PERMISSION_KEYS`), and the
-  `admin` role bypasses permission checks entirely rather than being
-  attributed as some other principal type.
+  `system_user`, `api_key`, OR `subscriber`. A subscriber principal IS a
+  real, supported way to reach this route: a subscriber can be mapped to the
+  `admin` role (or any role holding the compound admission permission) via
+  the seeded role-assignment path (`scripts/seed/seed_rbac.py`,
+  `app/services/subscriber_assignments.py`,
+  `app/services/auth_flow.py`'s login role resolution) — production usage of
+  that path is unverified, but it is not theoretical, and this resolver does
+  not silently 403 it. Retiring that access is a deliberate, separate
+  census/migration, not something implemented here.
   `SystemAdmission` (an admission with no authenticated end-user context at
   all) has NO production construction site at all: `OfferVersions.create`'s
   `actor_id`/`actor_type` resolution FAILS CLOSED (raises a typed
   `OfferAccessRequirementError`) for any combination it doesn't recognize as
-  `system_user`/`api_key`, instead of silently defaulting to
+  `system_user`/`api_key`/`subscriber`, instead of silently defaulting to
   `SystemAdmission`; an internal/test caller that genuinely has no
   authenticated actor must construct `SystemAdmission(reason=...)` and pass
   it explicitly via the distinct `principal=` argument. This is proven by an

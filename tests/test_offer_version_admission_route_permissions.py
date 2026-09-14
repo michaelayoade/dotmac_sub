@@ -148,9 +148,13 @@ def test_catalog_write_alone_without_either_admission_permission_is_refused(
 def test_admission_principal_resolution_is_identical_for_post_and_patch():
     """Symmetry proof for finding 2: both the POST create_offer_version and
     PATCH update_offer_version routes call the SAME ``_admission_principal``
-    function — a system_user/api_key auth resolves identically, and any
-    other principal type is refused identically, regardless of which route
-    reached it."""
+    function — a system_user/api_key/subscriber auth resolves identically,
+    and an unrecognized principal type is refused identically, regardless of
+    which route reached it.
+
+    Decision 2 (round 11): a ``subscriber`` auth is now resolved to a typed
+    ``SubscriberPrincipal`` rather than refused — the seeded
+    subscriber-admin path is preserved, not silently 403'd."""
 
     import inspect
 
@@ -164,7 +168,11 @@ def test_admission_principal_resolution_is_identical_for_post_and_patch():
         "principal_type": "system_user",
     }
     api_key_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "api_key"}
-    other_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "subscriber"}
+    subscriber_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "subscriber",
+    }
+    other_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "reseller_user"}
 
     assert isinstance(
         api_catalog._admission_principal(system_user_auth),
@@ -173,6 +181,10 @@ def test_admission_principal_resolution_is_identical_for_post_and_patch():
     assert isinstance(
         api_catalog._admission_principal(api_key_auth),
         offer_access_requirement.ApiKeyPrincipal,
+    )
+    assert isinstance(
+        api_catalog._admission_principal(subscriber_auth),
+        offer_access_requirement.SubscriberPrincipal,
     )
     with pytest.raises(HTTPException) as excinfo:
         api_catalog._admission_principal(other_auth)

@@ -108,10 +108,18 @@ DOMAIN = DomainSOT(
                             "so the two admission permissions are an "
                             "OR-alternative to EACH OTHER, never a pure "
                             "standalone alternative to catalog:write itself. "
-                            "The command itself makes no authorization "
-                            "decision, and the authenticated principal it "
-                            "records is audit/attribution evidence only; no "
-                            "application-level fallback for the value itself"
+                            "The command ALSO re-derives and checks this "
+                            "identical compound rule itself, inside its own "
+                            "transaction, for the system_user/api_key/"
+                            "subscriber principal supplied (defense in depth "
+                            "on top of the route, not a substitute for it) — "
+                            "a subscriber principal mapped to a role holding "
+                            "the compound permission (the seeded "
+                            "subscriber-admin path) is a supported caller, "
+                            "not a refused one. The authenticated principal "
+                            "remains recorded audit/attribution evidence as "
+                            "well; no application-level fallback for the "
+                            "value itself"
                         ),
                     ),
                     AuthorityInput(
@@ -169,16 +177,17 @@ DOMAIN = DomainSOT(
                         "residual window would require row-locking that "
                         "entire RBAC surface, judged disproportionate to the "
                         "risk. Admission holds a transaction-scoped advisory "
-                        "lock keyed on (offer_id, version_number) before "
-                        "checking for an existing row of that identity; it "
-                        "performs no RBAC check of its own at all — "
-                        "authorization is decided once, before the command "
-                        "is even constructed, by the route's compound "
+                        "lock keyed on (offer_id, version_number), and after "
+                        "acquiring it, re-verifies the identical compound "
                         "catalog:write AND (catalog:billing_write OR "
-                        "catalog:offer_version:admission) requirement "
-                        "(the router's own require_method_permission gate "
-                        "plus the route's require_any_permission "
-                        "dependency)."
+                        "catalog:offer_version:admission) requirement itself "
+                        "(_verify_admission_authorization), against the live "
+                        "database, for the supplied principal — defense in "
+                        "depth on top of the route's own "
+                        "require_method_permission gate plus its "
+                        "require_any_permission dependency, which remain in "
+                        "place; authorization is no longer decided ONLY at "
+                        "the route."
                     ),
                     idempotency=(
                         "One classification row per offer version, globally "
@@ -241,6 +250,11 @@ DOMAIN = DomainSOT(
                         "an idempotency key reused with different command inputs",
                         "an ungranted or revoked classify permission, "
                         "re-verified inside the command's own transaction",
+                        "an ungranted or revoked compound admission "
+                        "permission (catalog:write AND (catalog:billing_"
+                        "write OR catalog:offer_version:admission)), "
+                        "re-verified inside admit_offer_version's own "
+                        "transaction for the supplied principal",
                     ),
                 ),
                 events=EventContract(
