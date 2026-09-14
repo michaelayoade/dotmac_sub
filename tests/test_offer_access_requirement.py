@@ -863,12 +863,16 @@ def test_admit_requires_an_explicit_principal():
 
 
 def test_admit_with_system_admission_is_not_rbac_gated(db_session):
-    """Existing internal/system-initiated convention is preserved: an
-    admission with no authenticated end-user context (``SystemAdmission``) is
-    not RBAC-gated by the command — the command makes no authorization
-    decision at all now (matches every pre-existing caller of
+    """Existing internal/system-initiated convention is preserved:
+    ``SystemAdmission`` — and only ``SystemAdmission`` — is exempt from
+    ``_verify_admission_authorization``'s RBAC re-check (see its own
+    docstring). This is NOT "the command makes no authorization decision at
+    all": round 11 added a real, in-transaction RBAC re-check
+    (``_verify_admission_authorization``) for every OTHER principal type —
+    see ``test_admit_denies_an_unprivileged_staff_principal`` and its
+    siblings below. Matches every pre-existing caller of
     ``offer_versions.create``/``admit_offer_version`` with no actor, e.g.
-    ``tests/conftest.py``'s shared ``catalog_offer`` fixture)."""
+    ``tests/conftest.py``'s shared ``catalog_offer`` fixture."""
 
     offer = _make_offer(db_session)
     result = admit_offer_version(db_session, _admit_command(offer, 1))
@@ -909,12 +913,12 @@ def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
     assert result.offer_version.offer_id == offer.id
 
 
-def test_admit_denies_an_api_key_with_no_matching_scope(db_session):
-    """An API key that carries no scope satisfying the compound rule is
-    refused by the command's own re-check, not merely a spoofable random id
-    (this test previously used ``ApiKeyPrincipal(api_key_id=uuid4())`` with
-    no backing row at all, which the redesigned command now also refuses —
-    a nonexistent key is refused the same as an existing, underscoped one)."""
+def test_admit_denies_a_nonexistent_api_key(db_session):
+    """A principal naming an api_key_id with no backing row at all is
+    refused — distinct from (and previously conflated with) an existing key
+    that simply lacks the required scope; see
+    ``test_admit_denies_an_api_key_with_no_matching_scope`` below for that
+    case."""
 
     offer = _make_offer(db_session)
 
@@ -922,6 +926,29 @@ def test_admit_denies_an_api_key_with_no_matching_scope(db_session):
         admit_offer_version(
             db_session,
             _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=uuid4())),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
+
+
+def test_admit_denies_an_api_key_with_no_matching_scope(db_session):
+    """An EXISTING, active API key whose scopes do not satisfy the compound
+    rule is refused by the command's own re-check for that reason —
+    ``catalog:write`` alone is not enough without either
+    ``catalog:billing_write`` or ``catalog:offer_version:admission``.
+
+    Previously this test used a nonexistent random ``api_key_id`` (now
+    covered separately by ``test_admit_denies_a_nonexistent_api_key`` above)
+    and so never actually exercised "a real key with an insufficient scope"
+    at all — a denial was observed, but for the wrong reason."""
+
+    offer = _make_offer(db_session)
+    api_key = _admission_api_key(db_session, scopes=["catalog:write"])
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=api_key.id)),
         )
     db_session.rollback()
     assert excinfo.value.code.endswith("permission_denied")
