@@ -701,11 +701,59 @@ def test_migration_downgrade_locks_before_counting():
     assert "ACCESS EXCLUSIVE MODE" in migration
 
 
+def _function_source(module_source: str, function_name: str) -> str:
+    """The exact source text of one top-level function, by name.
+
+    Slicing on ``def upgrade()``/``def downgrade()`` string offsets (the
+    prior shape of this check) cannot tell the two functions apart — a
+    timeout statement anywhere in the file satisfied a membership test that
+    read as "both functions carry it". Parsing to an AST and returning only
+    the named function's own line range makes each function's assertion
+    incapable of being satisfied by the OTHER function's statements.
+    """
+
+    tree = ast.parse(module_source)
+    lines = module_source.splitlines(keepends=True)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return "".join(lines[node.lineno - 1 : node.end_lineno])
+    raise AssertionError(f"no top-level function named {function_name!r} found")
+
+
 def test_migration_uses_set_local_not_a_bare_set_for_timeouts():
     migration = _source("alembic/versions/607_offer_access_requirement.py")
     assert "SET LOCAL lock_timeout" in migration
     assert "RESET lock_timeout" not in migration
     assert "RESET statement_timeout" not in migration
+
+
+def test_migration_downgrade_sets_the_identical_timeout_budget_as_upgrade():
+    """``downgrade()`` acquires ACCESS EXCLUSIVE locks — at least as
+    contention-prone as ``upgrade()``'s ADD COLUMN — so it must carry the
+    identical ``SET LOCAL`` timeout budget, not merely SOME timeout
+    statement somewhere in the file.
+
+    Sensitivity: this test is written against the current (fixed) 607, where
+    both functions carry the budget — it would have failed against the prior
+    downgrade(), which had neither statement, while
+    ``test_migration_uses_set_local_not_a_bare_set_for_timeouts`` above
+    (matching anywhere in the file) stayed green throughout because
+    upgrade() alone satisfied it.
+    """
+
+    migration = _source("alembic/versions/607_offer_access_requirement.py")
+    upgrade_source = _function_source(migration, "upgrade")
+    downgrade_source = _function_source(migration, "downgrade")
+    for label, function_source in (
+        ("upgrade", upgrade_source),
+        ("downgrade", downgrade_source),
+    ):
+        assert "SET LOCAL lock_timeout = '5s'" in function_source, (
+            f"{label}() is missing the lock_timeout budget"
+        )
+        assert "SET LOCAL statement_timeout = '15min'" in function_source, (
+            f"{label}() is missing the statement_timeout budget"
+        )
 
 
 def test_migration_declares_check_constraints_for_the_legal_transition_shape():

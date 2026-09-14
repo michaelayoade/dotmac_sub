@@ -132,6 +132,15 @@ def downgrade() -> None:
     table_names = set(sa.inspect(bind).get_table_names())
 
     if is_postgres:
+        # Identical budget to upgrade()'s: SET LOCAL is scoped to this
+        # migration's own transaction and reverts automatically when it
+        # ends, so it never discards the operator-configured global
+        # lock_timeout (alembic/env.py) for any statement that runs after
+        # this one. The ACCESS EXCLUSIVE locks below are at least as
+        # contention-prone as upgrade()'s ADD COLUMN, so downgrade must not
+        # be allowed to wait indefinitely either.
+        op.execute("SET LOCAL lock_timeout = '5s'")
+        op.execute("SET LOCAL statement_timeout = '15min'")
         # Lock BOTH tables, inside this migration's own transaction, before
         # counting anything below. Without this, a concurrent INSERT/UPDATE
         # between the count and the destructive DDL could commit real data
