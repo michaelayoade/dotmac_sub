@@ -34,19 +34,24 @@ direct call to an inner function.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import catalog as api_catalog
 from app.db import get_db
+from app.models.audit import AuditEvent
 from app.models.catalog import AccessType, PriceBasis, ServiceType
+from app.models.erp_staff_access import ErpStaffLeaveRestriction
 from app.models.rbac import Permission, SystemUserPermission
 from app.models.system_user import SystemUser
 from app.schemas.catalog import CatalogOfferCreate
 from app.services import catalog as catalog_service
+from app.services import erp_staff_access
 from app.services.auth_dependencies import require_user_auth
 from app.services.catalog import offer_access_requirement
+from app.services.erp_staff_access import StaffLeaveRestrictionStatus
 
 
 def _mounted_app(db_session) -> FastAPI:
@@ -154,6 +159,30 @@ def _offer(db_session):
             price_basis=PriceBasis.flat,
         ),
     )
+
+
+def _apply_active_leave_restriction(db_session, user: SystemUser) -> None:
+    """A REAL ``ErpStaffLeaveRestriction`` row — not a mock of
+    ``staff_write_restricted`` — so the request below genuinely exercises
+    the whole leave-restriction decision, not an injected substitute for
+    it."""
+
+    now = datetime.now(UTC)
+    db_session.add(
+        ErpStaffLeaveRestriction(
+            source_system="test",
+            restriction_id=f"asgi-{uuid.uuid4().hex[:8]}",
+            erp_employee_id=f"emp-{uuid.uuid4().hex[:8]}",
+            system_user_id=user.id,
+            effective_from=now - timedelta(days=1),
+            effective_until=None,
+            status=StaffLeaveRestrictionStatus.active.value,
+            version=1,
+            source_updated_at=now,
+            last_event_id=f"evt-{uuid.uuid4().hex[:8]}",
+        )
+    )
+    db_session.commit()
 
 
 def test_unauthorized_admission_is_refused_by_the_mounted_admission_route(
@@ -435,4 +464,118 @@ def test_machine_admission_succeeds_via_shadow_mode_through_the_mounted_route(
         "credential_kind never reached the authorization decision, "
         "reintroducing the exact lockout this branch already committed "
         "a fix for once"
+    )
+
+
+def test_a_leave_restricted_staff_admission_is_refused_and_leaves_a_durable_audit_row(
+    db_session,
+):
+    """Round 14 finding 4: the parity test that used to prove the denial
+    behavior (staged audit event survives the rollback its own refusal
+    causes) was retired to a pointer comment along with the rest of that
+    file's source-grep shape, and nothing replaced its BEHAVIORAL half.
+
+    OBSERVED: the mounted app, via a real, issued HTTP POST request, and a
+    real database query for the durable audit row afterward. A staff
+    principal holding every permission the compound rule needs, but under
+    a REAL, planted ``ErpStaffLeaveRestriction`` row (not a mocked
+    ``staff_write_restricted``), is refused — and the
+    ``auth.erp_staff_leave_write_denied`` audit event this refusal
+    produces is queried back from the database AFTER the request
+    completes, proving it survived whatever transaction the refusal itself
+    rolled back.
+
+    Break condition: fails if the leave-restriction check is ever removed
+    from ``authorize_offer_version_admission``, if
+    ``record_leave_denial_evidence`` stops being called on this refusal
+    path, or if the evidence it writes stops being durable."""
+
+    user = _system_user(db_session)
+    _grant_direct_permission(
+        db_session, user, offer_access_requirement.WRITE_PERMISSION
+    )
+    _grant_direct_permission(db_session, user, offer_access_requirement.ADMISSION_SCOPE)
+    _apply_active_leave_restriction(db_session, user)
+
+    offer = _offer(db_session)
+    app = _mounted_app(db_session)
+    app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 1,
+            "name": "v1",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert response.status_code == 403
+
+    audit_rows = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == "auth.erp_staff_leave_write_denied",
+            AuditEvent.entity_id == str(user.id),
+        )
+        .all()
+    )
+    assert len(audit_rows) >= 1, (
+        "a leave-restriction denial through the real mounted route must "
+        "leave a durable audit record behind, not just a refused response"
+    )
+
+
+def test_an_audit_write_failure_never_replaces_the_permission_denied_response(
+    db_session, monkeypatch
+):
+    """Round 14 finding 4's other half: a failure recording denial
+    evidence must never mask the real refusal underneath it. OBSERVED: the
+    mounted app, via a real, issued HTTP POST request, with
+    ``erp_staff_access.audit_denied_write`` forced to raise.
+
+    Break condition: fails (a 500, or any status other than 403) if
+    ``record_leave_denial_evidence``'s own failure handling stops
+    swallowing an evidence-recording failure and returning the original
+    ``permission_denied`` refusal to the caller unchanged."""
+
+    user = _system_user(db_session)
+    _grant_direct_permission(
+        db_session, user, offer_access_requirement.WRITE_PERMISSION
+    )
+    _grant_direct_permission(db_session, user, offer_access_requirement.ADMISSION_SCOPE)
+    _apply_active_leave_restriction(db_session, user)
+
+    def _broken_audit_denied_write(db, **kwargs):
+        raise RuntimeError("simulated audit-write failure")
+
+    monkeypatch.setattr(
+        erp_staff_access, "audit_denied_write", _broken_audit_denied_write
+    )
+
+    offer = _offer(db_session)
+    app = _mounted_app(db_session)
+    app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 1,
+            "name": "v1",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert response.status_code == 403, (
+        "an audit-write failure must never surface as anything other than "
+        "the original permission_denied refusal — not a 500, and not a "
+        "silently-succeeded 201"
     )
