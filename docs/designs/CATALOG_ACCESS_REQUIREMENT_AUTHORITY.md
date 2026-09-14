@@ -127,13 +127,20 @@ isolation.
   principal`/`_api_key_principal`) is the only signal that tells them apart,
   and `_admission_principal` reads it to resolve `MachineCredentialPrincipal`
   versus `ApiKeyPrincipal`. `MachineCredentialPrincipal` is the exact,
-  non-growing compatibility path for a migration in progress: no inventory
-  of active machine callers and their granted scopes exists yet, so
-  `verify_admission_authorization` runs its decision in SHADOW/WOULD-REFUSE
-  mode only (evaluates and logs, never refuses) until that inventory, a
-  scope migration, and a reviewed enforcement switch land — hard-enforcing
-  today would be an uncensused, silent access retirement of a caller
-  `origin/main` always authorized.
+  non-growing compatibility path, and SHADOW/WOULD-REFUSE MODE IS ITS
+  TERMINAL STATE ON THIS BRANCH, not a staging step toward an enforcement
+  flag: a cross-repository census established that the published Kernel
+  Sub actually depends on (`dotmac-kernel==0.1.0a94`) cannot supply a
+  verified machine principal carrying the identity, attribution, scope,
+  expiry, and revocation evidence real enforcement would require, so
+  `authorize_offer_version_admission` evaluates and logs this decision but
+  never refuses on it — hard-enforcing with what this module can actually
+  see today would be an uncensused, silent access retirement of a caller
+  `origin/main` always authorized. Enforcement waits for a published Kernel
+  successor contract (recorded in Knowledge:
+  `dotmac-kernel-verified-machine-authentication-successor-contract`); it
+  is not scheduled by an inventory or a scope migration this repository
+  controls.
   `SystemAdmission` (an admission with no authenticated end-user context at
   all) has NO production construction site at all: `OfferVersions.create`'s
   `actor_id`/`actor_type` resolution FAILS CLOSED (raises a typed
