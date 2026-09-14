@@ -26,11 +26,16 @@ from sqlalchemy.orm import Session
 
 from app.models.account_recovery import (
     KNOWN_RESOURCE_TYPES,
+    RESOURCE_TYPE_ADD_ON,
+    RESOURCE_TYPE_ENFORCEMENT_LOCK,
+    RESOURCE_TYPE_IP_ASSIGNMENT,
     AccountRecoveryRecord,
     AccountRecoveryState,
     AccountRecoverySubscriptionSnapshot,
 )
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionAddOn
+from app.models.enforcement_lock import EnforcementLock
+from app.models.network import IPAssignment
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import ActivationIntent, restore_subscription_detailed
 from app.services.audit_adapter import stage_audit_event
@@ -45,11 +50,23 @@ from app.services.events.types import EventType
 # claim; recovery on a record naming any of them fails closed.
 REGISTERED_RECOVERY_PARTICIPANTS: frozenset[str] = frozenset({"subscription"})
 
+# `cancel_subscription` (access.subscription_lifecycle) has other
+# consequences beyond a bare status write — it ends active add-ons,
+# resolves active enforcement locks, and releases the subscriber's active
+# service IP assignments. None of those is a registered recovery
+# participant, so a deletion that would trigger one of them is refused
+# BEFORE any mutation (see `_preflight_unsupported_consequences`) rather
+# than discovered later at restore time as `blocked_missing_participants`.
+_UNSUPPORTED_CANCELLATION_CONSEQUENCES: frozenset[str] = frozenset(
+    {RESOURCE_TYPE_ADD_ON, RESOURCE_TYPE_ENFORCEMENT_LOCK, RESOURCE_TYPE_IP_ASSIGNMENT}
+)
+
 
 class RecoveryOutcomeKind(StrEnum):
     restored = "restored"
     partially_restored = "partially_restored"
     blocked_missing_participants = "blocked_missing_participants"
+    blocked_unsupported_consequence = "blocked_unsupported_consequence"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +98,27 @@ class DeletionTombstone:
     confirmation_fingerprint: str
     affected_resource_types: tuple[str, ...]
     affected_subscription_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DeletionPreflightBlocked:
+    """Refusal to open a deletion generation: zero mutation happened.
+
+    Returned when any subscription `request_recoverable_deletion` would
+    cancel currently carries a consequence `cancel_subscription` would
+    trigger that this owner cannot yet reverse (an active add-on, an active
+    enforcement lock, or an active service IP assignment). Naming exactly
+    which consequence(s) blocked the request lets an operator resolve them
+    (end the add-on, clear the lock, release the IP) and retry, instead of
+    discovering the gap only at restore time.
+    """
+
+    kind: RecoveryOutcomeKind = field(
+        default=RecoveryOutcomeKind.blocked_unsupported_consequence, init=False
+    )
+    account_id: UUID
+    blocked_subscription_ids: tuple[UUID, ...]
+    unsupported_consequences: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,14 +252,76 @@ def _lock_open_record(db: Session, account_id: UUID) -> AccountRecoveryRecord:
     return record
 
 
+def _preflight_unsupported_consequences(
+    db: Session, subscriptions: list[Subscription]
+) -> tuple[str, ...]:
+    """Return every unsupported `cancel_subscription` consequence in play.
+
+    Only subscriptions that are not already `canceled` matter — exactly the
+    set `request_recoverable_deletion` is about to cancel. Read-only: no
+    locking beyond the row locks the caller already holds, no mutation.
+    """
+    pending_ids = [s.id for s in subscriptions if s.status.value != "canceled"]
+    if not pending_ids:
+        return ()
+
+    found: set[str] = set()
+
+    if db.execute(
+        select(EnforcementLock.id)
+        .where(
+            EnforcementLock.subscription_id.in_(pending_ids),
+            EnforcementLock.is_active.is_(True),
+        )
+        .limit(1)
+    ).first():
+        found.add(RESOURCE_TYPE_ENFORCEMENT_LOCK)
+
+    if db.execute(
+        select(SubscriptionAddOn.id)
+        .where(
+            SubscriptionAddOn.subscription_id.in_(pending_ids),
+            SubscriptionAddOn.end_at.is_(None),
+        )
+        .limit(1)
+    ).first():
+        found.add(RESOURCE_TYPE_ADD_ON)
+
+    # IPAssignment is keyed by subscriber (account), not subscription — a
+    # release triggered by cancelling any one pending subscription affects
+    # the whole account's active service IPs (see
+    # `ip_lifecycle.release_service_ips_for_subscription`), so this check is
+    # account-wide rather than per-subscription.
+    account_id = subscriptions[0].subscriber_id
+    if db.execute(
+        select(IPAssignment.id)
+        .where(
+            IPAssignment.subscriber_id == account_id,
+            IPAssignment.is_active.is_(True),
+        )
+        .limit(1)
+    ).first():
+        found.add(RESOURCE_TYPE_IP_ASSIGNMENT)
+
+    return tuple(sorted(found))
+
+
 def request_recoverable_deletion(
     db: Session, command: RequestRecoverableDeletionCommand
-) -> DeletionTombstone:
+) -> DeletionTombstone | DeletionPreflightBlocked:
     """Open one new deletion generation and tombstone the account.
 
     Locks the subscriber first, then every affected subscription in stable
     UUID order, exactly matching the lock order `restore_account` uses so
     the two operations can never deadlock against each other.
+
+    Before any mutation, every subscription that would be canceled is
+    checked for an unsupported `cancel_subscription` consequence (an active
+    add-on, an active enforcement lock, or an active service IP
+    assignment). Subscription is the only registered recovery participant
+    in this slice — any of those additional consequences refuses the whole
+    request with zero mutation (`DeletionPreflightBlocked`) rather than
+    proceeding and leaving a tombstone that can never fully restore.
     """
     from app.models.account_recovery import ADMINISTRATIVE_RECOVERABLE_DELETION
     from app.services.account_lifecycle import cancel_subscription
@@ -260,6 +360,19 @@ def request_recoverable_deletion(
             .with_for_update()
         ).all()
     )
+
+    if subscriptions:
+        unsupported = _preflight_unsupported_consequences(db, subscriptions)
+        if unsupported:
+            blocked_ids = tuple(
+                s.id for s in subscriptions if s.status.value != "canceled"
+            )
+            return DeletionPreflightBlocked(
+                account_id=command.account_id,
+                blocked_subscription_ids=blocked_ids,
+                unsupported_consequences=unsupported,
+            )
+
     now = datetime.now(UTC)
 
     # This owner tombstones the account; driving each subscription to

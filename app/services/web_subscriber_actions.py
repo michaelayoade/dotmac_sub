@@ -309,9 +309,19 @@ def _request_recoverable_deletion(
         reason="Administrative recoverable deletion via subscriber admin action",
     )
     try:
-        account_recovery.request_recoverable_deletion(db, command)
+        outcome = account_recovery.request_recoverable_deletion(db, command)
     except account_recovery.AccountRecoveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(outcome, account_recovery.DeletionPreflightBlocked):
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Deletion refused: unsupported consequence(s) "
+                f"{', '.join(outcome.unsupported_consequences)} would affect "
+                f"subscription(s) {', '.join(str(i) for i in outcome.blocked_subscription_ids)}."
+            ),
+        )
     db.commit()
 
 

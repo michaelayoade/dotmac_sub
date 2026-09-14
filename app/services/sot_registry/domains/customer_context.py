@@ -662,7 +662,16 @@ DOMAIN = DomainSOT(
                 "only access.subscription_lifecycle's "
                 "restore_subscription_detailed, called with "
                 "ActivationIntent.DELETION_RECOVERY, may reverse a canceled "
-                "subscription."
+                "subscription. request_recoverable_deletion additionally "
+                "runs a PREFLIGHT before canceling any subscription: if a "
+                "pending subscription currently carries an active add-on, "
+                "an active enforcement lock, or an active service IP "
+                "assignment — consequences "
+                "access.subscription_lifecycle.cancel_subscription would "
+                "trigger but this owner cannot yet reverse — the whole "
+                "request is refused with zero mutation "
+                "(blocked_unsupported_consequence) instead of only being "
+                "discovered at restore time."
             ),
             contract=ServiceContract(
                 concerns=(

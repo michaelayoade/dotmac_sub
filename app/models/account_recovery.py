@@ -67,6 +67,12 @@ RESOURCE_TYPE_IP_ASSIGNMENT = "ip_assignment"
 RESOURCE_TYPE_ONT_ASSIGNMENT = "ont_assignment"
 RESOURCE_TYPE_SPLITTER_ASSIGNMENT = "splitter_assignment"
 RESOURCE_TYPE_CPE_DEVICE = "cpe_device"
+# Named so a preflight refusal (see
+# `account_recovery.request_recoverable_deletion`) can say exactly which
+# `cancel_subscription` consequence it found — never a registered recovery
+# participant, since neither is reversible through this owner today.
+RESOURCE_TYPE_ADD_ON = "add_on"
+RESOURCE_TYPE_ENFORCEMENT_LOCK = "enforcement_lock"
 
 KNOWN_RESOURCE_TYPES = frozenset(
     {
@@ -80,6 +86,8 @@ KNOWN_RESOURCE_TYPES = frozenset(
         RESOURCE_TYPE_ONT_ASSIGNMENT,
         RESOURCE_TYPE_SPLITTER_ASSIGNMENT,
         RESOURCE_TYPE_CPE_DEVICE,
+        RESOURCE_TYPE_ADD_ON,
+        RESOURCE_TYPE_ENFORCEMENT_LOCK,
     }
 )
 
