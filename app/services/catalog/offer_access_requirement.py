@@ -17,18 +17,26 @@ Both public commands (admission and reviewed classification) enter through
 completion here — a caller builds the command and reads the result; it never
 constructs the ``OfferVersion`` row or the classification row itself.
 
-Authorization for the two commands lives at different layers, deliberately:
-admission is gated entirely at the ROUTE (``app/api/catalog.py``'s own
-router-level ``catalog:write`` gate, combined with the route's
-``require_any_permission(catalog:billing_write, catalog:offer_version:
-admission)`` dependency — the ACTUAL effective requirement is the compound
-``catalog:write AND (catalog:billing_write OR catalog:offer_version:
-admission)``, never a pure OR/standalone-narrower-permission alternative to
-``catalog:write`` itself) — this module makes NO authorization decision for
-admission, and ``AdmitOfferVersionCommand.principal`` is audit/attribution
-evidence only. Classification has no such pre-authorizing route (its only
-caller is a trust-the-operator CLI); its permission is re-verified fresh,
-inside this module, immediately before the write.
+Authorization for admission is checked at TWO independent layers, on
+purpose (defense in depth, matching ``app/services/billing/
+subledger_opening.py``'s precedent of a command re-verifying scope inside
+its own transaction rather than trusting a caller-asserted boolean): the
+ROUTE (``app/api/catalog.py``'s own router-level ``catalog:write`` gate,
+combined with the route's ``require_any_permission(catalog:billing_write,
+catalog:offer_version:admission)`` dependency — the ACTUAL effective
+requirement is the compound ``catalog:write AND (catalog:billing_write OR
+catalog:offer_version:admission)``, never a pure OR/standalone-narrower-
+permission alternative to ``catalog:write`` itself), and this module's own
+``_verify_admission_authorization``, called from ``_admit`` inside the same
+transaction as the write, which re-derives and checks the IDENTICAL compound
+rule for whichever principal was supplied (a real RBAC/scope check against
+the live database, never a trusted caller-supplied flag). Removing either
+layer would regress this command back to single-layer enforcement — both
+stay. ``AdmitOfferVersionCommand.principal`` remains the audit/attribution
+identity as well, but it is no longer unchecked evidence. Classification has
+no pre-authorizing route (its only caller is a trust-the-operator CLI); its
+permission is re-verified fresh, inside this module, immediately before the
+write.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
+from app.models.auth import ApiKey
 from app.models.catalog import (
     AccessRequirement,
     BillingCycle,
@@ -56,6 +65,8 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.rbac import Role, SubscriberRole
+from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.catalog import OfferVersionCreate
 from app.services import catalog_billing_governance as billing_governance
@@ -77,6 +88,15 @@ from app.services.system_user_assignments import system_user_role_names
 OWNER = "service_intent.offer_access_requirement"
 CLASSIFY_PERMISSION = "catalog:offer_access_requirement:classify"
 ADMISSION_SCOPE = "catalog:offer_version:admission"
+
+#: The two other legs of the compound admission rule, named here so
+#: ``_admission_permission_granted`` below and ``app/api/catalog.py``'s
+#: route-level guards (``_require_offer_version_admission`` and the
+#: router's own blanket ``catalog:write`` gate) spell the SAME two keys from
+#: ONE place — never a second, independently-typed copy of either string
+#: that could drift out of sync with the rule this module enforces.
+WRITE_PERMISSION = "catalog:write"
+BILLING_WRITE_PERMISSION = "catalog:billing_write"
 
 _ADMIT_CONCERN = "access-classified offer-version admission"
 _ADMIT_COMMAND = OwnerCommandDefinition(
@@ -254,21 +274,42 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
 @dataclass(frozen=True, slots=True)
 class StaffPrincipal:
     """An admission attributed to an authenticated staff (system_user)
-    principal. Evidence only — the ROUTE (``app/api/catalog.py``) already
-    authorized the request via ``require_any_permission(catalog:billing_write,
-    catalog:offer_version:admission)`` before this command ever runs; this
-    id is recorded for audit/attribution and is never re-checked against RBAC
-    here."""
+    principal. The ROUTE (``app/api/catalog.py``) already authorizes the
+    request via ``require_any_permission(catalog:billing_write,
+    catalog:offer_version:admission)`` (combined with the router's own
+    ``catalog:write`` gate) before this command ever runs; this id is ALSO
+    re-verified against the identical compound permission inside the
+    command itself (``_verify_admission_authorization``), as defense in
+    depth for a caller that reaches this command directly. It remains the
+    recorded audit/attribution identity either way."""
 
     system_user_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
 class ApiKeyPrincipal:
-    """An admission attributed to an authenticated API-key principal.
-    Evidence only, for the same reason as :class:`StaffPrincipal`."""
+    """An admission attributed to an authenticated API-key principal,
+    re-verified inside the command for the same reason as
+    :class:`StaffPrincipal`."""
 
     api_key_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberPrincipal:
+    """An admission attributed to an authenticated subscriber principal.
+
+    A subscriber can be mapped to the ``admin`` role (or any role holding
+    the compound admission permission) via the seeded role-assignment path
+    (``scripts/seed/seed_rbac.py``, ``app/services/subscriber_assignments.py``,
+    ``app/services/auth_flow.py``'s login role resolution) — this is a
+    supported, if unverified-in-production, caller shape, not a theoretical
+    one, and it is preserved here rather than silently refused. Re-verified
+    against the identical compound permission inside the command, the same
+    as every other non-exempt principal type.
+    """
+
+    subscriber_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,17 +326,26 @@ class SystemAdmission:
     it is NOT an unforgeable runtime credential: any code actually running
     inside that allowed module can still construct one. It exists to make an
     unreviewed new "no actor" admission path visible in review, not to
-    cryptographically bind identity.
+    cryptographically bind identity. It carries no RBAC identity to
+    re-verify, so ``_verify_admission_authorization`` exempts it outright.
     """
 
     reason: str
 
 
-#: The closed set of ways an admission can be attributed. Never used for an
-#: authorization decision — see ``AdmitOfferVersionCommand.principal``'s
-#: docstring.
-AdmissionPrincipal = StaffPrincipal | ApiKeyPrincipal | SystemAdmission
-_ADMISSION_PRINCIPAL_TYPES = (StaffPrincipal, ApiKeyPrincipal, SystemAdmission)
+#: The closed set of ways an admission can be attributed. Recorded for
+#: audit/attribution; every member except ``SystemAdmission`` is ALSO
+#: re-verified against RBAC by ``_verify_admission_authorization`` — see
+#: ``AdmitOfferVersionCommand.principal``'s docstring.
+AdmissionPrincipal = (
+    StaffPrincipal | ApiKeyPrincipal | SubscriberPrincipal | SystemAdmission
+)
+_ADMISSION_PRINCIPAL_TYPES = (
+    StaffPrincipal,
+    ApiKeyPrincipal,
+    SubscriberPrincipal,
+    SystemAdmission,
+)
 
 
 def admission_actor_label(principal: AdmissionPrincipal) -> str:
@@ -305,6 +355,8 @@ def admission_actor_label(principal: AdmissionPrincipal) -> str:
         return f"system_user:{principal.system_user_id}"
     if isinstance(principal, ApiKeyPrincipal):
         return f"api_key:{principal.api_key_id}"
+    if isinstance(principal, SubscriberPrincipal):
+        return f"subscriber:{principal.subscriber_id}"
     return f"system:{principal.reason}"
 
 
@@ -318,7 +370,152 @@ def _admission_actor_evidence(
         return str(principal.system_user_id), "system_user"
     if isinstance(principal, ApiKeyPrincipal):
         return str(principal.api_key_id), "api_key"
+    if isinstance(principal, SubscriberPrincipal):
+        return str(principal.subscriber_id), "subscriber"
     return None, None
+
+
+def _subscriber_role_names(db: Session, subscriber_id: UUID) -> tuple[str, ...]:
+    """Live role-name read for one subscriber.
+
+    The identical ``SubscriberRole -> Role`` join ``has_permission``'s own
+    subscriber branch and ``auth_flow._load_rbac_claims``'s subscriber
+    branch already use — read fresh here (never through the 300-second
+    RBAC-claims cache ``claims_for_principal`` sits on top of) so a role
+    granted or revoked moments earlier is observed immediately. Mirrors
+    ``system_user_assignments.system_user_role_names``'s shape for the
+    sibling principal type.
+    """
+
+    rows = (
+        db.execute(
+            select(Role.name)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .where(
+                SubscriberRole.subscriber_id == subscriber_id,
+                Role.is_active.is_(True),
+            )
+            .distinct()
+            .order_by(Role.name)
+        )
+        .scalars()
+        .all()
+    )
+    return tuple(rows)
+
+
+def _admission_permission_granted(auth: dict, db: Session) -> bool:
+    """The exact compound rule the route already enforces: ``catalog:write
+    AND (catalog:billing_write OR catalog:offer_version:admission)``.
+
+    Re-derived here via the SAME ``has_permission`` function
+    ``auth_dependencies.py``'s own ``require_permission``/
+    ``require_any_permission``/``require_method_permission`` dependencies
+    call — there is exactly one place that decides what a role/scope means,
+    and this is not a second, parallel definition of it.
+    """
+
+    return has_permission(auth, db, WRITE_PERMISSION) and (
+        has_permission(auth, db, BILLING_WRITE_PERMISSION)
+        or has_permission(auth, db, ADMISSION_SCOPE)
+    )
+
+
+def _verify_admission_authorization(db: Session, principal: AdmissionPrincipal) -> None:
+    """Re-verify the compound admission permission INSIDE this command's own
+    transaction — defense in depth on top of the route-level gate
+    (``app/api/catalog.py``'s ``require_method_permission`` router gate plus
+    its ``require_any_permission`` route dependency), which stays in place
+    and is not removed by this check. A caller that constructs this command
+    directly (bypassing the route) is now held to the identical rule, not
+    merely trusted evidence — this is a real RBAC/scope re-check against the
+    live database, never a caller-supplied ``permission_granted`` boolean
+    (contrast ``app/services/billing/subledger_opening.py``'s
+    ``CorrectCustomerSubledgerOpeningCommand.permission_granted``, an
+    attestation this module deliberately does NOT adopt: Michael's ruling
+    calls for enforcement, not a second copy of an assertion the caller
+    could get wrong).
+
+    ``SystemAdmission`` is exempt — see its own docstring; it carries no
+    RBAC identity to check.
+    """
+
+    if isinstance(principal, SystemAdmission):
+        return
+
+    if isinstance(principal, StaffPrincipal):
+        # populate_existing=True: force a fresh read even if an earlier call
+        # in this same transaction already populated the identity map for
+        # this id — mirrors _verify_classify_permission's same discipline.
+        user = db.get(SystemUser, principal.system_user_id, populate_existing=True)
+        if user is None or not user.is_active:
+            raise _error(
+                "permission_denied",
+                "Offer version admission requires an active, authenticated "
+                "staff principal.",
+                retryable=False,
+            )
+        auth = {
+            "principal_id": str(principal.system_user_id),
+            "principal_type": "system_user",
+            "roles": set(system_user_role_names(db, principal.system_user_id)),
+        }
+    elif isinstance(principal, ApiKeyPrincipal):
+        api_key = db.get(ApiKey, principal.api_key_id, populate_existing=True)
+        now = datetime.now(UTC)
+        expired = api_key is not None and (
+            api_key.expires_at is not None and _utc(api_key.expires_at) <= now
+        )
+        if (
+            api_key is None
+            or not api_key.is_active
+            or api_key.revoked_at is not None
+            or expired
+        ):
+            raise _error(
+                "permission_denied",
+                "Offer version admission requires an active, unrevoked, "
+                "unexpired API-key principal.",
+                retryable=False,
+            )
+        # API keys carry no roles (auth_dependencies._api_key_principal);
+        # their access is exactly their scopes, wildcard-aware via the same
+        # has_permission() call every other principal type goes through.
+        auth = {
+            "principal_id": str(principal.api_key_id),
+            "principal_type": "api_key",
+            "roles": [],
+            "scopes": list(api_key.scopes or []),
+        }
+    elif isinstance(principal, SubscriberPrincipal):
+        subscriber = db.get(Subscriber, principal.subscriber_id, populate_existing=True)
+        if subscriber is None or not subscriber.is_active:
+            raise _error(
+                "permission_denied",
+                "Offer version admission requires an active, authenticated "
+                "subscriber principal.",
+                retryable=False,
+            )
+        auth = {
+            "principal_id": str(principal.subscriber_id),
+            "principal_type": "subscriber",
+            "roles": set(_subscriber_role_names(db, principal.subscriber_id)),
+        }
+    else:  # pragma: no cover - closed union; __post_init__ already refuses
+        # any object outside AdmissionPrincipal at construction time.
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires a recognized principal.",
+            retryable=False,
+        )
+
+    if not _admission_permission_granted(auth, db):
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires catalog:write and either "
+            "catalog:billing_write or catalog:offer_version:admission.",
+            retryable=False,
+        )
 
 
 def _lock_key(*parts: object) -> int:
@@ -397,29 +594,34 @@ def assert_access_requirement_immutable(update_payload: Mapping[str, object]) ->
 class AdmitOfferVersionCommand:
     context: CommandContext
     payload: OfferVersionCreate
-    #: REQUIRED, no default. Authorization for admission is decided entirely
-    #: at the route layer (``app/api/catalog.py``'s router-level
+    #: REQUIRED, no default. Authorization for admission is checked at TWO
+    #: independent layers: the route (``app/api/catalog.py``'s router-level
     #: ``catalog:write`` gate together with the route's
     #: ``require_any_permission(catalog:billing_write,
-    #: catalog:offer_version:admission)`` dependency) before this command is
-    #: ever constructed — this command makes NO authorization decision of
-    #: its own. ``principal`` is recorded for audit/attribution only; every
-    #: caller must construct one explicitly (see ``AdmissionPrincipal``).
+    #: catalog:offer_version:admission)`` dependency), AND this command's own
+    #: ``_verify_admission_authorization`` (called from ``_admit``), which
+    #: re-derives and checks the identical compound rule against the live
+    #: database for whichever principal is supplied — never a caller-
+    #: asserted boolean. ``SystemAdmission`` is exempt (see its docstring).
+    #: ``principal`` remains the recorded audit/attribution identity as
+    #: well; every caller must construct one explicitly (see
+    #: ``AdmissionPrincipal``).
     principal: AdmissionPrincipal
 
     def __post_init__(self) -> None:
         # The closed union (``StaffPrincipal | ApiKeyPrincipal |
-        # SystemAdmission``) is only a static type hint — Python does not
-        # enforce it at runtime, so a caller passing ``principal=None`` or
-        # any arbitrary object would otherwise be accepted silently. This
-        # makes the closed set a real runtime guarantee: only omitting the
-        # argument raises (a bare ``TypeError`` from the dataclass
-        # constructor); passing something outside the union now raises here.
+        # SubscriberPrincipal | SystemAdmission``) is only a static type
+        # hint — Python does not enforce it at runtime, so a caller passing
+        # ``principal=None`` or any arbitrary object would otherwise be
+        # accepted silently. This makes the closed set a real runtime
+        # guarantee: only omitting the argument raises (a bare ``TypeError``
+        # from the dataclass constructor); passing something outside the
+        # union now raises here.
         if not isinstance(self.principal, _ADMISSION_PRINCIPAL_TYPES):
             raise TypeError(
                 "AdmitOfferVersionCommand.principal must be a StaffPrincipal, "
-                "ApiKeyPrincipal, or SystemAdmission instance; got "
-                f"{type(self.principal).__name__!r}"
+                "ApiKeyPrincipal, SubscriberPrincipal, or SystemAdmission "
+                f"instance; got {type(self.principal).__name__!r}"
             )
 
 
@@ -491,6 +693,14 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
     _acquire_xact_lock(
         db, "offer_access_requirement:admit", payload.offer_id, payload.version_number
     )
+
+    # Re-verify the compound admission permission here, under the advisory
+    # locks acquired above and inside this same transaction, immediately
+    # before any existence check or write — the same "re-check under the
+    # lock" discipline classify's own _verify_classify_permission follows.
+    # This is defense in depth on top of the route-level gate, which stays
+    # in place; it is not a substitute for it.
+    _verify_admission_authorization(db, command.principal)
 
     fingerprint = _admission_fingerprint(payload)
     if key:
@@ -1125,6 +1335,7 @@ __all__ = [
     "OfferAccessRequirementError",
     "PreviewClassifyOfferAccessRequirementQuery",
     "StaffPrincipal",
+    "SubscriberPrincipal",
     "SystemAdmission",
     "UnclassifiedOfferVersionRow",
     "UnclassifiedOfferVersionsWorklist",

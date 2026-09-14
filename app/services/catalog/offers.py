@@ -545,14 +545,20 @@ class OfferVersions(CRUDManager[OfferVersion]):
     ) -> "offer_access_requirement.AdmissionPrincipal":
         """Resolve a recognized, authenticated actor into its typed
         principal. FAILS CLOSED: any ``actor_id``/``actor_type`` combination
-        that is not a real ``system_user`` or ``api_key`` raises a typed
-        error rather than silently defaulting to ``SystemAdmission`` — a
-        caller with no authenticated actor at all must go through
-        ``create``'s distinct ``principal=`` argument instead (see its
-        docstring). ``app/api/catalog.py``'s route always supplies a real,
-        authenticated ``system_user``/``api_key`` actor, so this only ever
-        raises for a caller that invokes this adapter directly with neither
-        a recognized actor nor an explicit ``principal``."""
+        that is not a real ``system_user``, ``api_key``, or ``subscriber``
+        raises a typed error rather than silently defaulting to
+        ``SystemAdmission`` — a caller with no authenticated actor at all
+        must go through ``create``'s distinct ``principal=`` argument
+        instead (see its docstring). ``app/api/catalog.py``'s route always
+        supplies a real, authenticated ``system_user``/``api_key``/
+        ``subscriber`` actor, so this only ever raises for a caller that
+        invokes this adapter directly with neither a recognized actor nor an
+        explicit ``principal``.
+
+        A ``subscriber`` actor is a supported caller shape (a subscriber
+        mapped to the ``admin`` role, or any role holding the compound
+        admission permission, via the seeded role-assignment path) — see
+        ``offer_access_requirement.SubscriberPrincipal``'s docstring."""
 
         if actor_type == "system_user" and actor_id:
             return offer_access_requirement.StaffPrincipal(
@@ -562,12 +568,16 @@ class OfferVersions(CRUDManager[OfferVersion]):
             return offer_access_requirement.ApiKeyPrincipal(
                 api_key_id=UUID(str(actor_id))
             )
+        if actor_type == "subscriber" and actor_id:
+            return offer_access_requirement.SubscriberPrincipal(
+                subscriber_id=UUID(str(actor_id))
+            )
         raise offer_access_requirement.OfferAccessRequirementError(
             code=f"{offer_access_requirement.OWNER}.unattributed_admission_actor",
             message=(
                 "offer_versions.create requires either a recognized "
-                "system_user/api_key actor_id/actor_type pair or an "
-                "explicit principal= argument (e.g. SystemAdmission for a "
+                "system_user/api_key/subscriber actor_id/actor_type pair or "
+                "an explicit principal= argument (e.g. SystemAdmission for a "
                 "genuinely internal/test caller); neither was supplied."
             ),
             details={"actor_id": actor_id, "actor_type": actor_type},

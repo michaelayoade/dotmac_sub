@@ -74,14 +74,22 @@ from app.services.catalog import offer_access_requirement
 from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
 
 router = APIRouter(
-    dependencies=[Depends(require_method_permission("catalog:read", "catalog:write"))]
+    dependencies=[
+        Depends(
+            require_method_permission(
+                "catalog:read", offer_access_requirement.WRITE_PERMISSION
+            )
+        )
+    ]
 )
 
-_require_billing_catalog_write = require_permission("catalog:billing_write")
+_require_billing_catalog_write = require_permission(
+    offer_access_requirement.BILLING_WRITE_PERMISSION
+)
 
 #: NOT a pure OR / standalone-narrower-permission alternative: this router
 #: is declared with its own ``catalog:write`` gate
-#: (``require_method_permission("catalog:read", "catalog:write")`` above,
+#: (``require_method_permission("catalog:read", WRITE_PERMISSION)`` above,
 #: pre-existing and unrelated to admission), which applies to every mutating
 #: route in this file including these two. The ACTUAL effective requirement
 #: on the offer-version admission routes is therefore the compound
@@ -92,8 +100,14 @@ _require_billing_catalog_write = require_permission("catalog:billing_write")
 #: on every other billing_write-gated route in this file (offers,
 #: offer-prices, add-on-prices, ...): this is this router's established,
 #: pre-existing pattern, not a regression introduced by admission.
+#:
+#: ``WRITE_PERMISSION``/``BILLING_WRITE_PERMISSION``/``ADMISSION_SCOPE`` are
+#: the SAME three constants ``offer_access_requirement._admission_permission_
+#: granted`` re-checks inside the command's own transaction — one spelling
+#: of each key, never a second copy that could drift from this route's gate.
 _require_offer_version_admission = require_any_permission(
-    "catalog:billing_write", offer_access_requirement.ADMISSION_SCOPE
+    offer_access_requirement.BILLING_WRITE_PERMISSION,
+    offer_access_requirement.ADMISSION_SCOPE,
 )
 
 
@@ -106,24 +120,27 @@ def _admission_principal(
 ) -> offer_access_requirement.AdmissionPrincipal:
     """The typed principal for an admission/update reached through this route.
 
-    The route dependency above already authorized the request; this is
-    audit/attribution evidence only — never re-checked for authorization.
-    An authenticated route caller is always a real system_user or api_key
-    principal, so this fails closed rather than falling back to
+    The route dependency above already authorized the request; this
+    resolves the principal for BOTH audit/attribution AND the command's own
+    defense-in-depth RBAC re-check
+    (``offer_access_requirement._verify_admission_authorization``). An
+    authenticated route caller is always a real system_user, api_key, or
+    subscriber principal, so this fails closed rather than falling back to
     ``SystemAdmission`` (that fallback is reserved for internal/test callers
     that invoke the service layer directly, bypassing this route entirely —
     see ``app/services/catalog/offers.py``'s
     ``OfferVersions._resolve_admission_principal``).
 
     Applied identically to BOTH the POST (create) and PATCH (update) offer-
-    version routes below: narrowing to system_user/api_key is a deliberate,
-    documented tightening, not a silent regression — no other principal type
-    could ever have reached either route anyway, because both already sit
-    under this router's own pre-existing ``catalog:write`` gate, which is
-    admin-only (never UI-assignable to a non-admin role,
-    ``scripts/seed/seed_rbac.py``'s ``ADMIN_ONLY_PERMISSION_KEYS``), and the
-    ``admin`` role bypasses permission checks entirely rather than being
-    attributed as a non-system_user/api_key principal.
+    version routes below.
+
+    A subscriber principal IS a real, supported way to reach this route: a
+    subscriber can be mapped to the ``admin`` role (or any role holding the
+    compound admission permission) via the seeded role-assignment path
+    (``scripts/seed/seed_rbac.py``, ``app/services/subscriber_assignments.py``,
+    ``app/services/auth_flow.py``'s login role resolution). Retiring that
+    access is a separate, deliberate census/migration — not something this
+    resolver silently forecloses by refusing the principal type.
     """
 
     principal_id = auth.get("principal_id")
@@ -136,11 +153,15 @@ def _admission_principal(
         return offer_access_requirement.ApiKeyPrincipal(
             api_key_id=UUID(str(principal_id))
         )
+    if principal_type == "subscriber" and principal_id:
+        return offer_access_requirement.SubscriberPrincipal(
+            subscriber_id=UUID(str(principal_id))
+        )
     raise HTTPException(
         status_code=403,
         detail=(
-            "Offer version admission requires an authenticated staff or "
-            "API-key principal."
+            "Offer version admission requires an authenticated staff, "
+            "API-key, or subscriber principal."
         ),
     )
 
