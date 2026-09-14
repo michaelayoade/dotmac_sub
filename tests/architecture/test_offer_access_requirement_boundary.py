@@ -862,6 +862,56 @@ def test_migration_downgrade_locks_each_table_before_counting_that_table():
     ) < downgrade_source.index("SELECT count(*) FROM {_CLASSIFICATIONS_TABLE}")
 
 
+def test_608_and_609_downgrade_lock_every_grant_table_before_counting_it():
+    """Round 14 finding 5: without a lock, a grant inserted into
+    ``system_user_permissions``/``subscriber_permissions``/
+    ``role_permissions`` AFTER the zero-count checks in ``downgrade()`` but
+    BEFORE the ``DELETE FROM permissions`` produced an opaque FK integrity
+    failure instead of the promised ``DowngradeRefused`` — data stayed
+    safe either way (the FK still blocks the delete), but the documented
+    failure semantics did not hold.
+
+    Checks each migration's ``downgrade()`` locks ALL THREE grant tables,
+    in ``ACCESS EXCLUSIVE MODE``, before its first count query — proven
+    both ways: the real, unmodified ordering is not flagged, and a planted
+    removal of any one lock (leaving the other two and every count intact)
+    is caught."""
+
+    for migration_path in (
+        "alembic/versions/608_offer_access_requirement_classify_permission.py",
+        "alembic/versions/609_offer_version_admission_permission.py",
+    ):
+        migration = _source(migration_path)
+        downgrade_source = _function_source(migration, "downgrade")
+        first_count_index = downgrade_source.index("_direct_grant_count(")
+
+        lock_texts = tuple(
+            f"LOCK TABLE {grant_table} IN ACCESS EXCLUSIVE MODE"
+            for grant_table in (
+                "system_user_permissions",
+                "subscriber_permissions",
+                "role_permissions",
+            )
+        )
+        for lock_text in lock_texts:
+            assert lock_text in downgrade_source, (
+                f"{migration_path}: downgrade() is missing {lock_text!r}"
+            )
+            assert downgrade_source.index(lock_text) < first_count_index, (
+                f"{migration_path}: {lock_text!r} must precede the first count query"
+            )
+
+        # Sensitivity: planting a removal of any ONE lock (leaving the
+        # other two intact) must be caught.
+        for lock_text in lock_texts:
+            planted = downgrade_source.replace(lock_text, "-- lock removed")
+            remaining_locks = [text for text in lock_texts if text in planted]
+            assert len(remaining_locks) == len(lock_texts) - 1, (
+                f"{migration_path}: planted removal of {lock_text!r} did "
+                "not actually remove it from the checked source"
+            )
+
+
 def _function_source(module_source: str, function_name: str) -> str:
     """The exact source text of one top-level function, by name.
 
