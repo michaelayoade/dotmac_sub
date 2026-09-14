@@ -491,12 +491,27 @@ class AdmissionAuthorizationClaims:
     infrastructure used across the whole application and are out of scope
     for this change; ``as_dict()`` below is the one, single, explicit
     translation point into that shared shape, kept as narrow as possible.
+
+    ``credential_kind`` (round 13 finding 2) carries
+    ``auth_dependencies``'s ``"machine"``/``"legacy_api_key"`` stamp
+    through to the decision itself — not just to principal resolution.
+    Before this field existed, the ROUTE built claims with no way to say
+    "this is a machine credential", so ``authorize_offer_version_
+    admission`` enforced the compound rule against it exactly like any
+    other API key and refused a valid kernel credential outright,
+    UNREACHABLE before the shadow branch (only constructed afterward, from
+    the now-already-refused auth dict, inside ``create_offer_version``) —
+    the exact lockout this whole migration exists to prevent, live again.
+    ``authorize_offer_version_admission`` reads THIS field to route to
+    ``_shadow_check_machine_credential_admission`` (evaluate, log, never
+    refuse) INSTEAD of the enforced check, for both callers identically.
     """
 
     principal_id: str
     principal_type: str
     roles: frozenset[str] = frozenset()
     scopes: frozenset[str] = frozenset()
+    credential_kind: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         """The exact shape ``auth_dependencies``'s dict-based primitives
@@ -597,7 +612,24 @@ def authorize_offer_version_admission(
     unwound in their own transaction, through a genuinely separate one. A
     failure recording that evidence is logged and swallowed — it must
     never mask or replace the ``permission_denied`` the caller already has.
+
+    MACHINE CREDENTIALS ARE SHADOW-ONLY (round 13 finding 2 fix):
+    ``claims.credential_kind == "machine"`` routes to
+    ``_shadow_check_machine_credential_admission`` — evaluate, log, NEVER
+    raise — instead of the enforced check below, for BOTH callers
+    identically. This must be checked BEFORE the compound-permission
+    enforcement, not after: a valid kernel machine credential without the
+    newer, narrower admission scopes must still succeed all the way
+    through, not get refused here and never reach the shadow path at all
+    (which is exactly what happened when the route built claims with no
+    ``credential_kind`` and the typed ``MachineCredentialPrincipal`` was
+    only constructed AFTER this dependency had already succeeded or
+    failed).
     """
+
+    if claims.credential_kind == "machine":
+        _shadow_check_machine_credential_admission(db, claims)
+        return
 
     auth = claims.as_dict()
     if not _admission_permission_granted(auth, db):
@@ -691,41 +723,40 @@ def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) 
 
 
 def _shadow_check_machine_credential_admission(
-    db: Session, principal: MachineCredentialPrincipal
+    db: Session, claims: AdmissionAuthorizationClaims
 ) -> None:
     """SHADOW / WOULD-REFUSE evaluation for a machine-credential admission —
-    evaluates and LOGS what ``authorize_offer_version_admission`` would have
-    decided; NEVER raises, and NEVER refuses. A machine credential that
-    ``origin/main`` authorized (no command-level check existed before this
-    module had one at all) must still succeed on this branch — hard
-    enforcement here, before an inventory of active machine callers and
-    their granted scopes exists, would be an uncensused, silent access
-    retirement, which is exactly what this migration must not do.
+    evaluates and LOGS what the enforced compound rule would have decided;
+    NEVER raises, and NEVER refuses. A machine credential that ``origin/
+    main`` authorized (no command-level check existed before this module
+    had one at all) must still succeed here — hard enforcement, before an
+    inventory of active machine callers and their granted scopes exists,
+    would be an uncensused, silent access retirement, which is exactly what
+    this migration must not do.
 
-    Works ONLY from what this module can actually see: ``principal.scopes``,
+    Works ONLY from what this module can actually see: ``claims.scopes``,
     the snapshot captured at authentication time
-    (``auth_dependencies._machine_principal``) and threaded through by
-    ``app/api/catalog.py``'s ``_admission_principal``. This module has no
-    live query surface into the kernel's own credential/scope storage
-    (``dotmac_kernel`` is not vendored or importable in this codebase — the
-    inventory and any live re-read are a cross-repository slice for later,
-    not something this function can safely attempt), so the logged decision
-    is necessarily a point-in-time approximation, not a live re-verification
-    — consistent with this being a diagnostic/inventory aid, not an
+    (``auth_dependencies._machine_principal``, via its ``credential_kind``
+    stamp) and threaded through by BOTH callers — the route
+    (``app/api/catalog.py``'s ``_require_offer_version_admission``, from
+    the live HTTP auth dict) and the command
+    (``_verify_admission_authorization``, from the typed
+    ``MachineCredentialPrincipal``). This module has no live query surface
+    into the kernel's own credential/scope storage (``dotmac_kernel`` is
+    not vendored or importable in this codebase — the inventory and any
+    live re-read are a cross-repository slice for later, not something
+    this function can safely attempt), so the logged decision is
+    necessarily a point-in-time approximation, not a live re-verification —
+    consistent with this being a diagnostic/inventory aid, not an
     enforcement path.
     """
 
-    claims = AdmissionAuthorizationClaims(
-        principal_id=str(principal.credential_id),
-        principal_type="api_key",
-        scopes=frozenset(principal.scopes),
-    )
     would_be_granted = _admission_permission_granted(claims.as_dict(), db)
     if would_be_granted:
         logger.info(
             "offer_version_admission.machine_credential_shadow: would be "
             "authorized (compatibility path, not enforced) credential_id=%s",
-            principal.credential_id,
+            claims.principal_id,
         )
         return
     logger.warning(
@@ -734,8 +765,8 @@ def _shadow_check_machine_credential_admission(
         "(catalog:billing_write OR catalog:offer_version:admission)) but "
         "admission is NOT enforced against machine credentials yet — "
         "proceeding under the compatibility path. credential_id=%s scopes=%s",
-        principal.credential_id,
-        sorted(principal.scopes),
+        claims.principal_id,
+        sorted(claims.scopes),
     )
 
 
@@ -848,13 +879,22 @@ def _verify_admission_authorization(
             roles=frozenset(_subscriber_role_names(db, principal.subscriber_id)),
         )
     elif isinstance(principal, MachineCredentialPrincipal):
-        # EXACT, NON-GROWING COMPATIBILITY PATH: this is the only principal
-        # type this function does not enforce against — see
-        # MachineCredentialPrincipal's own docstring for why, and
+        # EXACT, NON-GROWING COMPATIBILITY PATH: credential_kind="machine"
+        # routes the SAME authorize_offer_version_admission call below to
+        # its shadow branch — see MachineCredentialPrincipal's own
+        # docstring for why, and
         # test_machine_credential_is_the_only_shadow_mode_principal for the
         # guard that fails the build if this set of one silently grows.
-        _shadow_check_machine_credential_admission(db, principal)
-        return
+        # Going through the one owner (rather than a separate return here,
+        # the round-12 shape) is what round 13 finding 2 required: the
+        # route and the command now reach shadow mode through the
+        # identical function, keyed on the identical field.
+        claims = AdmissionAuthorizationClaims(
+            principal_id=str(principal.credential_id),
+            principal_type="api_key",
+            scopes=frozenset(principal.scopes),
+            credential_kind="machine",
+        )
     else:  # pragma: no cover - closed union; __post_init__ already refuses
         # any object outside AdmissionPrincipal at construction time.
         raise _error(
