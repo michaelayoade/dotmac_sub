@@ -685,9 +685,26 @@ class OfferVersions(CRUDManager[OfferVersion]):
         version_id: str,
         payload: OfferVersionUpdate,
         *,
+        principal: "offer_access_requirement.AdmissionPrincipal",
         actor_id: str | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
     ):
+        """Mutate an already-admitted offer version.
+
+        ``principal`` is REQUIRED (round 13 finding 3): the route's own
+        gate (``_require_offer_version_admission``) authorizes ADMISSION
+        only — reaching this method proves nothing about whether the
+        caller's grant is still valid by the time the mutation actually
+        happens. This method re-verifies through the SAME owner
+        (``offer_access_requirement.verify_admission_authorization``)
+        IMMEDIATELY before the mutation below, inside this method's own
+        transaction, against the LIVE database — never trusted from the
+        route's earlier check alone. A caller with no authenticated actor
+        (internal/test code) must pass ``SystemAdmission`` explicitly, the
+        same escape hatch admission uses; there is no silent default.
+        """
+
         version = db.get(OfferVersion, version_id)
         if not version:
             raise HTTPException(status_code=404, detail="Offer version not found")
@@ -696,6 +713,12 @@ class OfferVersions(CRUDManager[OfferVersion]):
         _assert_offer_version_identity_immutable(data)
         changes = billing_governance.billing_field_changes(version, data)
         billing_governance.assert_offer_version_update_safe(db, version, changes)
+        # Immediately before the mutation, not at the top of this method —
+        # narrowing the window between the re-check and the write it gates
+        # to the read-only validation above, which touches no session state.
+        offer_access_requirement.verify_admission_authorization(
+            db, principal, request_id=request_id
+        )
         for key, value in data.items():
             setattr(version, key, value)
         critical_changes = billing_governance.billing_critical_changes(
