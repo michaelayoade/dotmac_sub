@@ -1098,6 +1098,91 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     assert any(call["principal_id"] == str(user.id) for call in observed_calls)
 
 
+def test_admit_accepts_a_machine_credential_with_no_satisfying_scope(db_session):
+    """Michael's ruling: machine principals stay on a shadowed, inventoried
+    migration path with NO immediate refusal. A ``MachineCredentialPrincipal``
+    holding scopes that satisfy NOTHING in the compound rule still succeeds —
+    admission proceeds under the compatibility path exactly as it did before
+    this module had any command-level check at all (``origin/main``
+    authorized this same shape). The decision is only logged (shadow/
+    would-refuse), never enforced.
+
+    Break condition: this fails the moment ``MachineCredentialPrincipal`` is
+    ever enforced against — i.e. the exact uncensused, silent access
+    retirement Michael's ruling explicitly forbids landing without an
+    inventory, a scope migration, and a reviewed enforcement switch first."""
+
+    offer = _make_offer(db_session)
+
+    result = admit_offer_version(
+        db_session,
+        _admit_command(
+            offer,
+            1,
+            principal=offer_access_requirement.MachineCredentialPrincipal(
+                credential_id=uuid4(), scopes=()
+            ),
+        ),
+    )
+    db_session.rollback()
+    assert result.offer_version.offer_id == offer.id
+
+
+def test_machine_credential_is_the_only_shadow_mode_admission_principal(db_session):
+    """Exact, non-growing compatibility path proof.
+
+    Constructs a deliberately unauthorized instance of EVERY member of the
+    closed ``AdmissionPrincipal`` union and asserts exactly two bypass real
+    enforcement: ``SystemAdmission`` (has no RBAC identity to check at all)
+    and ``MachineCredentialPrincipal`` (shadow/would-refuse migration,
+    Michael's ruling). Every other member — ``StaffPrincipal``,
+    ``ApiKeyPrincipal``, ``SubscriberPrincipal`` — is refused.
+
+    Break condition: this fails if the compatibility path silently widens to
+    exempt a THIRD principal type (e.g. someone adding ``ApiKeyPrincipal`` to
+    the same isinstance branch as a shortcut), and it fails if
+    ``MachineCredentialPrincipal`` itself starts being enforced against
+    (collapsing the shadow migration back into an immediate, uncensused
+    refusal) — either direction of drift trips it."""
+
+    offer = _make_offer(db_session)
+    bypassed: set[type] = set()
+    refused: set[type] = set()
+
+    unauthorized_principals = (
+        offer_access_requirement.StaffPrincipal(system_user_id=uuid4()),
+        offer_access_requirement.ApiKeyPrincipal(api_key_id=uuid4()),
+        offer_access_requirement.SubscriberPrincipal(subscriber_id=uuid4()),
+        offer_access_requirement.MachineCredentialPrincipal(
+            credential_id=uuid4(), scopes=()
+        ),
+        offer_access_requirement.SystemAdmission(reason="non-growth probe"),
+    )
+    for index, principal in enumerate(unauthorized_principals):
+        try:
+            admit_offer_version(
+                db_session,
+                _admit_command(offer, 100 + index, principal=principal),
+            )
+        except OfferAccessRequirementError as exc:
+            assert exc.code.endswith("permission_denied")
+            refused.add(type(principal))
+        else:
+            bypassed.add(type(principal))
+        finally:
+            db_session.rollback()
+
+    assert bypassed == {
+        offer_access_requirement.SystemAdmission,
+        offer_access_requirement.MachineCredentialPrincipal,
+    }
+    assert refused == {
+        offer_access_requirement.StaffPrincipal,
+        offer_access_requirement.ApiKeyPrincipal,
+        offer_access_requirement.SubscriberPrincipal,
+    }
+
+
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
     """Regression: before this fix, retrying an admission with the SAME
     (offer_id, version_number) silently created a second row — there was no
