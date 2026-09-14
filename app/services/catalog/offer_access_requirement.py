@@ -111,6 +111,23 @@ _ADMIT_COMMAND = OwnerCommandDefinition(
     name="admit_offer_version",
 )
 
+#: A SEPARATE registered command, under the SAME already-declared concern
+#: (``_ADMIT_CONCERN`` — this IS a consequence of an admission attempt, not
+#: a new decision surface), whose sole job is durably recording a
+#: staff-leave admission denial. Kept genuinely distinct from
+#: ``_ADMIT_COMMAND`` so ``record_leave_denial_evidence`` runs as a real,
+#: registered, manifest-validated owner command — its own root transaction,
+#: begun and completed by ``execute_owner_command`` — never a helper that
+#: commits/rolls back a session directly (``docs/CODING_STANDARD.md`` § 3:
+#: "nested domain helpers... never call commit() or rollback()
+#: independently"; round 14 finding 1 corrected an earlier version of this
+#: function that did exactly that).
+_RECORD_LEAVE_DENIAL_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_ADMIT_CONCERN,
+    name="record_admission_leave_denial",
+)
+
 _CLASSIFY_CONCERN = "reviewed classification of legacy/unclassified versions"
 _CLASSIFY_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
@@ -676,20 +693,32 @@ def authorize_offer_version_admission(
 
 
 def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) -> None:
-    """Durably record a staff-leave admission denial, in a genuinely
-    SEPARATE transaction from whichever one the denial itself unwound —
+    """Durably record a staff-leave admission denial, through a genuinely
+    SEPARATE registered owner command (``_RECORD_LEAVE_DENIAL_COMMAND``) —
     called AFTER ``authorize_offer_version_admission`` has already raised
     and that raise has already propagated past its caller's own
     transaction boundary (the route's plain session, or
-    ``execute_owner_command``'s rollback). No-ops for any error that is
-    not a leave-restriction denial (``exc.details["leave_restricted"]``
-    unset) — an ordinary compound-permission refusal has no prior audit
-    event to reconstruct.
+    ``execute_owner_command``'s rollback for the direct-command path). This
+    is a REGISTERED command, not a helper: session lifecycle (open/close)
+    stays the adapter's job, but beginning and completing THIS transaction
+    is ``execute_owner_command``'s job, exactly as it is for admission and
+    classification — this function's own callback stays flush-only and
+    never calls ``commit()``/``rollback()`` itself (round 14 finding 1: an
+    earlier version of this function did both directly, which
+    ``docs/CODING_STANDARD.md`` § 3 forbids for a nested helper, and which
+    silently rolled back any of the CALLER's own in-flight work still
+    sitting in the session at that point).
+
+    No-ops for any error that is not a leave-restriction denial
+    (``exc.details["leave_restricted"]`` unset) — an ordinary
+    compound-permission refusal has no prior audit event to reconstruct.
 
     Best-effort and STRICTLY NON-MASKING: this function never raises. A
-    failure writing the evidence is logged and swallowed, exactly because
-    the caller already has the real, correct ``permission_denied`` to
-    return — losing the audit trail a second time must never turn into
+    failure — including the defensive rollback of any lingering caller
+    transaction below, or the registered command itself failing manifest
+    validation or its own transaction — is logged and swallowed, exactly
+    because the caller already has the real, correct ``permission_denied``
+    to return: losing the audit trail a second time must never turn into
     losing the original refusal too.
     """
 
@@ -699,28 +728,53 @@ def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) 
         return
 
     from types import SimpleNamespace
+    from uuid import uuid4
 
     from app.services import erp_staff_access
 
     try:
+        # Defensive only: execute_owner_command itself requires a
+        # transaction-free session at entry and would otherwise roll back
+        # and refuse to run at all — clearing any lingering, already-
+        # abandoned caller transaction here is what lets the registered
+        # command actually execute instead of silently no-op'ing on this
+        # guard.
         if db.in_transaction():
             db.rollback()
+
+        principal_id = exc.details.get("principal_id")
         auth = {
-            "principal_id": exc.details.get("principal_id"),
+            "principal_id": principal_id,
             "principal_type": exc.details.get("principal_type"),
         }
         restriction = SimpleNamespace(
             restriction_id=exc.details.get("restriction_id"),
             source_system=exc.details.get("restriction_source_system"),
         )
-        erp_staff_access.audit_denied_write(
+        request_id = exc.details.get("request_id")
+
+        def _operation() -> None:
+            erp_staff_access.audit_denied_write(
+                db,
+                auth=auth,
+                restriction=restriction,
+                request_id=request_id,
+                permission_key=ADMISSION_SCOPE,
+            )
+
+        command_id = uuid4()
+        execute_owner_command(
             db,
-            auth=auth,
-            restriction=restriction,
-            request_id=exc.details.get("request_id"),
-            permission_key=ADMISSION_SCOPE,
+            definition=_RECORD_LEAVE_DENIAL_COMMAND,
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=str(principal_id or "unknown"),
+                scope=ADMISSION_SCOPE,
+                reason="record a refused admission attempt for audit",
+            ),
+            operation=_operation,
         )
-        db.commit()
     except Exception:
         logger.exception(
             "offer_version_admission.leave_denial_audit_failed principal_id=%s",
