@@ -372,6 +372,7 @@ class TestOfferVersions:
             db_session,
             str(version.id),
             OfferVersionUpdate(name="v1-updated"),
+            principal=SystemAdmission(reason="test fixture"),
         )
         assert updated.name == "v1-updated"
 

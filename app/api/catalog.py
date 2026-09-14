@@ -1005,21 +1005,33 @@ def list_offer_versions(
     tags=["offer-versions"],
 )
 def update_offer_version(
+    request: Request,
     version_id: str,
     payload: OfferVersionUpdate,
     db: Session = Depends(get_db),
     auth: dict = Depends(_require_offer_version_admission),
 ):
     actor_id, actor_type = _actor(auth)
-    # Same principal-type check as POST create_offer_version above — applied
-    # identically to both routes for the same underlying command, per
-    # _admission_principal's docstring.
-    _admission_principal(auth)
+    # Resolved and passed explicitly (not discarded) — round 13 finding 3:
+    # the route's own dependency authorizes ADMISSION only. The mutation
+    # itself must recheck through the same owner, immediately before it
+    # mutates, inside its own transaction — OfferVersions.update does that
+    # recheck; this is the typed principal it re-verifies against the live
+    # database, the same shape _admission_principal's docstring promises
+    # for POST.
+    principal = _admission_principal(auth)
     try:
         return catalog_service.offer_versions.update(
-            db, version_id, payload, actor_id=actor_id, actor_type=actor_type
+            db,
+            version_id,
+            payload,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            principal=principal,
+            request_id=_request_id(request),
         )
     except OfferAccessRequirementError as exc:
+        offer_access_requirement.record_leave_denial_evidence(db, exc)
         raise _offer_access_requirement_http_error(exc) from exc
 
 

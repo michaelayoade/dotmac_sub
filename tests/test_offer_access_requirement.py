@@ -279,7 +279,10 @@ def test_offer_version_update_never_mutates_access_requirement(db_session):
         db_session, offer, access_requirement=AccessRequirement.unclassified
     )
     updated = catalog_service.offer_versions.update(
-        db_session, str(version.id), OfferVersionUpdate(name="Renamed")
+        db_session,
+        str(version.id),
+        OfferVersionUpdate(name="Renamed"),
+        principal=SystemAdmission(reason="test fixture"),
     )
     db_session.commit()
     assert updated.access_requirement is AccessRequirement.unclassified
