@@ -885,3 +885,124 @@ def test_migration_declares_check_constraints_for_the_legal_transition_shape():
     assert "new_access_requirement IN ('network_access', 'no_network_access')" in (
         migration
     )
+
+
+def test_admission_principal_resolver_maps_every_auth_shape_correctly():
+    """Unit-level proof of ``app.api.catalog._admission_principal``'s own
+    mapping logic — a pure function from an auth dict's shape to a typed
+    ``AdmissionPrincipal`` — NOT a claim about route/dependency-graph
+    behavior (see ``tests/test_offer_version_admission_asgi.py`` for that;
+    calling this resolver directly here is testing the function's own
+    contract, the same as any other pure helper, not simulating
+    authorization).
+
+    Covers the machine-vs-legacy-API-key distinction specifically: a
+    ``credential_kind == "machine"`` auth resolves to the shadow-only
+    ``MachineCredentialPrincipal`` with its scopes preserved; every other
+    ``api_key`` shape (with or without an explicit
+    ``credential_kind == "legacy_api_key"``) resolves to the enforced
+    ``ApiKeyPrincipal`` — deleting or inverting that branch would silently
+    turn a real machine request into a caller hunting a nonexistent local
+    ``ApiKey`` row.
+    """
+
+    import uuid
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api import catalog as api_catalog
+    from app.services.catalog import offer_access_requirement
+
+    system_user_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "system_user",
+    }
+    api_key_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "api_key"}
+    legacy_api_key_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "api_key",
+        "credential_kind": "legacy_api_key",
+    }
+    machine_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "api_key",
+        "credential_kind": "machine",
+        "scopes": ["catalog:write", offer_access_requirement.ADMISSION_SCOPE],
+    }
+    subscriber_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "subscriber",
+    }
+    other_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "reseller_user"}
+
+    assert isinstance(
+        api_catalog._admission_principal(system_user_auth),
+        offer_access_requirement.StaffPrincipal,
+    )
+    assert isinstance(
+        api_catalog._admission_principal(api_key_auth),
+        offer_access_requirement.ApiKeyPrincipal,
+    )
+    assert isinstance(
+        api_catalog._admission_principal(legacy_api_key_auth),
+        offer_access_requirement.ApiKeyPrincipal,
+    )
+    machine_principal = api_catalog._admission_principal(machine_auth)
+    assert isinstance(
+        machine_principal, offer_access_requirement.MachineCredentialPrincipal
+    )
+    assert machine_principal.credential_id == uuid.UUID(machine_auth["principal_id"])
+    assert set(machine_principal.scopes) == set(machine_auth["scopes"])
+    assert isinstance(
+        api_catalog._admission_principal(subscriber_auth),
+        offer_access_requirement.SubscriberPrincipal,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        api_catalog._admission_principal(other_auth)
+    assert excinfo.value.status_code == 403
+
+
+def test_credential_kind_is_stamped_by_both_api_key_authentication_paths():
+    """No test asserts ``credential_kind`` at the AUTHENTICATION layer
+    behaviorally — ``test_admission_principal_resolver_maps_every_auth_
+    shape_correctly`` above builds its own auth dicts by hand, and the
+    machine-shadow tests in ``tests/test_offer_access_requirement.py``
+    construct ``MachineCredentialPrincipal`` directly, bypassing both the
+    dict stamp AND the route conversion. Deleting the stamp in either
+    ``auth_dependencies._machine_principal`` or ``_api_key_principal``
+    would leave every one of those tests green while a real machine
+    request silently resolved to ``ApiKeyPrincipal`` and 403'd hunting a
+    nonexistent local row.
+
+    Checked via AST dict-literal inspection of each function's own body —
+    not a behavioral call, since ``_machine_principal`` requires a
+    configured kernel HMAC key and a live
+    ``dotmac_kernel.machine_auth.authenticate_machine`` call this test
+    environment cannot provide (``dotmac_kernel`` is not vendored or
+    importable here at all — there is no behavioral alternative to this
+    check for this specific property)."""
+
+    def _stamps_credential_kind(function_name: str, expected_value: str) -> bool:
+        source = _source("app/services/auth_dependencies.py")
+        tree = ast.parse(source)
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        )
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values, strict=False):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "credential_kind"
+                    and isinstance(value, ast.Constant)
+                    and value.value == expected_value
+                ):
+                    return True
+        return False
+
+    assert _stamps_credential_kind("_machine_principal", "machine")
+    assert _stamps_credential_kind("_api_key_principal", "legacy_api_key")
