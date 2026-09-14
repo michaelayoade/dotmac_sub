@@ -723,13 +723,26 @@ def test_leave_denial_evidence_is_a_registered_command_not_a_committing_helper()
     Checked precisely: the function must call ``execute_owner_command(``
     (proving delegation, not merely defining a command constant that is
     never used) and must NEVER call ``db.commit(`` itself (proving it does
-    not complete its own transaction). It MAY call ``db.rollback(`` exactly
-    once, defensively, BEFORE delegating — clearing a lingering caller
-    transaction so the registered command can actually run, rather than
-    completing or discarding a transaction of its own; that rollback is
-    checked to sit textually before the ``execute_owner_command(`` call,
-    not after it (i.e. it is not standing in for the command boundary's
-    own failure handling)."""
+    not complete its own transaction).
+
+    ``db.rollback(`` is explicitly PERMITTED exactly ONE or exactly TWO
+    times, in a checked order (round 15 finding 4 correction — the prior
+    version of this check only compared the FIRST occurrence's position,
+    so a second, undisclosed rollback anywhere in the function went
+    completely unchecked):
+
+    1. The defensive pre-delegation cleanup — clearing a lingering caller
+       transaction so the registered command can actually run — MUST sit
+       BEFORE ``execute_owner_command(``.
+    2. An OPTIONAL second rollback — the outer failure handler's own
+       defensive cleanup for when ``execute_owner_command`` itself raises
+       — MUST sit AFTER ``execute_owner_command(`` if present. This is
+       genuinely a second, distinct call site (the ``except Exception:``
+       block), not the same rollback counted twice.
+
+    A THIRD occurrence, or a second occurrence positioned before the
+    delegation call, fails this test — neither is a documented, permitted
+    shape."""
 
     owner = _source("app/services/catalog/offer_access_requirement.py")
     function_source = _function_source(owner, "record_leave_denial_evidence")
@@ -742,12 +755,31 @@ def test_leave_denial_evidence_is_a_registered_command_not_a_committing_helper()
         "record_leave_denial_evidence must never complete its own "
         "transaction — that is execute_owner_command's job"
     )
-    if "db.rollback(" in function_source:
-        assert function_source.index("db.rollback(") < function_source.index(
-            "execute_owner_command("
-        ), (
-            "the only permitted db.rollback( here is the defensive "
-            "pre-delegation cleanup, before execute_owner_command( runs"
+
+    rollback_count = function_source.count("db.rollback(")
+    assert rollback_count in (1, 2), (
+        f"record_leave_denial_evidence has {rollback_count} db.rollback( "
+        "calls; expected exactly one (defensive pre-delegation cleanup) or "
+        "two (that cleanup, plus a second, post-delegation rollback in the "
+        "outer failure handler) — never more, and never used as a "
+        "substitute for the command boundary's own transaction completion"
+    )
+
+    execute_index = function_source.index("execute_owner_command(")
+    first_rollback_index = function_source.index("db.rollback(")
+    assert first_rollback_index < execute_index, (
+        "the FIRST db.rollback( must be the defensive pre-delegation "
+        "cleanup, before execute_owner_command( runs"
+    )
+    if rollback_count == 2:
+        second_rollback_index = function_source.index(
+            "db.rollback(", first_rollback_index + 1
+        )
+        assert second_rollback_index > execute_index, (
+            "the SECOND db.rollback( must sit strictly after "
+            "execute_owner_command( — it is the outer failure handler's "
+            "own defensive cleanup for when the registered command itself "
+            "raises, never a duplicate of the pre-delegation guard"
         )
 
 
