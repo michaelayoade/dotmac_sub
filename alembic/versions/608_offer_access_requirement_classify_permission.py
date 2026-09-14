@@ -114,9 +114,29 @@ def _direct_grant_count(bind, table_names: set[str], table: str, key: str) -> in
 
 def downgrade() -> None:
     bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
     table_names = set(sa.inspect(bind).get_table_names())
     if "permissions" not in table_names:
         return
+
+    if is_postgres:
+        # Round 14 finding 5: without a lock here, a grant inserted into
+        # any of these three tables AFTER the zero-count checks below but
+        # BEFORE the DELETE produces an opaque FK integrity failure
+        # instead of the promised DowngradeRefused — data stays safe
+        # either way (the FK still blocks the delete), but the documented
+        # failure semantics did not hold. Locking all three grant tables
+        # BEFORE counting anything closes the window the same way 607's
+        # own downgrade already locks its target tables before counting.
+        op.execute("SET LOCAL lock_timeout = '5s'")
+        op.execute("SET LOCAL statement_timeout = '15min'")
+        for grant_table in (
+            "system_user_permissions",
+            "subscriber_permissions",
+            "role_permissions",
+        ):
+            if grant_table in table_names:
+                op.execute(f"LOCK TABLE {grant_table} IN ACCESS EXCLUSIVE MODE")
 
     direct_grants = _direct_grant_count(
         bind, table_names, "system_user_permissions", PERMISSION_KEY
