@@ -1056,14 +1056,29 @@ def update_offer_version(
     tags=["offer-versions"],
 )
 def delete_offer_version(
+    request: Request,
     version_id: str,
     db: Session = Depends(get_db),
     auth: dict = Depends(_require_billing_catalog_write),
 ):
     actor_id, actor_type = _actor(auth)
-    catalog_service.offer_versions.delete(
-        db, version_id, actor_id=actor_id, actor_type=actor_type
-    )
+    # Round 15 finding 2: deactivation is a mutation of an already-admitted
+    # row exactly like PATCH, and Michael's ruling covers "every mutation" —
+    # resolved and passed explicitly so OfferVersions.delete can recheck
+    # through the same owner immediately before it deactivates the row.
+    principal = _admission_principal(auth)
+    try:
+        catalog_service.offer_versions.delete(
+            db,
+            version_id,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            principal=principal,
+            request_id=_request_id(request),
+        )
+    except OfferAccessRequirementError as exc:
+        offer_access_requirement.record_leave_denial_evidence(db, exc)
+        raise _offer_access_requirement_http_error(exc) from exc
 
 
 @router.post(

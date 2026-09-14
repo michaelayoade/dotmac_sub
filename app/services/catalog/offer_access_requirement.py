@@ -893,11 +893,15 @@ def verify_admission_authorization(
     decision, made by the SAME owner function
     (``authorize_offer_version_admission``) the route delegates to — not a
     second, independently-maintained approximation of it. PUBLIC (not
-    underscore-prefixed) because both ``_admit`` (admission) and
-    ``OfferVersions.update`` (``app/services/catalog/offers.py`` — every
-    other mutation of an already-admitted row) call it; this is the ONE
-    reusable live-claims rebuild + owner delegation, not two separately
-    maintained copies of the same per-principal-type resolution.
+    underscore-prefixed) because ``_admit`` (admission), ``OfferVersions.
+    update`` (PATCH — every other field mutation of an already-admitted
+    row), and ``OfferVersions.delete`` (deactivation) all call it (``app/
+    services/catalog/offers.py``) — this is the ONE reusable live-claims
+    rebuild + owner delegation, not several separately maintained copies of
+    the same per-principal-type resolution. Not every mutation in this
+    module is covered by this list — only these three call it today; a new
+    mutation of an already-admitted offer version must call it too, not be
+    assumed to inherit the property.
 
     ``SystemAdmission`` is exempt — see its own docstring; it carries no
     RBAC identity to check.
