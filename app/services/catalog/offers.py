@@ -607,11 +607,13 @@ class OfferVersions(CRUDManager[OfferVersion]):
         retried POST with no key is not distinguishable from a genuinely new
         admission.
 
-        Authorization is decided entirely by the caller (the route's
-        ``require_any_permission`` dependency, or the test/internal caller
-        that invokes this adapter directly) — this method and the command it
-        builds make no authorization decision; ``actor_id``/``actor_type``
-        become the admission's typed, audit-only principal.
+        Authorization is checked at TWO independent layers: the route's own
+        ``require_any_permission`` dependency, AND a fresh, in-transaction
+        RBAC re-check inside ``admit_offer_version`` itself
+        (``offer_access_requirement._verify_admission_authorization``) —
+        this method does not decide authorization itself, but the command it
+        builds does. ``actor_id``/``actor_type`` become the admission's
+        typed principal, used for BOTH that re-check and audit attribution.
 
         ``principal`` is the ONLY way to admit with no authenticated actor
         (e.g. ``SystemAdmission`` for an internal/test caller) — pass it

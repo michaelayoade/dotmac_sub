@@ -401,50 +401,106 @@ def test_offer_version_admission_permission_is_not_seeded_into_any_role():
     )
 
 
-def test_offer_access_requirement_never_checks_billing_write_permission():
-    """``catalog:billing_write`` is referenced only in explanatory docstrings
-    in this module (documenting the route-level compound/OR-alternative
-    relationship) — this module itself never performs an authorization CHECK
-    against it (that check lives entirely at the route, per
-    ``test_admission_command_makes_no_authorization_decision`` above).
+def test_billing_write_is_checked_from_exactly_one_place_in_this_module():
+    """Round 11 gave the admission command a real, in-transaction
+    authorization decision (``_verify_admission_authorization`` /
+    ``_admission_permission_granted``), and that decision LEGITIMATELY
+    checks ``catalog:billing_write`` as one leg of the compound OR — see the
+    module's own docstring ("there is exactly one place that decides what a
+    role/scope means"). The prior version of this test asserted the
+    pre-round-11 premise ("this module never checks catalog:billing_write at
+    all"), which round 11 made false, and it did so by matching ONLY a
+    literal string argument — a check written as a named constant
+    (``BILLING_WRITE_PERMISSION``, the actual current shape) silently evaded
+    it even before round 11's redesign made the underlying premise obsolete.
 
-    Checked structurally, via real AST ``Call`` inspection of every
-    ``has_permission(...)`` call site for that literal string argument — not
-    by banning the substring outright, which fails on the module's own
-    accurate docstring mentions of the permission name (there are several,
-    all legitimate).
+    The invariant actually worth guarding now is narrower and still real:
+    ``catalog:billing_write`` (by literal string OR the ``BILLING_WRITE_
+    PERMISSION`` constant) is checked from exactly ONE call site in this
+    module — inside ``_admission_permission_granted`` — never from a second,
+    independently-written check elsewhere that could drift out of sync with
+    it (e.g. inside ``_verify_classify_permission``, which must never grow
+    its own billing-write check).
+
+    Checked via real AST ``Call`` inspection of every ``has_permission(...)``
+    call site's arguments, resolving BOTH a literal string and a reference to
+    the named constant — not by banning the substring outright, which fails
+    on the module's own accurate docstring mentions of the permission name
+    (there are several, all legitimate).
     """
 
     owner = _source("app/services/catalog/offer_access_requirement.py")
     tree = ast.parse(owner)
-    offending_calls = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+
+    def _checks_billing_write(node: ast.Call) -> bool:
         func = node.func
         is_has_permission = (
             isinstance(func, ast.Name) and func.id == "has_permission"
         ) or (isinstance(func, ast.Attribute) and func.attr == "has_permission")
         if not is_has_permission:
-            continue
+            return False
         for arg in list(node.args) + [kw.value for kw in node.keywords]:
             if isinstance(arg, ast.Constant) and arg.value == "catalog:billing_write":
-                offending_calls.append(node.lineno)
-    assert offending_calls == [], (
-        f"has_permission(...) checked catalog:billing_write directly at "
-        f"line(s) {offending_calls}"
+                return True
+            if isinstance(arg, ast.Name) and arg.id == "BILLING_WRITE_PERMISSION":
+                return True
+        return False
+
+    checking_functions = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if any(_checks_billing_write(call) for call in ast.walk(node) if isinstance(call, ast.Call)):
+            checking_functions.add(node.name)
+
+    assert checking_functions == {"_admission_permission_granted"}, (
+        "catalog:billing_write must be checked from exactly "
+        "_admission_permission_granted and nowhere else in this module; "
+        f"found it checked in: {sorted(checking_functions)}"
     )
 
 
-def test_admission_command_makes_no_authorization_decision():
-    """Sensitivity proof for the route-layer authorization redesign: the
-    admission command has no permission-verification function of its own —
-    authorization is decided entirely by the route's
-    ``require_any_permission`` dependency before the command ever runs."""
+def test_admission_command_makes_a_real_authorization_decision():
+    """Round 11 replaced the single-layer design this test used to assert
+    ("the command makes no authorization decision at all") with a two-layer
+    one: the route's ``require_any_permission`` gate stays, AND the command
+    itself now re-verifies the identical compound rule, fresh, inside its
+    own transaction, via ``_verify_admission_authorization`` — see that
+    function's and the module's own docstrings. Keeping the old assertion
+    would describe something false about the current, correct architecture;
+    this replaces it with a check of what is actually true today:
+
+    - the pre-round-11 function name never reappears (regression guard
+      against silently reintroducing the OLD, single-layer shape under its
+      old name);
+    - the new two-layer function is not just defined but actually CALLED
+      from ``_admit`` (a defined-but-dead function would let this pass
+      while the real command still made no decision) — proven via AST
+      inspection, not merely a substring search that a comment could
+      satisfy just as easily as a real call.
+    """
 
     owner = _source("app/services/catalog/offer_access_requirement.py")
     assert "_verify_admission_permission" not in owner
+    assert "def _verify_admission_authorization" in owner
     assert "def _verify_classify_permission" in owner
+
+    tree = ast.parse(owner)
+    admit_function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_admit"
+    )
+    calls_verify_admission_authorization = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_verify_admission_authorization"
+        for node in ast.walk(admit_function)
+    )
+    assert calls_verify_admission_authorization, (
+        "_admit must actually call _verify_admission_authorization, not "
+        "merely define it"
+    )
 
 
 #: There is no production call site allowed to construct ``SystemAdmission``
