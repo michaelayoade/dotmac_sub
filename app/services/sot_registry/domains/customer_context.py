@@ -878,6 +878,7 @@ DOMAIN = DomainSOT(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md",
                     "docs/SUBSCRIBER_METADATA_OWNERSHIP.md",
+                    "docs/designs/ACCOUNT_RECOVERY_PARTICIPANT_ARCHITECTURE.md",
                 ),
                 test_refs=(
                     "tests/architecture/test_account_recovery_boundary.py",
