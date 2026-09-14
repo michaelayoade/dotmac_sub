@@ -675,18 +675,15 @@ def test_offer_versions_create_delegates_the_actual_persist_to_the_new_owner():
 def test_offer_access_requirement_owner_actually_performs_the_write():
     """Round 13 correction: the earlier version of this test banned
     ``db.commit(``/``db.rollback(`` anywhere in the WHOLE file. That is too
-    broad — ``record_leave_denial_evidence`` legitimately commits, but only
-    in a transaction it is documented to own AFTER an owner-command
-    transaction has already unwound, never inside one (that was the exact
-    round-13 bug: an in-transaction ``db.commit()`` inside
+    broad — the round-13 bug was an in-transaction ``db.commit()`` inside
     ``authorize_offer_version_admission``, rejected by
     ``owner_commands._reject_helper_commit``, which turned a
     ``permission_denied`` refusal into ``nested_transaction_completion``
-    while still losing the audit evidence).
+    while still losing the audit evidence.
 
     Scoped to the actual owner-managed transaction functions instead: ONLY
     ``_admit``, ``_classify``, ``authorize_offer_version_admission``, and
-    ``_verify_admission_authorization`` (the ones that either run inside
+    ``verify_admission_authorization`` (the ones that either run inside
     ``execute_owner_command``'s transaction or are the shared decision this
     round moved the commit responsibility OUT of) may never call
     ``db.commit(``/``db.rollback(`` themselves — completing or discarding
@@ -709,6 +706,47 @@ def test_offer_access_requirement_owner_actually_performs_the_write():
         )
         assert "db.rollback(" not in function_source, (
             f"{function_name} must never roll back its own transaction"
+        )
+
+
+def test_leave_denial_evidence_is_a_registered_command_not_a_committing_helper():
+    """Round 14 finding 1: ``record_leave_denial_evidence`` used to call
+    ``db.commit()`` directly, making it a nested helper that completed its
+    own transaction — exactly what ``docs/CODING_STANDARD.md`` § 3 forbids
+    ("nested domain helpers... never call commit() or rollback()
+    independently"). It now delegates to a genuinely separate REGISTERED
+    owner command (``_RECORD_LEAVE_DENIAL_COMMAND`` /
+    ``execute_owner_command``), which begins and completes that
+    transaction itself.
+
+    Checked precisely: the function must call ``execute_owner_command(``
+    (proving delegation, not merely defining a command constant that is
+    never used) and must NEVER call ``db.commit(`` itself (proving it does
+    not complete its own transaction). It MAY call ``db.rollback(`` exactly
+    once, defensively, BEFORE delegating — clearing a lingering caller
+    transaction so the registered command can actually run, rather than
+    completing or discarding a transaction of its own; that rollback is
+    checked to sit textually before the ``execute_owner_command(`` call,
+    not after it (i.e. it is not standing in for the command boundary's
+    own failure handling)."""
+
+    owner = _source("app/services/catalog/offer_access_requirement.py")
+    function_source = _function_source(owner, "record_leave_denial_evidence")
+
+    assert "execute_owner_command(" in function_source, (
+        "record_leave_denial_evidence must actually delegate to a "
+        "registered owner command, not merely define one"
+    )
+    assert "db.commit(" not in function_source, (
+        "record_leave_denial_evidence must never complete its own "
+        "transaction — that is execute_owner_command's job"
+    )
+    if "db.rollback(" in function_source:
+        assert function_source.index("db.rollback(") < function_source.index(
+            "execute_owner_command("
+        ), (
+            "the only permitted db.rollback( here is the defensive "
+            "pre-delegation cleanup, before execute_owner_command( runs"
         )
 
 
