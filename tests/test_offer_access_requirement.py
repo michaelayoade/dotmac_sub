@@ -1108,15 +1108,32 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
       the REAL ``audit_denied_write`` run and asserts the durable
       ``auth.erp_staff_leave_write_denied`` row survives.
 
+    Round 13 correction: an EARLIER version of this fix had
+    ``authorize_offer_version_admission`` call ``db.commit()`` itself,
+    before raising, to save the staged audit row from the owner-command
+    rollback. That commit ran INSIDE ``execute_owner_command``'s own
+    transaction and was rejected by its ``before_commit`` guard
+    (``owner_commands._reject_helper_commit``), so the direct-command
+    caller got ``OwnerCommandError(nested_transaction_completion)`` instead
+    of ``permission_denied`` — worse than the bug, and still lost the
+    audit row. The decision function now only attaches denial details to
+    the raised error; ``record_leave_denial_evidence`` writes the evidence
+    afterward, in the caller's own separate transaction. This test would
+    have caught that regression too: ``command_excinfo`` below asserts the
+    real ``permission_denied`` code, not whatever the nested-commit
+    rejection would have produced.
+
     Break condition: fails if either adapter stops calling
     ``authorize_offer_version_admission`` (or that function stops calling
     ``erp_staff_access.staff_write_restricted``); if ``create_offer_version``/
     ``update_offer_version`` are ever moved back onto the blanket-gated
     ``router`` (reintroducing the two-decision-maker graph this round
-    closed); or if the direct-command denial's audit record stops
-    surviving the transaction rollback the denial itself triggers. None of
-    this can be satisfied by a rename; only real delegation, the actual
-    router registration, and a real committed audit row make it pass.
+    closed); if the direct-command denial's audit record stops surviving
+    the transaction rollback the denial itself triggers; or if the denial
+    decision ever again tries to commit from inside an owner-command
+    transaction. None of this can be satisfied by a rename; only real
+    delegation, the actual router registration, and a real committed audit
+    row make it pass.
     """
 
     from types import SimpleNamespace

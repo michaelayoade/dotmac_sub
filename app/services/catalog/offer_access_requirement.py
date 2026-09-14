@@ -574,14 +574,29 @@ def authorize_offer_version_admission(
     directly (a background job, CLI, or other non-route caller, which
     bypasses the router entirely regardless).
 
-    The staged ``audit_denied_write`` record is committed HERE, before
-    raising, rather than left to the caller's own transaction — a direct-
-    command caller's refusal (unlike the route's) runs inside
-    ``execute_owner_command``'s owned transaction, which rolls back on this
-    exact exception; without an explicit commit first, the staged evidence
-    of the denial would be deleted by the very rollback the denial causes,
-    silently losing the one durable trace that a leave-restricted principal
-    attempted a write at all.
+    THIS FUNCTION NEVER COMMITS AND NEVER WRITES AUDIT EVIDENCE ITSELF
+    (round 13 correction of an earlier, wrong fix): an in-transaction
+    ``db.commit()`` here, when called from ``_verify_admission_authorization``
+    inside ``execute_owner_command``'s owned transaction, is rejected by
+    that boundary's own ``before_commit`` guard
+    (``_reject_helper_commit`` in ``app/services/owner_commands.py``) —
+    "only the public command boundary may commit its transaction" — so the
+    caller got ``OwnerCommandError(nested_transaction_completion)`` instead
+    of ``permission_denied``, and the staged audit row was rolled back
+    anyway. The fix was worse than the bug it targeted.
+
+    Michael's ruling: a denial rolls back NORMALLY, like any other refusal.
+    When the refusal is specifically a staff-leave restriction, this
+    function attaches everything needed to reconstruct the audit evidence
+    onto the raised error's ``details`` (``leave_restricted=True``, the
+    principal identity, and the restriction's own two fields) — it does
+    NOT write anything. The OUTER command boundary
+    (``admit_offer_version``) and the route adapter
+    (``app/api/catalog.py``'s ``_require_offer_version_admission``) each
+    call ``record_leave_denial_evidence`` AFTER the denial has already
+    unwound in their own transaction, through a genuinely separate one. A
+    failure recording that evidence is logged and swallowed — it must
+    never mask or replace the ``permission_denied`` the caller already has.
     """
 
     auth = claims.as_dict()
@@ -604,24 +619,75 @@ def authorize_offer_version_admission(
     restriction = erp_staff_access.staff_write_restricted(db, auth, method="POST")
     if restriction is None:
         return
-    erp_staff_access.audit_denied_write(
-        db,
-        auth=auth,
-        restriction=restriction,
-        request_id=request_id,
-        permission_key=ADMISSION_SCOPE,
-    )
-    # Commit the staged audit record NOW, before raising — see this
-    # function's own docstring for why: a direct-command caller's refusal
-    # unwinds inside execute_owner_command's owned transaction, which would
-    # otherwise roll back and delete this exact evidence.
-    db.commit()
     raise _error(
         "permission_denied",
         "Offer version admission is refused: an active staff leave "
         "restriction permits read-only access.",
         retryable=False,
+        leave_restricted=True,
+        principal_id=claims.principal_id,
+        principal_type=claims.principal_type,
+        restriction_id=restriction.restriction_id,
+        restriction_source_system=restriction.source_system,
+        request_id=request_id,
     )
+
+
+def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) -> None:
+    """Durably record a staff-leave admission denial, in a genuinely
+    SEPARATE transaction from whichever one the denial itself unwound —
+    called AFTER ``authorize_offer_version_admission`` has already raised
+    and that raise has already propagated past its caller's own
+    transaction boundary (the route's plain session, or
+    ``execute_owner_command``'s rollback). No-ops for any error that is
+    not a leave-restriction denial (``exc.details["leave_restricted"]``
+    unset) — an ordinary compound-permission refusal has no prior audit
+    event to reconstruct.
+
+    Best-effort and STRICTLY NON-MASKING: this function never raises. A
+    failure writing the evidence is logged and swallowed, exactly because
+    the caller already has the real, correct ``permission_denied`` to
+    return — losing the audit trail a second time must never turn into
+    losing the original refusal too.
+    """
+
+    if not isinstance(exc, OfferAccessRequirementError) or not exc.details.get(
+        "leave_restricted"
+    ):
+        return
+
+    from types import SimpleNamespace
+
+    from app.services import erp_staff_access
+
+    try:
+        if db.in_transaction():
+            db.rollback()
+        auth = {
+            "principal_id": exc.details.get("principal_id"),
+            "principal_type": exc.details.get("principal_type"),
+        }
+        restriction = SimpleNamespace(
+            restriction_id=exc.details.get("restriction_id"),
+            source_system=exc.details.get("restriction_source_system"),
+        )
+        erp_staff_access.audit_denied_write(
+            db,
+            auth=auth,
+            restriction=restriction,
+            request_id=exc.details.get("request_id"),
+            permission_key=ADMISSION_SCOPE,
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "offer_version_admission.leave_denial_audit_failed principal_id=%s",
+            exc.details.get("principal_id"),
+        )
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - defensive, session may be unusable
+            pass
 
 
 def _shadow_check_machine_credential_admission(
@@ -931,14 +997,24 @@ def admit_offer_version(
     billing-governance audit participant all run inside one
     ``execute_owner_command`` boundary. ``OfferVersions.create`` is a thin
     adapter over this — it does not construct the row itself.
+
+    A staff-leave denial rolls back normally (see ``authorize_offer_version_
+    admission``'s own docstring); this OUTER boundary then records the
+    denial's audit evidence in a genuinely separate transaction, AFTER the
+    rollback above has already completed and released the session — never
+    inside it.
     """
 
-    return execute_owner_command(
-        db,
-        definition=_ADMIT_COMMAND,
-        context=command.context,
-        operation=lambda: _admit(db, command),
-    )
+    try:
+        return execute_owner_command(
+            db,
+            definition=_ADMIT_COMMAND,
+            context=command.context,
+            operation=lambda: _admit(db, command),
+        )
+    except OfferAccessRequirementError as exc:
+        record_leave_denial_evidence(db, exc)
+        raise
 
 
 def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionResult:
@@ -1643,5 +1719,6 @@ __all__ = [
     "list_unclassified_offer_versions",
     "preview_classify_offer_version_access_requirement",
     "principal_label",
+    "record_leave_denial_evidence",
     "validate_admission_access_requirement",
 ]
