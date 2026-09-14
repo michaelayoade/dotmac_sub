@@ -91,9 +91,12 @@ or schedule pressure:
   payload's byte alignment, so this guard accepts a wider over-report in
   that encoding instead of risking a silent miss — in any git-tracked file
   in this repository that also satisfies the scan's enforceable
-  completeness premises, checked against the git INDEX (no path recorded
-  as a symlink or gitlink/submodule, checked first, before anything is
-  read from disk) as well as the WORKING TREE (no symlink or non-regular
+  completeness premises, checked against the git INDEX (every tracked
+  path's mode checked against an EXACT ALLOWLIST of `100644`/`100755`,
+  checked first, before anything is read from disk — a mode outside the
+  allowlist refuses, including `120000` symlink or `160000` gitlink/
+  submodule and any mode this guard has never named before) as well as
+  the WORKING TREE (no symlink or non-regular
   file actually encountered on disk, no missing tracked path) — TWO
   separate sources of truth about the same path, because a tracked
   symlink or gitlink locally replaced by an ordinary regular file on disk

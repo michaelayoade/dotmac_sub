@@ -213,9 +213,12 @@ accepted there too.
   at runtime, unicode homoglyphs). It scans every git-tracked file in this
   repository that also satisfies its own enforceable completeness premises,
   checked against TWO separate sources of truth about the same path: the
-  git INDEX (no path recorded as a symlink or gitlink/submodule — checked
-  first, on the index's word alone, before anything is read from disk; see
-  `_dotmac_ro_scan_targets`'s docstring) and the WORKING TREE (no symlink
+  git INDEX (every tracked path's mode checked against an EXACT ALLOWLIST
+  of `100644`/`100755` — checked first, on the index's word alone, before
+  anything is read from disk; a mode outside the allowlist refuses,
+  including `120000` symlink or `160000` gitlink/submodule and any mode
+  this guard has never named before; see `_tracked_files_with_modes`'s
+  docstring) and the WORKING TREE (no symlink
   or non-regular file actually encountered while walking to a leaf, no
   missing tracked path; see `_files_containing`'s docstring). An earlier
   version of this guard checked only the working tree, which left a real

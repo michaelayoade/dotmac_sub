@@ -579,15 +579,31 @@ def _byte_needle_patterns(needle: str) -> tuple[re.Pattern[bytes], ...]:
 _SCAN_REFUSAL_MARKER = "scan refusal, not a silent skip"
 
 
-#: Git index modes this scan REFUSES on the index's word alone, before
-#: anything is read from disk. `120000` is a symlink; `160000` is a
-#: gitlink/submodule. Both name a path the index does NOT declare to be
-#: ordinary tracked file content — the index is the authoritative
-#: statement of what a tracked path IS, independent of whatever currently
-#: happens to sit on disk at that path.
-_PROHIBITED_INDEX_MODES: dict[str, str] = {
-    "120000": "a symlink",
-    "160000": "a gitlink/submodule",
+#: Git index modes this scan permits to be scanned at all — an EXACT
+#: ALLOWLIST, checked on the index's word alone before anything is read
+#: from disk. `100644` is an ordinary file; `100755` is an ordinary
+#: executable file. Everything else refuses, including a mode this scan
+#: has never named. An EARLIER version of this was a DENYLIST naming only
+#: `120000` (symlink) and `160000` (gitlink/submodule): a mode neither of
+#: those two — unrecognized, unexpected, or simply never anticipated —
+#: fell THROUGH the denylist and was scanned as ordinary content, because
+#: "not in the denylist" and "safe to scan" are not the same claim. An
+#: allowlist has no such gap by construction: a mode is scanned only
+#: because it was explicitly proven safe, never because it merely failed
+#: to match a specific list of known-bad values. Compared as bytes,
+#: matching the raw `git ls-files --stage -z` output — the mode is never
+#: decoded to text just to run this comparison.
+_ALLOWED_INDEX_MODES: frozenset[bytes] = frozenset({b"100644", b"100755"})
+
+#: Human-readable descriptions for the two non-allowed modes this scan has
+#: actually observed in practice — a real symlink or a real gitlink/
+#: submodule — used only to make a refusal message name the specific
+#: thing when it can. Any OTHER non-allowed mode, with no entry here,
+#: still refuses via `_ALLOWED_INDEX_MODES` above; this dict only makes
+#: two known cases more readable, it is not itself the enforcement.
+_KNOWN_PROHIBITED_INDEX_MODE_DESCRIPTIONS: dict[bytes, str] = {
+    b"120000": "a symlink",
+    b"160000": "a gitlink/submodule",
 }
 
 
@@ -615,6 +631,20 @@ def _tracked_files_with_modes(root: Path) -> tuple[tuple[Path, str], ...]:
     non-UTF-8 tracked filename raises a controlled, typed refusal here —
     not an uncontrolled `UnicodeDecodeError` from a whole-output decode
     with no stable refusal contract.
+
+    The mode is checked against `_ALLOWED_INDEX_MODES` HERE, in the
+    enumerator, before a single path is even decoded — not in
+    `_dotmac_ro_scan_targets`, which filters this function's output by the
+    three self-referencing exclusions before anything else runs. An
+    earlier draft put the mode check there instead, after that exclusion
+    filter, which meant a mode violation on one of the three excluded
+    paths (this guard file, ADR-0016, the runbook) would never be
+    noticed — an excluded path is exactly as capable of being recorded as
+    a symlink or an unrecognized mode as any other tracked path, and
+    exclusion from the SCAN is not exclusion from the INDEX's mode
+    declaration. Checking here, over every record `git ls-files --stage`
+    returns with no exclusion applied yet, covers every tracked path
+    unconditionally.
     """
     result = subprocess.run(
         ["git", "ls-files", "--stage", "-z"],
@@ -627,7 +657,24 @@ def _tracked_files_with_modes(root: Path) -> tuple[tuple[Path, str], ...]:
         if not record:
             continue
         metadata, _, relative_bytes = record.partition(b"\t")
-        mode = metadata.split(b" ", 1)[0].decode("ascii")
+        mode_bytes = metadata.split(b" ", 1)[0]
+        if mode_bytes not in _ALLOWED_INDEX_MODES:
+            description = _KNOWN_PROHIBITED_INDEX_MODE_DESCRIPTIONS.get(
+                mode_bytes, "not one of the allowed modes (100644, 100755)"
+            )
+            raise AssertionError(
+                f"a git-tracked path under {root} ({relative_bytes!r}) is "
+                f"recorded in the git INDEX at mode "
+                f"{mode_bytes.decode('ascii', errors='replace')} "
+                f"({description}), regardless of what currently sits on "
+                "disk at that path; the index is the authoritative "
+                "declaration of what a tracked path IS, and only 100644 "
+                "(ordinary file) and 100755 (ordinary executable file) "
+                "are allowed — every other mode is refused on the "
+                f"index's word alone, before anything is read from disk — "
+                f"{_SCAN_REFUSAL_MARKER}"
+            )
+        mode = mode_bytes.decode("ascii")
         try:
             relative = relative_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -686,25 +733,36 @@ def _dotmac_ro_scan_targets(root: Path) -> tuple[Path, ...]:
 
     THE LESSON THIS FUNCTION EXISTS TO RECORD: a tracked path has TWO
     sources of truth, not one — the git INDEX, which declares what the
-    path IS (mode `100644` ordinary file, `120000` symlink, `160000`
-    gitlink/submodule, ...), and the WORKING TREE, which is whatever
-    currently happens to sit on disk at that path. `_read_verified_tracked_bytes`
-    asks the filesystem: it refuses a symlinked ancestor, a dangling
-    target, a FIFO, a non-regular leaf — every one of those is a DISK-STATE
-    check, made by actually opening path components with `O_NOFOLLOW`. But
-    a disk-state check can only see what is currently on disk. If a
-    tracked symlink or gitlink has been locally replaced by an ORDINARY
-    regular file, the disk-state walk sees a perfectly normal file and
-    scans it — it never learns that the INDEX declares this path to be
-    something this guard must refuse, because the index is a different
-    source of truth that a disk-only walk never reads. This function reads
-    the index (`_tracked_files_with_modes`, `git ls-files --stage -z`) and
-    refuses a prohibited mode (`_PROHIBITED_INDEX_MODES`) HERE, at target
-    selection, before `_read_verified_tracked_bytes` or anything else
-    reads a single byte from disk — closing the half of this guard's
-    completeness that a disk-only walk structurally cannot reach. The next
-    person strengthening this guard should check both sources, not just
-    the one already checked.
+    path IS (mode `100644` ordinary file, `100755` ordinary executable
+    file, `120000` symlink, `160000` gitlink/submodule, ...), and the
+    WORKING TREE, which is whatever currently happens to sit on disk at
+    that path. `_read_verified_tracked_bytes` asks the filesystem: it
+    refuses a symlinked ancestor, a dangling target, a FIFO, a non-regular
+    leaf — every one of those is a DISK-STATE check, made by actually
+    opening path components with `O_NOFOLLOW`. But a disk-state check can
+    only see what is currently on disk. If a tracked symlink or gitlink
+    has been locally replaced by an ORDINARY regular file, the disk-state
+    walk sees a perfectly normal file and scans it — it never learns that
+    the INDEX declares this path to be something this guard must refuse,
+    because the index is a different source of truth that a disk-only
+    walk never reads. `_tracked_files_with_modes` reads the index
+    (`git ls-files --stage -z`) and refuses any mode outside
+    `_ALLOWED_INDEX_MODES` there, in the enumerator, before a single path
+    is filtered by exclusion or read from disk — closing the half of this
+    guard's completeness that a disk-only walk structurally cannot reach.
+    The next person strengthening this guard should check both sources,
+    not just the one already checked.
+
+    This function itself no longer inspects the mode at all — it trusts
+    that every `(path, mode)` pair `_tracked_files_with_modes` returns has
+    already survived the allowlist, and only applies the three
+    self-referencing exclusions on top. That ordering matters: checking
+    the mode in the ENUMERATOR, before this function's exclusion filter
+    ever runs, means the three excluded paths (this guard file, ADR-0016,
+    the runbook) are validated exactly like every other tracked path — an
+    earlier draft checked the mode here instead, after exclusion, which
+    would have let one of those three paths carry a prohibited mode
+    unnoticed.
 
     This function still makes no claim about whether a selected path's
     CONTENT can be safely read from disk — that remains
@@ -716,22 +774,9 @@ def _dotmac_ro_scan_targets(root: Path) -> tuple[Path, ...]:
     FILENAME itself, via `_tracked_files_with_modes`.
     """
     excluded = {root / relative for relative in _DOTMAC_RO_SELF_REFERENCING_FILES}
-    targets: list[Path] = []
-    for path, mode in _tracked_files_with_modes(root):
-        if path in excluded:
-            continue
-        if mode in _PROHIBITED_INDEX_MODES:
-            raise AssertionError(
-                f"{path} is recorded in the git INDEX as "
-                f"{_PROHIBITED_INDEX_MODES[mode]} (mode {mode}), regardless "
-                "of what currently sits on disk at that path right now; "
-                "the index is the authoritative declaration of what a "
-                "tracked path IS, and a prohibited mode is refused on the "
-                "index's word alone, before anything is read from disk — "
-                f"{_SCAN_REFUSAL_MARKER}"
-            )
-        targets.append(path)
-    return tuple(targets)
+    return tuple(
+        path for path, _mode in _tracked_files_with_modes(root) if path not in excluded
+    )
 
 
 def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
@@ -875,10 +920,11 @@ def _files_containing(paths: Iterable[Path], needle: str, root: Path) -> list[Pa
     substitution races the walk) — a guard exemption states an enforceable
     premise, or the region is unmonitored rather than exempt. That refusal
     is a DISK-STATE check; it complements, and does not replace, the git
-    INDEX-mode check `_dotmac_ro_scan_targets` performs before any path
-    ever reaches this function (see that function's docstring for why the
-    index and the working tree are two different sources of truth about
-    the same path, and why a guard needs both).
+    INDEX-mode check `_tracked_files_with_modes` performs, via
+    `_dotmac_ro_scan_targets`, before any path ever reaches this function
+    (see that function's docstring for why the index and the working tree
+    are two different sources of truth about the same path, and why a
+    guard needs both).
 
     There is deliberately NO binary-file exemption. Matching happens
     directly against each file's RAW BYTES (see `_byte_needle_patterns`),
@@ -1650,6 +1696,67 @@ def test_the_scan_refuses_a_gitlink_recorded_in_the_index(tmp_path) -> None:
 
     with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
         _dotmac_ro_scan_targets(repo)
+
+
+def test_the_scan_refuses_an_index_mode_outside_the_allowlist(
+    monkeypatch, tmp_path
+) -> None:
+    """Sensitivity proof: an index mode this scan has never named must REFUSE.
+
+    `_ALLOWED_INDEX_MODES` is an ALLOWLIST (`100644`, `100755`), not a
+    denylist of the two known-bad modes (`120000`, `160000`). This proves
+    the allowlist's actual reason for existing: a mode that is neither
+    ordinary-file nor symlink-nor-gitlink — one this scan has never even
+    named — must still refuse, not silently scan, because it was never
+    proven safe.
+
+    STATED PREMISE, checked directly rather than assumed: on git 2.39.5,
+    no supported git can actually RECORD such a mode. `update-index
+    --cacheinfo`, `update-index --index-info`, and even `mktree` all exit
+    0 and silently NORMALIZE an unrecognized `100xxx` permission bit to
+    `100644` (or `100755` on the executable bit) — `mktree` writes the
+    normalized mode into the tree object itself, so a `read-tree` of that
+    tree yields `100644` too, not the mode that was asked for. A plant
+    that staged, say, `100600` through any of those git commands would
+    therefore record a PERMITTED mode and trigger no refusal at all — it
+    would fail while appearing to prove the guard broken, and someone
+    "fixing" that failure by loosening the allowlist would be repairing a
+    test artifact, not a real gap. Building the plant that way is exactly
+    the mistake this allowlist exists to prevent, so this test does not
+    attempt it.
+
+    Instead this drives `_tracked_files_with_modes` directly, at the
+    PARSER level: `subprocess.run` is monkeypatched to return a synthetic
+    `git ls-files --stage -z` record naming mode `100600`, with no git
+    process and no filesystem involved anywhere in this test. That proves
+    the refusal is REACHABLE given such a record — a future git, a
+    hand-written or corrupted index, or any other producer of this exact
+    on-disk format — not that the record is producible by git today. It
+    also satisfies "not through the filesystem-shape check" more exactly
+    than a staged file could: there is no filesystem-shape check in this
+    test's path at all, only the allowlist comparison itself.
+    """
+    synthetic_stdout = (
+        b"100600 " + b"a" * 40 + b" 0\tscripts/never_actually_stageable.py\0"
+    )
+
+    def _fake_git_ls_files_stage(*args, **kwargs):
+        assert args[0] == ["git", "ls-files", "--stage", "-z"], (
+            "this fake only understands the exact invocation "
+            "_tracked_files_with_modes makes; anything else means the "
+            "function under test changed and this plant needs revisiting"
+        )
+        return subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout=synthetic_stdout, stderr=b""
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_git_ls_files_stage)
+
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER) as excinfo:
+        _tracked_files_with_modes(tmp_path)
+    assert "100600" in str(excinfo.value), (
+        "the refusal must name the offending mode explicitly, not just say 'refused'"
+    )
 
 
 def test_the_scan_refuses_a_non_utf8_tracked_filename(tmp_path) -> None:
