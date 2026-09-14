@@ -297,13 +297,13 @@ def _verify_classify_permission(db: Session, system_user_id: UUID) -> None:
 @dataclass(frozen=True, slots=True)
 class StaffPrincipal:
     """An admission attributed to an authenticated staff (system_user)
-    principal. The ROUTE (``app/api/catalog.py``) already authorizes the
-    request via ``require_any_permission(catalog:billing_write,
-    catalog:offer_version:admission)`` (combined with the router's own
-    ``catalog:write`` gate) before this command ever runs; this id is ALSO
-    re-verified against the identical compound permission inside the
-    command itself (``verify_admission_authorization``), as defense in
-    depth for a caller that reaches this command directly. It remains the
+    principal. The ROUTE (``app/api/catalog.py``'s ``_require_offer_
+    version_admission``, on ``admission_router``) already authorizes the
+    request by delegating to ``authorize_offer_version_admission`` before
+    this command ever runs; this id is ALSO re-verified against the
+    identical decision inside the command itself
+    (``verify_admission_authorization``, delegating to the SAME owner), as
+    defense in depth for a caller that reaches this command directly. It remains the
     recorded audit/attribution identity either way."""
 
     system_user_id: UUID
@@ -1098,13 +1098,13 @@ def assert_access_requirement_immutable(update_payload: Mapping[str, object]) ->
 class AdmitOfferVersionCommand:
     context: CommandContext
     payload: OfferVersionCreate
-    #: REQUIRED, no default. Authorization for admission is checked at TWO
-    #: independent layers: the route (``app/api/catalog.py``'s router-level
-    #: ``catalog:write`` gate together with the route's
-    #: ``require_any_permission(catalog:billing_write,
-    #: catalog:offer_version:admission)`` dependency), AND this command's own
+    #: REQUIRED, no default. Authorization for admission has ONE decision
+    #: owner (``authorize_offer_version_admission``); TWO callers delegate
+    #: to it — the route (``app/api/catalog.py``'s ``_require_offer_
+    #: version_admission``, on ``admission_router``, which carries NO
+    #: blanket router-level gate of its own) and this command's own
     #: ``verify_admission_authorization`` (called from ``_admit``), which
-    #: re-derives and checks the identical compound rule against the live
+    #: re-derives and checks the identical decision against the live
     #: database for whichever principal is supplied — never a caller-
     #: asserted boolean. ``SystemAdmission`` is exempt (see its docstring).
     #: ``principal`` remains the recorded audit/attribution identity as
