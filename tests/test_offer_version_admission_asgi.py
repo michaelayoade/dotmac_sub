@@ -402,28 +402,42 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
     verify the LATER decision (the one actually being tested) observes the
     committed change.
 
-    PLACEMENT, not just existence (round 14 finding 6): the earlier version
-    of this test injected the revocation in ``_admission_principal``, which
-    the ROUTE calls BEFORE ``OfferVersions.update`` is ever entered — so a
-    recheck moved to the very TOP of ``update`` would have observed the
-    revocation just as well as the real, immediately-pre-mutation
-    placement, and the test could not have told the two apart. This
-    version injects the revocation from INSIDE ``OfferVersions.update``
-    itself — wrapping ``catalog_billing_governance.
-    assert_offer_version_update_safe``, the read-only validation call that
-    runs immediately before ``verify_admission_authorization`` in the real
-    function, several statements after ``update`` was entered. A recheck
-    moved to the top of ``update`` (before this validation call) would run
-    BEFORE the revocation lands and would NOT observe it, returning 200;
-    the real, immediately-pre-mutation placement runs AFTER it and does,
-    returning 403. That contrast is what distinguishes "checked somewhere
-    in update" from "checked immediately before the mutation" — the claim
-    this test actually makes.
+    PLACEMENT, narrowed precisely (round 15 finding 6 correction — the
+    round 14 version of this docstring overclaimed what the fixture
+    actually establishes). The round-13 version of this test injected the
+    revocation in ``_admission_principal``, which the ROUTE calls BEFORE
+    ``OfferVersions.update`` is ever entered, so a recheck moved to the
+    very TOP of ``update`` would have observed the revocation just as
+    well as the real placement. Round 14 moved the injection to wrap
+    ``catalog_billing_governance.assert_offer_version_update_safe`` (the
+    read-only validation call immediately before
+    ``verify_admission_authorization`` in the real function) — genuinely
+    stronger, but still NOT a proof of "immediately before the write" or
+    "inside the same transaction" in the strict sense:
+
+    - It distinguishes a recheck placed BEFORE this validation seam (would
+      miss the revocation, return 200) from one placed AFTER it (observes
+      the revocation, returns 403) — it does NOT distinguish "immediately
+      after the seam" from "after the seam, with other statements before
+      the actual mutation": a recheck moved later still, but still after
+      this exact injection point, would pass this test identically.
+    - The revocation is committed on the SAME session/request the
+      mutation itself uses (the accepted single-process TOCTOU-injection
+      technique described above) — this test does not independently
+      verify the check and the mutation share one transaction boundary;
+      that currently follows from reading ``OfferVersions.update``'s own
+      source (no intervening commit), not from anything this test
+      observes on its own.
+
+    What this test DOES prove, at that narrower scope: a grant revoked
+    after ``update``'s read-only validation runs, but before its recheck,
+    is observed by that recheck — it is not a stale, top-of-function check
+    a later revocation could slip past.
 
     Break condition: this fails (a 200 where it must be 403) if
     ``OfferVersions.update`` stops calling ``verify_admission_authorization``
-    AFTER its read-only validation and immediately before its mutation, or
-    if that call is ever moved earlier than the injection point below.
+    AFTER its read-only validation, or if that call is ever moved earlier
+    than the injection point below.
     """
 
     from app.services import catalog_billing_governance
@@ -483,10 +497,11 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
         json={"name": "renamed after revocation"},
     )
     assert patch_response.status_code == 403, (
-        "a grant revoked mid-update, immediately before "
-        "verify_admission_authorization's recheck, must still refuse the "
-        "write — a recheck moved to the TOP of update() would have missed "
-        "this revocation and returned 200 instead"
+        "a grant revoked mid-update, AFTER its read-only validation seam "
+        "but before verify_admission_authorization's recheck, must still "
+        "refuse the write — a recheck moved to the TOP of update() (before "
+        "this seam) would have missed this revocation and returned 200 "
+        "instead"
     )
 
 
