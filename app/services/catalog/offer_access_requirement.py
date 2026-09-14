@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -87,6 +88,8 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 from app.services.system_user_assignments import system_user_role_names
+
+logger = logging.getLogger(__name__)
 
 OWNER = "service_intent.offer_access_requirement"
 CLASSIFY_PERMISSION = "catalog:offer_access_requirement:classify"
@@ -316,6 +319,48 @@ class SubscriberPrincipal:
 
 
 @dataclass(frozen=True, slots=True)
+class MachineCredentialPrincipal:
+    """An admission attributed to a kernel-issued machine credential
+    (``dotmac_kernel.machine_auth``), authenticated via
+    ``auth_dependencies._machine_principal`` and distinguished from a
+    legacy local ``ApiKeyPrincipal`` by ``credential_kind == "machine"`` on
+    the auth dict (both currently surface as ``principal_type == "api_key"``
+    at the HTTP layer for backward compatibility — see
+    ``app/api/catalog.py``'s ``_admission_principal``).
+
+    THIS IS THE EXACT, NON-GROWING COMPATIBILITY PATH for the
+    machine-credential authorization migration Michael ruled on: no
+    inventory of active machine callers and their granted scopes exists yet,
+    so hard-enforcing the compound admission rule against them today would
+    be an uncensused, silent access retirement (exactly what this migration
+    must not do) rather than a reviewed one. Until that inventory, a scope
+    migration, and an explicit enforcement decision land,
+    ``_verify_admission_authorization`` runs this principal's authorization
+    decision in SHADOW / WOULD-REFUSE mode only: it computes and logs
+    whether ``authorize_offer_version_admission`` would have refused, using
+    the scopes captured at authentication time (below), but never raises —
+    admission proceeds regardless, identical to every machine credential's
+    behavior before this module had any command-level check at all. This is
+    the ONE and ONLY principal type this module treats this way: the
+    isinstance branch in ``_verify_admission_authorization`` names exactly
+    this type, and
+    ``test_machine_credential_is_the_only_shadow_mode_principal`` fails the
+    build if that set ever silently grows to cover another principal type.
+
+    ``scopes`` is a SNAPSHOT taken at authentication time, not a live
+    re-read — this module has no live query surface into the kernel's
+    ``machine_credentials`` table, so even after real enforcement lands, a
+    scope revoked between authentication and this command's transaction
+    would not be observed by this snapshot alone (see the broader residual
+    premise documented on ``_verify_admission_authorization``, which applies
+    identically here once enforcement is turned on).
+    """
+
+    credential_id: UUID
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SystemAdmission:
     """An admission with no authenticated end-user context at all — internal
     tooling, seed data, or a test fixture calling this command directly
@@ -341,12 +386,17 @@ class SystemAdmission:
 #: re-verified against RBAC by ``_verify_admission_authorization`` — see
 #: ``AdmitOfferVersionCommand.principal``'s docstring.
 AdmissionPrincipal = (
-    StaffPrincipal | ApiKeyPrincipal | SubscriberPrincipal | SystemAdmission
+    StaffPrincipal
+    | ApiKeyPrincipal
+    | SubscriberPrincipal
+    | MachineCredentialPrincipal
+    | SystemAdmission
 )
 _ADMISSION_PRINCIPAL_TYPES = (
     StaffPrincipal,
     ApiKeyPrincipal,
     SubscriberPrincipal,
+    MachineCredentialPrincipal,
     SystemAdmission,
 )
 
@@ -360,6 +410,8 @@ def admission_actor_label(principal: AdmissionPrincipal) -> str:
         return f"api_key:{principal.api_key_id}"
     if isinstance(principal, SubscriberPrincipal):
         return f"subscriber:{principal.subscriber_id}"
+    if isinstance(principal, MachineCredentialPrincipal):
+        return f"machine_credential:{principal.credential_id}"
     return f"system:{principal.reason}"
 
 
@@ -375,6 +427,8 @@ def _admission_actor_evidence(
         return str(principal.api_key_id), "api_key"
     if isinstance(principal, SubscriberPrincipal):
         return str(principal.subscriber_id), "subscriber"
+    if isinstance(principal, MachineCredentialPrincipal):
+        return str(principal.credential_id), "machine_credential"
     return None, None
 
 
@@ -483,6 +537,56 @@ def authorize_offer_version_admission(
         "Offer version admission is refused: an active staff leave "
         "restriction permits read-only access.",
         retryable=False,
+    )
+
+
+def _shadow_check_machine_credential_admission(
+    db: Session, principal: MachineCredentialPrincipal
+) -> None:
+    """SHADOW / WOULD-REFUSE evaluation for a machine-credential admission —
+    evaluates and LOGS what ``authorize_offer_version_admission`` would have
+    decided; NEVER raises, and NEVER refuses. A machine credential that
+    ``origin/main`` authorized (no command-level check existed before this
+    module had one at all) must still succeed on this branch — hard
+    enforcement here, before an inventory of active machine callers and
+    their granted scopes exists, would be an uncensused, silent access
+    retirement, which is exactly what this migration must not do.
+
+    Works ONLY from what this module can actually see: ``principal.scopes``,
+    the snapshot captured at authentication time
+    (``auth_dependencies._machine_principal``) and threaded through by
+    ``app/api/catalog.py``'s ``_admission_principal``. This module has no
+    live query surface into the kernel's own credential/scope storage
+    (``dotmac_kernel`` is not vendored or importable in this codebase — the
+    inventory and any live re-read are a cross-repository slice for later,
+    not something this function can safely attempt), so the logged decision
+    is necessarily a point-in-time approximation, not a live re-verification
+    — consistent with this being a diagnostic/inventory aid, not an
+    enforcement path.
+    """
+
+    auth = {
+        "principal_id": str(principal.credential_id),
+        "principal_type": "api_key",
+        "roles": [],
+        "scopes": list(principal.scopes),
+    }
+    would_be_granted = _admission_permission_granted(auth, db)
+    if would_be_granted:
+        logger.info(
+            "offer_version_admission.machine_credential_shadow: would be "
+            "authorized (compatibility path, not enforced) credential_id=%s",
+            principal.credential_id,
+        )
+        return
+    logger.warning(
+        "offer_version_admission.machine_credential_shadow: WOULD REFUSE "
+        "under the compound admission rule (catalog:write AND "
+        "(catalog:billing_write OR catalog:offer_version:admission)) but "
+        "admission is NOT enforced against machine credentials yet — "
+        "proceeding under the compatibility path. credential_id=%s scopes=%s",
+        principal.credential_id,
+        sorted(principal.scopes),
     )
 
 
@@ -595,6 +699,14 @@ def _verify_admission_authorization(
             "principal_type": "subscriber",
             "roles": set(_subscriber_role_names(db, principal.subscriber_id)),
         }
+    elif isinstance(principal, MachineCredentialPrincipal):
+        # EXACT, NON-GROWING COMPATIBILITY PATH: this is the only principal
+        # type this function does not enforce against — see
+        # MachineCredentialPrincipal's own docstring for why, and
+        # test_machine_credential_is_the_only_shadow_mode_principal for the
+        # guard that fails the build if this set of one silently grows.
+        _shadow_check_machine_credential_admission(db, principal)
+        return
     else:  # pragma: no cover - closed union; __post_init__ already refuses
         # any object outside AdmissionPrincipal at construction time.
         raise _error(
@@ -1430,6 +1542,7 @@ __all__ = [
     "ApiKeyPrincipal",
     "ClassifyOfferAccessRequirementCommand",
     "OWNER",
+    "MachineCredentialPrincipal",
     "OfferAccessRequirementClassificationPreview",
     "OfferAccessRequirementClassificationResult",
     "OfferAccessRequirementError",
@@ -1442,6 +1555,7 @@ __all__ = [
     "admission_actor_label",
     "admit_offer_version",
     "assert_access_requirement_immutable",
+    "authorize_offer_version_admission",
     "classify_offer_version_access_requirement",
     "list_unclassified_offer_versions",
     "preview_classify_offer_version_access_requirement",

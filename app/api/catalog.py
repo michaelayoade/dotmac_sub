@@ -156,6 +156,17 @@ def _admission_principal(
     ``app/services/auth_flow.py``'s login role resolution). Retiring that
     access is a separate, deliberate census/migration — not something this
     resolver silently forecloses by refusing the principal type.
+
+    A kernel machine credential (``auth_dependencies._machine_principal``)
+    and a legacy local API key (``_api_key_principal``) both authenticate as
+    ``principal_type == "api_key"``, for backward compatibility with every
+    existing permission check — but they are different principal KINDS with
+    different live-verification stories (a local ``ApiKey`` row this module
+    can re-read live, versus a kernel credential it cannot), so they must not
+    share one lookup. ``credential_kind`` on the auth dict (set at
+    authentication time) distinguishes them: ``"machine"`` resolves to
+    ``MachineCredentialPrincipal`` (shadow/would-refuse only — see its own
+    docstring), anything else resolves to ``ApiKeyPrincipal`` (enforced).
     """
 
     principal_id = auth.get("principal_id")
@@ -165,6 +176,11 @@ def _admission_principal(
             system_user_id=UUID(str(principal_id))
         )
     if principal_type == "api_key" and principal_id:
+        if auth.get("credential_kind") == "machine":
+            return offer_access_requirement.MachineCredentialPrincipal(
+                credential_id=UUID(str(principal_id)),
+                scopes=tuple(auth.get("scopes") or ()),
+            )
         return offer_access_requirement.ApiKeyPrincipal(
             api_key_id=UUID(str(principal_id))
         )
@@ -897,14 +913,17 @@ def create_offer_version(
     auth: dict = Depends(_require_offer_version_admission),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    actor_id, actor_type = _actor(auth)
-    _admission_principal(auth)  # fails closed before any write if unattributable
+    # Resolved and passed explicitly (never re-derived from actor_id/
+    # actor_type strings) so a MachineCredentialPrincipal's captured scopes
+    # actually reach the command — actor_id/actor_type alone cannot carry
+    # them, and cannot distinguish a machine credential from a legacy API
+    # key in the first place (see _admission_principal's docstring).
+    principal = _admission_principal(auth)  # fails closed if unattributable
     try:
         return catalog_service.offer_versions.create(
             db,
             payload,
-            actor_id=actor_id,
-            actor_type=actor_type,
+            principal=principal,
             idempotency_key=idempotency_key,
         )
     except OfferAccessRequirementError as exc:
