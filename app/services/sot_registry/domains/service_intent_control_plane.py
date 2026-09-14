@@ -97,14 +97,20 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "OfferVersionCreate.access_requirement supplied "
-                            "explicitly by a caller holding EITHER "
-                            "catalog:billing_write OR the narrower "
-                            "catalog:offer_version:admission, checked once "
-                            "by the route's require_any_permission "
-                            "dependency (app/api/catalog.py) — the command "
-                            "itself makes no authorization decision, and the "
-                            "authenticated principal it records is "
-                            "audit/attribution evidence only; no "
+                            "explicitly by a caller satisfying the route's "
+                            "actual compound requirement: catalog:write AND "
+                            "(catalog:billing_write OR the narrower "
+                            "catalog:offer_version:admission) — catalog:write "
+                            "comes from this router's own pre-existing "
+                            "require_method_permission gate "
+                            "(app/api/catalog.py), which applies to every "
+                            "mutating route in the file including this one, "
+                            "so the two admission permissions are an "
+                            "OR-alternative to EACH OTHER, never a pure "
+                            "standalone alternative to catalog:write itself. "
+                            "The command itself makes no authorization "
+                            "decision, and the authenticated principal it "
+                            "records is audit/attribution evidence only; no "
                             "application-level fallback for the value itself"
                         ),
                     ),
@@ -167,8 +173,12 @@ DOMAIN = DomainSOT(
                         "checking for an existing row of that identity; it "
                         "performs no RBAC check of its own at all — "
                         "authorization is decided once, before the command "
-                        "is even constructed, by the route's "
-                        "require_any_permission dependency."
+                        "is even constructed, by the route's compound "
+                        "catalog:write AND (catalog:billing_write OR "
+                        "catalog:offer_version:admission) requirement "
+                        "(the router's own require_method_permission gate "
+                        "plus the route's require_any_permission "
+                        "dependency)."
                     ),
                     idempotency=(
                         "One classification row per offer version, globally "
@@ -234,19 +244,30 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 events=EventContract(
-                    event_types=("catalog.offer_access_requirement_classified",),
+                    event_types=(
+                        "catalog.offer_access_requirement_classified",
+                        "catalog.offer_version_admitted",
+                    ),
                     schema_version=1,
                     delivery_owner="events.dispatcher",
                     compatibility=(
-                        "The event carries the exact offer version, previous "
-                        "and new access requirement, review reference, "
-                        "command/correlation identifiers, and authenticated "
-                        "principal."
+                        "catalog.offer_access_requirement_classified carries "
+                        "the exact offer version, previous and new access "
+                        "requirement, review reference, command/correlation "
+                        "identifiers, and authenticated principal. "
+                        "catalog.offer_version_admitted carries the exact "
+                        "offer/offer-version identity, version number, "
+                        "admitted access requirement, command/correlation "
+                        "identifiers, and authenticated principal; it is "
+                        "staged only for a genuinely NEW admission, never "
+                        "re-emitted for an idempotency-key replay."
                     ),
                     replay=(
                         "An exact idempotency-key and target replay returns "
                         "the recorded outcome and never re-emits a second "
-                        "transition for the same offer version."
+                        "transition for the same offer version, nor a "
+                        "second catalog.offer_version_admitted event for the "
+                        "same admission."
                     ),
                 ),
                 migration=MigrationContract(

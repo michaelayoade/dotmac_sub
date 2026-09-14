@@ -10,6 +10,7 @@ from app.models.catalog import AccessRequirement, AccessType, PriceBasis, Servic
 from app.models.fup import FupRule
 from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate
 from app.services import catalog as catalog_service
+from app.services.catalog.offer_access_requirement import SystemAdmission
 from app.services.fup import fup_policies
 from app.services.web_fup import handle_add_rule, handle_update_rule
 from tests.fup_helpers import (
@@ -42,6 +43,7 @@ def _create_offer(db_session, *, name: str, code: str):
             access_type=AccessType.fiber,
             price_basis=PriceBasis.flat,
         ),
+        principal=SystemAdmission(reason="test fixture"),
     )
     return offer
 

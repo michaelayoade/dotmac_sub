@@ -80,6 +80,7 @@ def _make_version(db_session, offer, *, access_requirement, version_number=1):
             price_basis=PriceBasis.flat,
             access_requirement=access_requirement,
         ),
+        principal=SystemAdmission(reason="test fixture"),
     )
     db_session.commit()
     return version
@@ -633,9 +634,13 @@ def test_classify_reverifies_permission_after_the_row_lock_not_only_at_entry(
     """Regression for the permission-revocation race: before this fix,
     ``_verify_classify_permission`` ran exactly ONCE, at the top of
     ``_classify``, before the offer version was locked. This asserts it now
-    runs a SECOND time — after the lock, immediately before the write — so a
-    grant revoked between the first check and the commit can never be used
-    to complete the write. Fails before the fix (call count 1, not 2)."""
+    runs a SECOND time — after the lock, immediately before the write. This
+    NARROWS but does NOT ELIMINATE the revoke-during-apply race: no RBAC row
+    (system_users, roles, role_permissions, permissions) is locked, so a
+    grant revoked in the instant between this second check and the commit is
+    still not caught (see the SOT manifest's own honest disclosure,
+    ``service_intent_control_plane.py``'s ``locking=`` contract). Fails
+    before the fix (call count 1, not 2)."""
 
     offer = _make_offer(db_session)
     version = _make_version(
@@ -814,9 +819,10 @@ def test_admit_with_system_admission_is_not_rbac_gated(db_session):
     ``tests/conftest.py``'s shared ``catalog_offer`` fixture)."""
 
     offer = _make_offer(db_session)
-    version = admit_offer_version(db_session, _admit_command(offer, 1))
+    result = admit_offer_version(db_session, _admit_command(offer, 1))
     db_session.rollback()
-    assert version.access_requirement is AccessRequirement.unclassified
+    assert result.replayed is False
+    assert result.offer_version.access_requirement is AccessRequirement.unclassified
 
 
 def test_admit_records_an_unprivileged_staff_principal_without_checking_rbac(
@@ -831,35 +837,35 @@ def test_admit_records_an_unprivileged_staff_principal_without_checking_rbac(
     offer = _make_offer(db_session)
     user = _unprivileged_system_user(db_session)
 
-    version = admit_offer_version(
+    result = admit_offer_version(
         db_session,
         _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
     )
     db_session.rollback()
-    assert version.offer_id == offer.id
+    assert result.offer_version.offer_id == offer.id
 
 
 def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
     offer = _make_offer(db_session)
     user = _admin_system_user(db_session)
 
-    version = admit_offer_version(
+    result = admit_offer_version(
         db_session,
         _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
     )
     db_session.rollback()
-    assert version.offer_id == offer.id
+    assert result.offer_version.offer_id == offer.id
 
 
 def test_admit_accepts_an_api_key_principal(db_session):
     offer = _make_offer(db_session)
 
-    version = admit_offer_version(
+    result = admit_offer_version(
         db_session,
         _admit_command(offer, 1, principal=ApiKeyPrincipal(api_key_id=uuid4())),
     )
     db_session.rollback()
-    assert version.offer_id == offer.id
+    assert result.offer_version.offer_id == offer.id
 
 
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
@@ -886,3 +892,227 @@ def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
     ).all()
     db_session.rollback()
     assert len(rows) == 1
+
+
+def test_admit_replay_with_matching_key_and_payload_returns_the_original_row(
+    db_session,
+):
+    """End-to-end admission idempotency: an exact-key, exact-payload retry
+    returns the ORIGINAL row (``replayed=True``) instead of a
+    ``duplicate_version_number`` conflict."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-{uuid4()}"
+    command_id = uuid4()
+
+    def _command():
+        return AdmitOfferVersionCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="system:test",
+                scope=ADMISSION_SCOPE,
+                reason="test admission",
+                idempotency_key=key,
+            ),
+            payload=OfferVersionCreate(
+                offer_id=offer.id,
+                version_number=1,
+                name="Fiber 100 v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+            principal=SystemAdmission(reason="test admission"),
+        )
+
+    first = admit_offer_version(db_session, _command())
+    db_session.rollback()
+    assert first.replayed is False
+
+    second = admit_offer_version(db_session, _command())
+    db_session.rollback()
+    assert second.replayed is True
+    assert second.offer_version.id == first.offer_version.id
+
+
+def test_admit_replay_with_matching_key_but_different_payload_is_a_typed_conflict(
+    db_session,
+):
+    """End-to-end admission idempotency: the SAME key reused for a
+    DIFFERENT admission payload is a typed ``idempotency_conflict``, never a
+    silent substitution or a raw database error."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-{uuid4()}"
+
+    admit_offer_version(
+        db_session,
+        AdmitOfferVersionCommand(
+            context=CommandContext(
+                command_id=uuid4(),
+                correlation_id=uuid4(),
+                actor="system:test",
+                scope=ADMISSION_SCOPE,
+                reason="test admission",
+                idempotency_key=key,
+            ),
+            payload=OfferVersionCreate(
+                offer_id=offer.id,
+                version_number=1,
+                name="Fiber 100 v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+            principal=SystemAdmission(reason="test admission"),
+        ),
+    )
+    db_session.rollback()
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            AdmitOfferVersionCommand(
+                context=CommandContext(
+                    command_id=uuid4(),
+                    correlation_id=uuid4(),
+                    actor="system:test",
+                    scope=ADMISSION_SCOPE,
+                    reason="test admission",
+                    idempotency_key=key,
+                ),
+                payload=OfferVersionCreate(
+                    offer_id=offer.id,
+                    version_number=2,
+                    name="Fiber 100 v2 (different)",
+                    service_type=ServiceType.residential,
+                    access_type=AccessType.fiber,
+                    price_basis=PriceBasis.flat,
+                    access_requirement=AccessRequirement.unclassified,
+                ),
+                principal=SystemAdmission(reason="test admission"),
+            ),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("idempotency_conflict")
+
+
+def test_admission_fingerprint_distinguishes_omitted_from_explicit_default(
+    db_session,
+):
+    """Regression for round 7's fix: an omitted optional field (e.g.
+    ``billing_cycle``, left for ``_admit``'s settings-resolved default to
+    decide) must fingerprint DIFFERENTLY from an explicit value that happens
+    to equal that same schema default — ``model_dump()`` alone makes them
+    indistinguishable, since Pydantic fills every omitted field with its
+    schema default before ``_admission_fingerprint`` ever sees it."""
+
+    offer = _make_offer(db_session)
+    base_kwargs = dict(
+        offer_id=offer.id,
+        version_number=1,
+        name="Fiber 100 v1",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        access_requirement=AccessRequirement.unclassified,
+    )
+    omitted = OfferVersionCreate(**base_kwargs)
+    explicit_default = OfferVersionCreate(
+        **base_kwargs, billing_cycle=omitted.billing_cycle
+    )
+    assert "billing_cycle" not in omitted.model_fields_set
+    assert "billing_cycle" in explicit_default.model_fields_set
+
+    omitted_fingerprint = offer_access_requirement._admission_fingerprint(omitted)
+    explicit_fingerprint = offer_access_requirement._admission_fingerprint(
+        explicit_default
+    )
+    assert omitted_fingerprint != explicit_fingerprint
+
+
+def test_admit_stages_the_admitted_event_only_for_a_fresh_admission(
+    db_session, monkeypatch
+):
+    """Regression for the typed-outcome/event fix: a genuinely NEW admission
+    stages ``catalog.offer_version_admitted`` exactly once; an idempotent
+    replay of the SAME command does not re-emit it."""
+
+    from app.services.events import types as event_types
+
+    emitted: list[object] = []
+    real_emit_event = offer_access_requirement.emit_event
+
+    def _recording_emit_event(db, event_type, payload, **kwargs):
+        emitted.append(event_type)
+        return real_emit_event(db, event_type, payload, **kwargs)
+
+    monkeypatch.setattr(offer_access_requirement, "emit_event", _recording_emit_event)
+
+    offer = _make_offer(db_session)
+    key = f"admit-event-{uuid4()}"
+
+    def _command():
+        return AdmitOfferVersionCommand(
+            context=CommandContext(
+                command_id=uuid4(),
+                correlation_id=uuid4(),
+                actor="system:test",
+                scope=ADMISSION_SCOPE,
+                reason="test admission",
+                idempotency_key=key,
+            ),
+            payload=OfferVersionCreate(
+                offer_id=offer.id,
+                version_number=1,
+                name="Fiber 100 v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+            principal=SystemAdmission(reason="test admission"),
+        )
+
+    admit_offer_version(db_session, _command())
+    db_session.rollback()
+    admit_offer_version(db_session, _command())
+    db_session.rollback()
+
+    assert emitted == [event_types.EventType.catalog_offer_version_admitted]
+
+
+def test_admit_command_rejects_a_principal_outside_the_closed_union():
+    """Regression for the runtime-validation gap: the closed union
+    (``StaffPrincipal | ApiKeyPrincipal | SystemAdmission``) is only a
+    static type hint — passing ``principal=None`` or any arbitrary object
+    must raise here, not just when the argument is omitted entirely."""
+
+    def _build(principal):
+        return AdmitOfferVersionCommand(
+            context=CommandContext(
+                command_id=uuid4(),
+                correlation_id=uuid4(),
+                actor="system:test",
+                scope=ADMISSION_SCOPE,
+                reason="test admission",
+            ),
+            payload=OfferVersionCreate(
+                offer_id=uuid4(),
+                version_number=1,
+                name="Fiber 100 v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+            principal=principal,
+        )
+
+    with pytest.raises(TypeError):
+        _build(None)
+    with pytest.raises(TypeError):
+        _build("system_user:not-a-real-principal")

@@ -543,15 +543,16 @@ class OfferVersions(CRUDManager[OfferVersion]):
     def _resolve_admission_principal(
         actor_id: str | None, actor_type: str | None
     ) -> "offer_access_requirement.AdmissionPrincipal":
-        """The ONE production call site allowed to construct
-        ``SystemAdmission`` (enumerated in
-        ``tests/architecture/test_offer_access_requirement_boundary.py``'s
-        confinement guard). ``app/api/catalog.py``'s route always supplies a
-        real, authenticated ``system_user``/``api_key`` actor, so this
-        fallback is reached only by an internal/test caller invoking this
-        adapter directly with no actor — the same pre-existing convention
-        this replaces (``tests/conftest.py``'s shared fixtures, and every
-        other test file that admits a version with no actor)."""
+        """Resolve a recognized, authenticated actor into its typed
+        principal. FAILS CLOSED: any ``actor_id``/``actor_type`` combination
+        that is not a real ``system_user`` or ``api_key`` raises a typed
+        error rather than silently defaulting to ``SystemAdmission`` — a
+        caller with no authenticated actor at all must go through
+        ``create``'s distinct ``principal=`` argument instead (see its
+        docstring). ``app/api/catalog.py``'s route always supplies a real,
+        authenticated ``system_user``/``api_key`` actor, so this only ever
+        raises for a caller that invokes this adapter directly with neither
+        a recognized actor nor an explicit ``principal``."""
 
         if actor_type == "system_user" and actor_id:
             return offer_access_requirement.StaffPrincipal(
@@ -561,8 +562,16 @@ class OfferVersions(CRUDManager[OfferVersion]):
             return offer_access_requirement.ApiKeyPrincipal(
                 api_key_id=UUID(str(actor_id))
             )
-        return offer_access_requirement.SystemAdmission(
-            reason="no authenticated actor supplied to offer_versions.create"
+        raise offer_access_requirement.OfferAccessRequirementError(
+            code=f"{offer_access_requirement.OWNER}.unattributed_admission_actor",
+            message=(
+                "offer_versions.create requires either a recognized "
+                "system_user/api_key actor_id/actor_type pair or an "
+                "explicit principal= argument (e.g. SystemAdmission for a "
+                "genuinely internal/test caller); neither was supplied."
+            ),
+            details={"actor_id": actor_id, "actor_type": actor_type},
+            retryable=False,
         )
 
     @staticmethod
@@ -573,6 +582,7 @@ class OfferVersions(CRUDManager[OfferVersion]):
         actor_id: str | None = None,
         actor_type: str | None = None,
         idempotency_key: str | None = None,
+        principal: "offer_access_requirement.AdmissionPrincipal | None" = None,
     ):
         """Thin adapter. The actual persist, defaults resolution, and
         transaction are owned by
@@ -592,26 +602,39 @@ class OfferVersions(CRUDManager[OfferVersion]):
         that invokes this adapter directly) — this method and the command it
         builds make no authorization decision; ``actor_id``/``actor_type``
         become the admission's typed, audit-only principal.
+
+        ``principal`` is the ONLY way to admit with no authenticated actor
+        (e.g. ``SystemAdmission`` for an internal/test caller) — pass it
+        explicitly rather than omitting ``actor_id``/``actor_type`` and
+        relying on an implicit fallback: an unrecognized or omitted
+        ``actor_id``/``actor_type`` with no ``principal`` supplied is a
+        typed error, never a silent ``SystemAdmission``.
         """
-        principal = OfferVersions._resolve_admission_principal(actor_id, actor_type)
+        resolved_principal = (
+            principal
+            if principal is not None
+            else OfferVersions._resolve_admission_principal(actor_id, actor_type)
+        )
         command_id = uuid4()
-        version = offer_access_requirement.admit_offer_version(
+        result = offer_access_requirement.admit_offer_version(
             db,
             offer_access_requirement.AdmitOfferVersionCommand(
                 context=CommandContext(
                     command_id=command_id,
                     correlation_id=command_id,
-                    actor=offer_access_requirement.admission_actor_label(principal),
+                    actor=offer_access_requirement.admission_actor_label(
+                        resolved_principal
+                    ),
                     scope=offer_access_requirement.ADMISSION_SCOPE,
                     reason="offer version admitted via catalog API",
                     idempotency_key=idempotency_key,
                 ),
                 payload=payload,
-                principal=principal,
+                principal=resolved_principal,
             ),
         )
-        db.refresh(version)
-        return version
+        db.refresh(result.offer_version)
+        return result.offer_version
 
     @classmethod
     def get(cls, db: Session, version_id: str):
