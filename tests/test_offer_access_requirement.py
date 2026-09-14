@@ -26,7 +26,13 @@ from app.models.catalog import (
     PriceBasis,
     ServiceType,
 )
-from app.models.rbac import Role, SubscriberRole, SystemUserRole
+from app.models.rbac import (
+    Permission,
+    Role,
+    SubscriberRole,
+    SystemUserPermission,
+    SystemUserRole,
+)
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.catalog import (
@@ -119,6 +125,36 @@ def _unprivileged_system_user(db_session) -> SystemUser:
         email=f"unprivileged-{uuid4().hex[:8]}@example.com",
     )
     db_session.add(user)
+    db_session.commit()
+    return user
+
+
+def _staff_with_direct_permissions(db_session, *permission_keys: str) -> SystemUser:
+    """A real, active staff principal holding exactly ``permission_keys`` as
+    DIRECT ``SystemUserPermission`` grants — no ``admin`` role, no wildcard,
+    no role-mediated grant at all. Lets a test hold a caller to EXACTLY the
+    compatibility-leg permissions (e.g. ``catalog:write`` +
+    ``catalog:billing_write``, deliberately withholding
+    ``catalog:offer_version:admission``) rather than the ``admin`` role's
+    blanket bypass, which would satisfy the compound rule for a reason
+    unrelated to the specific OR-leg under test."""
+
+    user = SystemUser(
+        first_name="Test",
+        last_name="DirectGrant",
+        email=f"direct-grant-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(user)
+    db_session.flush()
+    for key in permission_keys:
+        permission = db_session.scalar(select(Permission).where(Permission.key == key))
+        if permission is None:
+            permission = Permission(key=key, description=f"test grant: {key}")
+            db_session.add(permission)
+            db_session.flush()
+        db_session.add(
+            SystemUserPermission(system_user_id=user.id, permission_id=permission.id)
+        )
     db_session.commit()
     return user
 
@@ -904,6 +940,43 @@ def test_admit_denies_an_unprivileged_staff_principal(db_session):
 def test_admit_accepts_a_privileged_claimed_staff_principal(db_session):
     offer = _make_offer(db_session)
     user = _admin_system_user(db_session)
+
+    result = admit_offer_version(
+        db_session,
+        _admit_command(offer, 1, principal=StaffPrincipal(system_user_id=user.id)),
+    )
+    db_session.rollback()
+    assert result.offer_version.offer_id == offer.id
+
+
+def test_admit_accepts_the_catalog_write_plus_billing_write_compatibility_leg(
+    db_session,
+):
+    """Owner-command-level proof of the BASELINE caller population: a staff
+    principal holding exactly ``catalog:write`` + ``catalog:billing_write``
+    — no ``catalog:offer_version:admission``, no ``admin`` role, no
+    wildcard — is accepted directly by ``admit_offer_version``. Before this
+    test, only the ROUTE (``tests/test_offer_version_admission_route_
+    permissions.py``) exercised this leg; the owner command's own
+    compound-rule re-check had no test proving it accepts the shape every
+    pre-existing ``catalog:billing_write`` caller already held prior to
+    ``catalog:offer_version:admission`` ever being introduced.
+
+    Break condition: this fails if ``_admission_permission_granted``'s OR
+    ever drops (or narrows) the ``catalog:billing_write`` branch — e.g. a
+    future edit that requires ``catalog:offer_version:admission``
+    unconditionally would leave every OTHER focused test in this file green
+    (they all use ``admin``, the narrower admission scope, or refusal cases)
+    while silently locking out the entire pre-existing
+    ``catalog:billing_write`` caller population this compound rule was
+    designed to keep working."""
+
+    offer = _make_offer(db_session)
+    user = _staff_with_direct_permissions(
+        db_session,
+        offer_access_requirement.WRITE_PERMISSION,
+        offer_access_requirement.BILLING_WRITE_PERMISSION,
+    )
 
     result = admit_offer_version(
         db_session,
