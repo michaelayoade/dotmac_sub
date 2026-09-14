@@ -501,6 +501,35 @@ def _verify_admission_authorization(
 
     ``SystemAdmission`` is exempt — see its own docstring; it carries no
     RBAC identity to check.
+
+    Called TWICE from ``_admit``: once immediately after the advisory locks
+    are acquired (before any existence check), and again immediately before
+    the ``OfferVersion`` INSERT, narrowing the window between a permission
+    read and the write it gates — the same two-checkpoint discipline
+    ``_classify`` already uses.
+
+    RESIDUAL PREMISE, stated precisely rather than left implicit: the
+    advisory locks held during this transaction (``offer_access_
+    requirement:admit[_idempotency]``) serialize concurrent ADMISSIONS
+    against the SAME idempotency key or the SAME (offer_id, version_number)
+    target — they do not lock the principal's own authorization state
+    (``system_users``/``roles``/``role_permissions``/``permissions``/
+    ``subscriber_roles``/``subscriber_permissions``/``api_keys`` rows). A
+    revoke of the exact grant that made THIS check pass, committed by
+    another transaction in the narrow window between the second check above
+    and this transaction's own commit, is not observed — the admission
+    still proceeds and persists under what is, by the time it lands,
+    already-revoked authority. This is the identical class of residual
+    window ``_classify`` documents and accepts for the same reason: closing
+    it fully would require row-locking the entire RBAC surface (six-plus
+    tables, several of them shared by every other authorization check in
+    the system) for the duration of every admission, which is judged
+    disproportionate given that the admitting principal is recorded
+    (audit/attribution — never anonymous) and the resulting row is
+    ordinary, visible, correctable data: an operator can deactivate or
+    correct it through the existing offer-version admin/repair paths like
+    any other wrongly-created row, it is not a silent or unrecoverable
+    state. The window is one commit wide, not open-ended.
     """
 
     principal = command.principal
@@ -838,6 +867,16 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
         )
         if default_status:
             data["status"] = validate_enum(default_status, OfferStatus, "status")
+
+    # Re-verify again, immediately before the write — narrows the window
+    # opened by the settings_spec.resolve_value() calls above (each is a
+    # separate statement, any of which could in principle yield to another
+    # transaction) between the first check and the INSERT. This mirrors
+    # _classify's own "verify at the top, verify again right before the
+    # mutation" discipline. It narrows the window; it does not close it —
+    # see _verify_admission_authorization's docstring for the precise,
+    # honestly-stated residual premise this does NOT eliminate.
+    _verify_admission_authorization(db, command)
 
     version = OfferVersion(**data)
     db.add(version)
