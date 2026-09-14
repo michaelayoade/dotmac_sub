@@ -78,11 +78,58 @@ def upgrade() -> None:
     # into any role by default.
 
 
+class DowngradeRefused(RuntimeError):
+    """Raised when downgrading would silently orphan a real operator grant."""
+
+
+def _direct_grant_count(bind, table_names: set[str], table: str, key: str) -> int:
+    """Rows in a direct-grant table (``system_user_permissions``/
+    ``subscriber_permissions``) that FK-reference this permission.
+
+    These are legitimate, UI-created grants, not corrupt data: this
+    permission is UI-assignable (``is_ui_assignable=true`` above), so an
+    operator may have granted it directly to a principal without going
+    through a role. Deleting the permission row while such a grant still
+    exists would either cascade (destroying real operator-created state) or
+    fail on the FK with an opaque database error; counting first lets the
+    caller refuse cleanly instead.
+    """
+
+    if table not in table_names:
+        return 0
+    return int(
+        bind.execute(
+            sa.text(
+                f"""
+                SELECT count(*) FROM {table} g
+                JOIN permissions p ON g.permission_id = p.id
+                WHERE p.key = :key
+                """
+            ),
+            {"key": key},
+        ).scalar()
+        or 0
+    )
+
+
 def downgrade() -> None:
     bind = op.get_bind()
     table_names = set(sa.inspect(bind).get_table_names())
     if "permissions" not in table_names:
         return
+
+    direct_grants = _direct_grant_count(
+        bind, table_names, "system_user_permissions", PERMISSION_KEY
+    ) + _direct_grant_count(bind, table_names, "subscriber_permissions", PERMISSION_KEY)
+    if direct_grants:
+        raise DowngradeRefused(
+            f"{direct_grants} direct grant(s) of {PERMISSION_KEY!r} still "
+            "exist (system_user_permissions/subscriber_permissions); "
+            "downgrading would either cascade-delete a real operator-created "
+            "grant or fail on the FK. Remove the direct grant(s) first, then "
+            "re-run the downgrade."
+        )
+
     if "role_permissions" in table_names:
         bind.execute(
             sa.text(

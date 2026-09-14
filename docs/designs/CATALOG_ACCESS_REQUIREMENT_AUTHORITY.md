@@ -66,24 +66,51 @@ isolation.
   (`app/api/catalog.py`'s `require_any_permission(catalog:billing_write,
   catalog:offer_version:admission)` dependency on `POST`/`PATCH
   /offer-versions`) — matching this repo's own existing pattern in
-  `app/services/billing/subledger_opening.py`. `AdmitOfferVersionCommand`
-  makes NO authorization decision of its own: it takes a REQUIRED, typed
-  `AdmissionPrincipal` (`StaffPrincipal` | `ApiKeyPrincipal` |
-  `SystemAdmission`) recorded purely for audit/attribution, never re-checked
-  against RBAC. `catalog:offer_version:admission`
-  (`alembic/versions/609_offer_version_admission_permission.py`) is a
-  genuine, narrower, OPT-IN alternative to `catalog:billing_write` — a
-  caller holding either satisfies the route — so the migration seeds only
-  the permission row (mirroring 608's pattern exactly) and copies no grants:
-  there is no existing-caller regression to prevent, because nobody's
-  existing `catalog:billing_write` access is narrowed or removed.
+  `app/services/billing/subledger_opening.py`. That dependency is NOT the
+  whole story: both routes also sit under this router's own pre-existing
+  `catalog:write` gate (`require_method_permission("catalog:read",
+  "catalog:write")`, applied to every mutating route in the file). The
+  ACTUAL effective requirement is therefore the compound `catalog:write AND
+  (catalog:billing_write OR catalog:offer_version:admission)` — the two
+  admission permissions are an OR-alternative to EACH OTHER, never a pure
+  standalone alternative to `catalog:write` itself. This is this router's
+  established, pre-existing pattern (every other `catalog:billing_write`
+  route in this file — offers, offer-prices, add-on-prices — already
+  requires `catalog:write` too), not a regression introduced by admission.
+  `AdmitOfferVersionCommand` makes NO authorization decision of its own: it
+  takes a REQUIRED, typed `AdmissionPrincipal` (`StaffPrincipal` |
+  `ApiKeyPrincipal` | `SystemAdmission`), validated at construction
+  (`__post_init__`) to actually be one of those three, and recorded purely
+  for audit/attribution, never re-checked against RBAC. `catalog:offer_
+  version:admission` (`alembic/versions/609_offer_version_admission_
+  permission.py`) is a genuine, narrower, OPT-IN alternative to `catalog:
+  billing_write` — a caller holding either (in addition to `catalog:write`)
+  satisfies the route — so the migration seeds only the permission row
+  (mirroring 608's pattern exactly) and copies no grants: there is no
+  existing-caller regression to prevent, because nobody's existing
+  `catalog:billing_write` access is narrowed or removed.
+  `app/api/catalog.py`'s `_admission_principal` narrows the attributable
+  principal on BOTH routes (POST and PATCH, identically) to an authenticated
+  `system_user`/`api_key` — a deliberate, documented tightening, not a
+  silent regression: no other principal type could ever have reached either
+  route, because both already require `catalog:write`, which is admin-only
+  and never UI-assignable to a non-admin role
+  (`scripts/seed/seed_rbac.py`'s `ADMIN_ONLY_PERMISSION_KEYS`), and the
+  `admin` role bypasses permission checks entirely rather than being
+  attributed as some other principal type.
   `SystemAdmission` (an admission with no authenticated end-user context at
-  all) is confined to one enumerated production call site
-  (`app/services/catalog/offers.py`), proven by an AST-based, test-enforced
-  allowlist guard with its own planted-leak sensitivity proof
-  (`tests/architecture/test_offer_access_requirement_boundary.py`) — a
-  build-time/reviewed-call-site guarantee, not an unforgeable runtime
-  credential.
+  all) has NO production construction site at all: `OfferVersions.create`'s
+  `actor_id`/`actor_type` resolution FAILS CLOSED (raises a typed
+  `OfferAccessRequirementError`) for any combination it doesn't recognize as
+  `system_user`/`api_key`, instead of silently defaulting to
+  `SystemAdmission`; an internal/test caller that genuinely has no
+  authenticated actor must construct `SystemAdmission(reason=...)` and pass
+  it explicitly via the distinct `principal=` argument. This is proven by an
+  AST-based (real `ast.Call` node inspection, not a substring search),
+  test-enforced allowlist guard with its own planted-leak and near-miss
+  sensitivity proofs (`tests/architecture/
+  test_offer_access_requirement_boundary.py`) — a build-time/reviewed-call-
+  site guarantee, not an unforgeable runtime credential.
 - `(offer_id, version_number)` is enforced as a real DB-level unique
   constraint (`uq_offer_versions_offer_id_version_number`,
   `alembic/versions/610_offer_versions_unique_version_number.py`), not only

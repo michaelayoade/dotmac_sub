@@ -322,6 +322,7 @@ from app.services import network as network_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import radius as radius_service
 from app.services import tr069 as tr069_service
+from app.services.catalog.offer_access_requirement import SystemAdmission
 from scripts.ci.migrated_test_database import (
     DatabaseContractError,
     parse_test_database_target,
@@ -654,6 +655,7 @@ def catalog_offer(db_session):
             access_type=AccessType.fiber,
             price_basis=PriceBasis.flat,
         ),
+        principal=SystemAdmission(reason="conftest.catalog_offer fixture"),
     )
     return offer
 

@@ -79,12 +79,19 @@ router = APIRouter(
 
 _require_billing_catalog_write = require_permission("catalog:billing_write")
 
-#: Admission is a genuine future narrower-delegation path (like classify's
-#: catalog:offer_access_requirement:classify): a caller holding EITHER the
-#: existing catalog:billing_write OR the newer, narrower
-#: catalog:offer_version:admission may admit/update an offer version, so
-#: today's holders of catalog:billing_write keep working unchanged while a
-#: future role can be granted only the narrower permission.
+#: NOT a pure OR / standalone-narrower-permission alternative: this router
+#: is declared with its own ``catalog:write`` gate
+#: (``require_method_permission("catalog:read", "catalog:write")`` above,
+#: pre-existing and unrelated to admission), which applies to every mutating
+#: route in this file including these two. The ACTUAL effective requirement
+#: on the offer-version admission routes is therefore the compound
+#: ``catalog:write AND (catalog:billing_write OR
+#: catalog:offer_version:admission)`` — a caller holding ONLY the narrower
+#: catalog:offer_version:admission (without catalog:write) is refused here,
+#: exactly as a caller holding ONLY catalog:billing_write is already refused
+#: on every other billing_write-gated route in this file (offers,
+#: offer-prices, add-on-prices, ...): this is this router's established,
+#: pre-existing pattern, not a regression introduced by admission.
 _require_offer_version_admission = require_any_permission(
     "catalog:billing_write", offer_access_requirement.ADMISSION_SCOPE
 )
@@ -97,7 +104,7 @@ def _actor(auth: dict) -> tuple[str | None, str | None]:
 def _admission_principal(
     auth: dict,
 ) -> offer_access_requirement.AdmissionPrincipal:
-    """The typed principal for an admission reached through this route.
+    """The typed principal for an admission/update reached through this route.
 
     The route dependency above already authorized the request; this is
     audit/attribution evidence only — never re-checked for authorization.
@@ -107,6 +114,16 @@ def _admission_principal(
     that invoke the service layer directly, bypassing this route entirely —
     see ``app/services/catalog/offers.py``'s
     ``OfferVersions._resolve_admission_principal``).
+
+    Applied identically to BOTH the POST (create) and PATCH (update) offer-
+    version routes below: narrowing to system_user/api_key is a deliberate,
+    documented tightening, not a silent regression — no other principal type
+    could ever have reached either route anyway, because both already sit
+    under this router's own pre-existing ``catalog:write`` gate, which is
+    admin-only (never UI-assignable to a non-admin role,
+    ``scripts/seed/seed_rbac.py``'s ``ADMIN_ONLY_PERMISSION_KEYS``), and the
+    ``admin`` role bypasses permission checks entirely rather than being
+    attributed as a non-system_user/api_key principal.
     """
 
     principal_id = auth.get("principal_id")
@@ -131,14 +148,29 @@ def _admission_principal(
 def _offer_access_requirement_http_error(
     exc: OfferAccessRequirementError,
 ) -> HTTPException:
+    """Map a domain error to an ``HTTPException`` whose ``detail`` still
+    carries the stable machine ``code`` (matching the shape several other
+    API modules already use, e.g. ``app/api/me.py``,
+    ``app/api/billing_treatments.py``: ``{"code": ..., "message": ...}``) —
+    a bare string ``detail`` loses the code, and the global HTTP-exception
+    handler (``app/errors.py``) then falls back to a generic ``http_409``/
+    ``http_403`` instead of the real domain code.
+    """
+
+    def _http(status_code: int) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.message},
+        )
+
     if exc.code.endswith("invalid_access_requirement"):
-        return HTTPException(status_code=422, detail=exc.message)
+        return _http(422)
     if exc.code.endswith("immutable_access_requirement"):
-        return HTTPException(status_code=409, detail=exc.message)
+        return _http(409)
     if exc.code.endswith("offer_not_found"):
-        return HTTPException(status_code=404, detail=exc.message)
+        return _http(404)
     if exc.code.endswith("permission_denied"):
-        return HTTPException(status_code=403, detail=exc.message)
+        return _http(403)
     if exc.code.endswith(
         (
             "duplicate_version_number",
@@ -146,12 +178,10 @@ def _offer_access_requirement_http_error(
             "idempotency_conflict",
         )
     ):
-        return HTTPException(status_code=409, detail=exc.message)
-    if exc.code.endswith(
-        ("idempotency_key_too_long", "review_reference_too_long")
-    ):
-        return HTTPException(status_code=422, detail=exc.message)
-    return HTTPException(status_code=400, detail=exc.message)
+        return _http(409)
+    if exc.code.endswith(("idempotency_key_too_long", "review_reference_too_long")):
+        return _http(422)
+    return _http(400)
 
 
 @router.post(
@@ -885,6 +915,10 @@ def update_offer_version(
     auth: dict = Depends(_require_offer_version_admission),
 ):
     actor_id, actor_type = _actor(auth)
+    # Same principal-type check as POST create_offer_version above — applied
+    # identically to both routes for the same underlying command, per
+    # _admission_principal's docstring.
+    _admission_principal(auth)
     try:
         return catalog_service.offer_versions.update(
             db, version_id, payload, actor_id=actor_id, actor_type=actor_type

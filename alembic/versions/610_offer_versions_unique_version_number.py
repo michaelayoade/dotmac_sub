@@ -37,6 +37,15 @@ _TABLE_NAME = "offer_versions"
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # SET LOCAL is scoped to this migration's own transaction and reverts
+        # automatically when it ends -- unlike a plain SET, it never discards
+        # the operator-configured global lock_timeout (alembic/env.py) for
+        # any statement that runs after this one. Mirrors
+        # 607_offer_access_requirement's exact budget.
+        op.execute("SET LOCAL lock_timeout = '5s'")
+        op.execute("SET LOCAL statement_timeout = '15min'")
     op.create_unique_constraint(
         _CONSTRAINT_NAME,
         _TABLE_NAME,
@@ -45,4 +54,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("SET LOCAL lock_timeout = '5s'")
+        op.execute("SET LOCAL statement_timeout = '15min'")
     op.drop_constraint(_CONSTRAINT_NAME, _TABLE_NAME, type_="unique")

@@ -67,7 +67,10 @@ from app.schemas.catalog import (
     ValidationAddOnRequest,
 )
 from app.services import catalog as catalog_service
-from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
+from app.services.catalog.offer_access_requirement import (
+    OfferAccessRequirementError,
+    SystemAdmission,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -295,6 +298,7 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         assert version.id is not None
         assert version.version_number == 1
@@ -319,6 +323,7 @@ class TestOfferVersions:
                     access_type=AccessType.fiber,
                     price_basis=PriceBasis.flat,
                 ),
+                principal=SystemAdmission(reason="test fixture"),
             )
         assert exc_info.value.code.endswith("offer_not_found")
 
@@ -335,6 +340,7 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         items = catalog_service.offer_versions.list(
             db_session,
@@ -360,6 +366,7 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         updated = catalog_service.offer_versions.update(
             db_session,
@@ -381,6 +388,7 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         catalog_service.offer_versions.delete(db_session, str(version.id))
         db_session.refresh(version)
@@ -406,6 +414,7 @@ class TestOfferVersionPrices:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         price = catalog_service.offer_version_prices.create(
             db_session,
@@ -441,6 +450,7 @@ class TestOfferVersionPrices:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         price = catalog_service.offer_version_prices.create(
             db_session,
@@ -1648,6 +1658,7 @@ class TestSubscriptions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         sub = catalog_service.subscriptions.create(
             db_session,

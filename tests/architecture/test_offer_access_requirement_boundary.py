@@ -96,9 +96,7 @@ def _find_leaks(
     return leaks
 
 
-def _enclosing_function_span(
-    tree: ast.AST, lineno: int
-) -> tuple[int, int] | None:
+def _enclosing_function_span(tree: ast.AST, lineno: int) -> tuple[int, int] | None:
     """The smallest (innermost) function/async-function body containing
     ``lineno`` (1-based), as an inclusive ``(start_line, end_line)`` span, or
     ``None`` if ``lineno`` sits outside every function (e.g. a module-level
@@ -377,18 +375,65 @@ def test_offer_access_requirement_permission_is_not_seeded_into_any_role():
 
 def test_offer_version_admission_permission_is_not_seeded_into_any_role():
     """Regression for the shrunk 609 migration: admission is an OR-alternative
-    to catalog:billing_write at the route, never a hard requirement, so there
-    is no existing-caller regression to prevent by copying grants — this
-    migration seeds the permission row only, exactly like 608's pattern."""
+    to catalog:billing_write at the route (combined with the router's own
+    catalog:write gate — see the migration's own docstring), never a hard
+    requirement, so there is no existing-caller regression to prevent by
+    copying grants — this migration's ``upgrade()`` seeds the permission row
+    only, with no grant-copying logic, exactly like 608's pattern.
+
+    Checked structurally (no ``INSERT INTO role_permissions`` in
+    ``upgrade()``), not by banning the substrings ``role_permissions``/
+    ``catalog:billing_write`` outright: both appear legitimately elsewhere in
+    this migration — ``role_permissions`` in the downgrade's direct-grant
+    refusal/cleanup, and ``catalog:billing_write`` in the docstring
+    explaining the OR-alternative relationship and the compound requirement
+    with ``catalog:write``. A naive substring ban would fail on those
+    accurate mentions, not on a real grant-copying regression.
+    """
 
     migration = _source("alembic/versions/609_offer_version_admission_permission.py")
-    assert "role_permissions" not in migration
-    assert "catalog:billing_write" not in migration
+    upgrade_source, _, downgrade_source = migration.partition("def downgrade")
+    assert "INSERT INTO role_permissions" not in upgrade_source
+    assert "role_permissions" in downgrade_source, (
+        "the downgrade's own direct-grant refusal/cleanup should still "
+        "reference role_permissions — if this ever goes false, the seed-only "
+        "shape of upgrade() changed and this test's premise needs revisiting"
+    )
 
 
-def test_offer_access_requirement_never_reuses_billing_write():
+def test_offer_access_requirement_never_checks_billing_write_permission():
+    """``catalog:billing_write`` is referenced only in explanatory docstrings
+    in this module (documenting the route-level compound/OR-alternative
+    relationship) — this module itself never performs an authorization CHECK
+    against it (that check lives entirely at the route, per
+    ``test_admission_command_makes_no_authorization_decision`` above).
+
+    Checked structurally, via real AST ``Call`` inspection of every
+    ``has_permission(...)`` call site for that literal string argument — not
+    by banning the substring outright, which fails on the module's own
+    accurate docstring mentions of the permission name (there are several,
+    all legitimate).
+    """
+
     owner = _source("app/services/catalog/offer_access_requirement.py")
-    assert "catalog:billing_write" not in owner
+    tree = ast.parse(owner)
+    offending_calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_has_permission = (
+            isinstance(func, ast.Name) and func.id == "has_permission"
+        ) or (isinstance(func, ast.Attribute) and func.attr == "has_permission")
+        if not is_has_permission:
+            continue
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            if isinstance(arg, ast.Constant) and arg.value == "catalog:billing_write":
+                offending_calls.append(node.lineno)
+    assert offending_calls == [], (
+        f"has_permission(...) checked catalog:billing_write directly at "
+        f"line(s) {offending_calls}"
+    )
 
 
 def test_admission_command_makes_no_authorization_decision():
@@ -402,18 +447,71 @@ def test_admission_command_makes_no_authorization_decision():
     assert "def _verify_classify_permission" in owner
 
 
-#: The one production call site allowed to construct ``SystemAdmission`` —
-#: an internal/test caller that invokes ``offer_versions.create`` directly
-#: with no authenticated actor, bypassing the (always-authenticated) HTTP
-#: route entirely. Every ``tests/`` file is unconditionally exempt from this
-#: scan (matching ``_find_leaks``'s own convention above): a test fixture may
-#: freely construct ``AdmitOfferVersionCommand``/``SystemAdmission`` directly.
-_SYSTEM_ADMISSION_ALLOWED_PATHS = ("app/services/catalog/offers.py",)
+#: There is no production call site allowed to construct ``SystemAdmission``
+#: at all: ``offers.py``'s admission adapter FAILS CLOSED for any
+#: unrecognized actor instead of falling back to it (see
+#: ``OfferVersions._resolve_admission_principal``); the only way to admit
+#: with no authenticated actor is a caller passing ``principal=
+#: SystemAdmission(...)`` explicitly, and the only current callers that do
+#: that are test fixtures. Every ``tests/`` file is unconditionally exempt
+#: from this scan (matching ``_find_leaks``'s own convention above): a test
+#: fixture may freely construct ``SystemAdmission`` directly. The tuple stays
+#: as an explicit, reviewable allowlist parameter (rather than a hardcoded
+#: empty scan) so a future genuine internal production call site is added by
+#: EDITING this declaration, not by silently becoming invisible to the guard.
+_SYSTEM_ADMISSION_ALLOWED_PATHS: tuple[str, ...] = ()
+
+#: Every name a ``SystemAdmission`` construction could resolve through, given
+#: a (possibly aliased) import of the class.
+_SYSTEM_ADMISSION_CLASS_NAME = "SystemAdmission"
+
+
+def _bound_system_admission_names(tree: ast.AST) -> set[str]:
+    """Local names bound to the ``SystemAdmission`` class in one module,
+    including an aliased ``from ... import SystemAdmission as X``. The bare
+    class name is always included: a module that never imports it under that
+    name simply never matches on a bare ``ast.Name`` call."""
+
+    names = {_SYSTEM_ADMISSION_CLASS_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == _SYSTEM_ADMISSION_CLASS_NAME:
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _calls_construct_system_admission(tree: ast.AST, bound_names: set[str]) -> bool:
+    """True if ``tree`` contains a real ``ast.Call`` node that constructs
+    ``SystemAdmission`` — either a direct/aliased bare name (``SystemAdmission(...)``
+    or ``X(...)`` after ``import ... as X``), or a dotted attribute access
+    ending in ``.SystemAdmission(...)`` (e.g. ``offer_access_requirement.
+    SystemAdmission(...)``, which stays ``SystemAdmission`` as the attribute
+    name regardless of how the containing module itself was imported)."""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in bound_names:
+            return True
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == _SYSTEM_ADMISSION_CLASS_NAME
+        ):
+            return True
+    return False
 
 
 def _find_system_admission_construction_leaks(
     root: Path, *, allowed: tuple[str, ...]
 ) -> list[str]:
+    """Real AST ``Call``-node scan (not a substring search): a string match
+    on ``"SystemAdmission("`` misses an aliased import and flags any merely
+    textual mention (a comment, a docstring, a string literal). Parsing each
+    file and inspecting actual ``ast.Call`` nodes catches genuine
+    construction only, whitespace/formatting notwithstanding."""
+
     leaks: list[str] = []
     for path in root.rglob("*.py"):
         if "/.venv/" in str(path) or "/node_modules/" in str(path):
@@ -422,7 +520,14 @@ def _find_system_admission_construction_leaks(
         if relative.startswith("tests/") or relative in allowed:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if "SystemAdmission(" in text:
+        if _SYSTEM_ADMISSION_CLASS_NAME not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        bound_names = _bound_system_admission_names(tree)
+        if _calls_construct_system_admission(tree, bound_names):
             leaks.append(relative)
     return leaks
 
@@ -431,8 +536,9 @@ def test_system_admission_construction_is_confined_to_the_declared_allowlist():
     """SystemAdmission is an admission with no authenticated end-user context
     at all. This is a BUILD-TIME/reviewed-call-site guarantee, not an
     unforgeable runtime credential (see the class's own docstring): it proves
-    no committed, non-test file outside the allowlist constructs this type,
-    so a new "no actor" admission path is visible in review instead of
+    no committed, non-test file outside the allowlist constructs this type
+    (the allowlist is currently empty — there is no production call site at
+    all), so a new "no actor" admission path is visible in review instead of
     silently added anywhere in the tree."""
 
     leaks = _find_system_admission_construction_leaks(
@@ -459,16 +565,58 @@ def test_system_admission_confinement_guard_catches_a_planted_leak(tmp_path):
     assert "app/services/network/leaky.py" in leaks
 
 
+def test_system_admission_confinement_guard_catches_an_aliased_import_construction(
+    tmp_path,
+):
+    """Sensitivity proof for the aliasing fix: ``from ... import
+    SystemAdmission as X`` followed by ``X(...)`` is still caught — a plain
+    substring search on ``"SystemAdmission("`` would miss this entirely."""
+
+    (tmp_path / "app" / "services" / "network").mkdir(parents=True)
+    leaking = tmp_path / "app" / "services" / "network" / "leaky_alias.py"
+    leaking.write_text(
+        "from app.services.catalog.offer_access_requirement import "
+        "SystemAdmission as _Bypass\n"
+        "principal = _Bypass(reason='aliased bypass')\n"
+    )
+
+    leaks = _find_system_admission_construction_leaks(
+        tmp_path, allowed=_SYSTEM_ADMISSION_ALLOWED_PATHS
+    )
+    assert "app/services/network/leaky_alias.py" in leaks
+
+
 def test_system_admission_confinement_guard_does_not_flag_the_allowed_call_site(
     tmp_path,
 ):
-    """Near-miss proof: the one declared allowed call site is not flagged
-    even though it constructs ``SystemAdmission``."""
+    """Near-miss proof: a file at a DECLARED allowed relative path is not
+    flagged even though it constructs ``SystemAdmission`` — exercised with a
+    synthetic allowlist entry (the real allowlist is empty today) so this
+    test still proves the allowlist-skip branch itself works."""
 
     (tmp_path / "app" / "services" / "catalog").mkdir(parents=True)
     allowed_file = tmp_path / "app" / "services" / "catalog" / "offers.py"
-    allowed_file.write_text(
-        "principal = SystemAdmission(reason='no actor supplied')\n"
+    allowed_file.write_text("principal = SystemAdmission(reason='no actor supplied')\n")
+
+    leaks = _find_system_admission_construction_leaks(
+        tmp_path, allowed=("app/services/catalog/offers.py",)
+    )
+    assert leaks == []
+
+
+def test_system_admission_confinement_guard_does_not_flag_a_mere_textual_mention(
+    tmp_path,
+):
+    """Near-miss proof for the AST-vs-substring fix: a file that merely
+    MENTIONS the name (a comment, docstring, or string literal) — with no
+    actual ``ast.Call`` construction — is not flagged."""
+
+    (tmp_path / "app" / "services" / "network").mkdir(parents=True)
+    mentioning = tmp_path / "app" / "services" / "network" / "mentions_only.py"
+    mentioning.write_text(
+        '"""Never construct SystemAdmission here."""\n'
+        "# SystemAdmission( is not a real call, just a comment example\n"
+        "label = 'SystemAdmission(reason=...)'\n"
     )
 
     leaks = _find_system_admission_construction_leaks(
