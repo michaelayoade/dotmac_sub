@@ -3,11 +3,13 @@
 Idempotent: reruns update the existing row rather than duplicating it. This
 migration deliberately does NOT insert into role_permissions — the reviewed
 classification CLI is the only intended caller, gated by a real staff
-principal or a scoped machine credential (see
-scripts/catalog/classify_offer_access_requirement.py). Normal wildcard/admin
-RBAC access (``*`` or the ``admin`` role) continues to satisfy this permission
-exactly as it does every other permission in this system; that is existing
-RBAC behavior, not a grant this migration adds.
+principal: its ONLY identity argument is ``--actor-system-user-id``, resolved
+to an authenticated ``SystemUser`` (see
+scripts/catalog/classify_offer_access_requirement.py) — there is no
+machine-credential argument or path through this CLI today. Normal
+wildcard/admin RBAC access (``*`` or the ``admin`` role) continues to satisfy
+this permission exactly as it does every other permission in this system;
+that is existing RBAC behavior, not a grant this migration adds.
 
 Revision ID: 608_offer_access_requirement_classify_permission
 Revises: 607_offer_access_requirement

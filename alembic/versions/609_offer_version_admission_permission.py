@@ -4,15 +4,15 @@ Idempotent: reruns update the existing row rather than duplicating it. This
 mirrors 608_offer_access_requirement_classify_permission's exact pattern:
 this migration seeds the permission row only.
 
-Admission authorization is checked at TWO independent layers: the route
-layer (``app/api/catalog.py``) AND a fresh, in-transaction re-check inside
+Admission authorization has ONE decision owner
+(``service_intent.offer_access_requirement.authorize_offer_version_
+admission``) — see that module's docstring. TWO callers delegate to it: the
+route (``app/api/catalog.py``'s ``_require_offer_version_admission``, on
+``admission_router``, which deliberately carries NO blanket router-level
+gate of its own) and a fresh, in-transaction re-check inside
 ``service_intent.offer_access_requirement``'s own command
-(``verify_admission_authorization``) — see that module's docstring. The
-route ALSO sits under this router's own
-``catalog:write`` gate (``require_method_permission("catalog:read",
-"catalog:write")``, applied to every mutating route in that file, unrelated
-to and pre-dating this permission), so the actual effective requirement is
-``catalog:write AND (catalog:billing_write OR
+(``verify_admission_authorization``). The effective requirement either
+delegate enforces is ``catalog:write AND (catalog:billing_write OR
 catalog:offer_version:admission)`` -- never a pure OR/standalone-narrower-
 permission alternative. A caller holding the existing ``catalog:billing_write``
 continues to admit an offer version exactly as before, and this permission is
