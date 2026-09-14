@@ -90,10 +90,16 @@ or schedule pressure:
   are deliberately UNBOUNDED — a boundary check cannot know a UTF-16
   payload's byte alignment, so this guard accepts a wider over-report in
   that encoding instead of risking a silent miss — in any git-tracked file
-  in this repository that also
-  satisfies the scan's enforceable completeness premises (no tracked
-  symlinks, no gitlinks/submodules, no missing tracked paths — a violated
-  premise REFUSES rather than silently skips), except the three files that
+  in this repository that also satisfies the scan's enforceable
+  completeness premises, checked against the git INDEX (no path recorded
+  as a symlink or gitlink/submodule, checked first, before anything is
+  read from disk) as well as the WORKING TREE (no symlink or non-regular
+  file actually encountered on disk, no missing tracked path) — TWO
+  separate sources of truth about the same path, because a tracked
+  symlink or gitlink locally replaced by an ordinary regular file on disk
+  would otherwise be scanned as normal content: a disk-only check cannot
+  see what only the index declares. A violated premise, from either
+  source, REFUSES rather than silently skips, except the three files that
   must themselves name it to describe and forbid it (this guard test file,
   ADR-0016, and this runbook — asserted to be EXACTLY those three via a
   literal written independently of the exclusion list); every other test

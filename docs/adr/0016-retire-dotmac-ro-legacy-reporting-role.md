@@ -211,10 +211,19 @@ accepted there too.
   of a constructed or obfuscated reference (string concatenation, another
   encoding, an environment-variable name that only resolves to `dotmac_ro`
   at runtime, unicode homoglyphs). It scans every git-tracked file in this
-  repository that also satisfies its own enforceable completeness premises
-  (no tracked symlinks, no gitlinks/submodules, no missing tracked paths; a
-  violated premise REFUSES the scan rather than silently skipping the
-  offending path — see `_files_containing`'s docstring) — except the three
+  repository that also satisfies its own enforceable completeness premises,
+  checked against TWO separate sources of truth about the same path: the
+  git INDEX (no path recorded as a symlink or gitlink/submodule — checked
+  first, on the index's word alone, before anything is read from disk; see
+  `_dotmac_ro_scan_targets`'s docstring) and the WORKING TREE (no symlink
+  or non-regular file actually encountered while walking to a leaf, no
+  missing tracked path; see `_files_containing`'s docstring). An earlier
+  version of this guard checked only the working tree, which left a real
+  gap: a tracked symlink or gitlink locally replaced by an ordinary
+  regular file on disk would have been scanned as if it were normal
+  content, because a disk-only walk cannot see what only the index
+  declares. A violated premise, from either source, REFUSES the scan
+  rather than silently skipping the offending path — except the three
   files that must themselves name `dotmac_ro` to describe and forbid it
   (this guard test file, ADR-0016, and the companion runbook; excluded by
   exact relative-path match, not by directory or suffix, and asserted to be

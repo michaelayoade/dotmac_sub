@@ -563,21 +563,83 @@ def _byte_needle_patterns(needle: str) -> tuple[re.Pattern[bytes], ...]:
     return (ascii_pattern, _utf16_pattern("le"), _utf16_pattern("be"))
 
 
-def _tracked_files(root: Path) -> tuple[Path, ...]:
-    """Every git-tracked file under `root`, as absolute paths.
+#: The ONE literal phrase every refusal in this scan emits — from a
+#: prohibited git index mode, an undecodable filename, a symlink or
+#: non-regular file encountered on disk, or any other premise
+#: violation — regardless of which specific mechanism (errno, index mode,
+#: decode failure) produced it. A test asserting THIS marker is asserting
+#: the security PROPERTY — "refused, not silently skipped, not left to
+#: hang, not left to propagate as a raw exception" — instead of one
+#: platform's or one code path's mechanism. CI on the hosted (Linux)
+#: runner found that a test asserting `match="without following a"`
+#: (wording emitted ONLY by one specific branch) failed on a CORRECT
+#: guard, because the identical logical refusal took a different branch
+#: on Linux than on macOS. This marker exists so that mistake cannot
+#: recur, for any refusal this scan performs.
+_SCAN_REFUSAL_MARKER = "scan refusal, not a silent skip"
+
+
+#: Git index modes this scan REFUSES on the index's word alone, before
+#: anything is read from disk. `120000` is a symlink; `160000` is a
+#: gitlink/submodule. Both name a path the index does NOT declare to be
+#: ordinary tracked file content — the index is the authoritative
+#: statement of what a tracked path IS, independent of whatever currently
+#: happens to sit on disk at that path.
+_PROHIBITED_INDEX_MODES: dict[str, str] = {
+    "120000": "a symlink",
+    "160000": "a gitlink/submodule",
+}
+
+
+def _tracked_files_with_modes(root: Path) -> tuple[tuple[Path, str], ...]:
+    """Every git-tracked path under `root`, paired with its INDEX mode.
 
     Tracked rather than on-disk on purpose: an untracked scratch file (a
     local `.env`, a build artifact) must never be able to trip this guard,
     and it must never be able to hide a real offender from it either.
+
+    Uses `git ls-files --stage -z`, not plain `git ls-files -z`, because
+    the mode is exactly the information a disk-state-only enumeration
+    cannot supply. This scan's `O_NOFOLLOW` walk (see
+    `_read_verified_tracked_bytes`) refuses a symlink or non-regular file
+    it ENCOUNTERS on disk — but that walk can only see whatever currently
+    sits on disk. If a tracked symlink (mode `120000`) or
+    gitlink/submodule (mode `160000`) has been locally replaced by an
+    ordinary regular file, the on-disk walk sees a perfectly normal file
+    and scans it, never learning that the INDEX declares this path to be
+    something this guard must refuse. The filesystem and the index are two
+    DIFFERENT sources of truth about the same path, and a guard that reads
+    only one of them has a gap shaped exactly like the other.
+
+    Filenames are decoded as UTF-8 explicitly, one record at a time, so a
+    non-UTF-8 tracked filename raises a controlled, typed refusal here —
+    not an uncontrolled `UnicodeDecodeError` from a whole-output decode
+    with no stable refusal contract.
     """
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "--stage", "-z"],
         capture_output=True,
-        text=True,
         check=True,
         cwd=root,
     )
-    return tuple(sorted(root / entry for entry in result.stdout.split("\0") if entry))
+    entries: list[tuple[Path, str]] = []
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, _, relative_bytes = record.partition(b"\t")
+        mode = metadata.split(b" ", 1)[0].decode("ascii")
+        try:
+            relative = relative_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AssertionError(
+                f"a git-tracked path under {root} is not valid UTF-8 "
+                f"({relative_bytes!r}); this scan's completeness requires "
+                "every tracked path's name to be decodable, and an "
+                f"undecodable name is refused rather than crashing — "
+                f"{_SCAN_REFUSAL_MARKER}"
+            ) from exc
+        entries.append((root / relative, mode))
+    return tuple(sorted(entries, key=lambda entry: entry[0]))
 
 
 #: The only three tracked files permitted to name `dotmac_ro` literally,
@@ -620,36 +682,56 @@ def _dotmac_ro_scan_targets(root: Path) -> tuple[Path, ...]:
     `config/freeradius/sql/admin_schema.sql` — all real, tracked,
     unscanned surfaces. Selecting every tracked file minus the three
     documented self-referencing exclusions has no such PATH-SELECTION blind
-    spot by construction. This function only selects paths; it makes no
-    claim about whether a selected path's CONTENT can be safely read — that
-    is `_files_containing`'s enforceable-premise contract (no symlinks, no
-    gitlinks, no missing paths; a violation refuses rather than silently
-    skips). It also makes no claim about text encoding, because
-    `_files_containing` scans raw bytes and needs no such assumption.
+    spot by construction.
+
+    THE LESSON THIS FUNCTION EXISTS TO RECORD: a tracked path has TWO
+    sources of truth, not one — the git INDEX, which declares what the
+    path IS (mode `100644` ordinary file, `120000` symlink, `160000`
+    gitlink/submodule, ...), and the WORKING TREE, which is whatever
+    currently happens to sit on disk at that path. `_read_verified_tracked_bytes`
+    asks the filesystem: it refuses a symlinked ancestor, a dangling
+    target, a FIFO, a non-regular leaf — every one of those is a DISK-STATE
+    check, made by actually opening path components with `O_NOFOLLOW`. But
+    a disk-state check can only see what is currently on disk. If a
+    tracked symlink or gitlink has been locally replaced by an ORDINARY
+    regular file, the disk-state walk sees a perfectly normal file and
+    scans it — it never learns that the INDEX declares this path to be
+    something this guard must refuse, because the index is a different
+    source of truth that a disk-only walk never reads. This function reads
+    the index (`_tracked_files_with_modes`, `git ls-files --stage -z`) and
+    refuses a prohibited mode (`_PROHIBITED_INDEX_MODES`) HERE, at target
+    selection, before `_read_verified_tracked_bytes` or anything else
+    reads a single byte from disk — closing the half of this guard's
+    completeness that a disk-only walk structurally cannot reach. The next
+    person strengthening this guard should check both sources, not just
+    the one already checked.
+
+    This function still makes no claim about whether a selected path's
+    CONTENT can be safely read from disk — that remains
+    `_files_containing`'s enforceable-premise contract (no symlinks or
+    non-regular files ENCOUNTERED on disk, no missing paths; a violation
+    refuses rather than silently skips). It also makes no claim about text
+    encoding for file CONTENT, because `_files_containing` scans raw bytes
+    and needs no such assumption — but it does refuse a non-UTF-8 tracked
+    FILENAME itself, via `_tracked_files_with_modes`.
     """
     excluded = {root / relative for relative in _DOTMAC_RO_SELF_REFERENCING_FILES}
     targets: list[Path] = []
-    for path in _tracked_files(root):
+    for path, mode in _tracked_files_with_modes(root):
         if path in excluded:
             continue
+        if mode in _PROHIBITED_INDEX_MODES:
+            raise AssertionError(
+                f"{path} is recorded in the git INDEX as "
+                f"{_PROHIBITED_INDEX_MODES[mode]} (mode {mode}), regardless "
+                "of what currently sits on disk at that path right now; "
+                "the index is the authoritative declaration of what a "
+                "tracked path IS, and a prohibited mode is refused on the "
+                "index's word alone, before anything is read from disk — "
+                f"{_SCAN_REFUSAL_MARKER}"
+            )
         targets.append(path)
     return tuple(targets)
-
-
-#: The ONE literal phrase every refusal branch in
-#: `_read_verified_tracked_bytes` emits, regardless of which platform-
-#: specific `errno` (or no errno at all, for the non-regular-leaf case)
-#: produced the refusal. A test asserting THIS marker is asserting the
-#: security PROPERTY — "refused, not silently skipped, not left to hang,
-#: not left to propagate as a raw OSError" — instead of one platform's
-#: mechanism. CI on the hosted (Linux) runner found that
-#: `test_the_scan_refuses_an_ancestor_symlink_not_just_the_leaf` had
-#: asserted `match="without following a"`, which is emitted ONLY by the
-#: ELOOP branch; the identical logical refusal lands in the generic
-#: branch on Linux instead (`ENOTDIR`, not `ELOOP`, for a symlinked
-#: ancestor opened with `O_DIRECTORY`), and the test failed on a correct
-#: guard. This marker exists so that mistake cannot recur.
-_SCAN_REFUSAL_MARKER = "scan refusal, not a silent skip"
 
 
 def _read_verified_tracked_bytes(path: Path, root: Path) -> bytes:
@@ -791,7 +873,12 @@ def _files_containing(paths: Iterable[Path], needle: str, root: Path) -> list[Pa
     leaf-only, stat-then-read check is not enough, and for the one
     STATED, deliberately unclosed residual premise (no same-type ancestor
     substitution races the walk) — a guard exemption states an enforceable
-    premise, or the region is unmonitored rather than exempt.
+    premise, or the region is unmonitored rather than exempt. That refusal
+    is a DISK-STATE check; it complements, and does not replace, the git
+    INDEX-mode check `_dotmac_ro_scan_targets` performs before any path
+    ever reaches this function (see that function's docstring for why the
+    index and the working tree are two different sources of truth about
+    the same path, and why a guard needs both).
 
     There is deliberately NO binary-file exemption. Matching happens
     directly against each file's RAW BYTES (see `_byte_needle_patterns`),
@@ -901,9 +988,10 @@ def test_dotmac_ro_never_reenters_migrations_app_or_scripts() -> None:
         "closes"
     )
 
-    # `_tracked_files` must enumerate via unrestricted `git ls-files`, not a
-    # hand-maintained list of directories. These three are diagnostic
-    # samples, not the proof: naming SPECIFIC expected files gives a
+    # `_tracked_files_with_modes` must enumerate via unrestricted
+    # `git ls-files --stage`, not a hand-maintained list of directories.
+    # These three are diagnostic samples, not the proof: naming SPECIFIC
+    # expected files gives a
     # readable failure message, but sampling more directories only moves
     # the goalpost — a pathspec listing exactly `docs`, `tests`, `scripts`,
     # `app`, `alembic`, `.github`, `config/freeradius`, and the asserted
@@ -932,8 +1020,9 @@ def test_dotmac_ro_never_reenters_migrations_app_or_scripts() -> None:
 
     # THIS is what actually closes the enumeration question: an
     # INDEPENDENTLY computed `git ls-files` call (its own subprocess
-    # invocation, not a reuse of `_tracked_files`) enumerates every tracked
-    # file in the repository, and the scan's target set must equal EXACTLY
+    # invocation, not a reuse of `_tracked_files_with_modes`) enumerates
+    # every tracked file in the repository, and the scan's target set must
+    # equal EXACTLY
     # that set minus the three accepted exclusions. No sampling, no
     # directory list, nothing assumed — a narrowed OR widened enumeration
     # shows up here even if it happened to satisfy every sampled assertion
@@ -1357,8 +1446,9 @@ def test_the_scan_targets_exclude_only_the_three_accepted_files(tmp_path) -> Non
     design (see the module-level history above) — plus one brand-new
     top-level directory that has never appeared in any historical
     allowlist. A single decoy under `scripts/` alone would not catch a
-    regression that narrowed `_tracked_files`'s `git ls-files` invocation
-    back down to exactly the directories this test and the real-tree
+    regression that narrowed `_tracked_files_with_modes`'s
+    `git ls-files --stage` invocation back down to exactly the directories
+    this test and the real-tree
     assertions above happen to check (`docs/`, `tests/`, `scripts/`,
     `Makefile`, `docker-compose.yml`, `CHANGELOG.md`,
     `config/freeradius/...`) — that narrowing would satisfy every one of
@@ -1440,6 +1530,182 @@ def test_the_scan_targets_exclude_only_the_three_accepted_files(tmp_path) -> Non
         f"missing: {sorted(p.relative_to(repo).as_posix() for p in expected_scanned - scanned)}; "
         f"unexpected: {sorted(p.relative_to(repo).as_posix() for p in scanned - expected_scanned)}"
     )
+
+
+def test_the_scan_refuses_an_index_symlink_replaced_by_a_regular_file_on_disk(
+    tmp_path,
+) -> None:
+    """Sensitivity proof for THE defect an independent review found.
+
+    An earlier version of this guard read only the WORKING TREE — `git
+    ls-files -z` names paths, and `_read_verified_tracked_bytes` then
+    inspects whatever currently sits on disk at each one. That leaves a
+    real gap: if the git INDEX records a path as a symlink (mode `120000`)
+    but the working tree has been locally replaced with an ORDINARY
+    regular file, the on-disk `O_NOFOLLOW` walk sees a perfectly normal
+    file and scans it — it never learns the index disagrees, because the
+    index is a different source of truth the walk never reads.
+
+    This builds a real git repository, stages a blob directly into the
+    INDEX at mode `120000` via `git update-index --add --cacheinfo`
+    (which never touches the working tree, so index and disk can be made
+    to disagree on purpose), then writes an ORDINARY regular file at that
+    exact path on disk. `_dotmac_ro_scan_targets` must refuse this path on
+    the index's word alone — before `_read_verified_tracked_bytes` or
+    anything else ever reads a byte from the substituted regular file.
+    """
+    repo = tmp_path / "fake_repo_index_symlink"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "guard-test@example.com"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "guard test"], cwd=repo, check=True)
+
+    for relative in _DOTMAC_RO_SELF_REFERENCING_FILES:
+        seeded = repo / relative
+        seeded.parent.mkdir(parents=True, exist_ok=True)
+        seeded.write_text(
+            "this file legitimately names dotmac_ro to describe and forbid it\n"
+        )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed the three accepted files"],
+        cwd=repo,
+        check=True,
+    )
+
+    blob_sha = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input="target_of_the_symlink\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    substituted_relative = "scripts/index_says_symlink_disk_says_regular_file.py"
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"120000,{blob_sha},{substituted_relative}",
+        ],
+        cwd=repo,
+        check=True,
+    )
+
+    substituted_path = repo / substituted_relative
+    substituted_path.parent.mkdir(parents=True, exist_ok=True)
+    substituted_path.write_text("an ordinary regular file, not a symlink\n")
+
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
+        _dotmac_ro_scan_targets(repo)
+
+
+def test_the_scan_refuses_a_gitlink_recorded_in_the_index(tmp_path) -> None:
+    """Sensitivity proof: a real gitlink (submodule) entry, mode `160000`, must REFUSE.
+
+    `git update-index --add --cacheinfo 160000,<sha>,<path>` stages a
+    genuine gitlink entry without needing an actual submodule checkout —
+    git does not validate a gitlink's SHA against a real object, because
+    it names a commit in a DIFFERENT repository this one never stores.
+    `_dotmac_ro_scan_targets` must refuse it on the index's word alone.
+    """
+    repo = tmp_path / "fake_repo_gitlink"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "guard-test@example.com"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "guard test"], cwd=repo, check=True)
+
+    for relative in _DOTMAC_RO_SELF_REFERENCING_FILES:
+        seeded = repo / relative
+        seeded.parent.mkdir(parents=True, exist_ok=True)
+        seeded.write_text(
+            "this file legitimately names dotmac_ro to describe and forbid it\n"
+        )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed the three accepted files"],
+        cwd=repo,
+        check=True,
+    )
+
+    fake_commit_sha = "a" * 40
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{fake_commit_sha},vendor/fake_submodule",
+        ],
+        cwd=repo,
+        check=True,
+    )
+
+    with pytest.raises(AssertionError, match=_SCAN_REFUSAL_MARKER):
+        _dotmac_ro_scan_targets(repo)
+
+
+def test_the_scan_refuses_a_non_utf8_tracked_filename(tmp_path) -> None:
+    """Sensitivity proof: a non-UTF-8 tracked filename must REFUSE via a typed error, not crash.
+
+    Git treats a path as raw bytes, not text — a filename need not be
+    valid UTF-8 to be tracked. `_tracked_files_with_modes` decodes each
+    filename explicitly, one record at a time, so an undecodable name
+    raises a controlled `AssertionError` with a stable message here — not
+    an uncontrolled `UnicodeDecodeError` from decoding the whole
+    subprocess output at once, which would carry no stable refusal
+    contract at all.
+
+    The invalid-UTF-8 path is staged directly into the INDEX via
+    `git update-index --add --cacheinfo`, never touching the working
+    tree, specifically so this test does not depend on whether the local
+    filesystem itself accepts an invalid-UTF-8 filename (some do not).
+    """
+    repo = tmp_path / "fake_repo_non_utf8_filename"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "guard-test@example.com"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "guard test"], cwd=repo, check=True)
+
+    for relative in _DOTMAC_RO_SELF_REFERENCING_FILES:
+        seeded = repo / relative
+        seeded.parent.mkdir(parents=True, exist_ok=True)
+        seeded.write_text(
+            "this file legitimately names dotmac_ro to describe and forbid it\n"
+        )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed the three accepted files"],
+        cwd=repo,
+        check=True,
+    )
+
+    blob_sha = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input=b"nothing to do with the legacy role\n",
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+    non_utf8_cacheinfo = b"100644," + blob_sha + b",invalid_\xffname.sql"
+    subprocess.run(
+        [b"git", b"update-index", b"--add", b"--cacheinfo", non_utf8_cacheinfo],
+        cwd=repo,
+        check=True,
+    )
+
+    with pytest.raises(AssertionError, match="not valid UTF-8"):
+        _dotmac_ro_scan_targets(repo)
 
 
 def test_the_scan_refuses_a_symlinked_leaf(tmp_path) -> None:
