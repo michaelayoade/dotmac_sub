@@ -111,14 +111,27 @@ def _require_offer_version_admission(
 
     This router's own blanket ``catalog:write`` gate above
     (``require_method_permission``) still runs for every route in this file
-    including this one; the owner function re-checks ``catalog:write``
-    itself too, so the two are consistent, not competing.
+    including this one, and independently applies the identical staff
+    leave-restriction check BEFORE this dependency is ever reached for any
+    caller holding ``catalog:write`` — see ``authorize_offer_version_
+    admission``'s own docstring for the precise, stated-not-glossed-over
+    relationship between that pre-existing router gate and this owner.
+
+    The route's cached/session ``auth`` dict is translated into the typed
+    ``AdmissionAuthorizationClaims`` boundary here — the one, explicit
+    translation point from this route's shape into what the owner accepts.
     """
 
     load_permission_keys(auth, db)
+    claims = offer_access_requirement.AdmissionAuthorizationClaims(
+        principal_id=str(auth.get("principal_id")),
+        principal_type=str(auth.get("principal_type") or "subscriber"),
+        roles=frozenset(auth.get("roles") or ()),
+        scopes=frozenset(auth.get("scopes") or ()),
+    )
     try:
         offer_access_requirement.authorize_offer_version_admission(
-            db, auth, request_id=_request_id(request)
+            db, claims, request_id=_request_id(request)
         )
     except OfferAccessRequirementError as exc:
         raise _offer_access_requirement_http_error(exc) from exc

@@ -1085,36 +1085,46 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     """Behavioral parity proof for the single authorization owner
     (``offer_access_requirement.authorize_offer_version_admission``).
 
-    This replaces the retired AST name-matching guard in
-    ``tests/architecture/test_offer_access_requirement_boundary.py`` (see
-    the comment left in its place). It injects a sentinel refusal at the
-    shared decision the owner makes — an ERP staff leave-write restriction —
-    and drives BOTH adapters through it: the route's own admission
-    dependency (``app.api.catalog._require_offer_version_admission``,
-    called directly, bypassing FastAPI's DI) and a direct
-    ``admit_offer_version`` call (bypassing the route entirely). Both must
-    refuse the SAME privileged, admin-role staff principal — proving both
-    adapters delegate to the one owner rather than each computing an
-    independent approximation that could disagree.
+    Round 12 findings 2 and 3 showed the ORIGINAL version of this test
+    masked the two defects it was meant to disprove:
 
-    Break condition: this fails if either adapter stops calling
+    - It called ``_require_offer_version_admission`` directly, skipping the
+      router's own PRE-EXISTING blanket ``catalog:write`` gate
+      (``require_method_permission``), which independently applies the
+      SAME staff leave-write check via older plumbing BEFORE the admission
+      dependency is ever reached. This version drives the REAL graph — the
+      router gate included — proving the actual production request path
+      refuses, not just the inner function in isolation.
+    - It replaced ``erp_staff_access.audit_denied_write`` with a no-op,
+      hiding that a direct-command denial's staged audit record was
+      deleted by the very rollback the denial causes. This version lets
+      the REAL ``audit_denied_write`` run and asserts the durable
+      ``auth.erp_staff_leave_write_denied`` row survives.
+
+    Break condition: fails if either adapter stops calling
     ``authorize_offer_version_admission`` (or that function stops calling
-    ``erp_staff_access.staff_write_restricted``) — regardless of what the
-    owner, the guard, or any intermediate helper is named. It cannot be
-    satisfied by a rename; only real delegation makes both paths observe
-    the sentinel.
+    ``erp_staff_access.staff_write_restricted``), if the router gate stops
+    independently enforcing the leave restriction ahead of the admission
+    dependency, or if the direct-command denial's audit record stops
+    surviving the transaction rollback the denial itself triggers. None of
+    this can be satisfied by a rename; only real delegation and a real
+    committed audit row make it pass.
     """
 
     from types import SimpleNamespace
 
     from fastapi import HTTPException
+    from starlette.requests import Request
 
     from app.api import catalog as api_catalog
-    from app.services import erp_staff_access
+    from app.models.audit import AuditEvent
+    from app.services import auth_dependencies, erp_staff_access
 
     user = _admin_system_user(db_session)
 
-    sentinel_restriction = object()
+    sentinel_restriction = SimpleNamespace(
+        restriction_id="sentinel-leave-block", source_system="test"
+    )
     observed_calls: list[dict] = []
 
     def _fake_staff_write_restricted(db, auth, *, method, at=None):
@@ -1127,19 +1137,15 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
             return sentinel_restriction
         return None
 
-    def _fake_audit_denied_write(db, **kwargs):
-        return None
-
     monkeypatch.setattr(
         erp_staff_access, "staff_write_restricted", _fake_staff_write_restricted
     )
-    monkeypatch.setattr(
-        erp_staff_access, "audit_denied_write", _fake_audit_denied_write
-    )
+    # audit_denied_write is deliberately NOT mocked — this test asserts on
+    # its REAL, durable effect below.
 
     offer = _make_offer(db_session)
 
-    # Direct-command adapter: bypasses the route entirely.
+    # --- Direct-command adapter: bypasses the route entirely. ---
     with pytest.raises(OfferAccessRequirementError) as command_excinfo:
         admit_offer_version(
             db_session,
@@ -1148,25 +1154,51 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     db_session.rollback()
     assert command_excinfo.value.code.endswith("permission_denied")
 
-    # Route adapter: call the real FastAPI dependency function directly with
-    # explicit arguments (bypassing FastAPI's own DI resolution, which is
-    # not needed to exercise the function body).
-    fake_request = SimpleNamespace(state=SimpleNamespace(), headers={})
+    surviving_audit_rows = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == "auth.erp_staff_leave_write_denied",
+            AuditEvent.entity_id == str(user.id),
+        )
+        .all()
+    )
+    assert len(surviving_audit_rows) >= 1, (
+        "the direct-command staff-leave denial's audit record did not "
+        "survive the transaction rollback the denial itself causes"
+    )
+
+    # --- Route adapter: the REAL dependency graph, router gate included. ---
     route_auth = {
         "principal_id": str(user.id),
         "principal_type": "system_user",
         "roles": ["admin"],
         "scopes": [],
     }
+    real_request = Request(
+        {"type": "http", "method": "POST", "path": "/offer-versions", "headers": []}
+    )
+
+    router_gate = auth_dependencies.require_method_permission(
+        "catalog:read", offer_access_requirement.WRITE_PERMISSION
+    )
+    with pytest.raises(HTTPException) as router_excinfo:
+        router_gate(request=real_request, auth=dict(route_auth), db=db_session)
+    db_session.rollback()
+    assert router_excinfo.value.status_code == 403
+
+    # The endpoint dependency also refuses on its own — necessary for any
+    # caller that reaches it without the router gate running first (a
+    # differently-mounted route, a future refactor), not merely relying on
+    # the router gate to be the only thing that ever catches this.
     with pytest.raises(HTTPException) as route_excinfo:
         api_catalog._require_offer_version_admission(
-            request=fake_request, auth=route_auth, db=db_session
+            request=real_request, auth=dict(route_auth), db=db_session
         )
     db_session.rollback()
     assert route_excinfo.value.status_code == 403
 
-    # Both paths actually reached the sentinel for THIS principal — proving
-    # the refusal observed above came from the injected restriction, not
+    # Every path actually reached the sentinel for THIS principal — proving
+    # the refusals observed above came from the injected restriction, not
     # from some unrelated failure.
     assert any(call["principal_id"] == str(user.id) for call in observed_calls)
 
@@ -1254,6 +1286,41 @@ def test_machine_credential_is_the_only_shadow_mode_admission_principal(db_sessi
         offer_access_requirement.ApiKeyPrincipal,
         offer_access_requirement.SubscriberPrincipal,
     }
+
+
+def test_admit_stages_a_machine_admission_with_api_key_actor_type_not_system(
+    db_session,
+):
+    """Forensic-attribution proof (round 12, finding 4). A billing-governance
+    audit entry only ever carries a strictly-enumerated ``AuditActorType``
+    (``system``/``user``/``api_key``/``service``): ``app.models.audit`` has
+    no ``machine_credential`` member, so
+    ``catalog_billing_governance._actor_type`` silently falls back to
+    ``AuditActorType.system`` for anything it doesn't recognize. Returning
+    the free-text string ``"machine_credential"`` as this evidence's
+    ``actor_type`` would therefore record an AUTHENTICATED, AUTHORIZED
+    machine admission as an anonymous system action — losing the exact
+    credential-attribution class this principal held before this module
+    ever distinguished it from a legacy local API key.
+
+    Break condition: this fails if ``_admission_actor_evidence`` ever
+    returns anything other than ``"api_key"`` for a
+    ``MachineCredentialPrincipal`` — including its own now-more-descriptive
+    but WRONG former value, ``"machine_credential"``, which is not a member
+    of ``AuditActorType`` at all."""
+
+    from app.services.catalog_billing_governance import _actor_type
+
+    principal = offer_access_requirement.MachineCredentialPrincipal(
+        credential_id=uuid4(), scopes=(offer_access_requirement.ADMISSION_SCOPE,)
+    )
+    actor_id, actor_type = offer_access_requirement._admission_actor_evidence(principal)
+    assert actor_id == str(principal.credential_id)
+    assert actor_type == "api_key"
+    # And the ENUM this actually feeds must resolve to the real api_key
+    # class, never the system fallback that swallows anything unrecognized.
+    resolved = _actor_type(actor_type)
+    assert resolved.value == "api_key"
 
 
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):

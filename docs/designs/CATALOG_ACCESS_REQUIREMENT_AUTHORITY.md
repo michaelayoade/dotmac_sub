@@ -62,37 +62,45 @@ isolation.
 - `unclassified` is never read as, defaulted to, or treated like PPPoE or any
   connection-type fallback anywhere in the codebase — see the architecture
   guard below.
-- Admission authorization is checked at TWO independent layers. The ROUTE
-  layer (`app/api/catalog.py`'s `require_any_permission(catalog:billing_write,
-  catalog:offer_version:admission)` dependency on `POST`/`PATCH
-  /offer-versions`) — matching this repo's own existing pattern in
-  `app/services/billing/subledger_opening.py`. That dependency is NOT the
-  whole story: both routes also sit under this router's own pre-existing
+- Admission authorization has ONE decision owner:
+  `offer_access_requirement.authorize_offer_version_admission`. It decides
+  the compound `catalog:write AND (catalog:billing_write OR
+  catalog:offer_version:admission)` rule AND the ERP staff leave-write
+  restriction (`app/services/erp_staff_access.py`), never just the leaf
+  permission grant. TWO call sites delegate to it rather than each deciding
+  independently: `app/api/catalog.py`'s `_require_offer_version_admission`
+  route dependency, and the command's own `_verify_admission_authorization`
+  (called from `_admit`, inside its transaction, twice — once after the
+  advisory locks are acquired, once again immediately before the INSERT).
+  Because both delegate to the same function, there is exactly one
+  implementation of the rule to keep correct, not two that can silently
+  disagree.
+  This router ALSO carries its own pre-existing, admission-unrelated
   `catalog:write` gate (`require_method_permission("catalog:read",
-  "catalog:write")`, applied to every mutating route in the file). The
-  ACTUAL effective requirement is therefore the compound `catalog:write AND
-  (catalog:billing_write OR catalog:offer_version:admission)` — the two
-  admission permissions are an OR-alternative to EACH OTHER, never a pure
-  standalone alternative to `catalog:write` itself. This is this router's
-  established, pre-existing pattern (every other `catalog:billing_write`
-  route in this file — offers, offer-prices, add-on-prices — already
-  requires `catalog:write` too), not a regression introduced by admission.
-  The COMMAND layer re-derives and checks the identical compound rule a
-  second time, inside `_admit`'s own transaction
-  (`offer_access_requirement._verify_admission_authorization`), for
-  whichever principal was supplied — a real RBAC/scope re-check against the
-  live database, not a caller-asserted boolean (unlike
-  `subledger_opening.py`'s `permission_granted` attestation, which this
-  module deliberately does not adopt for the actual enforcement: an
-  attestation only proves the caller CLAIMED authorization was checked,
-  never that it was). Both layers stay; removing either regresses the
-  command to single-layer enforcement.
+  "catalog:write")`, applied to every mutating route in the file, including
+  offers/offer-prices/add-on-prices) — stated precisely rather than
+  glossed over: for an HTTP caller who already holds `catalog:write`, THAT
+  gate's own `require_permission` independently applies the SAME
+  `erp_staff_access` leave-restriction check before `_require_offer_version_
+  admission` (and therefore the owner) is ever reached, using older,
+  separate plumbing (a bare-string HTTPException detail, and an audit write
+  it commits inline rather than staging). It cannot produce a DIFFERENT
+  verdict — both call the identical `erp_staff_access.staff_write_
+  restricted` — but it is a genuinely earlier, separate checkpoint, not a
+  second copy of the owner's decision; removing it is out of scope here
+  (it is shared, file-wide infrastructure, not owned by this module) and it
+  does not run at all for a caller who reaches the owner directly (a
+  background job, CLI, or other direct `admit_offer_version` caller bypasses
+  it entirely, which is exactly why the owner's own leave-check exists and
+  is not redundant for that path).
   `AdmitOfferVersionCommand` takes a REQUIRED, typed `AdmissionPrincipal`
   (`StaffPrincipal` | `ApiKeyPrincipal` | `SubscriberPrincipal` |
-  `SystemAdmission`), validated at construction (`__post_init__`) to
-  actually be one of those four. It is recorded for audit/attribution AND
-  (for every member except `SystemAdmission`) re-verified against RBAC
-  inside the command. `catalog:offer_
+  `MachineCredentialPrincipal` | `SystemAdmission`), validated at
+  construction (`__post_init__`) to actually be one of those five. It is
+  recorded for audit/attribution AND (for every member except
+  `SystemAdmission` and, pending a separate migration, `Machine
+  CredentialPrincipal`) re-verified against RBAC inside the command.
+  `catalog:offer_
   version:admission` (`alembic/versions/609_offer_version_admission_
   permission.py`) is a genuine, narrower, OPT-IN alternative to `catalog:
   billing_write` — a caller holding either (in addition to `catalog:write`)
@@ -111,6 +119,20 @@ isolation.
   that path is unverified, but it is not theoretical, and this resolver does
   not silently 403 it. Retiring that access is a deliberate, separate
   census/migration, not something implemented here.
+  A kernel machine credential and a legacy local API key both authenticate
+  as `principal_type == "api_key"` (backward compatible with every existing
+  permission check); `credential_kind` on the auth dict
+  (`"machine"`/`"legacy_api_key"`, stamped by `auth_dependencies._machine_
+  principal`/`_api_key_principal`) is the only signal that tells them apart,
+  and `_admission_principal` reads it to resolve `MachineCredentialPrincipal`
+  versus `ApiKeyPrincipal`. `MachineCredentialPrincipal` is the exact,
+  non-growing compatibility path for a migration in progress: no inventory
+  of active machine callers and their granted scopes exists yet, so
+  `_verify_admission_authorization` runs its decision in SHADOW/WOULD-REFUSE
+  mode only (evaluates and logs, never refuses) until that inventory, a
+  scope migration, and a reviewed enforcement switch land — hard-enforcing
+  today would be an uncensused, silent access retirement of a caller
+  `origin/main` always authorized.
   `SystemAdmission` (an admission with no authenticated end-user context at
   all) has NO production construction site at all: `OfferVersions.create`'s
   `actor_id`/`actor_type` resolution FAILS CLOSED (raises a typed

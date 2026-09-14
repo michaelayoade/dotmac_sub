@@ -428,7 +428,18 @@ def _admission_actor_evidence(
     if isinstance(principal, SubscriberPrincipal):
         return str(principal.subscriber_id), "subscriber"
     if isinstance(principal, MachineCredentialPrincipal):
-        return str(principal.credential_id), "machine_credential"
+        # NOT "machine_credential": app.models.audit.AuditActorType has no
+        # such member, so the billing-governance audit adapter's own
+        # _actor_type() fallback would silently relabel this as
+        # AuditActorType.system — collapsing a distinct, authenticated
+        # credential attribution class into an anonymous system action.
+        # "api_key" is the exact class this principal belonged to before
+        # this module ever distinguished it from a legacy local key (see
+        # MachineCredentialPrincipal's own docstring); the richer
+        # "machine_credential:<id>" distinction lives in the free-text
+        # admission_actor_label/event actor string above, not in this
+        # strictly-enumerated evidence field.
+        return str(principal.credential_id), "api_key"
     return None, None
 
 
@@ -461,6 +472,44 @@ def _subscriber_role_names(db: Session, subscriber_id: UUID) -> tuple[str, ...]:
     return tuple(rows)
 
 
+@dataclass(frozen=True, slots=True)
+class AdmissionAuthorizationClaims:
+    """Typed boundary for ``authorize_offer_version_admission`` — the exact
+    claims its decision needs, constructed identically by both callers: the
+    ROUTE (from a live, HTTP-authenticated auth dict — cached/session
+    claims) and the COMMAND (from a fresh per-principal database re-read —
+    live claims), so the SAME typed shape reaches the one decision function
+    regardless of which adapter built it. An untyped ``auth: dict`` was
+    flagged (round 12) as exactly the kind of free-form primitive bag this
+    repository's coding rules forbid as an owner-interface boundary: two
+    differently-constructed dicts (route-cached vs. command-reconstructed)
+    could silently diverge in shape or key spelling with nothing to catch
+    it, and a typo'd key would read as "no grant" rather than fail loudly.
+
+    ``auth_dependencies.has_permission``/``staff_write_restricted``'s own
+    ``dict`` parameters are unrelated, pre-existing, file-wide shared
+    infrastructure used across the whole application and are out of scope
+    for this change; ``as_dict()`` below is the one, single, explicit
+    translation point into that shared shape, kept as narrow as possible.
+    """
+
+    principal_id: str
+    principal_type: str
+    roles: frozenset[str] = frozenset()
+    scopes: frozenset[str] = frozenset()
+
+    def as_dict(self) -> dict[str, object]:
+        """The exact shape ``auth_dependencies``'s dict-based primitives
+        expect. Never constructed by hand anywhere else in this module."""
+
+        return {
+            "principal_id": self.principal_id,
+            "principal_type": self.principal_type,
+            "roles": set(self.roles),
+            "scopes": set(self.scopes),
+        }
+
+
 def _admission_permission_granted(auth: dict, db: Session) -> bool:
     """The compound permission LEG of the admission decision: ``catalog:write
     AND (catalog:billing_write OR catalog:offer_version:admission)``.
@@ -474,6 +523,8 @@ def _admission_permission_granted(auth: dict, db: Session) -> bool:
     staff leave-write restriction. Nothing outside ``authorize_offer_version_
     admission`` (the one owner, below) may call this directly for an actual
     authorization decision; it exists as a private helper of that owner.
+    Takes the raw ``dict`` shape (an internal implementation detail of the
+    typed owner above it, never a public boundary of its own).
     """
 
     return has_permission(auth, db, WRITE_PERMISSION) and (
@@ -483,16 +534,17 @@ def _admission_permission_granted(auth: dict, db: Session) -> bool:
 
 
 def authorize_offer_version_admission(
-    db: Session, auth: dict, *, request_id: str | None = None
+    db: Session,
+    claims: AdmissionAuthorizationClaims,
+    *,
+    request_id: str | None = None,
 ) -> None:
     """THE single owner of the offer-version-admission authorization
-    decision — not a leaf permission check, the WHOLE decision the route
-    makes: the compound permission rule above, AND (for a ``system_user``
-    principal) the ERP staff leave-write restriction
+    decision — not a leaf permission check, the WHOLE decision: the
+    compound permission rule above, AND (for a ``system_user`` principal)
+    the ERP staff leave-write restriction
     (``app/services/erp_staff_access.py``'s ``staff_write_restricted`` /
-    ``audit_denied_write``, which ``auth_dependencies.require_permission``/
-    ``require_any_permission`` already apply via their own
-    ``_enforce_staff_leave_write_guard`` after a permission grant).
+    ``audit_denied_write``).
 
     ``app/api/catalog.py``'s route dependency and this module's own
     in-transaction command re-check (``_verify_admission_authorization``)
@@ -504,8 +556,35 @@ def authorize_offer_version_admission(
     writes refused) is refused here exactly as it is over HTTP — a
     caller reaching this command directly must not get a MORE permissive
     answer than the route would have given the identical principal.
+
+    STATED PRECISELY, not glossed over: this is NOT the only leave-
+    restriction checkpoint a real HTTP request passes through.
+    ``app/api/catalog.py``'s router carries its OWN pre-existing, admission-
+    unrelated ``catalog:write`` gate (``require_method_permission``, applied
+    to every mutating route in the file) whose ``require_permission``
+    independently invokes the identical ``erp_staff_access.staff_write_
+    restricted`` check BEFORE this function is ever reached, for any caller
+    who holds ``catalog:write`` — using older, separate plumbing (a bare-
+    string HTTPException detail, and an inline-committed audit write rather
+    than this function's staged one). It cannot produce a DIFFERENT
+    verdict (both call the same underlying primitive), but it IS a
+    genuinely earlier, separate checkpoint for the ROUTE path specifically;
+    this function's own leave-check is what actually enforces the
+    restriction for a caller who reaches ``admit_offer_version`` directly
+    (a background job, CLI, or other non-route caller bypasses the router
+    entirely, so nothing upstream of this function would catch it there).
+
+    The staged ``audit_denied_write`` record is committed HERE, before
+    raising, rather than left to the caller's own transaction — a direct-
+    command caller's refusal (unlike the route's) runs inside
+    ``execute_owner_command``'s owned transaction, which rolls back on this
+    exact exception; without an explicit commit first, the staged evidence
+    of the denial would be deleted by the very rollback the denial causes,
+    silently losing the one durable trace that a leave-restricted principal
+    attempted a write at all.
     """
 
+    auth = claims.as_dict()
     if not _admission_permission_granted(auth, db):
         raise _error(
             "permission_denied",
@@ -532,6 +611,11 @@ def authorize_offer_version_admission(
         request_id=request_id,
         permission_key=ADMISSION_SCOPE,
     )
+    # Commit the staged audit record NOW, before raising — see this
+    # function's own docstring for why: a direct-command caller's refusal
+    # unwinds inside execute_owner_command's owned transaction, which would
+    # otherwise roll back and delete this exact evidence.
+    db.commit()
     raise _error(
         "permission_denied",
         "Offer version admission is refused: an active staff leave "
@@ -565,13 +649,12 @@ def _shadow_check_machine_credential_admission(
     enforcement path.
     """
 
-    auth = {
-        "principal_id": str(principal.credential_id),
-        "principal_type": "api_key",
-        "roles": [],
-        "scopes": list(principal.scopes),
-    }
-    would_be_granted = _admission_permission_granted(auth, db)
+    claims = AdmissionAuthorizationClaims(
+        principal_id=str(principal.credential_id),
+        principal_type="api_key",
+        scopes=frozenset(principal.scopes),
+    )
+    would_be_granted = _admission_permission_granted(claims.as_dict(), db)
     if would_be_granted:
         logger.info(
             "offer_version_admission.machine_credential_shadow: would be "
@@ -653,11 +736,11 @@ def _verify_admission_authorization(
                 "staff principal.",
                 retryable=False,
             )
-        auth = {
-            "principal_id": str(principal.system_user_id),
-            "principal_type": "system_user",
-            "roles": set(system_user_role_names(db, principal.system_user_id)),
-        }
+        claims = AdmissionAuthorizationClaims(
+            principal_id=str(principal.system_user_id),
+            principal_type="system_user",
+            roles=frozenset(system_user_role_names(db, principal.system_user_id)),
+        )
     elif isinstance(principal, ApiKeyPrincipal):
         api_key = db.get(ApiKey, principal.api_key_id, populate_existing=True)
         now = datetime.now(UTC)
@@ -679,12 +762,11 @@ def _verify_admission_authorization(
         # API keys carry no roles (auth_dependencies._api_key_principal);
         # their access is exactly their scopes, wildcard-aware via the same
         # has_permission() call every other principal type goes through.
-        auth = {
-            "principal_id": str(principal.api_key_id),
-            "principal_type": "api_key",
-            "roles": [],
-            "scopes": list(api_key.scopes or []),
-        }
+        claims = AdmissionAuthorizationClaims(
+            principal_id=str(principal.api_key_id),
+            principal_type="api_key",
+            scopes=frozenset(api_key.scopes or ()),
+        )
     elif isinstance(principal, SubscriberPrincipal):
         subscriber = db.get(Subscriber, principal.subscriber_id, populate_existing=True)
         if subscriber is None or not subscriber.is_active:
@@ -694,11 +776,11 @@ def _verify_admission_authorization(
                 "subscriber principal.",
                 retryable=False,
             )
-        auth = {
-            "principal_id": str(principal.subscriber_id),
-            "principal_type": "subscriber",
-            "roles": set(_subscriber_role_names(db, principal.subscriber_id)),
-        }
+        claims = AdmissionAuthorizationClaims(
+            principal_id=str(principal.subscriber_id),
+            principal_type="subscriber",
+            roles=frozenset(_subscriber_role_names(db, principal.subscriber_id)),
+        )
     elif isinstance(principal, MachineCredentialPrincipal):
         # EXACT, NON-GROWING COMPATIBILITY PATH: this is the only principal
         # type this function does not enforce against — see
@@ -716,7 +798,7 @@ def _verify_admission_authorization(
         )
 
     authorize_offer_version_admission(
-        db, auth, request_id=str(command.context.correlation_id)
+        db, claims, request_id=str(command.context.correlation_id)
     )
 
 
@@ -1536,6 +1618,7 @@ def _classify(
 __all__ = [
     "ADMISSION_SCOPE",
     "CLASSIFY_PERMISSION",
+    "AdmissionAuthorizationClaims",
     "AdmissionPrincipal",
     "AdmitOfferVersionCommand",
     "AdmitOfferVersionResult",
