@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
@@ -13,12 +13,10 @@ logger = logging.getLogger(__name__)
 
 from app.models.subscriber import SubscriberCategory
 from app.schemas.subscriber import SubscriberUpdate
-from app.services import account_recovery
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services.audit_helpers import log_audit_event
-from app.services.owner_commands import CommandContext
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
     resolve_form_customer_ids,
@@ -295,76 +293,6 @@ def update_subscriber_from_form(
     return subscriber, before, after
 
 
-def _request_recoverable_deletion(
-    db: Session,
-    subscriber_id: UUID,
-    actor_id: str | None,
-    *,
-    idempotency_key: str,
-) -> None:
-    """Route the deletion through the owner-command boundary.
-
-    ``request_recoverable_deletion`` itself enters
-    :func:`app.services.owner_commands.execute_owner_command`, which owns
-    the transaction — this adapter never calls ``db.commit()``.
-    ``idempotency_key`` has no default: this action has no natural
-    review-step fingerprint to derive one from (unlike restore/rebaseline),
-    so the caller must supply a key that is stable across a genuine retry of
-    the SAME deletion attempt and distinct from any later, separate
-    deletion attempt on this account (e.g. after a full restore).
-    """
-    actor = actor_id or "system_restore_tool"
-    account_id = (
-        subscriber_id if isinstance(subscriber_id, UUID) else UUID(str(subscriber_id))
-    )
-    context = CommandContext(
-        command_id=uuid4(),
-        correlation_id=uuid4(),
-        actor=actor,
-        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
-        reason="Administrative recoverable deletion via subscriber admin action",
-        idempotency_key=idempotency_key,
-    )
-    command = account_recovery.RequestRecoverableDeletionCommand(
-        account_id=account_id,
-        context=context,
-        requested_by=actor,
-        deleted_by=actor,
-    )
-    try:
-        outcome = account_recovery.request_recoverable_deletion(db, command)
-    except account_recovery.AccountRecoveryError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if isinstance(outcome, account_recovery.DeletionPreflightBlocked):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Deletion refused: unsupported consequence(s) "
-                f"{', '.join(outcome.unsupported_consequences)} would affect "
-                f"subscription(s) {', '.join(str(i) for i in outcome.blocked_subscription_ids)}."
-            ),
-        )
-
-
-def delete_subscriber(
-    db: Session,
-    subscriber_id: UUID,
-    actor_id: str | None = None,
-    *,
-    idempotency_key: str,
-) -> None:
-    subscriber = subscriber_service.subscribers.get(
-        db=db, subscriber_id=str(subscriber_id)
-    )
-    if subscriber.is_active:
-        raise HTTPException(
-            status_code=409, detail="Deactivate subscriber before deleting."
-        )
-    _request_recoverable_deletion(
-        db, subscriber_id, actor_id, idempotency_key=idempotency_key
-    )
-
-
 def bulk_set_subscriber_status(
     db: Session, subscriber_ids: list[str], is_active: bool
 ) -> tuple[int, int]:
@@ -389,31 +317,6 @@ def bulk_set_subscriber_status(
             failed_count += 1
             continue
     return updated_count, failed_count
-
-
-def bulk_delete_inactive_subscribers(
-    db: Session,
-    subscriber_ids: list[str],
-    actor_id: str | None = None,
-) -> tuple[int, int, int]:
-    deleted_count = 0
-    skipped_active = 0
-    failed_count = 0
-    for subscriber_id in subscriber_ids:
-        try:
-            subscriber = subscriber_service.subscribers.get(
-                db=db, subscriber_id=subscriber_id
-            )
-            if subscriber.is_active:
-                skipped_active += 1
-                continue
-            _request_recoverable_deletion(db, subscriber.id, actor_id)
-            deleted_count += 1
-        except Exception as exc:
-            logger.error("Failed to delete subscriber %s: %s", subscriber_id, exc)
-            failed_count += 1
-            continue
-    return deleted_count, skipped_active, failed_count
 
 
 def toggle_comment_todo(
