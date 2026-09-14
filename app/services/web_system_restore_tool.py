@@ -15,10 +15,11 @@ typed dataclass, never an ``HTTPException``.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.account_recovery import AccountRecoveryRecord, AccountRecoveryState
 from app.models.subscriber import Subscriber, UserType
 from app.services import account_recovery
+from app.services.owner_commands import CommandContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +134,20 @@ def build_page_state(
     }
 
 
+def _replay_safe_idempotency_key(*parts: str) -> str:
+    """Deterministic key for a form re-submission of the SAME review step.
+
+    Each admin form here always carries the record's current
+    ``confirmation_fingerprint`` (obtained from the review step this action
+    confirms). That fingerprint changes on every generation/revision, so a
+    key derived from it collapses a genuine double-submit (same fingerprint)
+    into one replayed outcome while a later, distinct review (new
+    fingerprint) always gets its own key — never a stale cross-generation
+    replay.
+    """
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
 def restore_via_recovery(
     db: Session,
     *,
@@ -140,16 +156,30 @@ def restore_via_recovery(
     actor_id: str,
     reason: str,
 ) -> account_recovery.RecoveryOutcome:
-    """Thin typed adapter over :func:`account_recovery.restore_account`."""
+    """Thin typed adapter over :func:`account_recovery.restore_account`.
+
+    Routes through the owner-command boundary
+    (:func:`app.services.owner_commands.execute_owner_command`, entered by
+    ``restore_account`` itself) instead of self-committing — the command
+    boundary owns the transaction, so this adapter never calls
+    ``db.commit()``.
+    """
+    context = CommandContext(
+        command_id=uuid4(),
+        correlation_id=uuid4(),
+        actor=actor_id,
+        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+        reason=reason,
+        idempotency_key=_replay_safe_idempotency_key(
+            "account-recovery:restore", subscriber_id, confirmation_fingerprint
+        ),
+    )
     command = account_recovery.RestoreAccountCommand(
         account_id=UUID(subscriber_id),
+        context=context,
         confirmation_fingerprint=confirmation_fingerprint,
-        actor=actor_id,
-        reason=reason,
     )
-    outcome = account_recovery.restore_account(db, command)
-    db.commit()
-    return outcome
+    return account_recovery.restore_account(db, command)
 
 
 def rebaseline_via_recovery(
@@ -161,14 +191,27 @@ def rebaseline_via_recovery(
     actor_id: str,
     reason: str,
 ) -> account_recovery.RebaselineApplied:
-    """Thin typed adapter over :func:`account_recovery.rebaseline_recovery_evidence`."""
+    """Thin typed adapter over :func:`account_recovery.rebaseline_recovery_evidence`.
+
+    Routes through the owner-command boundary; see `restore_via_recovery`.
+    """
+    context = CommandContext(
+        command_id=uuid4(),
+        correlation_id=uuid4(),
+        actor=actor_id,
+        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+        reason=reason,
+        idempotency_key=_replay_safe_idempotency_key(
+            "account-recovery:rebaseline",
+            subscriber_id,
+            confirmation_fingerprint,
+            ",".join(sorted(affected_resource_types)),
+        ),
+    )
     command = account_recovery.RebaselineRecoveryCommand(
         account_id=UUID(subscriber_id),
+        context=context,
         confirmation_fingerprint=confirmation_fingerprint,
         affected_resource_types=affected_resource_types,
-        actor=actor_id,
-        reason=reason,
     )
-    outcome = account_recovery.rebaseline_recovery_evidence(db, command)
-    db.commit()
-    return outcome
+    return account_recovery.rebaseline_recovery_evidence(db, command)

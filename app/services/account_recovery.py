@@ -22,6 +22,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.account_recovery import (
@@ -35,6 +36,7 @@ from app.models.account_recovery import (
 )
 from app.models.catalog import Subscription, SubscriptionAddOn
 from app.models.enforcement_lock import EnforcementLock
+from app.models.idempotency import IdempotencyKey
 from app.models.network import IPAssignment
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import ActivationIntent, restore_subscription_detailed
@@ -43,12 +45,35 @@ from app.models.audit import AuditActorType
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 # The closed set of resource types this owner can actually reverse today.
 # Every other known type (see `KNOWN_RESOURCE_TYPES`) exists only so a
 # legacy row can name what it touched without a false "subscription-only"
 # claim; recovery on a record naming any of them fails closed.
 REGISTERED_RECOVERY_PARTICIPANTS: frozenset[str] = frozenset({"subscription"})
+
+ACCOUNT_RECOVERY_WRITE_SCOPE = "customer:account-recovery:write"
+
+_REQUEST_DELETION_COMMAND = OwnerCommandDefinition(
+    owner="customer.account_recovery",
+    concern="deletion tombstones",
+    name="request_recoverable_deletion",
+)
+_RESTORE_COMMAND = OwnerCommandDefinition(
+    owner="customer.account_recovery",
+    concern="recovery confirmation",
+    name="restore_account",
+)
+_REBASELINE_COMMAND = OwnerCommandDefinition(
+    owner="customer.account_recovery",
+    concern="recovery evidence re-baselining",
+    name="rebaseline_recovery_evidence",
+)
 
 # `cancel_subscription` (access.subscription_lifecycle) has other
 # consequences beyond a bare status write — it ends active add-ons,
@@ -78,14 +103,20 @@ class RequestRecoverableDeletionCommand:
     `customer_requested_termination` through the ordinary lifecycle owner
     and never creates a row here, because that path never claims to be
     recoverable.
+
+    ``context.command_id``/``context.correlation_id`` are the command's own
+    identity; ``context.idempotency_key`` is a durable replay key so a
+    retried request returns the original tombstone (or preflight refusal)
+    instead of erroring or re-mutating. ``requested_by``/``deleted_by``
+    stay separate domain fields (who asked vs. who is recorded as the
+    executing actor) — distinct from ``context.actor``, the command's own
+    audit identity.
     """
 
     account_id: UUID
-    command_id: UUID
-    correlation_id: UUID
+    context: CommandContext
     requested_by: str
     deleted_by: str
-    reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,9 +155,8 @@ class DeletionPreflightBlocked:
 @dataclass(frozen=True, slots=True)
 class RestoreAccountCommand:
     account_id: UUID
+    context: CommandContext
     confirmation_fingerprint: str
-    actor: str
-    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,10 +203,9 @@ RecoveryOutcome = RecoveryBlocked | RecoveryRestored | RecoveryPartiallyRestored
 @dataclass(frozen=True, slots=True)
 class RebaselineRecoveryCommand:
     account_id: UUID
+    context: CommandContext
     confirmation_fingerprint: str
     affected_resource_types: tuple[str, ...]
-    actor: str
-    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +279,184 @@ def _lock_open_record(db: Session, account_id: UUID) -> AccountRecoveryRecord:
             account_id=str(account_id),
         )
     return record
+
+
+def _validate_scope(command_scope: str) -> None:
+    if command_scope != ACCOUNT_RECOVERY_WRITE_SCOPE:
+        raise _error(
+            "command_scope_mismatch",
+            "Account-recovery write scope is required.",
+        )
+
+
+def _reserve_idempotency(
+    db: Session, *, scope: str, account_id: UUID, idempotency_key: str | None
+) -> IdempotencyKey:
+    """Reserve (or return the existing) durable replay row for one command.
+
+    Mirrors ``account_status_commands._reserve_idempotency``: a caller-
+    supplied key is required and bounded, a second reservation for the same
+    (scope, key) belonging to a DIFFERENT account is refused, and a raw
+    unique-constraint race is translated into a typed conflict.
+    """
+    key = str(idempotency_key or "").strip()
+    if not key or len(key) > 120:
+        raise _error(
+            "invalid_idempotency_key",
+            "An account-recovery idempotency key is required.",
+        )
+    existing = db.execute(
+        select(IdempotencyKey)
+        .where(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.account_id != account_id:
+            raise _error(
+                "idempotency_account_mismatch",
+                "The account-recovery command belongs to another account.",
+            )
+        return existing
+    reservation = IdempotencyKey(scope=scope, key=key, account_id=account_id)
+    db.add(reservation)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise _error(
+            "idempotency_conflict",
+            "The account-recovery command conflicted with another request.",
+        ) from exc
+    return reservation
+
+
+def _input_fingerprint(*parts: str) -> str:
+    """Fingerprint the caller-supplied inputs a replay must match exactly.
+
+    Packed into the reserved ``IdempotencyKey.ref_id`` alongside the entity
+    id (see `_pack_replay_ref`/`_resolve_replay`) so a SECOND use of the same
+    idempotency key with materially different inputs is a typed conflict,
+    never a silent replay of the wrong decision and never a raw error.
+    """
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _pack_replay_ref(input_fingerprint: str, entity_id: UUID) -> str:
+    return f"{input_fingerprint}:{entity_id}"
+
+
+def _resolve_replay(reservation: IdempotencyKey, input_fingerprint: str) -> UUID | None:
+    """Return the record id to replay, or ``None`` for a fresh reservation.
+
+    A stored ref_id whose packed fingerprint does not match this call's
+    inputs means the idempotency key was reused for a materially different
+    command — refused as `idempotency_input_conflict` rather than replayed
+    or silently re-executed.
+    """
+    if not reservation.ref_id:
+        return None
+    stored_fingerprint, separator, record_id = reservation.ref_id.partition(":")
+    if not separator or stored_fingerprint != input_fingerprint or not record_id:
+        raise _error(
+            "idempotency_input_conflict",
+            "This idempotency key was already used for a different "
+            "account-recovery command.",
+        )
+    return UUID(record_id)
+
+
+def _replay_request_outcome(db: Session, record_id: UUID) -> DeletionTombstone:
+    record = db.get(AccountRecoveryRecord, record_id)
+    if record is None:
+        raise _error(
+            "invalid_replay_evidence",
+            "Stored account-recovery replay evidence is invalid.",
+            record_id=str(record_id),
+        )
+    subscription_ids = tuple(
+        db.scalars(
+            select(AccountRecoverySubscriptionSnapshot.subscription_id)
+            .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
+            .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
+        ).all()
+    )
+    return DeletionTombstone(
+        record_id=record.id,
+        account_id=record.account_id,
+        generation=record.generation,
+        confirmation_fingerprint=record.confirmation_fingerprint,
+        affected_resource_types=tuple(record.affected_resource_types),
+        affected_subscription_ids=subscription_ids,
+    )
+
+
+def _replay_restore_outcome(db: Session, record_id: UUID) -> RecoveryOutcome:
+    """Re-derive the current, canonical restore outcome for a replay.
+
+    Deliberately reads CURRENT subscription/record state rather than
+    replaying a cached decision: this owner never re-decides or rewrites
+    source state, so a replay is a read of the same canonical truth the
+    original call would read if it ran again right now — not a stored
+    snapshot that could grow stale relative to it.
+    """
+    record = db.get(AccountRecoveryRecord, record_id)
+    if record is None:
+        raise _error(
+            "invalid_replay_evidence",
+            "Stored account-recovery replay evidence is invalid.",
+            record_id=str(record_id),
+        )
+    affected = tuple(record.affected_resource_types)
+    missing = sorted(set(affected) - REGISTERED_RECOVERY_PARTICIPANTS)
+    unknown = sorted(set(affected) - KNOWN_RESOURCE_TYPES)
+    if unknown:
+        missing = sorted(set(missing) | set(unknown))
+    if missing:
+        return RecoveryBlocked(record_id=record.id, missing_participant_types=tuple(missing))
+
+    snapshots = list(
+        db.scalars(
+            select(AccountRecoverySubscriptionSnapshot)
+            .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
+            .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
+        ).all()
+    )
+    restored_ids: list[UUID] = []
+    unrestored_ids: list[UUID] = []
+    for snapshot in snapshots:
+        subscription = db.get(Subscription, snapshot.subscription_id)
+        if subscription is not None and subscription.status.value != "canceled":
+            restored_ids.append(snapshot.subscription_id)
+        else:
+            unrestored_ids.append(snapshot.subscription_id)
+
+    if unrestored_ids:
+        return RecoveryPartiallyRestored(
+            record_id=record.id,
+            account_id=record.account_id,
+            restored_subscription_ids=tuple(restored_ids),
+            unrestored_subscription_ids=tuple(unrestored_ids),
+        )
+    return RecoveryRestored(
+        record_id=record.id,
+        account_id=record.account_id,
+        restored_subscription_ids=tuple(restored_ids),
+    )
+
+
+def _replay_rebaseline_outcome(db: Session, record_id: UUID) -> RebaselineApplied:
+    record = db.get(AccountRecoveryRecord, record_id)
+    if record is None:
+        raise _error(
+            "invalid_replay_evidence",
+            "Stored account-recovery replay evidence is invalid.",
+            record_id=str(record_id),
+        )
+    return RebaselineApplied(
+        record_id=record.id,
+        new_confirmation_fingerprint=record.confirmation_fingerprint,
+        fingerprint_revision=record.fingerprint_revision,
+        affected_resource_types=tuple(record.affected_resource_types),
+    )
 
 
 def _preflight_unsupported_consequences(
@@ -327,152 +534,179 @@ def request_recoverable_deletion(
     from app.services.account_lifecycle import cancel_subscription
     from app.services.billing_automation import CancellationCreditIntent
 
-    subscriber = _lock_subscriber(db, command.account_id)
+    _validate_scope(command.context.scope)
 
-    existing_open = db.execute(
-        select(AccountRecoveryRecord.id).where(
-            AccountRecoveryRecord.account_id == command.account_id,
-            AccountRecoveryRecord.state.in_(
-                (AccountRecoveryState.open, AccountRecoveryState.blocked)
-            ),
+    def operation() -> DeletionTombstone | DeletionPreflightBlocked:
+        subscriber = _lock_subscriber(db, command.account_id)
+        input_fingerprint = _input_fingerprint(
+            str(command.account_id),
+            command.requested_by,
+            command.deleted_by,
+            command.context.reason,
         )
-    ).first()
-    if existing_open is not None:
-        raise _error(
-            "generation_already_open",
-            f"Account {command.account_id} already has an open recovery generation",
-            account_id=str(command.account_id),
+        reservation = _reserve_idempotency(
+            db,
+            scope="account_recovery:request_deletion",
+            account_id=command.account_id,
+            idempotency_key=command.context.idempotency_key,
+        )
+        replay_id = _resolve_replay(reservation, input_fingerprint)
+        if replay_id is not None:
+            return _replay_request_outcome(db, replay_id)
+
+        existing_open = db.execute(
+            select(AccountRecoveryRecord.id).where(
+                AccountRecoveryRecord.account_id == command.account_id,
+                AccountRecoveryRecord.state.in_(
+                    (AccountRecoveryState.open, AccountRecoveryState.blocked)
+                ),
+            )
+        ).first()
+        if existing_open is not None:
+            raise _error(
+                "generation_already_open",
+                f"Account {command.account_id} already has an open recovery generation",
+                account_id=str(command.account_id),
+            )
+
+        prior_generation = db.execute(
+            select(AccountRecoveryRecord.generation)
+            .where(AccountRecoveryRecord.account_id == command.account_id)
+            .order_by(AccountRecoveryRecord.generation.desc())
+            .limit(1)
+        ).scalar()
+        generation = (prior_generation or 0) + 1
+
+        subscriptions = list(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.subscriber_id == command.account_id)
+                .order_by(Subscription.id)
+                .with_for_update()
+            ).all()
         )
 
-    prior_generation = db.execute(
-        select(AccountRecoveryRecord.generation)
-        .where(AccountRecoveryRecord.account_id == command.account_id)
-        .order_by(AccountRecoveryRecord.generation.desc())
-        .limit(1)
-    ).scalar()
-    generation = (prior_generation or 0) + 1
+        if subscriptions:
+            unsupported = _preflight_unsupported_consequences(db, subscriptions)
+            if unsupported:
+                blocked_ids = tuple(
+                    s.id for s in subscriptions if s.status.value != "canceled"
+                )
+                return DeletionPreflightBlocked(
+                    account_id=command.account_id,
+                    blocked_subscription_ids=blocked_ids,
+                    unsupported_consequences=unsupported,
+                )
 
-    subscriptions = list(
-        db.scalars(
-            select(Subscription)
-            .where(Subscription.subscriber_id == command.account_id)
-            .order_by(Subscription.id)
-            .with_for_update()
-        ).all()
-    )
+        now = datetime.now(UTC)
 
-    if subscriptions:
-        unsupported = _preflight_unsupported_consequences(db, subscriptions)
-        if unsupported:
-            blocked_ids = tuple(
-                s.id for s in subscriptions if s.status.value != "canceled"
-            )
-            return DeletionPreflightBlocked(
-                account_id=command.account_id,
-                blocked_subscription_ids=blocked_ids,
-                unsupported_consequences=unsupported,
-            )
+        # This owner tombstones the account; driving each subscription to
+        # `canceled` is still exclusively the lifecycle owner's decision
+        # (`access.subscription_lifecycle` / `cancel_subscription`), invoked here
+        # with the one credit intent that suppresses a cancellation credit
+        # (`administrative_recoverable_deletion` — the subscription is expected
+        # to be reversed, not settled as a real termination).
+        pre_deletion_statuses = {s.id: s.status.value for s in subscriptions}
+        pre_deletion_offer_versions = {s.id: s.offer_version_id for s in subscriptions}
+        for subscription in subscriptions:
+            if subscription.status.value != "canceled":
+                cancel_subscription(
+                    db,
+                    str(subscription.id),
+                    command.context.reason
+                    or "Recoverable administrative account deletion",
+                    command.deleted_by,
+                    credit_intent=CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION,
+                    emit=True,
+                )
+        subscriber.is_active = False
 
-    now = datetime.now(UTC)
-
-    # This owner tombstones the account; driving each subscription to
-    # `canceled` is still exclusively the lifecycle owner's decision
-    # (`access.subscription_lifecycle` / `cancel_subscription`), invoked here
-    # with the one credit intent that suppresses a cancellation credit
-    # (`administrative_recoverable_deletion` — the subscription is expected
-    # to be reversed, not settled as a real termination).
-    pre_deletion_statuses = {s.id: s.status.value for s in subscriptions}
-    pre_deletion_offer_versions = {s.id: s.offer_version_id for s in subscriptions}
-    for subscription in subscriptions:
-        if subscription.status.value != "canceled":
-            cancel_subscription(
-                db,
-                str(subscription.id),
-                command.reason or "Recoverable administrative account deletion",
-                command.deleted_by,
-                credit_intent=CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION,
-                emit=True,
-            )
-    subscriber.is_active = False
-
-    affected_types = ("subscription",) if subscriptions else ()
-    fingerprint = _fingerprint(
-        account_id=command.account_id,
-        generation=generation,
-        deletion_intent=ADMINISTRATIVE_RECOVERABLE_DELETION,
-        affected_resource_types=affected_types,
-        revision=1,
-    )
-
-    record = AccountRecoveryRecord(
-        account_id=command.account_id,
-        generation=generation,
-        deletion_intent=ADMINISTRATIVE_RECOVERABLE_DELETION,
-        requested_by=command.requested_by,
-        deleted_by=command.deleted_by,
-        reason=command.reason,
-        requested_at=now,
-        deleted_at=now,
-        state=AccountRecoveryState.open,
-        affected_resource_types=list(affected_types),
-        command_id=command.command_id,
-        correlation_id=command.correlation_id,
-        confirmation_fingerprint=fingerprint,
-        fingerprint_revision=1,
-    )
-    db.add(record)
-    db.flush()
-
-    for subscription in subscriptions:
-        db.add(
-            AccountRecoverySubscriptionSnapshot(
-                recovery_record_id=record.id,
-                subscription_id=subscription.id,
-                # Captured BEFORE this command's own cancellation above, so a
-                # subscription that was e.g. `active` at deletion time is
-                # correctly restored to `active`, not `canceled`.
-                pre_deletion_status=pre_deletion_statuses[subscription.id],
-                pre_deletion_offer_version_id=pre_deletion_offer_versions[
-                    subscription.id
-                ],
-            )
+        affected_types = ("subscription",) if subscriptions else ()
+        fingerprint = _fingerprint(
+            account_id=command.account_id,
+            generation=generation,
+            deletion_intent=ADMINISTRATIVE_RECOVERABLE_DELETION,
+            affected_resource_types=affected_types,
+            revision=1,
         )
-    db.flush()
 
-    stage_audit_event(
+        record = AccountRecoveryRecord(
+            account_id=command.account_id,
+            generation=generation,
+            deletion_intent=ADMINISTRATIVE_RECOVERABLE_DELETION,
+            requested_by=command.requested_by,
+            deleted_by=command.deleted_by,
+            reason=command.context.reason,
+            requested_at=now,
+            deleted_at=now,
+            state=AccountRecoveryState.open,
+            affected_resource_types=list(affected_types),
+            command_id=command.context.command_id,
+            correlation_id=command.context.correlation_id,
+            confirmation_fingerprint=fingerprint,
+            fingerprint_revision=1,
+        )
+        db.add(record)
+        db.flush()
+
+        for subscription in subscriptions:
+            db.add(
+                AccountRecoverySubscriptionSnapshot(
+                    recovery_record_id=record.id,
+                    subscription_id=subscription.id,
+                    # Captured BEFORE this command's own cancellation above, so a
+                    # subscription that was e.g. `active` at deletion time is
+                    # correctly restored to `active`, not `canceled`.
+                    pre_deletion_status=pre_deletion_statuses[subscription.id],
+                    pre_deletion_offer_version_id=pre_deletion_offer_versions[
+                        subscription.id
+                    ],
+                )
+            )
+        reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
+        db.flush()
+
+        stage_audit_event(
+            db,
+            action="customer.account_recovery.deletion_tombstoned",
+            entity_type="subscriber",
+            entity_id=str(command.account_id),
+            actor_type=AuditActorType.user,
+            actor_id=command.deleted_by,
+            request_id=str(command.context.correlation_id),
+            metadata={
+                "record_id": str(record.id),
+                "generation": generation,
+                "affected_resource_types": list(affected_types),
+            },
+        )
+        emit_event(
+            db,
+            EventType.account_recovery_deletion_tombstoned,
+            {
+                "account_id": str(command.account_id),
+                "record_id": str(record.id),
+                "generation": generation,
+                "affected_resource_types": list(affected_types),
+            },
+            actor=command.deleted_by,
+            account_id=subscriber.id,
+        )
+
+        return DeletionTombstone(
+            record_id=record.id,
+            account_id=command.account_id,
+            generation=generation,
+            confirmation_fingerprint=fingerprint,
+            affected_resource_types=affected_types,
+            affected_subscription_ids=tuple(s.id for s in subscriptions),
+        )
+
+    return execute_owner_command(
         db,
-        action="customer.account_recovery.deletion_tombstoned",
-        entity_type="subscriber",
-        entity_id=str(command.account_id),
-        actor_type=AuditActorType.user,
-        actor_id=command.deleted_by,
-        request_id=str(command.correlation_id),
-        metadata={
-            "record_id": str(record.id),
-            "generation": generation,
-            "affected_resource_types": list(affected_types),
-        },
-    )
-    emit_event(
-        db,
-        EventType.account_recovery_deletion_tombstoned,
-        {
-            "account_id": str(command.account_id),
-            "record_id": str(record.id),
-            "generation": generation,
-            "affected_resource_types": list(affected_types),
-        },
-        actor=command.deleted_by,
-        account_id=subscriber.id,
-    )
-
-    return DeletionTombstone(
-        record_id=record.id,
-        account_id=command.account_id,
-        generation=generation,
-        confirmation_fingerprint=fingerprint,
-        affected_resource_types=affected_types,
-        affected_subscription_ids=tuple(s.id for s in subscriptions),
+        definition=_REQUEST_DELETION_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 
@@ -483,137 +717,173 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
     then every participant resource in stable UUID order (subscriptions,
     ordered by id) — the same order `request_recoverable_deletion` uses.
     """
-    subscriber = _lock_subscriber(db, command.account_id)
-    record = _lock_open_record(db, command.account_id)
+    _validate_scope(command.context.scope)
 
-    recomputed = _fingerprint(
-        account_id=record.account_id,
-        generation=record.generation,
-        deletion_intent=record.deletion_intent,
-        affected_resource_types=tuple(record.affected_resource_types),
-        revision=record.fingerprint_revision,
-    )
-    if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
-        raise _error(
-            "fingerprint_mismatch",
-            "Confirmation fingerprint does not match the current recovery "
-            "evidence; re-review before restoring.",
-            record_id=str(record.id),
+    def operation() -> RecoveryOutcome:
+        subscriber = _lock_subscriber(db, command.account_id)
+        input_fingerprint = _input_fingerprint(
+            str(command.account_id),
+            command.confirmation_fingerprint,
+            command.context.actor,
+            command.context.reason,
         )
-
-    affected = tuple(record.affected_resource_types)
-    missing = sorted(set(affected) - REGISTERED_RECOVERY_PARTICIPANTS)
-    unknown = sorted(set(affected) - KNOWN_RESOURCE_TYPES)
-    if unknown:
-        # Defensive: a type outside even the known vocabulary is treated the
-        # same as missing — fail closed, never silently ignored.
-        missing = sorted(set(missing) | set(unknown))
-
-    if missing:
-        record.state = AccountRecoveryState.blocked
-        db.flush()
-        return RecoveryBlocked(record_id=record.id, missing_participant_types=tuple(missing))
-
-    snapshots = list(
-        db.scalars(
-            select(AccountRecoverySubscriptionSnapshot)
-            .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
-            .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
-        ).all()
-    )
-    restored_ids: list[UUID] = []
-    unrestored_ids: list[UUID] = []
-    for snapshot in snapshots:
-        result = restore_subscription_detailed(
+        reservation = _reserve_idempotency(
             db,
-            str(snapshot.subscription_id),
-            trigger="account_recovery",
-            resolved_by=command.actor,
-            intent=ActivationIntent.DELETION_RECOVERY,
-            notes=command.reason,
+            scope="account_recovery:restore",
+            account_id=command.account_id,
+            idempotency_key=command.context.idempotency_key,
         )
-        if result.subscription_reactivated:
-            restored_ids.append(snapshot.subscription_id)
-        else:
-            unrestored_ids.append(snapshot.subscription_id)
+        replay_id = _resolve_replay(reservation, input_fingerprint)
+        if replay_id is not None:
+            # A completed, non-partial restore moves the record to `restored`
+            # — outside `_lock_open_record`'s open/blocked set. Read the
+            # replay evidence directly rather than requiring the generation
+            # to still be open, or a genuine replay of exactly this terminal
+            # outcome would wrongly fail closed as `no_open_generation`.
+            return _replay_restore_outcome(db, replay_id)
 
-    if unrestored_ids:
-        # Fail closed: at least one subscription in this generation did not
-        # reactivate (active-login conflict, remaining lock, etc). The
-        # record stays in its current open/blocked state rather than
-        # `restored` so the generation remains retryable — marking it
-        # `restored` here would permanently close recovery while the
-        # account can still be left inactive/canceled.
+        record = _lock_open_record(db, command.account_id)
+
+        recomputed = _fingerprint(
+            account_id=record.account_id,
+            generation=record.generation,
+            deletion_intent=record.deletion_intent,
+            affected_resource_types=tuple(record.affected_resource_types),
+            revision=record.fingerprint_revision,
+        )
+        if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
+            raise _error(
+                "fingerprint_mismatch",
+                "Confirmation fingerprint does not match the current recovery "
+                "evidence; re-review before restoring.",
+                record_id=str(record.id),
+            )
+
+        affected = tuple(record.affected_resource_types)
+        missing = sorted(set(affected) - REGISTERED_RECOVERY_PARTICIPANTS)
+        unknown = sorted(set(affected) - KNOWN_RESOURCE_TYPES)
+        if unknown:
+            # Defensive: a type outside even the known vocabulary is treated the
+            # same as missing — fail closed, never silently ignored.
+            missing = sorted(set(missing) | set(unknown))
+
+        if missing:
+            record.state = AccountRecoveryState.blocked
+            reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
+            db.flush()
+            return RecoveryBlocked(
+                record_id=record.id, missing_participant_types=tuple(missing)
+            )
+
+        snapshots = list(
+            db.scalars(
+                select(AccountRecoverySubscriptionSnapshot)
+                .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
+                .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
+            ).all()
+        )
+        restored_ids: list[UUID] = []
+        unrestored_ids: list[UUID] = []
+        for snapshot in snapshots:
+            result = restore_subscription_detailed(
+                db,
+                str(snapshot.subscription_id),
+                trigger="account_recovery",
+                resolved_by=command.context.actor,
+                intent=ActivationIntent.DELETION_RECOVERY,
+                notes=command.context.reason,
+            )
+            if result.subscription_reactivated:
+                restored_ids.append(snapshot.subscription_id)
+            else:
+                unrestored_ids.append(snapshot.subscription_id)
+
+        reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
+
+        if unrestored_ids:
+            # Fail closed: at least one subscription in this generation did not
+            # reactivate (active-login conflict, remaining lock, etc). The
+            # record stays in its current open/blocked state rather than
+            # `restored` so the generation remains retryable — marking it
+            # `restored` here would permanently close recovery while the
+            # account can still be left inactive/canceled.
+            db.flush()
+            stage_audit_event(
+                db,
+                action="customer.account_recovery.partially_restored",
+                entity_type="subscriber",
+                entity_id=str(command.account_id),
+                actor_type=AuditActorType.user,
+                actor_id=command.context.actor,
+                request_id=str(record.correlation_id),
+                metadata={
+                    "record_id": str(record.id),
+                    "generation": record.generation,
+                    "restored_subscription_ids": [str(i) for i in restored_ids],
+                    "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
+                },
+            )
+            emit_event(
+                db,
+                EventType.account_recovery_partially_restored,
+                {
+                    "account_id": str(command.account_id),
+                    "record_id": str(record.id),
+                    "restored_subscription_ids": [str(i) for i in restored_ids],
+                    "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
+                },
+                actor=command.context.actor,
+                account_id=subscriber.id,
+            )
+            return RecoveryPartiallyRestored(
+                record_id=record.id,
+                account_id=command.account_id,
+                restored_subscription_ids=tuple(restored_ids),
+                unrestored_subscription_ids=tuple(unrestored_ids),
+            )
+
+        record.state = AccountRecoveryState.restored
+        record.restored_at = datetime.now(UTC)
+        record.restored_by = command.context.actor
         db.flush()
+
         stage_audit_event(
             db,
-            action="customer.account_recovery.partially_restored",
+            action="customer.account_recovery.restored",
             entity_type="subscriber",
             entity_id=str(command.account_id),
             actor_type=AuditActorType.user,
-            actor_id=command.actor,
+            actor_id=command.context.actor,
             request_id=str(record.correlation_id),
             metadata={
                 "record_id": str(record.id),
                 "generation": record.generation,
                 "restored_subscription_ids": [str(i) for i in restored_ids],
-                "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
             },
         )
         emit_event(
             db,
-            EventType.account_recovery_partially_restored,
+            EventType.account_recovery_restored,
             {
                 "account_id": str(command.account_id),
                 "record_id": str(record.id),
                 "restored_subscription_ids": [str(i) for i in restored_ids],
-                "unrestored_subscription_ids": [str(i) for i in unrestored_ids],
             },
-            actor=command.actor,
+            actor=command.context.actor,
             account_id=subscriber.id,
         )
-        return RecoveryPartiallyRestored(
+
+        return RecoveryRestored(
             record_id=record.id,
             account_id=command.account_id,
             restored_subscription_ids=tuple(restored_ids),
-            unrestored_subscription_ids=tuple(unrestored_ids),
         )
 
-    record.state = AccountRecoveryState.restored
-    record.restored_at = datetime.now(UTC)
-    record.restored_by = command.actor
-    db.flush()
-
-    stage_audit_event(
+    return execute_owner_command(
         db,
-        action="customer.account_recovery.restored",
-        entity_type="subscriber",
-        entity_id=str(command.account_id),
-        actor_type=AuditActorType.user,
-        actor_id=command.actor,
-        request_id=str(record.correlation_id),
-        metadata={
-            "record_id": str(record.id),
-            "generation": record.generation,
-            "restored_subscription_ids": [str(i) for i in restored_ids],
-        },
-    )
-    emit_event(
-        db,
-        EventType.account_recovery_restored,
-        {
-            "account_id": str(command.account_id),
-            "record_id": str(record.id),
-            "restored_subscription_ids": [str(i) for i in restored_ids],
-        },
-        actor=command.actor,
-        account_id=subscriber.id,
-    )
-
-    return RecoveryRestored(
-        record_id=record.id,
-        account_id=command.account_id,
-        restored_subscription_ids=tuple(restored_ids),
+        definition=_RESTORE_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 
@@ -629,96 +899,123 @@ def rebaseline_recovery_evidence(
     but must never remove a resource type just to make the participant gate
     pass; that would silently claim a narrower, false history.
     """
-    record = _lock_open_record(db, command.account_id)
+    _validate_scope(command.context.scope)
 
-    recomputed = _fingerprint(
-        account_id=record.account_id,
-        generation=record.generation,
-        deletion_intent=record.deletion_intent,
-        affected_resource_types=tuple(record.affected_resource_types),
-        revision=record.fingerprint_revision,
-    )
-    if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
-        raise _error(
-            "fingerprint_mismatch",
-            "Confirmation fingerprint does not match the current recovery "
-            "evidence; re-review before re-baselining.",
-            record_id=str(record.id),
+    def operation() -> RebaselineApplied:
+        record = _lock_open_record(db, command.account_id)
+        input_fingerprint = _input_fingerprint(
+            str(command.account_id),
+            command.confirmation_fingerprint,
+            ",".join(sorted(command.affected_resource_types)),
+            command.context.actor,
+            command.context.reason,
+        )
+        reservation = _reserve_idempotency(
+            db,
+            scope="account_recovery:rebaseline",
+            account_id=command.account_id,
+            idempotency_key=command.context.idempotency_key,
+        )
+        replay_id = _resolve_replay(reservation, input_fingerprint)
+        if replay_id is not None:
+            return _replay_rebaseline_outcome(db, replay_id)
+
+        recomputed = _fingerprint(
+            account_id=record.account_id,
+            generation=record.generation,
+            deletion_intent=record.deletion_intent,
+            affected_resource_types=tuple(record.affected_resource_types),
+            revision=record.fingerprint_revision,
+        )
+        if not hmac.compare_digest(recomputed, command.confirmation_fingerprint):
+            raise _error(
+                "fingerprint_mismatch",
+                "Confirmation fingerprint does not match the current recovery "
+                "evidence; re-review before re-baselining.",
+                record_id=str(record.id),
+            )
+
+        existing = set(record.affected_resource_types)
+        new_types = set(command.affected_resource_types)
+        if not existing.issubset(new_types):
+            raise _error(
+                "rebaseline_would_narrow_evidence",
+                "Re-baselining must not remove a previously-recorded resource "
+                f"type: {sorted(existing - new_types)}",
+                record_id=str(record.id),
+                removed=sorted(existing - new_types),
+            )
+        unknown = new_types - KNOWN_RESOURCE_TYPES
+        if unknown:
+            raise _error(
+                "unknown_resource_type",
+                f"Unknown resource type(s): {sorted(unknown)}",
+                record_id=str(record.id),
+                unknown=sorted(unknown),
+            )
+
+        record.affected_resource_types = sorted(new_types)
+        record.fingerprint_revision += 1
+        # Deliberately NOT a state transition: re-baselining corrects the
+        # generation's own evidence but does not change its restorability, and
+        # `state` must stay in the `open`/`blocked` set every other reader
+        # (`_lock_open_record`, the eligibility query, the one-open-generation
+        # partial index) recognizes as an active generation. The fact that this
+        # record was re-baselined is captured entirely by
+        # `rebaselined_at`/`rebaselined_by`/`rebaseline_reason` below.
+        record.rebaselined_at = datetime.now(UTC)
+        record.rebaselined_by = command.context.actor
+        record.rebaseline_reason = command.context.reason
+        new_fingerprint = _fingerprint(
+            account_id=record.account_id,
+            generation=record.generation,
+            deletion_intent=record.deletion_intent,
+            affected_resource_types=tuple(record.affected_resource_types),
+            revision=record.fingerprint_revision,
+        )
+        record.confirmation_fingerprint = new_fingerprint
+        reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
+        db.flush()
+
+        stage_audit_event(
+            db,
+            action="customer.account_recovery.rebaselined",
+            entity_type="subscriber",
+            entity_id=str(command.account_id),
+            actor_type=AuditActorType.user,
+            actor_id=command.context.actor,
+            request_id=str(record.correlation_id),
+            metadata={
+                "record_id": str(record.id),
+                "affected_resource_types": record.affected_resource_types,
+                "fingerprint_revision": record.fingerprint_revision,
+            },
+        )
+        emit_event(
+            db,
+            EventType.account_recovery_rebaselined,
+            {
+                "account_id": str(command.account_id),
+                "record_id": str(record.id),
+                "affected_resource_types": record.affected_resource_types,
+                "fingerprint_revision": record.fingerprint_revision,
+            },
+            actor=command.context.actor,
+            account_id=record.account_id,
         )
 
-    existing = set(record.affected_resource_types)
-    new_types = set(command.affected_resource_types)
-    if not existing.issubset(new_types):
-        raise _error(
-            "rebaseline_would_narrow_evidence",
-            "Re-baselining must not remove a previously-recorded resource "
-            f"type: {sorted(existing - new_types)}",
-            record_id=str(record.id),
-            removed=sorted(existing - new_types),
-        )
-    unknown = new_types - KNOWN_RESOURCE_TYPES
-    if unknown:
-        raise _error(
-            "unknown_resource_type",
-            f"Unknown resource type(s): {sorted(unknown)}",
-            record_id=str(record.id),
-            unknown=sorted(unknown),
+        return RebaselineApplied(
+            record_id=record.id,
+            new_confirmation_fingerprint=new_fingerprint,
+            fingerprint_revision=record.fingerprint_revision,
+            affected_resource_types=tuple(record.affected_resource_types),
         )
 
-    record.affected_resource_types = sorted(new_types)
-    record.fingerprint_revision += 1
-    # Deliberately NOT a state transition: re-baselining corrects the
-    # generation's own evidence but does not change its restorability, and
-    # `state` must stay in the `open`/`blocked` set every other reader
-    # (`_lock_open_record`, the eligibility query, the one-open-generation
-    # partial index) recognizes as an active generation. The fact that this
-    # record was re-baselined is captured entirely by
-    # `rebaselined_at`/`rebaselined_by`/`rebaseline_reason` below.
-    record.rebaselined_at = datetime.now(UTC)
-    record.rebaselined_by = command.actor
-    record.rebaseline_reason = command.reason
-    new_fingerprint = _fingerprint(
-        account_id=record.account_id,
-        generation=record.generation,
-        deletion_intent=record.deletion_intent,
-        affected_resource_types=tuple(record.affected_resource_types),
-        revision=record.fingerprint_revision,
-    )
-    record.confirmation_fingerprint = new_fingerprint
-    db.flush()
-
-    stage_audit_event(
+    return execute_owner_command(
         db,
-        action="customer.account_recovery.rebaselined",
-        entity_type="subscriber",
-        entity_id=str(command.account_id),
-        actor_type=AuditActorType.user,
-        actor_id=command.actor,
-        request_id=str(record.correlation_id),
-        metadata={
-            "record_id": str(record.id),
-            "affected_resource_types": record.affected_resource_types,
-            "fingerprint_revision": record.fingerprint_revision,
-        },
-    )
-    emit_event(
-        db,
-        EventType.account_recovery_rebaselined,
-        {
-            "account_id": str(command.account_id),
-            "record_id": str(record.id),
-            "affected_resource_types": record.affected_resource_types,
-            "fingerprint_revision": record.fingerprint_revision,
-        },
-        actor=command.actor,
-        account_id=record.account_id,
-    )
-
-    return RebaselineApplied(
-        record_id=record.id,
-        new_confirmation_fingerprint=new_fingerprint,
-        fingerprint_revision=record.fingerprint_revision,
-        affected_resource_types=tuple(record.affected_resource_types),
+        definition=_REBASELINE_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 
