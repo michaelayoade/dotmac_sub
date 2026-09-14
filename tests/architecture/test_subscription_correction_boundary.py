@@ -24,7 +24,7 @@ def test_correction_owner_uses_one_public_transaction_and_flush_only_participant
     assert "fup_state.clear(" in source
     assert "cancel_subscription(" in source
     assert (
-        "credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION"
+        "credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION"
         in source
     )
     assert "generate_credit" not in source

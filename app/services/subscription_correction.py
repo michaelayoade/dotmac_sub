@@ -670,10 +670,12 @@ def _correct(
         emit=True,
         # A reviewed administrative correction moving continuous service from
         # a mistaken subscription record to the correct one — not a real
-        # termination and not a recoverable deletion, so this is the
-        # administrative-termination intent (credit is still evaluated but
-        # in practice there is nothing owed since service never stopped).
-        credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
+        # termination (the customer never decided to end service) and not a
+        # recoverable deletion (this is not tombstone/recovery evidence), so
+        # this is ADMINISTRATIVE_CORRECTION: credit is suppressed rather than
+        # evaluated, since service never actually stopped and a credit here
+        # would be a data-correction artifact, not a real cancellation credit.
+        credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
     )
     restored = transition_subscription_status(
         db,
