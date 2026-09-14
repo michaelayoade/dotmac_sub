@@ -638,7 +638,7 @@ def authorize_offer_version_admission(
     """
 
     if claims.credential_kind == "machine":
-        _shadow_check_machine_credential_admission(db, claims)
+        _shadow_check_machine_credential_admission(claims)
         return
 
     auth = claims.as_dict()
@@ -733,12 +733,12 @@ def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) 
 
 
 def _shadow_check_machine_credential_admission(
-    db: Session, claims: AdmissionAuthorizationClaims
+    claims: AdmissionAuthorizationClaims,
 ) -> None:
     """SHADOW / WOULD-REFUSE evaluation for a machine-credential admission —
-    evaluates and LOGS what the enforced compound rule would have decided;
-    NEVER raises, and NEVER refuses. This is the TERMINAL state for a
-    machine credential on this branch, not a staging step (see
+    evaluates and LOGS what the compound rule would have decided; NEVER
+    raises, and NEVER refuses, no matter what. This is the TERMINAL state
+    for a machine credential on this branch, not a staging step (see
     ``MachineCredentialPrincipal``'s own docstring for the full ruling):
     the published Kernel Sub actually depends on cannot yet supply a
     verified machine principal carrying the identity, attribution, scope,
@@ -746,6 +746,31 @@ def _shadow_check_machine_credential_admission(
     machine credential that ``origin/main`` authorized must still succeed
     here — hard-enforcing today, with what this module can actually see,
     would be an uncensused, silent access retirement.
+
+    TWO PROPERTIES this function is held to, both round-14 corrections of
+    the earlier shape:
+
+    1. NEVER RAISES. The earlier version called the DB-backed
+       ``_admission_permission_granted``/``has_permission``, so an RBAC
+       query error or statement timeout escaped as an unhandled exception
+       — a 500 in front of admission, which directly contradicts "evaluate
+       and log, never raise." Everything below is wrapped so no exception
+       from the evaluation itself can ever propagate.
+    2. READS ONLY THE CAPTURED SNAPSHOT, never a live authority table.
+       ``_admission_permission_granted`` also takes the ``principal_type
+       == "api_key"`` branch of ``has_permission``, which — for anything
+       NOT ``"system_user"`` — queries ``SubscriberRole``/
+       ``SubscriberPermission`` keyed by ``principal_id``. A machine
+       credential's UUID coincidentally matching (or a wildcard grant
+       existing for) an unrelated subscriber row could make this shadow
+       diagnostic report "authorized" for a credential whose ACTUAL
+       captured scopes authorize nothing — a diagnostic that can lie is
+       worse than one that is silent. The check below is pure in-memory
+       set membership against ``claims.scopes`` (via
+       ``auth_dependencies._expand_permission_keys``, the SAME
+       alias/wildcard-expansion primitive ``has_permission`` itself uses
+       for its own scope-intersection shortcut — not a second, differently
+       -written expansion), and touches no database table at all.
 
     Works ONLY from what this module can actually see: ``claims.scopes``,
     the snapshot captured at authentication time
@@ -762,7 +787,29 @@ def _shadow_check_machine_credential_admission(
     re-verification.
     """
 
-    would_be_granted = _admission_permission_granted(claims.as_dict(), db)
+    try:
+        from app.services.auth_dependencies import _expand_permission_keys
+
+        def _scope_satisfies(permission_key: str) -> bool:
+            possible = set(_expand_permission_keys(permission_key))
+            return bool(claims.scopes & possible)
+
+        would_be_granted = _scope_satisfies(WRITE_PERMISSION) and (
+            _scope_satisfies(BILLING_WRITE_PERMISSION)
+            or _scope_satisfies(ADMISSION_SCOPE)
+        )
+    except Exception:
+        # The evaluation itself must never be able to refuse or crash
+        # admission — this is a diagnostic aid, not a gate. Log and treat
+        # as "could not evaluate", never as a refusal.
+        logger.exception(
+            "offer_version_admission.machine_credential_shadow_failed: "
+            "shadow evaluation itself raised; admission proceeds "
+            "regardless (diagnostic only) credential_id=%s",
+            claims.principal_id,
+        )
+        return
+
     if would_be_granted:
         logger.info(
             "offer_version_admission.machine_credential_shadow: would be "
