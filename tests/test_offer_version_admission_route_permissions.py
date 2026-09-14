@@ -167,7 +167,22 @@ def test_admission_principal_resolution_is_identical_for_post_and_patch():
         "principal_id": str(uuid.uuid4()),
         "principal_type": "system_user",
     }
+    # NOT stamped with credential_kind — the legacy local-api-keys shape (or
+    # simply any caller that never set the field) must still resolve to the
+    # ENFORCED ApiKeyPrincipal, never accidentally to the shadow-only
+    # machine principal by defaulting the wrong way.
     api_key_auth = {"principal_id": str(uuid.uuid4()), "principal_type": "api_key"}
+    legacy_api_key_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "api_key",
+        "credential_kind": "legacy_api_key",
+    }
+    machine_auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "api_key",
+        "credential_kind": "machine",
+        "scopes": ["catalog:write", offer_access_requirement.ADMISSION_SCOPE],
+    }
     subscriber_auth = {
         "principal_id": str(uuid.uuid4()),
         "principal_type": "subscriber",
@@ -183,9 +198,75 @@ def test_admission_principal_resolution_is_identical_for_post_and_patch():
         offer_access_requirement.ApiKeyPrincipal,
     )
     assert isinstance(
+        api_catalog._admission_principal(legacy_api_key_auth),
+        offer_access_requirement.ApiKeyPrincipal,
+    )
+    # Round 12 finding 5: only the "machine" credential_kind — the one
+    # signal auth_dependencies._machine_principal stamps — resolves to the
+    # shadow-only MachineCredentialPrincipal. Deleting this branch (or the
+    # stamp that feeds it) would silently turn a real machine request into
+    # an ApiKeyPrincipal, which then hunts a nonexistent local ApiKey row
+    # and refuses — the exact lockout this migration exists to prevent.
+    machine_principal = api_catalog._admission_principal(machine_auth)
+    assert isinstance(
+        machine_principal, offer_access_requirement.MachineCredentialPrincipal
+    )
+    assert machine_principal.credential_id == uuid.UUID(machine_auth["principal_id"])
+    assert set(machine_principal.scopes) == set(machine_auth["scopes"])
+    assert isinstance(
         api_catalog._admission_principal(subscriber_auth),
         offer_access_requirement.SubscriberPrincipal,
     )
     with pytest.raises(HTTPException) as excinfo:
         api_catalog._admission_principal(other_auth)
     assert excinfo.value.status_code == 403
+
+
+def test_credential_kind_is_stamped_by_both_api_key_authentication_paths():
+    """Round 12 finding 5: no test previously asserted ``credential_kind``
+    at the AUTHENTICATION layer — the resolver test above builds its own
+    auth dicts by hand, and the machine-shadow tests in
+    ``tests/test_offer_access_requirement.py`` construct
+    ``MachineCredentialPrincipal`` directly, bypassing both the dict stamp
+    AND the route conversion. Deleting the stamp in either
+    ``auth_dependencies._machine_principal`` or ``_api_key_principal``
+    would leave every one of those tests green while a real machine
+    request silently resolved to ``ApiKeyPrincipal`` and 403'd hunting a
+    nonexistent local row.
+
+    Checked via AST dict-literal inspection of each function's own body —
+    not a behavioral call, since ``_machine_principal`` requires a
+    configured kernel HMAC key and a live
+    ``dotmac_kernel.machine_auth.authenticate_machine`` call this test
+    environment cannot provide (``dotmac_kernel`` is not vendored or
+    importable here at all)."""
+
+    import ast
+    import inspect
+
+    from app.services import auth_dependencies
+
+    source = inspect.getsource(auth_dependencies)
+    tree = ast.parse(source)
+
+    def _stamps_credential_kind(function_name: str, expected_value: str) -> bool:
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        )
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values, strict=False):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "credential_kind"
+                    and isinstance(value, ast.Constant)
+                    and value.value == expected_value
+                ):
+                    return True
+        return False
+
+    assert _stamps_credential_kind("_machine_principal", "machine")
+    assert _stamps_credential_kind("_api_key_principal", "legacy_api_key")
