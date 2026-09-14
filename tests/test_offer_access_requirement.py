@@ -1089,9 +1089,10 @@ def test_admit_denies_an_unprivileged_subscriber_principal(db_session):
 #: admission_router.routes/.dependencies (router membership) instead of
 #: issuing a real request through the mounted app -- the same
 #: source-grep/direct-call shape that let round 13's credential_kind
-#: lockout ship unnoticed through three rounds of "parity" tests. Retired
-#: in favor of tests/test_offer_version_admission_asgi.py, which mounts the
-#: real app.api.catalog routers and drives them with a real TestClient.
+#: lockout ship unnoticed through three rounds of "parity" tests. It now
+#: lives in tests/test_offer_version_admission_asgi.py under the SAME
+#: name, driving both a real mounted HTTP request and a direct
+#: admit_offer_version call through one injected sentinel.
 
 
 def test_admit_accepts_a_machine_credential_with_no_satisfying_scope(db_session):
