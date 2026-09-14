@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.schemas.catalog import (
     AccessCredentialCreate,
     AccessCredentialRead,
@@ -66,9 +66,11 @@ from app.schemas.catalog import (
 from app.schemas.common import ListResponse
 from app.services import catalog as catalog_service
 from app.services.auth_dependencies import (
-    require_any_permission,
+    _request_id,
+    load_permission_keys,
     require_method_permission,
     require_permission,
+    require_user_auth,
 )
 from app.services.catalog import offer_access_requirement
 from app.services.catalog.offer_access_requirement import OfferAccessRequirementError
@@ -87,28 +89,41 @@ _require_billing_catalog_write = require_permission(
     offer_access_requirement.BILLING_WRITE_PERMISSION
 )
 
-#: NOT a pure OR / standalone-narrower-permission alternative: this router
-#: is declared with its own ``catalog:write`` gate
-#: (``require_method_permission("catalog:read", WRITE_PERMISSION)`` above,
-#: pre-existing and unrelated to admission), which applies to every mutating
-#: route in this file including these two. The ACTUAL effective requirement
-#: on the offer-version admission routes is therefore the compound
-#: ``catalog:write AND (catalog:billing_write OR
-#: catalog:offer_version:admission)`` — a caller holding ONLY the narrower
-#: catalog:offer_version:admission (without catalog:write) is refused here,
-#: exactly as a caller holding ONLY catalog:billing_write is already refused
-#: on every other billing_write-gated route in this file (offers,
-#: offer-prices, add-on-prices, ...): this is this router's established,
-#: pre-existing pattern, not a regression introduced by admission.
-#:
-#: ``WRITE_PERMISSION``/``BILLING_WRITE_PERMISSION``/``ADMISSION_SCOPE`` are
-#: the SAME three constants ``offer_access_requirement._admission_permission_
-#: granted`` re-checks inside the command's own transaction — one spelling
-#: of each key, never a second copy that could drift from this route's gate.
-_require_offer_version_admission = require_any_permission(
-    offer_access_requirement.BILLING_WRITE_PERMISSION,
-    offer_access_requirement.ADMISSION_SCOPE,
-)
+
+def _require_offer_version_admission(
+    request: Request,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The route's admission-authorization gate.
+
+    Authenticates the caller, then DELEGATES the entire decision — the
+    compound ``catalog:write AND (catalog:billing_write OR catalog:
+    offer_version:admission)`` rule AND the ERP staff leave-write
+    restriction — to ``offer_access_requirement.authorize_offer_version_
+    admission``, the ONE owner of this decision. This command's own
+    in-transaction re-check (``_verify_admission_authorization``) delegates
+    to the exact same owner function, so there is one decision, not two
+    independently-maintained ones that could drift apart (the prior shape —
+    this route composing ``require_any_permission`` while the command called
+    a bare permission primitive — silently disagreed about an active staff
+    leave restriction: refused over HTTP, allowed direct to the command).
+
+    This router's own blanket ``catalog:write`` gate above
+    (``require_method_permission``) still runs for every route in this file
+    including this one; the owner function re-checks ``catalog:write``
+    itself too, so the two are consistent, not competing.
+    """
+
+    load_permission_keys(auth, db)
+    try:
+        offer_access_requirement.authorize_offer_version_admission(
+            db, auth, request_id=_request_id(request)
+        )
+    except OfferAccessRequirementError as exc:
+        raise _offer_access_requirement_http_error(exc) from exc
+    finish_read_transaction(db)
+    return auth
 
 
 def _actor(auth: dict) -> tuple[str | None, str | None]:

@@ -17,22 +17,25 @@ Both public commands (admission and reviewed classification) enter through
 completion here — a caller builds the command and reads the result; it never
 constructs the ``OfferVersion`` row or the classification row itself.
 
-Authorization for admission is checked at TWO independent layers, on
-purpose (defense in depth, matching ``app/services/billing/
-subledger_opening.py``'s precedent of a command re-verifying scope inside
-its own transaction rather than trusting a caller-asserted boolean): the
-ROUTE (``app/api/catalog.py``'s own router-level ``catalog:write`` gate,
-combined with the route's ``require_any_permission(catalog:billing_write,
-catalog:offer_version:admission)`` dependency — the ACTUAL effective
-requirement is the compound ``catalog:write AND (catalog:billing_write OR
-catalog:offer_version:admission)``, never a pure OR/standalone-narrower-
-permission alternative to ``catalog:write`` itself), and this module's own
+Authorization for admission has ONE owner: ``authorize_offer_version_
+admission``, below. It decides the WHOLE question — the compound
+``catalog:write AND (catalog:billing_write OR catalog:offer_version:
+admission)`` permission rule, AND the ERP staff leave-write restriction
+(``app/services/erp_staff_access.py``) — never just the leaf permission
+grant. TWO call sites DELEGATE to this one owner rather than each deciding
+independently: ``app/api/catalog.py``'s route dependency
+(``_require_offer_version_admission``), and this module's own
 ``_verify_admission_authorization``, called from ``_admit`` inside the same
-transaction as the write, which re-derives and checks the IDENTICAL compound
-rule for whichever principal was supplied (a real RBAC/scope check against
-the live database, never a trusted caller-supplied flag). Removing either
-layer would regress this command back to single-layer enforcement — both
-stay. ``AdmitOfferVersionCommand.principal`` remains the audit/attribution
+transaction as the write, re-verifying against the live database for
+whichever principal was supplied (never a trusted caller-supplied flag).
+Because both delegate to the same function, there is exactly one decision
+to get right, not two independently-maintained approximations of one rule
+that can silently disagree (the earlier shape — the route composing
+``require_any_permission`` while the command called a bare permission
+primitive — refused an active staff leave restriction over HTTP while
+allowing it through the command directly; that class of drift is now
+structurally impossible, not merely tested against).
+``AdmitOfferVersionCommand.principal`` remains the audit/attribution
 identity as well, but it is no longer unchecked evidence. Classification has
 no pre-authorizing route (its only caller is a trust-the-operator CLI); its
 permission is re-verified fresh, inside this module, immediately before the
@@ -405,14 +408,18 @@ def _subscriber_role_names(db: Session, subscriber_id: UUID) -> tuple[str, ...]:
 
 
 def _admission_permission_granted(auth: dict, db: Session) -> bool:
-    """The exact compound rule the route already enforces: ``catalog:write
+    """The compound permission LEG of the admission decision: ``catalog:write
     AND (catalog:billing_write OR catalog:offer_version:admission)``.
 
     Re-derived here via the SAME ``has_permission`` function
     ``auth_dependencies.py``'s own ``require_permission``/
     ``require_any_permission``/``require_method_permission`` dependencies
-    call — there is exactly one place that decides what a role/scope means,
-    and this is not a second, parallel definition of it.
+    call — there is exactly one place that decides what a role/scope means.
+
+    This is a LEG, not the whole decision — it says nothing about the ERP
+    staff leave-write restriction. Nothing outside ``authorize_offer_version_
+    admission`` (the one owner, below) may call this directly for an actual
+    authorization decision; it exists as a private helper of that owner.
     """
 
     return has_permission(auth, db, WRITE_PERMISSION) and (
@@ -421,24 +428,82 @@ def _admission_permission_granted(auth: dict, db: Session) -> bool:
     )
 
 
-def _verify_admission_authorization(db: Session, principal: AdmissionPrincipal) -> None:
-    """Re-verify the compound admission permission INSIDE this command's own
-    transaction — defense in depth on top of the route-level gate
+def authorize_offer_version_admission(
+    db: Session, auth: dict, *, request_id: str | None = None
+) -> None:
+    """THE single owner of the offer-version-admission authorization
+    decision — not a leaf permission check, the WHOLE decision the route
+    makes: the compound permission rule above, AND (for a ``system_user``
+    principal) the ERP staff leave-write restriction
+    (``app/services/erp_staff_access.py``'s ``staff_write_restricted`` /
+    ``audit_denied_write``, which ``auth_dependencies.require_permission``/
+    ``require_any_permission`` already apply via their own
+    ``_enforce_staff_leave_write_guard`` after a permission grant).
+
+    ``app/api/catalog.py``'s route dependency and this module's own
+    in-transaction command re-check (``_verify_admission_authorization``)
+    both DELEGATE to this ONE function rather than each independently
+    deciding — there is exactly one decision, so there is nothing for the
+    two call sites to disagree about, and no name-matching guard is needed
+    to keep them "in sync": there is only one implementation to keep at all.
+    An active staff leave restriction (account active, roles/grants intact,
+    writes refused) is refused here exactly as it is over HTTP — a
+    caller reaching this command directly must not get a MORE permissive
+    answer than the route would have given the identical principal.
+    """
+
+    if not _admission_permission_granted(auth, db):
+        raise _error(
+            "permission_denied",
+            "Offer version admission requires catalog:write and either "
+            "catalog:billing_write or catalog:offer_version:admission.",
+            retryable=False,
+        )
+
+    # Local import mirrors auth_dependencies.py's own lazy-import convention
+    # for this exact module (avoids a load-time dependency on ERP staff
+    # access plumbing for every caller of offer_access_requirement that never
+    # touches it). staff_write_restricted() itself no-ops for any
+    # principal_type other than "system_user", so this is safe to call
+    # unconditionally for every principal that reaches this point.
+    from app.services import erp_staff_access
+
+    restriction = erp_staff_access.staff_write_restricted(db, auth, method="POST")
+    if restriction is None:
+        return
+    erp_staff_access.audit_denied_write(
+        db,
+        auth=auth,
+        restriction=restriction,
+        request_id=request_id,
+        permission_key=ADMISSION_SCOPE,
+    )
+    raise _error(
+        "permission_denied",
+        "Offer version admission is refused: an active staff leave "
+        "restriction permits read-only access.",
+        retryable=False,
+    )
+
+
+def _verify_admission_authorization(
+    db: Session, command: AdmitOfferVersionCommand
+) -> None:
+    """Re-verify the admission authorization decision INSIDE this command's
+    own transaction — defense in depth on top of the route-level gate
     (``app/api/catalog.py``'s ``require_method_permission`` router gate plus
-    its ``require_any_permission`` route dependency), which stays in place
-    and is not removed by this check. A caller that constructs this command
-    directly (bypassing the route) is now held to the identical rule, not
-    merely trusted evidence — this is a real RBAC/scope re-check against the
-    live database, never a caller-supplied ``permission_granted`` boolean
-    (contrast ``app/services/billing/subledger_opening.py``'s
-    ``CorrectCustomerSubledgerOpeningCommand.permission_granted``, an
-    attestation this module deliberately does NOT adopt: Michael's ruling
-    calls for enforcement, not a second copy of an assertion the caller
-    could get wrong).
+    its own delegate-to-the-owner dependency), which stays in place and is
+    not removed by this check. A caller that constructs this command
+    directly (bypassing the route) is now held to the IDENTICAL decision,
+    made by the SAME owner function (``authorize_offer_version_admission``)
+    the route delegates to — not a second, independently-maintained
+    approximation of it.
 
     ``SystemAdmission`` is exempt — see its own docstring; it carries no
     RBAC identity to check.
     """
+
+    principal = command.principal
 
     if isinstance(principal, SystemAdmission):
         return
@@ -509,13 +574,9 @@ def _verify_admission_authorization(db: Session, principal: AdmissionPrincipal) 
             retryable=False,
         )
 
-    if not _admission_permission_granted(auth, db):
-        raise _error(
-            "permission_denied",
-            "Offer version admission requires catalog:write and either "
-            "catalog:billing_write or catalog:offer_version:admission.",
-            retryable=False,
-        )
+    authorize_offer_version_admission(
+        db, auth, request_id=str(command.context.correlation_id)
+    )
 
 
 def _lock_key(*parts: object) -> int:
@@ -700,7 +761,7 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
     # lock" discipline classify's own _verify_classify_permission follows.
     # This is defense in depth on top of the route-level gate, which stays
     # in place; it is not a substitute for it.
-    _verify_admission_authorization(db, command.principal)
+    _verify_admission_authorization(db, command)
 
     fingerprint = _admission_fingerprint(payload)
     if key:
