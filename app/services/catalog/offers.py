@@ -745,12 +745,37 @@ class OfferVersions(CRUDManager[OfferVersion]):
         db: Session,
         version_id: str,
         *,
+        principal: "offer_access_requirement.AdmissionPrincipal",
         actor_id: str | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
     ):
+        """Deactivate an already-admitted offer version.
+
+        ``principal`` is REQUIRED (round 15 finding 2 — Michael's ruling
+        covers "PATCH and every mutation", and deactivation deactivates a
+        real, already-admitted commercial offering exactly as a PATCH
+        mutates one). The route's own gate authorizes reaching the route at
+        all; this method re-verifies through the SAME owner
+        (``offer_access_requirement.verify_admission_authorization``)
+        IMMEDIATELY before the mutation below, inside this method's own
+        transaction, against the LIVE database — never trusted from the
+        route's earlier check alone, and never skippable by a direct
+        service caller that bypasses the route entirely. A caller with no
+        authenticated actor (internal/test code) must pass
+        ``SystemAdmission`` explicitly, the same escape hatch admission and
+        update use — there is no silent default.
+        """
+
         version = cls._get_or_404(db, version_id)
         changes = {"is_active": False}
         billing_governance.assert_offer_version_update_safe(db, version, changes)
+        # Immediately before the mutation, not at the top of this method —
+        # narrowing the window between the re-check and the write it gates
+        # to the read-only validation above, which touches no session state.
+        offer_access_requirement.verify_admission_authorization(
+            db, principal, request_id=request_id
+        )
         version.is_active = False
         billing_governance.stage_billing_catalog_change(
             db,

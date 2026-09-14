@@ -391,7 +391,11 @@ class TestOfferVersions:
             ),
             principal=SystemAdmission(reason="test fixture"),
         )
-        catalog_service.offer_versions.delete(db_session, str(version.id))
+        catalog_service.offer_versions.delete(
+            db_session,
+            str(version.id),
+            principal=SystemAdmission(reason="test fixture"),
+        )
         db_session.refresh(version)
         assert version.is_active is False
 
