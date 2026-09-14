@@ -35,23 +35,32 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
+import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import catalog as api_catalog
 from app.db import get_db
 from app.models.audit import AuditEvent
-from app.models.catalog import AccessType, PriceBasis, ServiceType
+from app.models.catalog import AccessRequirement, AccessType, PriceBasis, ServiceType
 from app.models.erp_staff_access import ErpStaffLeaveRestriction
 from app.models.rbac import Permission, SystemUserPermission
 from app.models.system_user import SystemUser
-from app.schemas.catalog import CatalogOfferCreate
+from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate
 from app.services import catalog as catalog_service
 from app.services import erp_staff_access
 from app.services.auth_dependencies import require_user_auth
 from app.services.catalog import offer_access_requirement
+from app.services.catalog.offer_access_requirement import (
+    AdmitOfferVersionCommand,
+    OfferAccessRequirementError,
+    StaffPrincipal,
+    admit_offer_version,
+)
 from app.services.erp_staff_access import StaffLeaveRestrictionStatus
+from app.services.owner_commands import CommandContext
 
 
 def _mounted_app(db_session) -> FastAPI:
@@ -301,8 +310,6 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
     # The planted removal: a handler with the SAME service call the real
     # route makes, registered directly with no admission dependency at
     # all — only bare authentication, which the override below satisfies.
-    from app.schemas.catalog import OfferVersionCreate
-
     def _make_unguarded_app(principal_factory):
         unguarded_app = FastAPI()
 
@@ -650,3 +657,107 @@ def test_an_audit_write_failure_never_replaces_the_permission_denied_response(
         "the original permission_denied refusal — not a 500, and not a "
         "silently-succeeded 201"
     )
+
+
+def test_authorization_owner_refuses_identically_through_route_and_command(
+    db_session, monkeypatch
+):
+    """Round 15 finding 7: the centerpiece property of this whole lane —
+    that the route and the direct command delegate to the SAME
+    authorization owner rather than each computing an independent
+    approximation — had no actual test proving it. Only comments bearing
+    this test's name existed. A regression where the direct command
+    swapped ``authorize_offer_version_admission`` for a bare
+    compound-permission-only check would have left the mounted
+    leave-denial test and the direct unprivileged-principal tests green
+    (they all reach 403 via the ordinary permission leg, which both a real
+    owner and a fake one would refuse identically) while a LEAVE-RESTRICTED
+    direct caller silently became authorized.
+
+    This test injects a refusal ONLY ``authorize_offer_version_admission``'s
+    leave-restriction branch can produce — a monkeypatched
+    ``erp_staff_access.staff_write_restricted`` sentinel, matched to one
+    specific principal who otherwise holds every permission the compound
+    rule needs — and drives it through BOTH delegators for that identical
+    principal:
+
+    OBSERVED: the mounted app, via a real, issued HTTP POST request (the
+    route delegator); and a direct, unmounted ``admit_offer_version`` call
+    with a hand-built ``AdmitOfferVersionCommand`` (the command delegator,
+    bypassing the route and the ASGI stack entirely).
+
+    Break condition: fails if the route dependency or the direct command
+    ever stops delegating to ``authorize_offer_version_admission`` — a
+    compound-permission-only substitute at either call site would grant
+    this exact principal, since they hold every ordinary permission the
+    rule needs; only the shared leave-restriction branch refuses them."""
+
+    user = _system_user(db_session)
+    _grant_direct_permission(
+        db_session, user, offer_access_requirement.WRITE_PERMISSION
+    )
+    _grant_direct_permission(db_session, user, offer_access_requirement.ADMISSION_SCOPE)
+
+    sentinel_restriction = SimpleNamespace(
+        restriction_id="centerpiece-sentinel", source_system="test"
+    )
+
+    def _fake_staff_write_restricted(db, auth, *, method, at=None):
+        if auth.get("principal_type") == "system_user" and auth.get(
+            "principal_id"
+        ) == str(user.id):
+            return sentinel_restriction
+        return None
+
+    monkeypatch.setattr(
+        erp_staff_access, "staff_write_restricted", _fake_staff_write_restricted
+    )
+
+    offer = _offer(db_session)
+
+    # --- Route delegator: real, mounted, issued HTTP request. ---
+    app = _mounted_app(db_session)
+    app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
+    client = TestClient(app)
+    route_response = client.post(
+        "/api/v1/offer-versions",
+        json={
+            "offer_id": str(offer.id),
+            "version_number": 1,
+            "name": "v1",
+            "service_type": "residential",
+            "access_type": "fiber",
+            "price_basis": "flat",
+            "access_requirement": "unclassified",
+        },
+    )
+    assert route_response.status_code == 403
+
+    # --- Command delegator: direct admit_offer_version call, no route,
+    # no ASGI stack, same monkeypatched sentinel, same principal. ---
+    command_id = uuid.uuid4()
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            AdmitOfferVersionCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"system_user:{user.id}",
+                    scope=offer_access_requirement.ADMISSION_SCOPE,
+                    reason="round 15 finding 7 centerpiece parity test",
+                ),
+                payload=OfferVersionCreate(
+                    offer_id=offer.id,
+                    version_number=2,
+                    name="v2",
+                    service_type=ServiceType.residential,
+                    access_type=AccessType.fiber,
+                    price_basis=PriceBasis.flat,
+                    access_requirement=AccessRequirement.unclassified,
+                ),
+                principal=StaffPrincipal(system_user_id=user.id),
+            ),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("permission_denied")
