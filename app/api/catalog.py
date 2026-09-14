@@ -149,6 +149,12 @@ def _require_offer_version_admission(
         principal_type=str(auth.get("principal_type") or "subscriber"),
         roles=frozenset(auth.get("roles") or ()),
         scopes=frozenset(auth.get("scopes") or ()),
+        # Round 13 finding 2: carried through so a kernel machine
+        # credential (credential_kind == "machine", stamped by
+        # auth_dependencies._machine_principal) reaches the owner's
+        # shadow/would-refuse branch instead of being enforced against and
+        # refused before MachineCredentialPrincipal is ever constructed.
+        credential_kind=auth.get("credential_kind"),
     )
     try:
         offer_access_requirement.authorize_offer_version_admission(
