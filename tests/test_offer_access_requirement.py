@@ -29,6 +29,7 @@ from app.models.catalog import (
 from app.models.rbac import (
     Permission,
     Role,
+    SubscriberPermission,
     SubscriberRole,
     SystemUserPermission,
     SystemUserRole,
@@ -1109,6 +1110,122 @@ def test_admit_accepts_a_machine_credential_with_no_satisfying_scope(db_session)
 
     offer = _make_offer(db_session)
 
+    result = admit_offer_version(
+        db_session,
+        _admit_command(
+            offer,
+            1,
+            principal=offer_access_requirement.MachineCredentialPrincipal(
+                credential_id=uuid4(), scopes=()
+            ),
+        ),
+    )
+    db_session.rollback()
+    assert result.offer_version.offer_id == offer.id
+
+
+def test_machine_credential_shadow_ignores_a_coincidentally_matching_subscriber_grant(
+    db_session, monkeypatch
+):
+    """Round 14 finding 3: the shadow evaluation must read ONLY the
+    captured scope snapshot, never a live authority table. Plants a real
+    ``Subscriber`` row whose id EQUALS the machine credential's id and
+    grants THAT subscriber the full compound permission directly — if the
+    shadow check ever went back to the DB-backed ``has_permission`` (whose
+    non-system_user branch queries ``SubscriberRole``/
+    ``SubscriberPermission`` keyed by ``principal_id``), it would read this
+    coincidental grant and report the credential "would be authorized"
+    even though the credential's OWN captured scopes (empty) authorize
+    nothing — a diagnostic that can lie about the very thing it exists to
+    report.
+
+    Break condition: fails if the shadow check is ever changed back to
+    query any RBAC table instead of ``claims.scopes`` alone — it would log
+    "would be authorized" instead of "WOULD REFUSE" for this exact
+    credential."""
+
+    credential_id = uuid4()
+    subscriber = Subscriber(
+        id=credential_id,
+        first_name="Coincidence",
+        last_name="Collision",
+        email=f"collide-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    for key in (
+        offer_access_requirement.WRITE_PERMISSION,
+        offer_access_requirement.ADMISSION_SCOPE,
+    ):
+        permission = db_session.scalar(select(Permission).where(Permission.key == key))
+        if permission is None:
+            permission = Permission(key=key, description=f"test grant: {key}")
+            db_session.add(permission)
+            db_session.flush()
+        db_session.add(
+            SubscriberPermission(
+                subscriber_id=subscriber.id, permission_id=permission.id
+            )
+        )
+    db_session.commit()
+
+    logged_messages: list[str] = []
+    monkeypatch.setattr(
+        offer_access_requirement.logger,
+        "warning",
+        lambda msg, *args, **kwargs: logged_messages.append(msg % args),
+    )
+    monkeypatch.setattr(
+        offer_access_requirement.logger,
+        "info",
+        lambda msg, *args, **kwargs: logged_messages.append(msg % args),
+    )
+
+    offer = _make_offer(db_session)
+    result = admit_offer_version(
+        db_session,
+        _admit_command(
+            offer,
+            1,
+            principal=offer_access_requirement.MachineCredentialPrincipal(
+                credential_id=credential_id, scopes=()
+            ),
+        ),
+    )
+    db_session.rollback()
+
+    # Admission still proceeds regardless (shadow never refuses)...
+    assert result.offer_version.offer_id == offer.id
+    # ...but the LOGGED diagnostic must say it would REFUSE, matching the
+    # credential's own (empty) scopes, not the coincidental subscriber
+    # grant a live DB query would have found.
+    assert any("WOULD REFUSE" in message for message in logged_messages), (
+        f"shadow check logged {logged_messages!r}, expected a WOULD REFUSE "
+        "entry reflecting the credential's own empty scopes"
+    )
+    assert not any("would be authorized" in message for message in logged_messages)
+
+
+def test_machine_credential_shadow_never_raises_even_if_its_evaluation_would(
+    db_session, monkeypatch
+):
+    """Round 14 finding 3: an error inside the shadow evaluation itself
+    must never escape as an exception (and therefore never as a 500 in
+    front of admission) — it is a diagnostic aid, not a gate.
+
+    Break condition: fails if the shadow check stops catching an exception
+    raised by its own evaluation logic, or if such an exception is allowed
+    to propagate out of ``admit_offer_version``."""
+
+    def _broken_expand_permission_keys(permission_key):
+        raise RuntimeError("simulated evaluation failure")
+
+    monkeypatch.setattr(
+        "app.services.auth_dependencies._expand_permission_keys",
+        _broken_expand_permission_keys,
+    )
+
+    offer = _make_offer(db_session)
     result = admit_offer_version(
         db_session,
         _admit_command(
