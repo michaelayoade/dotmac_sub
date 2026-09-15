@@ -102,11 +102,11 @@ isolation.
   `SystemAdmission` and, pending a separate migration, `Machine
   CredentialPrincipal`) re-verified against RBAC inside the command.
   `catalog:offer_
-  version:admission` (`alembic/versions/609_offer_version_admission_
+  version:admission` (`alembic/versions/610_offer_version_admission_
   permission.py`) is a genuine, narrower, OPT-IN alternative to `catalog:
   billing_write` — a caller holding either (in addition to `catalog:write`)
   satisfies the route — so the migration seeds only the permission row
-  (mirroring 608's pattern exactly) and copies no grants: there is no
+  (mirroring 609's pattern exactly) and copies no grants: there is no
   existing-caller regression to prevent, because nobody's existing
   `catalog:billing_write` access is narrowed or removed.
   `app/api/catalog.py`'s `_admission_principal` resolves the attributable
@@ -156,7 +156,7 @@ isolation.
   site guarantee, not an unforgeable runtime credential.
 - `(offer_id, version_number)` is enforced as a real DB-level unique
   constraint (`uq_offer_versions_offer_id_version_number`,
-  `alembic/versions/610_offer_versions_unique_version_number.py`), not only
+  `alembic/versions/611_offer_versions_unique_version_number.py`), not only
   by the advisory lock and pre-insert check. The pair is also immutable
   after admission: `OfferVersionUpdate` has neither field, and
   `OfferVersions.update` asserts this defense-in-depth, the same pattern as
@@ -226,7 +226,7 @@ this module's `ServiceContract`.
 ## RBAC: a claimed identity checked against real grants, not a free-text label
 
 `catalog:offer_access_requirement:classify` (migration
-`608_offer_access_requirement_classify_permission`) is:
+`609_offer_access_requirement_classify_permission`) is:
 
 - **Not `catalog:billing_write`.** It is a new, narrow permission.
 - **Not seeded into any role.** The migration inserts the permission row only
@@ -293,7 +293,7 @@ it — see the brief that authorized this work.
 - `app/services/catalog/offer_access_requirement.py` (the owner)
 - `app/models/catalog.py` (the model/column)
 - `app/schemas/catalog.py` (the schema)
-- `alembic/versions/607_offer_access_requirement.py` (the migration)
+- `alembic/versions/608_offer_access_requirement.py` (the migration)
 - `scripts/catalog/classify_offer_access_requirement.py` (the CLI/worklist)
 - `app/api/catalog.py` (thin error mapping)
 - test files

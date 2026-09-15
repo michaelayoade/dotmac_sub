@@ -164,7 +164,7 @@ _ADMISSION_IDEMPOTENCY_SCOPE = "offer_version_admission"
 
 #: Name of the DB-level unique constraint on
 #: ``(offer_versions.offer_id, offer_versions.version_number)``
-#: (``alembic/versions/610_offer_versions_unique_version_number.py``). Used
+#: (``alembic/versions/611_offer_versions_unique_version_number.py``). Used
 #: to distinguish an actual duplicate-version-number race from an unrelated
 #: integrity violation (e.g. a dangling FK on ``region_zone_id``) hitting the
 #: same broad ``except IntegrityError`` — the latter must never be mislabeled
@@ -1410,7 +1410,9 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
 # --------------------------------------------------------------------------
 
 
-def _assert_offer_version_identity_immutable(update_payload: Mapping[str, object]) -> None:
+def _assert_offer_version_identity_immutable(
+    update_payload: Mapping[str, object],
+) -> None:
     """Fail closed if any update path ever carries ``offer_id`` or
     ``version_number``.
 
@@ -1459,7 +1461,9 @@ class UpdateOfferVersionCommand:
             )
 
 
-def update_offer_version(db: Session, command: UpdateOfferVersionCommand) -> OfferVersion:
+def update_offer_version(
+    db: Session, command: UpdateOfferVersionCommand
+) -> OfferVersion:
     """The one path that mutates an already-admitted ``OfferVersion``
     row's fields.
 

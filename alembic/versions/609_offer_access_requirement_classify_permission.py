@@ -11,8 +11,8 @@ wildcard/admin RBAC access (``*`` or the ``admin`` role) continues to satisfy
 this permission exactly as it does every other permission in this system;
 that is existing RBAC behavior, not a grant this migration adds.
 
-Revision ID: 608_offer_access_requirement_classify_permission
-Revises: 607_offer_access_requirement
+Revision ID: 609_offer_access_requirement_classify_permission
+Revises: 608_offer_access_requirement
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "608_offer_access_requirement_classify_permission"
-down_revision: str | None = "607_offer_access_requirement"
+revision: str = "609_offer_access_requirement_classify_permission"
+down_revision: str | None = "608_offer_access_requirement"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -128,7 +128,7 @@ def downgrade() -> None:
         # instead of the promised DowngradeRefused — data stays safe
         # either way (the FK still blocks the delete), but the documented
         # failure semantics did not hold. Locking all three grant tables
-        # BEFORE counting anything closes the window the same way 607's
+        # BEFORE counting anything closes the window the same way 608's
         # own downgrade already locks its target tables before counting.
         op.execute("SET LOCAL lock_timeout = '5s'")
         op.execute("SET LOCAL statement_timeout = '15min'")

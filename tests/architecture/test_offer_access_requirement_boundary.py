@@ -28,10 +28,10 @@ _ALLOWED_PATHS = (
     "app/api/catalog.py",
     "app/services/sot_registry/domains/service_intent_control_plane.py",
     "app/services/events/types.py",
-    "alembic/versions/607_offer_access_requirement.py",
-    "alembic/versions/608_offer_access_requirement_classify_permission.py",
-    "alembic/versions/609_offer_version_admission_permission.py",
-    "alembic/versions/610_offer_versions_unique_version_number.py",
+    "alembic/versions/608_offer_access_requirement.py",
+    "alembic/versions/609_offer_access_requirement_classify_permission.py",
+    "alembic/versions/610_offer_version_admission_permission.py",
+    "alembic/versions/611_offer_versions_unique_version_number.py",
     "scripts/catalog/classify_offer_access_requirement.py",
     "docs/SOT_RELATIONSHIP_MAP.md",
     "docs/designs/CATALOG_ACCESS_REQUIREMENT_AUTHORITY.md",
@@ -367,19 +367,19 @@ def test_offer_access_requirement_permission_key_matches_the_repo_pattern():
 
 def test_offer_access_requirement_permission_is_not_seeded_into_any_role():
     migration = _source(
-        "alembic/versions/608_offer_access_requirement_classify_permission.py"
+        "alembic/versions/609_offer_access_requirement_classify_permission.py"
     )
     assert "INSERT INTO role_permissions" not in migration
     assert "catalog:billing_write" not in migration
 
 
 def test_offer_version_admission_permission_is_not_seeded_into_any_role():
-    """Regression for the shrunk 609 migration: admission is an OR-alternative
+    """Regression for the shrunk 610 migration: admission is an OR-alternative
     to catalog:billing_write at the route (combined with the router's own
     catalog:write gate — see the migration's own docstring), never a hard
     requirement, so there is no existing-caller regression to prevent by
     copying grants — this migration's ``upgrade()`` seeds the permission row
-    only, with no grant-copying logic, exactly like 608's pattern.
+    only, with no grant-copying logic, exactly like 609's pattern.
 
     Checked structurally (no ``INSERT INTO role_permissions`` in
     ``upgrade()``), not by banning the substrings ``role_permissions``/
@@ -391,7 +391,7 @@ def test_offer_version_admission_permission_is_not_seeded_into_any_role():
     accurate mentions, not on a real grant-copying regression.
     """
 
-    migration = _source("alembic/versions/609_offer_version_admission_permission.py")
+    migration = _source("alembic/versions/610_offer_version_admission_permission.py")
     upgrade_source, _, downgrade_source = migration.partition("def downgrade")
     assert "INSERT INTO role_permissions" not in upgrade_source
     assert "role_permissions" in downgrade_source, (
@@ -834,7 +834,7 @@ def test_migration_downgrade_locks_each_table_before_counting_that_table():
     FIRST ``LOCK TABLE`` occurrence against the FIRST ``SELECT count(*)``
     occurrence — true for the file as a whole even if ONE of the two locks
     were deleted, so long as the other lock still happened to precede
-    whichever count came first in the source. Deleting ``607``'s
+    whichever count came first in the source. Deleting ``608``'s
     ``offer_versions`` lock while leaving the classifications lock in place
     (or vice versa) would still have passed.
 
@@ -845,7 +845,7 @@ def test_migration_downgrade_locks_each_table_before_counting_that_table():
     order, before either count) is not flagged.
     """
 
-    migration = _source("alembic/versions/607_offer_access_requirement.py")
+    migration = _source("alembic/versions/608_offer_access_requirement.py")
     downgrade_source = _function_source(migration, "downgrade")
 
     # offer_versions is a literal table name; the classifications table is
@@ -895,7 +895,7 @@ def test_migration_downgrade_locks_each_table_before_counting_that_table():
     ) < downgrade_source.index("SELECT count(*) FROM {_CLASSIFICATIONS_TABLE}")
 
 
-def test_608_and_609_downgrade_lock_every_grant_table_before_counting_it():
+def test_609_and_610_downgrade_lock_every_grant_table_before_counting_it():
     """Round 14 finding 5: without a lock, a grant inserted into
     ``system_user_permissions``/``subscriber_permissions``/
     ``role_permissions`` AFTER the zero-count checks in ``downgrade()`` but
@@ -911,8 +911,8 @@ def test_608_and_609_downgrade_lock_every_grant_table_before_counting_it():
     is caught."""
 
     for migration_path in (
-        "alembic/versions/608_offer_access_requirement_classify_permission.py",
-        "alembic/versions/609_offer_version_admission_permission.py",
+        "alembic/versions/609_offer_access_requirement_classify_permission.py",
+        "alembic/versions/610_offer_version_admission_permission.py",
     ):
         migration = _source(migration_path)
         downgrade_source = _function_source(migration, "downgrade")
@@ -986,7 +986,7 @@ def _function_source(module_source: str, function_name: str) -> str:
 
 
 def test_migration_uses_set_local_not_a_bare_set_for_timeouts():
-    migration = _source("alembic/versions/607_offer_access_requirement.py")
+    migration = _source("alembic/versions/608_offer_access_requirement.py")
     assert "SET LOCAL lock_timeout" in migration
     assert "RESET lock_timeout" not in migration
     assert "RESET statement_timeout" not in migration
@@ -998,7 +998,7 @@ def test_migration_downgrade_sets_the_identical_timeout_budget_as_upgrade():
     identical ``SET LOCAL`` timeout budget, not merely SOME timeout
     statement somewhere in the file.
 
-    Sensitivity: this test is written against the current (fixed) 607, where
+    Sensitivity: this test is written against the current (fixed) 608, where
     both functions carry the budget — it would have failed against the prior
     downgrade(), which had neither statement, while
     ``test_migration_uses_set_local_not_a_bare_set_for_timeouts`` above
@@ -1006,7 +1006,7 @@ def test_migration_downgrade_sets_the_identical_timeout_budget_as_upgrade():
     upgrade() alone satisfied it.
     """
 
-    migration = _source("alembic/versions/607_offer_access_requirement.py")
+    migration = _source("alembic/versions/608_offer_access_requirement.py")
     upgrade_source = _function_source(migration, "upgrade")
     downgrade_source = _function_source(migration, "downgrade")
     for label, function_source in (
@@ -1022,7 +1022,7 @@ def test_migration_downgrade_sets_the_identical_timeout_budget_as_upgrade():
 
 
 def test_migration_declares_check_constraints_for_the_legal_transition_shape():
-    migration = _source("alembic/versions/607_offer_access_requirement.py")
+    migration = _source("alembic/versions/608_offer_access_requirement.py")
     assert "previous_access_requirement = 'unclassified'" in migration
     assert "new_access_requirement IN ('network_access', 'no_network_access')" in (
         migration

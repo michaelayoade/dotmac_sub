@@ -1,7 +1,7 @@
 """Register catalog:offer_version:admission. Not seeded into any role.
 
 Idempotent: reruns update the existing row rather than duplicating it. This
-mirrors 608_offer_access_requirement_classify_permission's exact pattern:
+mirrors 609_offer_access_requirement_classify_permission's exact pattern:
 this migration seeds the permission row only.
 
 Admission authorization has ONE decision owner
@@ -23,8 +23,8 @@ ability as a side effect of this migration, so (unlike an earlier version of
 this migration) there is no grant-copying logic here, and no risk of an
 incomplete copy regressing an API-key or direct-permission-grant principal.
 
-Revision ID: 609_offer_version_admission_permission
-Revises: 608_offer_access_requirement_classify_permission
+Revision ID: 610_offer_version_admission_permission
+Revises: 609_offer_access_requirement_classify_permission
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "609_offer_version_admission_permission"
-down_revision: str | None = "608_offer_access_requirement_classify_permission"
+revision: str = "610_offer_version_admission_permission"
+down_revision: str | None = "609_offer_access_requirement_classify_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -141,7 +141,7 @@ def downgrade() -> None:
         # instead of the promised DowngradeRefused — data stays safe
         # either way (the FK still blocks the delete), but the documented
         # failure semantics did not hold. Locking all three grant tables
-        # BEFORE counting anything closes the window the same way 607's
+        # BEFORE counting anything closes the window the same way 608's
         # own downgrade already locks its target tables before counting.
         op.execute("SET LOCAL lock_timeout = '5s'")
         op.execute("SET LOCAL statement_timeout = '15min'")

@@ -17,8 +17,8 @@ omitting the constraint because dirty data might exist. Any such failure
 must be repaired (de-duplicate or re-number the conflicting rows) before this
 migration can apply; that repair is out of scope here.
 
-Revision ID: 610_offer_versions_unique_version_number
-Revises: 609_offer_version_admission_permission
+Revision ID: 611_offer_versions_unique_version_number
+Revises: 610_offer_version_admission_permission
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "610_offer_versions_unique_version_number"
-down_revision: str | None = "609_offer_version_admission_permission"
+revision: str = "611_offer_versions_unique_version_number"
+down_revision: str | None = "610_offer_version_admission_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -43,7 +43,7 @@ def upgrade() -> None:
         # automatically when it ends -- unlike a plain SET, it never discards
         # the operator-configured global lock_timeout (alembic/env.py) for
         # any statement that runs after this one. Mirrors
-        # 607_offer_access_requirement's exact budget.
+        # 608_offer_access_requirement's exact budget.
         op.execute("SET LOCAL lock_timeout = '5s'")
         op.execute("SET LOCAL statement_timeout = '15min'")
     op.create_unique_constraint(
