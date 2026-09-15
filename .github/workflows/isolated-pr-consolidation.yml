@@ -7,176 +7,146 @@ on:
 
 permissions:
   contents: write
+  actions: read
   pull-requests: read
 
 concurrency:
   group: isolated-pr-consolidation-20260915
   cancel-in-progress: false
 
+env:
+  DATABASE_URL: sqlite:///./test.db
+  SECRET_KEY: ci-test-secret-key-not-for-production
+  REDIS_URL: redis://localhost:6379/0
+
 jobs:
-  consolidate:
+  repair:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ee6945c15264a61e9c3498965a5dc746cab33547
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
-      - name: Assemble pinned sources, repair, validate, and publish
+      - name: Restore the identical locked environment from this PR's CI
+        uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          path: ${{ runner.temp }}/python-environment
+          github-token: ${{ github.token }}
+          repository: michaelayoade/dotmac_sub
+          run-id: 35000151794
+      - name: Configure the shared environment
+        run: |
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+      - name: Repair the missing optional bounds and add legacy-query coverage
         env:
           GH_TOKEN: ${{ github.token }}
-          EVIDENCE: ${{ runner.temp }}/consolidation-evidence
         run: |
-          mkdir -p "$EVIDENCE"
-          cp .github/consolidation-repair.py "$EVIDENCE/repair.py"
+          mkdir -p "$RUNNER_TEMP/ci-repair-evidence"
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3166 --jq .head.sha)" = ee6945c15264a61e9c3498965a5dc746cab33547
+          git switch -c work/consolidation-3166-ci-fix-1
           python - <<'PY'
-          import json
-          import os
-          import pathlib
-          import re
-          import subprocess
-          import tomllib
-
-          repo = "michaelayoade/dotmac_sub"
-          included = {
-              3160: "2698af3559378290844176b2e20a0192c067ae75",
-              3161: "40635b2f5877c26049ec4dcbc0c458bb17638788",
-              3162: "1f918ec471c3bc235d2aa5de77ce2adb9730c4d8",
-              3163: "f3db00341b571b99402a141caac0a643936f8812",
-              3164: "c80626e40d39d575eaa216ea7442ec064bb00f93",
-          }
-          excluded = [2992, 3154, 3155, 3159]
-          base = "dc2573702ed9340fbfc4f44850905d48caea385a"
-          expected_tree = "4edc6810507b92ec0db016a4cf5b60b4901bdb61"
-          target = "consolidate/open-prs-20260915"
-          out = pathlib.Path(os.environ["EVIDENCE"])
-
-          def run(*args, check=True):
-              result = subprocess.run(args, text=True, capture_output=True)
-              if check and result.returncode:
-                  raise RuntimeError(f"Command failed: {' '.join(args)}\n{result.stdout}\n{result.stderr}")
-              return result
-
-          def git(*args, check=True):
-              return run("git", *args, check=check)
-
-          def api(path):
-              return json.loads(run("gh", "api", f"repos/{repo}/{path}").stdout)
-
-          git("config", "user.name", "github-actions[bot]")
-          git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-          git("config", "merge.conflictStyle", "diff3")
-          git("fetch", "origin", "main")
-          if git("rev-parse", "origin/main").stdout.strip() != base:
-              raise RuntimeError("Main changed since the reviewed consolidation")
-          prs = {p["number"]: p for p in api("pulls?state=open&per_page=100")}
-          if set(prs) != set(included) | set(excluded):
-              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}")
-          snapshot = {"base": base, "target": target, "included": [], "excluded": []}
-          for number in list(included) + excluded:
-              pr = prs[number]
-              if pr["base"]["ref"] != "main":
-                  raise RuntimeError(f"PR #{number} is not based on main")
-              ref = f"refs/remotes/origin/consolidation-pr-{number}"
-              git("fetch", "origin", f"refs/pull/{number}/head:{ref}")
-              sha = git("rev-parse", ref).stdout.strip()
-              if sha != pr["head"]["sha"] or (number in included and sha != included[number]):
-                  raise RuntimeError(f"PR #{number} moved since review")
-              snapshot["included" if number in included else "excluded"].append({
-                  "number": number, "title": pr["title"], "sha": sha, "ref": pr["head"]["ref"]
-              })
-          (out / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
-          excluded_commits = set()
-          for pr in snapshot["excluded"]:
-              excluded_commits.update(git("rev-list", pr["sha"], "--not", base).stdout.split())
-          for sha in included.values():
-              if excluded_commits.intersection(git("rev-list", sha, "--not", base).stdout.split()):
-                  raise RuntimeError("Included source contains excluded work")
-          git("checkout", "-b", target, base)
-          try:
-              for pr in snapshot["included"]:
-                  message = f"Merge PR #{pr['number']}: {pr['title']}"
-                  merged = git("merge", "--no-ff", "-m", message, pr["sha"], check=False)
-                  print(merged.stdout, merged.stderr, flush=True)
-                  if merged.returncode:
-                      conflicts = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
-                      (out / f"conflicts-{pr['number']}.diff").write_text(git("diff", "--cc").stdout)
-                      if pr["number"] == 3160 and conflicts == ["app/services/web_system_settings_forms.py"]:
-                          git("checkout", "--ours", "--", conflicts[0])
-                          git("add", "--", conflicts[0])
-                      elif pr["number"] == 3164 and conflicts == ["app/services/sales/service.py"]:
-                          path = pathlib.Path(conflicts[0])
-                          text = path.read_text()
-                          pattern = r"<<<<<<< HEAD\n(.*?)\|\|\|\|\|\|\| [0-9a-f]+\n(.*?)=======\n(.*?)>>>>>>> " + pr["sha"] + r"\n"
-                          matches = list(re.finditer(pattern, text, re.S))
-                          if len(matches) != 1:
-                              raise RuntimeError("Unexpected sales conflict count")
-                          match = matches[0]
-                          if match.group(2) or not match.group(1).startswith("def _optional_date_filter(") or not match.group(3).startswith("def normalize_lead_date_range("):
-                              raise RuntimeError("Unreviewed sales conflict")
-                          path.write_text(text[:match.start()] + match.group(1) + match.group(3) + text[match.end():])
-                          git("add", "--", conflicts[0])
-                      else:
-                          raise RuntimeError(f"Unreviewed conflict: {conflicts}")
-                      git("commit", "-m", message)
-              if git("rev-parse", "HEAD^{tree}").stdout.strip() != expected_tree:
-                  raise RuntimeError("Assembly differs from the locally reviewed source tree")
-              print(run("python", str(out / "repair.py")).stdout, flush=True)
-              repair_paths = git("diff", "--name-only").stdout.splitlines()
-              expected_repairs = {
-                  "app/services/sales/service.py", "app/services/sales/__init__.py",
-                  "app/services/web_sales.py",
-                  "app/services/sot_registry/domains/sales_referrals/lifecycle.py",
-                  "docs/SOT_RELATIONSHIP_MAP.md", "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
-                  "tests/test_web_sales_quotes_list.py",
-                  "tests/architecture/test_sales_quote_list_query_boundary.py",
-                  "tests/integration/test_quote_list_search_postgres.py",
-              }
-              if set(repair_paths) != expected_repairs:
-                  raise RuntimeError(f"Unexpected repair scope: {repair_paths}")
-              lock = tomllib.loads(pathlib.Path("poetry.lock").read_text())
-              version = next(p["version"] for p in lock["package"] if p["name"] == "ruff")
-              run("python", "-m", "pip", "install", f"ruff=={version}")
-              print(run("python", "-m", "ruff", "format", *[p for p in repair_paths if p.endswith(".py")]).stdout, flush=True)
-              for args in [("check",), ("format", "--check")]:
-                  checked = run("python", "-m", "ruff", *args, "app", "tests", "scripts", "alembic", check=False)
-                  (out / ("ruff-" + args[0] + ".log")).write_text(checked.stdout + checked.stderr)
-                  print(checked.stdout, checked.stderr, flush=True)
-                  if checked.returncode:
-                      raise RuntimeError(f"Ruff {args[0]} failed")
-              run("python", "-m", "compileall", "-q", "app", "tests", "scripts", "alembic")
-              git("diff", "--check")
-              git("add", "--", *repair_paths)
-              git("commit", "-m", "fix(sales): harden consolidated quote date filters and retry views")
-              for pr in snapshot["included"]:
-                  git("merge-base", "--is-ancestor", pr["sha"], "HEAD")
-                  current = api(f"pulls/{pr['number']}")
-                  if current["state"] != "open" or current["head"]["sha"] != pr["sha"]:
-                      raise RuntimeError(f"PR #{pr['number']} moved during consolidation")
-              for pr in snapshot["excluded"]:
-                  if git("merge-base", "--is-ancestor", pr["sha"], "HEAD", check=False).returncode == 0:
-                      raise RuntimeError(f"Excluded PR #{pr['number']} included unexpectedly")
-              git("diff", "--exit-code", base, "HEAD", "--", "VERSION", ".github/workflows", ".github/consolidation-repair.py", ".github/consolidation-repair.patch.gz.b64")
-              git("diff", "--check", f"{base}...HEAD")
-              if git("status", "--porcelain").stdout.strip():
-                  raise RuntimeError("Unexpected uncommitted files")
-              if git("ls-remote", "--heads", "origin", target).stdout.strip():
-                  raise RuntimeError("Target already exists; refusing to overwrite")
-              git("push", "origin", f"HEAD:refs/heads/{target}")
-              sha = git("rev-parse", "HEAD").stdout.strip()
-              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "tree": git("rev-parse", "HEAD^{tree}").stdout.strip(), "branch": target, "base": base}, indent=2))
-              print(f"CONSOLIDATED_HEAD={sha}", flush=True)
-              print(git("diff", "--stat", f"{base}...HEAD").stdout, flush=True)
-          finally:
-              git("bundle", "create", str(out / "source.bundle"), "--all")
+          from pathlib import Path
+          path = Path("app/services/sales/service.py")
+          text = path.read_text()
+          old = "            lead_id=coerce_uuid(lead_id) if lead_id else None,\n            is_active=True if is_active is None else is_active,\n"
+          new = "            lead_id=coerce_uuid(lead_id) if lead_id else None,\n            created_from=None,\n            created_to_exclusive=None,\n            is_active=True if is_active is None else is_active,\n"
+          if text.count(old) != 1:
+              raise RuntimeError("Legacy Quote list repair context changed")
+          path.write_text(text.replace(old, new, 1))
+          test = Path("tests/test_quote_legacy_list_compatibility.py")
+          if test.exists():
+              raise RuntimeError("Regression test already exists")
+          test.write_text('''"""Legacy Quote callers retain all-time filtering after date-filter additions."""
+          
+          from datetime import UTC, datetime
+          
+          from sqlalchemy.orm import Session
+          
+          from app.models.sales import Quote
+          from app.models.subscriber import Subscriber
+          from app.services import sales
+          
+          
+          def test_legacy_quote_list_keeps_all_time_scope(
+              db_session: Session, subscriber: Subscriber
+          ) -> None:
+              old = Quote(
+                  subscriber_id=subscriber.id,
+                  created_at=datetime(2020, 1, 1, tzinfo=UTC),
+              )
+              future = Quote(
+                  subscriber_id=subscriber.id,
+                  created_at=datetime(2040, 1, 1, tzinfo=UTC),
+              )
+              inactive = Quote(
+                  subscriber_id=subscriber.id,
+                  created_at=datetime(2041, 1, 1, tzinfo=UTC),
+                  is_active=False,
+              )
+              db_session.add_all([old, future, inactive])
+              db_session.commit()
+              rows = sales.quotes.list(
+                  db_session,
+                  lead_id=None,
+                  status=None,
+                  is_active=None,
+                  order_by="created_at",
+                  order_dir="desc",
+                  limit=25,
+                  offset=0,
+              )
+              typed = sales.quotes.query(db_session, sales.QuoteListQueryInput())
+              assert [row.id for row in rows] == [future.id, old.id]
+              assert [row.id for row in typed.items] == [row.id for row in rows]
+              assert typed.total_count == len(rows) == 2
+          ''')
           PY
-      - name: Preserve merge evidence and source bundle
+          poetry run ruff format app/services/sales/service.py tests/test_quote_legacy_list_compatibility.py
+          poetry run ruff check app tests scripts alembic
+          poetry run ruff format --check app tests scripts alembic
+          python -m compileall -q app tests scripts alembic
+          git diff --check
+      - name: Validate the full type-check command
+        run: poetry run mypy app --ignore-missing-imports --no-incremental 2>&1 | tee "$RUNNER_TEMP/ci-repair-evidence/mypy.log"
+      - name: Validate focused Quote and Lead regressions
+        run: >-
+          poetry run pytest tests/test_quote_legacy_list_compatibility.py
+          tests/test_web_sales_quotes_list.py tests/test_lead_created_date_filters.py
+          tests/architecture/test_sales_quote_list_query_boundary.py
+          tests/architecture/test_lead_created_date_ownership.py
+          -q --tb=short -o "addopts="
+          2>&1 | tee "$RUNNER_TEMP/ci-repair-evidence/pytest.log"
+      - name: Publish only the reviewed repair to a temporary source ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3166 --jq .head.sha)" = ee6945c15264a61e9c3498965a5dc746cab33547
+          git diff --exit-code ee6945c15264a61e9c3498965a5dc746cab33547 -- VERSION .github/workflows
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/services/sales/service.py tests/test_quote_legacy_list_compatibility.py
+          git commit -m 'fix(sales): retain legacy quote list all-time bounds'
+          git push origin HEAD:refs/heads/work/consolidation-3166-ci-fix-1
+          git rev-parse HEAD | tee "$RUNNER_TEMP/ci-repair-evidence/head.txt"
+      - name: Preserve repair evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-repair-evidence"
+          git diff > "$RUNNER_TEMP/ci-repair-evidence/uncommitted.diff"
+          git bundle create "$RUNNER_TEMP/ci-repair-evidence/source.bundle" --all
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: consolidation-evidence
-          path: ${{ runner.temp }}/consolidation-evidence
+          name: consolidation-ci-repair
+          path: ${{ runner.temp }}/ci-repair-evidence
           retention-days: 7
-          if-no-files-found: error
