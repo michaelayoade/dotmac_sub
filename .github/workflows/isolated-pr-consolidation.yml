@@ -1,0 +1,139 @@
+name: Isolated PR consolidation 20260915
+
+on:
+  push:
+    branches: [work/consolidate-open-prs-20260915]
+    paths: [.github/workflows/isolated-pr-consolidation.yml]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: isolated-pr-consolidation-20260915
+  cancel-in-progress: false
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Snapshot sources and merge only the requested PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE: ${{ runner.temp }}/consolidation-evidence
+        run: |
+          mkdir -p "$EVIDENCE"
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          repo = "michaelayoade/dotmac_sub"
+          included = [3160, 3161, 3162, 3163, 3164]
+          excluded = [2992, 3154, 3155, 3159]
+          target = "consolidate/open-prs-20260915"
+          out = pathlib.Path(os.environ["EVIDENCE"])
+
+          def run(*args, check=True):
+              result = subprocess.run(args, text=True, capture_output=True)
+              if check and result.returncode:
+                  raise RuntimeError(f"Command failed: {' '.join(args)}\n{result.stdout}\n{result.stderr}")
+              return result
+
+          def git(*args, check=True):
+              return run("git", *args, check=check)
+
+          def api(path):
+              return json.loads(run("gh", "api", f"repos/{repo}/{path}").stdout)
+
+          prs = {p["number"]: p for p in api("pulls?state=open&per_page=100")}
+          if set(prs) != set(included + excluded):
+              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}; expected the nine reviewed PRs")
+          snapshot = {"included": [], "excluded": [], "target": target}
+          git("config", "user.name", "github-actions[bot]")
+          git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+          git("config", "merge.conflictStyle", "diff3")
+          git("fetch", "origin", "main")
+          base = git("rev-parse", "origin/main").stdout.strip()
+          snapshot["base"] = base
+          for number in included + excluded:
+              pr = prs[number]
+              if pr["base"]["ref"] != "main":
+                  raise RuntimeError(f"PR #{number} is not based on main")
+              ref = f"refs/remotes/origin/consolidation-pr-{number}"
+              git("fetch", "origin", f"refs/pull/{number}/head:{ref}")
+              sha = git("rev-parse", ref).stdout.strip()
+              if sha != pr["head"]["sha"]:
+                  raise RuntimeError(f"PR #{number} moved while snapshotting")
+              record = {"number": number, "title": pr["title"], "sha": sha, "ref": pr["head"]["ref"]}
+              snapshot["included" if number in included else "excluded"].append(record)
+          (out / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
+          print(json.dumps(snapshot, indent=2), flush=True)
+
+          excluded_commits = set()
+          for pr in snapshot["excluded"]:
+              excluded_commits.update(git("rev-list", pr["sha"], "--not", base).stdout.split())
+          for pr in snapshot["included"]:
+              overlap = excluded_commits.intersection(git("rev-list", pr["sha"], "--not", base).stdout.split())
+              if overlap:
+                  raise RuntimeError(f"PR #{pr['number']} includes commits unique to an excluded PR: {sorted(overlap)}")
+
+          git("checkout", "-b", target, base)
+          try:
+              for pr in snapshot["included"]:
+                  print(f"Merging PR #{pr['number']}: {pr['sha']}", flush=True)
+                  merged = git("merge", "--no-ff", "-m", f"Merge PR #{pr['number']}: {pr['title']}", pr["sha"], check=False)
+                  print(merged.stdout, merged.stderr, flush=True)
+                  if merged.returncode:
+                      conflicts = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+                      (out / "conflicts.diff").write_text(git("diff", "--cc").stdout)
+                      for path in conflicts:
+                          dest = out / "conflicts" / path
+                          dest.parent.mkdir(parents=True, exist_ok=True)
+                          dest.write_text(pathlib.Path(path).read_text())
+                          for stage in (1, 2, 3):
+                              blob = git("show", f":{stage}:{path}", check=False)
+                              if blob.returncode == 0:
+                                  pathlib.Path(str(dest) + f".stage{stage}").write_text(blob.stdout)
+                      (out / "result.json").write_text(json.dumps({"status": "conflict", "pr": pr["number"], "paths": conflicts}, indent=2))
+                      raise RuntimeError(f"Review required for PR #{pr['number']}: {conflicts}")
+
+              for pr in snapshot["included"]:
+                  git("merge-base", "--is-ancestor", pr["sha"], "HEAD")
+                  current = api(f"pulls/{pr['number']}")
+                  if current["state"] != "open" or current["head"]["sha"] != pr["sha"]:
+                      raise RuntimeError(f"PR #{pr['number']} changed during consolidation")
+              for pr in snapshot["excluded"]:
+                  if git("merge-base", "--is-ancestor", pr["sha"], "HEAD", check=False).returncode == 0:
+                      raise RuntimeError(f"Excluded PR #{pr['number']} unexpectedly became an ancestor")
+              git("diff", "--exit-code", base, "HEAD", "--", "VERSION", ".github/workflows")
+              git("diff", "--check", f"{base}...HEAD")
+              run("python", "-m", "compileall", "-q", "app", "tests", "scripts", "alembic")
+              if git("status", "--porcelain").stdout.strip():
+                  raise RuntimeError("Unexpected uncommitted files after consolidation")
+              if git("ls-remote", "--heads", "origin", target).stdout.strip():
+                  raise RuntimeError("Target branch already exists; refusing to overwrite")
+              git("push", "origin", f"HEAD:refs/heads/{target}")
+              sha = git("rev-parse", "HEAD").stdout.strip()
+              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "branch": target, "base": base}, indent=2))
+              print(f"CONSOLIDATED_HEAD={sha}", flush=True)
+              print(git("diff", "--stat", f"{base}...HEAD").stdout, flush=True)
+          finally:
+              git("bundle", "create", str(out / "source.bundle"), "--all")
+          PY
+      - name: Preserve merge evidence and source bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-evidence
+          path: ${{ runner.temp }}/consolidation-evidence
+          retention-days: 7
+          if-no-files-found: error
