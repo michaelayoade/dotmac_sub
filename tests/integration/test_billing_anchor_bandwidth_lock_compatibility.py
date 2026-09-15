@@ -60,11 +60,13 @@ def test_anchor_projection_does_not_block_bandwidth_foreign_key_insert(engine):
                 price_basis=PriceBasis.flat,
             ),
         )
+        offer_id = offer.id
+        setup.commit()
         catalog_service.offer_versions.create(
             setup,
             OfferVersionCreate(
                 access_requirement=AccessRequirement.unclassified,
-                offer_id=offer.id,
+                offer_id=offer_id,
                 version_number=1,
                 name=f"Anchor Lock Compatibility {suffix} v1",
                 service_type=ServiceType.residential,

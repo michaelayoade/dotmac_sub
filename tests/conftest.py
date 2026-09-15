@@ -643,12 +643,16 @@ def catalog_offer(db_session):
             price_basis=PriceBasis.flat,
         ),
     )
-    # Create offer version linking to offer
+    # The version is a registered owner command. Settle the preceding offer
+    # creation before entering it, and capture the FK before commit can expire
+    # the ORM instance and start a new caller transaction on attribute access.
+    offer_id = offer.id
+    db_session.commit()
     catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
             access_requirement=AccessRequirement.unclassified,
-            offer_id=offer.id,
+            offer_id=offer_id,
             version_number=1,
             name="Standard Internet v1",
             service_type=ServiceType.residential,
