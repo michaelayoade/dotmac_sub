@@ -92,6 +92,7 @@ class RecoveryOutcomeKind(StrEnum):
     partially_restored = "partially_restored"
     blocked_missing_participants = "blocked_missing_participants"
     blocked_unsupported_consequence = "blocked_unsupported_consequence"
+    blocked_offer_version_drift = "blocked_offer_version_drift"
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +198,36 @@ class RecoveryPartiallyRestored:
     unrestored_subscription_ids: tuple[UUID, ...]
 
 
-RecoveryOutcome = RecoveryBlocked | RecoveryRestored | RecoveryPartiallyRestored
+@dataclass(frozen=True, slots=True)
+class RecoveryBlockedByOfferDrift:
+    """Refusal to restore: a snapshot's offer version drifted since deletion.
+
+    ``request_recoverable_deletion`` captures ``pre_deletion_offer_version_id``
+    per subscription. If the subscription's CURRENT offer version no longer
+    matches that snapshot by the time restoration is attempted (an operator
+    corrected the offer, a separate process re-pointed it, etc.), blindly
+    reactivating would either silently overwrite intervening evidence or
+    reactivate the subscription against stale evidence — neither is "restore
+    exactly what this deletion changed". This fails closed instead, zero
+    mutation, naming exactly which subscriptions drifted so an operator can
+    rebaseline (``rebaseline_recovery_evidence``) or investigate before
+    retrying. The record stays in its current ``open``/``blocked`` state.
+    """
+
+    kind: RecoveryOutcomeKind = field(
+        default=RecoveryOutcomeKind.blocked_offer_version_drift, init=False
+    )
+    record_id: UUID
+    account_id: UUID
+    drifted_subscription_ids: tuple[UUID, ...]
+
+
+RecoveryOutcome = (
+    RecoveryBlocked
+    | RecoveryRestored
+    | RecoveryPartiallyRestored
+    | RecoveryBlockedByOfferDrift
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +394,70 @@ def _resolve_replay(reservation: IdempotencyKey, input_fingerprint: str) -> UUID
     return UUID(record_id)
 
 
+_BLOCKED_REF_MARKER = "blocked"
+
+
+def _pack_blocked_preflight_ref(
+    input_fingerprint: str,
+    *,
+    account_id: UUID,
+    blocked_subscription_ids: tuple[UUID, ...],
+    unsupported_consequences: tuple[str, ...],
+) -> str:
+    """Pack a preflight refusal into the reservation's ``ref_id``.
+
+    No `AccountRecoveryRecord` exists for a preflight-blocked request (zero
+    mutation happened), so the refusal itself — not an entity id — is what
+    must be replayable: a retry with the same key+inputs must reproduce the
+    SAME refusal rather than being treated as a fresh reservation that could
+    later actually execute the deletion.
+    """
+    return ":".join(
+        (
+            input_fingerprint,
+            _BLOCKED_REF_MARKER,
+            str(account_id),
+            ",".join(str(i) for i in blocked_subscription_ids),
+            ",".join(unsupported_consequences),
+        )
+    )
+
+
+def _resolve_request_deletion_replay(
+    reservation: IdempotencyKey, input_fingerprint: str
+) -> tuple[UUID, None] | tuple[None, DeletionPreflightBlocked] | tuple[None, None]:
+    """Return ``(record_id, None)``, ``(None, blocked_outcome)``, or ``(None, None)``.
+
+    Mirrors `_resolve_replay`'s input-fingerprint conflict check, but also
+    recognizes the packed preflight-blocked shape from
+    `_pack_blocked_preflight_ref` and reconstructs that refusal directly —
+    there is no record to load it from.
+    """
+    if not reservation.ref_id:
+        return None, None
+    stored_fingerprint, separator, remainder = reservation.ref_id.partition(":")
+    if not separator or stored_fingerprint != input_fingerprint or not remainder:
+        raise _error(
+            "idempotency_input_conflict",
+            "This idempotency key was already used for a different "
+            "account-recovery command.",
+        )
+    marker, marker_sep, blocked_payload = remainder.partition(":")
+    if marker_sep and marker == _BLOCKED_REF_MARKER:
+        account_part, _, rest = blocked_payload.partition(":")
+        blocked_part, _, consequences_part = rest.partition(":")
+        blocked_ids = tuple(
+            UUID(i) for i in blocked_part.split(",") if i
+        )
+        consequences = tuple(c for c in consequences_part.split(",") if c)
+        return None, DeletionPreflightBlocked(
+            account_id=UUID(account_part),
+            blocked_subscription_ids=blocked_ids,
+            unsupported_consequences=consequences,
+        )
+    return UUID(remainder), None
+
+
 def _replay_request_outcome(db: Session, record_id: UUID) -> DeletionTombstone:
     record = db.get(AccountRecoveryRecord, record_id)
     if record is None:
@@ -387,6 +481,41 @@ def _replay_request_outcome(db: Session, record_id: UUID) -> DeletionTombstone:
         affected_resource_types=tuple(record.affected_resource_types),
         affected_subscription_ids=subscription_ids,
     )
+
+
+def _eligible_snapshots_for_restore(
+    snapshots: list[AccountRecoverySubscriptionSnapshot],
+) -> list[AccountRecoverySubscriptionSnapshot]:
+    """Snapshots this deletion actually changed, and so may restore.
+
+    A snapshot whose ``pre_deletion_status`` was already ``canceled`` names a
+    subscription `request_recoverable_deletion` explicitly skipped cancelling
+    (its own loop only calls ``cancel_subscription`` on a subscription that is
+    not already canceled) — this deletion changed nothing about it, so
+    restoration must leave it exactly as it is rather than reactivating an
+    unrelated, already-terminal subscription.
+    """
+    return [s for s in snapshots if s.pre_deletion_status != "canceled"]
+
+
+def _drifted_offer_version_ids(
+    db: Session, snapshots: list[AccountRecoverySubscriptionSnapshot]
+) -> tuple[UUID, ...]:
+    """Return snapshot subscription ids whose offer version has drifted.
+
+    Read-only: compares each snapshot's ``pre_deletion_offer_version_id``
+    against the subscription's CURRENT ``offer_version_id``. A missing
+    subscription is not reported here — that is a different, pre-existing
+    failure mode surfaced by the restoration call itself.
+    """
+    drifted: list[UUID] = []
+    for snapshot in snapshots:
+        subscription = db.get(Subscription, snapshot.subscription_id)
+        if subscription is None:
+            continue
+        if subscription.offer_version_id != snapshot.pre_deletion_offer_version_id:
+            drifted.append(snapshot.subscription_id)
+    return tuple(drifted)
 
 
 def _replay_restore_outcome(db: Session, record_id: UUID) -> RecoveryOutcome:
@@ -420,9 +549,19 @@ def _replay_restore_outcome(db: Session, record_id: UUID) -> RecoveryOutcome:
             .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
         ).all()
     )
+    eligible = _eligible_snapshots_for_restore(snapshots)
+
+    drifted = _drifted_offer_version_ids(db, eligible)
+    if drifted:
+        return RecoveryBlockedByOfferDrift(
+            record_id=record.id,
+            account_id=record.account_id,
+            drifted_subscription_ids=drifted,
+        )
+
     restored_ids: list[UUID] = []
     unrestored_ids: list[UUID] = []
-    for snapshot in snapshots:
+    for snapshot in eligible:
         subscription = db.get(Subscription, snapshot.subscription_id)
         if subscription is not None and subscription.status.value != "canceled":
             restored_ids.append(snapshot.subscription_id)
@@ -550,9 +689,13 @@ def request_recoverable_deletion(
             account_id=command.account_id,
             idempotency_key=command.context.idempotency_key,
         )
-        replay_id = _resolve_replay(reservation, input_fingerprint)
-        if replay_id is not None:
-            return _replay_request_outcome(db, replay_id)
+        replay_record_id, replay_blocked = _resolve_request_deletion_replay(
+            reservation, input_fingerprint
+        )
+        if replay_blocked is not None:
+            return replay_blocked
+        if replay_record_id is not None:
+            return _replay_request_outcome(db, replay_record_id)
 
         existing_open = db.execute(
             select(AccountRecoveryRecord.id).where(
@@ -592,6 +735,19 @@ def request_recoverable_deletion(
                 blocked_ids = tuple(
                     s.id for s in subscriptions if s.status.value != "canceled"
                 )
+                # Populate the reservation even on a refusal: zero mutation
+                # happened, but a retry with the same key+inputs must replay
+                # this SAME blocked outcome rather than being treated as a
+                # fresh reservation that could later actually execute the
+                # deletion once the blocking consequence is cleared out from
+                # under a caller who believes they're still replaying.
+                reservation.ref_id = _pack_blocked_preflight_ref(
+                    input_fingerprint,
+                    account_id=command.account_id,
+                    blocked_subscription_ids=blocked_ids,
+                    unsupported_consequences=unsupported,
+                )
+                db.flush()
                 return DeletionPreflightBlocked(
                     account_id=command.account_id,
                     blocked_subscription_ids=blocked_ids,
@@ -782,9 +938,41 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
                 .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
             ).all()
         )
+        # Only a snapshot this deletion actually changed (pre_deletion_status
+        # was not already `canceled`) is eligible for reactivation — see
+        # `_eligible_snapshots_for_restore`. A subscription already canceled
+        # before this deletion generation is left exactly as it is.
+        eligible = _eligible_snapshots_for_restore(snapshots)
+
+        drifted = _drifted_offer_version_ids(db, eligible)
+        if drifted:
+            # Fail closed, zero mutation: reserve the replay ref so a retry
+            # with the same key replays this same refusal rather than
+            # re-deriving a possibly different one, but do not touch record
+            # state — the generation stays exactly as retryable as before.
+            reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
+            db.flush()
+            return RecoveryBlockedByOfferDrift(
+                record_id=record.id,
+                account_id=command.account_id,
+                drifted_subscription_ids=drifted,
+            )
+
         restored_ids: list[UUID] = []
         unrestored_ids: list[UUID] = []
-        for snapshot in snapshots:
+        for snapshot in eligible:
+            subscription = db.get(Subscription, snapshot.subscription_id)
+            if (
+                subscription is not None
+                and subscription.status.value != "canceled"
+            ):
+                # Already in the target restored state from a prior partial
+                # attempt (or was never actually canceled) — treat as
+                # already-restored rather than re-invoking
+                # `restore_subscription_detailed` and misreading its
+                # "already active, no-op" result as a failure.
+                restored_ids.append(snapshot.subscription_id)
+                continue
             result = restore_subscription_detailed(
                 db,
                 str(snapshot.subscription_id),
@@ -845,6 +1033,14 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
         record.state = AccountRecoveryState.restored
         record.restored_at = datetime.now(UTC)
         record.restored_by = command.context.actor
+        # The account-level flag is itself part of what this deletion
+        # changed (`request_recoverable_deletion` sets it False
+        # unconditionally, even for a zero-subscription account with no
+        # snapshot loop to otherwise re-derive it) — reverse it explicitly on
+        # every successful full restoration rather than relying on
+        # `compute_account_status`'s own re-derivation, which never runs at
+        # all when there are no subscriptions to restore.
+        subscriber.is_active = True
         db.flush()
 
         stage_audit_event(
