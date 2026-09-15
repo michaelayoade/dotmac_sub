@@ -1,0 +1,47 @@
+name: Consolidation source workbench
+on:
+  push:
+    branches: ['chore/consolidation-workbench-20260915']
+    paths: ['.github/workflows/consolidation-workbench.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dc2573702ed9340fbfc4f44850905d48caea385a
+          fetch-depth: 0
+      - name: Capture exact authorized source heads without executing their code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/consolidation-source"
+          git update-ref refs/heads/consolidation-base dc2573702ed9340fbfc4f44850905d48caea385a
+          while read -r number expected; do
+            git fetch --no-tags origin "+refs/pull/${number}/head:refs/heads/source-pr-${number}"
+            actual=$(git rev-parse "refs/heads/source-pr-${number}")
+            test "$actual" = "$expected"
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${number}" > "$RUNNER_TEMP/consolidation-source/pr-${number}.json"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${actual}/check-runs?per_page=100" > "$RUNNER_TEMP/consolidation-source/checks-${number}.json"
+            git diff --stat "$(git merge-base consolidation-base "source-pr-${number}")" "source-pr-${number}"
+          done <<'SOURCES'
+          3160 2698af3559378290844176b2e20a0192c067ae75
+          3161 40635b2f5877c26049ec4dcbc0c458bb17638788
+          3162 1f918ec471c3bc235d2aa5de77ce2adb9730c4d8
+          3163 f3db00341b571b99402a141caac0a643936f8812
+          3164 c80626e40d39d575eaa216ea7442ec064bb00f93
+          SOURCES
+          git bundle create "$RUNNER_TEMP/consolidation-source/source.bundle" refs/heads/consolidation-base refs/heads/source-pr-3160 refs/heads/source-pr-3161 refs/heads/source-pr-3162 refs/heads/source-pr-3163 refs/heads/source-pr-3164
+          git bundle verify "$RUNNER_TEMP/consolidation-source/source.bundle"
+          du -h "$RUNNER_TEMP/consolidation-source/source.bundle"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-source
+          path: ${{ runner.temp }}/consolidation-source/
+          retention-days: 3
+          if-no-files-found: error
