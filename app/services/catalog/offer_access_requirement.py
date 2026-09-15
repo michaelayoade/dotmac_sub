@@ -72,7 +72,7 @@ from app.models.idempotency import IdempotencyKey
 from app.models.rbac import Role, SubscriberRole
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.schemas.catalog import OfferVersionCreate
+from app.schemas.catalog import OfferVersionCreate, OfferVersionUpdate
 from app.services import catalog_billing_governance as billing_governance
 from app.services import settings_spec
 from app.services.audit_adapter import stage_audit_event
@@ -133,6 +133,13 @@ _CLASSIFY_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
     concern=_CLASSIFY_CONCERN,
     name="classify_offer_version_access_requirement",
+)
+
+_UPDATE_CONCERN = "mutation of an already-admitted offer version"
+_UPDATE_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_UPDATE_CONCERN,
+    name="update_offer_version",
 )
 
 #: Real classifications. ``unclassified`` is never a valid classification
@@ -1399,6 +1406,138 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
 
 
 # --------------------------------------------------------------------------
+# Update command (the only way OfferVersions.update mutates a row).
+# --------------------------------------------------------------------------
+
+
+def _assert_offer_version_identity_immutable(update_payload: Mapping[str, object]) -> None:
+    """Fail closed if any update path ever carries ``offer_id`` or
+    ``version_number``.
+
+    ``(offer_id, version_number)`` is this row's immutable identity, enforced
+    at admission by ``admit_offer_version``'s advisory lock, existence
+    check, and DB-level unique constraint
+    (``uq_offer_versions_offer_id_version_number``). ``OfferVersionUpdate``
+    deliberately has neither field, so this should be unreachable in
+    practice — defense in depth, matching
+    ``assert_access_requirement_immutable``'s same shape, against a future
+    edit reintroducing either field on the update schema with no lock/
+    duplicate-check guarding it.
+    """
+
+    identity_fields = {"offer_id", "version_number"} & set(update_payload)
+    if identity_fields:
+        raise _error(
+            "immutable_offer_version_identity",
+            "offer_versions.offer_id and .version_number are immutable "
+            "outside admission.",
+            identity_fields=sorted(identity_fields),
+            retryable=False,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateOfferVersionCommand:
+    context: CommandContext
+    offer_version_id: UUID
+    payload: OfferVersionUpdate
+    #: REQUIRED, no default — the same closed AdmissionPrincipal union
+    #: admission uses, re-verified against the identical owner
+    #: (``authorize_offer_version_admission``, via
+    #: ``verify_admission_authorization``) inside this command's own
+    #: transaction, immediately before the mutation. A caller with no
+    #: authenticated actor must pass ``SystemAdmission`` explicitly.
+    principal: AdmissionPrincipal
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.principal, _ADMISSION_PRINCIPAL_TYPES):
+            raise TypeError(
+                "UpdateOfferVersionCommand.principal must be a "
+                "StaffPrincipal, ApiKeyPrincipal, SubscriberPrincipal, "
+                "MachineCredentialPrincipal, or SystemAdmission instance; "
+                f"got {type(self.principal).__name__!r}"
+            )
+
+
+def update_offer_version(db: Session, command: UpdateOfferVersionCommand) -> OfferVersion:
+    """The one path that mutates an already-admitted ``OfferVersion``
+    row's fields.
+
+    Owns its own transaction end to end (round 16 — Michael's ruling on
+    round 15 finding 3): lookup, read-only validation, the in-transaction
+    authorization recheck, the mutation, and the billing-governance audit
+    participant all run inside ONE ``execute_owner_command`` boundary.
+    ``OfferVersions.update`` (``app/services/catalog/offers.py``) is a
+    thin adapter over this — it does not mutate the row or complete the
+    transaction itself. Before this, ``OfferVersions.update`` called
+    ``db.commit()`` directly: a direct caller with unrelated pending work
+    in the same session had that work silently committed alongside the
+    version update. ``execute_owner_command`` refuses to run at all with a
+    pending caller transaction, rather than completing it.
+    """
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_UPDATE_COMMAND,
+            context=command.context,
+            operation=lambda: _update(db, command),
+        )
+    except OfferAccessRequirementError as exc:
+        record_leave_denial_evidence(db, exc)
+        raise
+
+
+def _update(db: Session, command: UpdateOfferVersionCommand) -> OfferVersion:
+    version = db.get(OfferVersion, command.offer_version_id)
+    if version is None:
+        raise _error(
+            "offer_version_not_found",
+            "The offer version does not exist.",
+            offer_version_id=str(command.offer_version_id),
+            retryable=False,
+        )
+
+    data = command.payload.model_dump(exclude_unset=True)
+    assert_access_requirement_immutable(data)
+    _assert_offer_version_identity_immutable(data)
+    changes = billing_governance.billing_field_changes(version, data)
+    billing_governance.assert_offer_version_update_safe(db, version, changes)
+
+    # Immediately before the mutation, not at the top of this function —
+    # narrowing the window between the re-check and the write it gates to
+    # the read-only validation above, which touches no session state. This
+    # now runs inside the SAME owner-managed transaction the mutation and
+    # the audit participant below complete in — not merely "the same
+    # session", a structural fact of this command's transaction boundary.
+    verify_admission_authorization(
+        db, command.principal, request_id=str(command.context.correlation_id)
+    )
+
+    for key, value in data.items():
+        setattr(version, key, value)
+
+    critical_changes = billing_governance.billing_critical_changes(
+        "offer_version", changes
+    )
+    if critical_changes:
+        evidence_actor_id, evidence_actor_type = _admission_actor_evidence(
+            command.principal
+        )
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="version_updated",
+            entity_type="offer_version",
+            entity_id=version.id,
+            changes=critical_changes,
+            actor_id=evidence_actor_id,
+            actor_type=evidence_actor_type,
+            offer_id=version.offer_id,
+        )
+    return version
+
+
+# --------------------------------------------------------------------------
 # Read-only operations worklist of remaining unclassified rows.
 # --------------------------------------------------------------------------
 
@@ -1873,6 +2012,7 @@ __all__ = [
     "SystemAdmission",
     "UnclassifiedOfferVersionRow",
     "UnclassifiedOfferVersionsWorklist",
+    "UpdateOfferVersionCommand",
     "admission_actor_label",
     "admit_offer_version",
     "assert_access_requirement_immutable",
@@ -1882,6 +2022,7 @@ __all__ = [
     "preview_classify_offer_version_access_requirement",
     "principal_label",
     "record_leave_denial_evidence",
+    "update_offer_version",
     "validate_admission_access_requirement",
     "verify_admission_authorization",
 ]

@@ -38,6 +38,7 @@ DOMAIN = DomainSOT(
                 "access-classified offer-version admission",
                 "immutable access requirement for an exact offer version",
                 "reviewed classification of legacy/unclassified versions",
+                "mutation of an already-admitted offer version",
             ),
             depends_on=(
                 "service_intent.catalog_policy",
@@ -85,6 +86,15 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.COMMAND_WRITER,
                         input_names=(
                             "authenticated reviewed classification command",
+                            "canonical offer-version record",
+                        ),
+                        canonical_writer="service_intent.offer_access_requirement",
+                    ),
+                    ConcernContract(
+                        name="mutation of an already-admitted offer version",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authenticated offer-version mutation command",
                             "canonical offer-version record",
                         ),
                         canonical_writer="service_intent.offer_access_requirement",
@@ -155,16 +165,39 @@ DOMAIN = DomainSOT(
                             "catalog:offer_access_requirement:classify"
                         ),
                     ),
+                    AuthorityInput(
+                        name="authenticated offer-version mutation command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed target offer version, the field changes "
+                            "requested (OfferVersionUpdate, exclude_unset), "
+                            "and the authenticated AdmissionPrincipal, gated "
+                            "by the identical compound catalog:write AND "
+                            "(catalog:billing_write OR catalog:offer_version:"
+                            "admission) decision admission uses — "
+                            "update_offer_version (app/services/catalog/"
+                            "offer_access_requirement.py) is a registered "
+                            "owner command in its own right: "
+                            "OfferVersions.update (app/services/catalog/"
+                            "offers.py) is a thin adapter that builds this "
+                            "command and returns its result, it does not "
+                            "mutate the row or complete the transaction "
+                            "itself."
+                        ),
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "admit_offer_version and "
-                        "classify_offer_version_access_requirement each enter "
-                        "their own root owner transaction and perform the "
-                        "real persistence themselves — OfferVersions.create is "
-                        "a thin adapter that builds the command and returns "
-                        "the result, it does not construct the row."
+                        "admit_offer_version, "
+                        "classify_offer_version_access_requirement, and "
+                        "update_offer_version each enter their own root "
+                        "owner transaction and perform the real persistence "
+                        "themselves — OfferVersions.create/update are thin "
+                        "adapters that build the command and return the "
+                        "result; neither constructs the row, mutates it, "
+                        "nor completes the transaction itself."
                     ),
                     locking=(
                         "The reviewed classification command locks the exact "
@@ -254,6 +287,7 @@ DOMAIN = DomainSOT(
                         "service_intent.offer_access_requirement.idempotency_conflict",
                         "service_intent.offer_access_requirement.permission_denied",
                         "service_intent.offer_access_requirement.stale_preview",
+                        "service_intent.offer_access_requirement.immutable_offer_version_identity",
                     ),
                     mapping_owner="app.api.catalog",
                     retryable_codes=(
