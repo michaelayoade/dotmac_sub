@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/leads-date-filter-implement.yml
       - .github/leads-date-filter.patch.b64
+      - .github/leads-date-filter-test-fix.patch
 permissions:
   contents: write
   actions: read
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply exact reviewed implementation
+      - name: Apply reviewed implementation and HTTP regression correction
         run: |
           python3 - <<'PY'
           import base64, gzip, hashlib
@@ -43,15 +44,18 @@ jobs:
           encoded = Path('.github/leads-date-filter.patch.b64').read_text().strip()
           encoded = encoded.replace('uZmXmiy', 'uZmXiy').replace('SLfK2jMW', 'SLfK2MW')
           patch = gzip.decompress(base64.b64decode(encoded, validate=True))
-          expected = '0b8cbba6afad811ffdc9ccb9a5f859f6e5cd747fdb2e64d3625f20b2c22b5f01'
-          actual = hashlib.sha256(patch).hexdigest()
-          if actual != expected:
-              raise SystemExit(f'Patch integrity mismatch: {actual}')
+          if hashlib.sha256(patch).hexdigest() != '0b8cbba6afad811ffdc9ccb9a5f859f6e5cd747fdb2e64d3625f20b2c22b5f01':
+              raise SystemExit('Implementation patch integrity mismatch')
+          correction = Path('.github/leads-date-filter-test-fix.patch').read_bytes()
+          if hashlib.sha256(correction).hexdigest() != '97ae0c3aff97544b7bf4210a961ed8e2a595c33a0053f0053e089926f530c782':
+              raise SystemExit('Regression patch integrity mismatch')
           Path('/tmp/leads-date-filter.patch').write_bytes(patch)
-          print(f'Verified reviewed patch: {len(patch)} bytes, sha256={actual}')
+          Path('/tmp/leads-date-filter-test-fix.patch').write_bytes(correction)
           PY
           git apply --check /tmp/leads-date-filter.patch
           git apply --index /tmp/leads-date-filter.patch
+          git apply --check /tmp/leads-date-filter-test-fix.patch
+          git apply --index /tmp/leads-date-filter-test-fix.patch
           git diff --cached --check
           python3 - <<'PY'
           import subprocess
@@ -79,7 +83,7 @@ jobs:
           git -c core.hooksPath=/dev/null commit -m 'feat(sales): add created-date filters to the Leads list'
           mkdir -p validation-results
           git rev-parse HEAD > validation-results/implementation-commit.txt
-          git rm .github/leads-date-filter.patch.b64 .github/workflows/leads-date-filter-workspace.yml .github/workflows/leads-date-filter-implement.yml
+          git rm .github/leads-date-filter.patch.b64 .github/leads-date-filter-test-fix.patch .github/workflows/leads-date-filter-workspace.yml .github/workflows/leads-date-filter-implement.yml
           git -c core.hooksPath=/dev/null commit -m 'chore: remove temporary leads validation scaffold'
           git rev-parse 'HEAD^{tree}' > validation-results/validated-clean-tree.txt
       - uses: actions/setup-python@v5
@@ -100,63 +104,53 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/poetry" config virtualenvs.create true
           "$HOME/.local/bin/poetry" config virtualenvs.in-project true
-      - name: Lint format and compile
-        id: lint
-        continue-on-error: true
+      - name: Require all static HTTP architecture and migrated PostgreSQL checks
         run: |
-          set -o pipefail
-          { poetry run ruff check app tests scripts alembic && poetry run ruff format --check app tests scripts alembic && poetry run python -m compileall -q app tests scripts alembic; } 2>&1 | tee validation-results/lint.txt
-      - name: Repository type checks
-        id: types
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          poetry run mypy app --ignore-missing-imports --no-incremental 2>&1 | tee validation-results/types.txt
-      - name: Import security and ownership documentation
-        id: standards
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          { poetry run lint-imports && poetry run bandit -r app -c pyproject.toml -q && poetry run python -m scripts.architecture.sot_manifest_docs && poetry run python scripts/architecture/workflow_guidance_gate.py --base dc2573702ed9340fbfc4f44850905d48caea385a; } 2>&1 | tee validation-results/standards.txt
-      - name: Leads quotes HTTP and guidance regressions
-        id: unit
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          poetry run pytest tests/test_sales_lead_date_filters.py tests/test_web_sales_leads_list.py tests/test_admin_sales_web.py tests/test_admin_sales_leads_http.py tests/test_web_sales_quotes_list.py tests/test_admin_workflow_guidance.py -v --tb=short --junitxml=validation-results/unit.xml 2>&1 | tee validation-results/unit.txt
-      - name: Focused architecture guards on the clean PR tree
-        id: architecture
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          poetry run pytest tests/architecture/test_lead_list_query_boundary.py tests/architecture/test_sales_quote_list_query_boundary.py tests/architecture/test_single_trunk_contract.py tests/architecture/test_adapter_keyword_service_calls.py -v --tb=short --junitxml=validation-results/architecture.xml 2>&1 | tee validation-results/architecture.txt
-      - name: Migrated PostgreSQL date and search parity
-        id: postgres
-        continue-on-error: true
-        env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
-          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
-        run: |
-          set -o pipefail
-          { make bootstrap-test-database-roles && poetry run python -m scripts.ci.migrated_test_database && poetry run pytest tests/integration/test_lead_list_date_filters_postgres.py tests/integration/test_lead_list_search_postgres.py -v --tb=short -o 'addopts=' --junitxml=validation-results/postgres.xml; } 2>&1 | tee validation-results/postgres.txt
-      - name: Require every validation group
-        if: always()
-        env:
-          LINT: ${{ steps.lint.outcome }}
-          TYPES: ${{ steps.types.outcome }}
-          STANDARDS: ${{ steps.standards.outcome }}
-          UNIT: ${{ steps.unit.outcome }}
-          ARCHITECTURE: ${{ steps.architecture.outcome }}
-          POSTGRES: ${{ steps.postgres.outcome }}
-        run: |
-          python3 - <<'PY'
-          import os
-          names = ('LINT', 'TYPES', 'STANDARDS', 'UNIT', 'ARCHITECTURE', 'POSTGRES')
-          for name in names:
-              print(f'{name}: {os.environ.get(name)}')
-          if any(os.environ.get(name) != 'success' for name in names):
-              raise SystemExit('Validation incomplete: no implementation commit will be published.')
-          PY
+          set -euo pipefail
+          poetry run python -m scripts.testing.host_test_policy full-suite
+          (
+            set -euo pipefail
+            poetry run ruff check app tests scripts alembic
+            poetry run ruff format --check app tests scripts alembic
+            poetry run python -m compileall -q app tests scripts alembic
+            poetry run mypy app --ignore-missing-imports --no-incremental
+          ) > validation-results/static.txt 2>&1 &
+          static_pid=$!
+          (
+            set -euo pipefail
+            poetry run lint-imports
+            poetry run bandit -r app -c pyproject.toml -q
+            poetry run python -m scripts.architecture.sot_manifest_docs
+            poetry run python scripts/architecture/workflow_guidance_gate.py --base dc2573702ed9340fbfc4f44850905d48caea385a
+          ) > validation-results/standards.txt 2>&1 &
+          standards_pid=$!
+          (
+            set -euo pipefail
+            poetry run pytest tests/test_sales_lead_date_filters.py tests/test_web_sales_leads_list.py tests/test_admin_sales_web.py tests/test_admin_sales_leads_http.py tests/test_web_sales_quotes_list.py tests/test_admin_workflow_guidance.py tests/architecture/test_lead_list_query_boundary.py tests/architecture/test_sales_quote_list_query_boundary.py tests/architecture/test_single_trunk_contract.py tests/architecture/test_adapter_keyword_service_calls.py -v --tb=short --junitxml=validation-results/unit-architecture.xml
+          ) > validation-results/unit-architecture.txt 2>&1 &
+          unit_pid=$!
+          (
+            set -euo pipefail
+            export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+            export TEST_DATABASE_URL="$DATABASE_URL"
+            make bootstrap-test-database-roles
+            poetry run python -m scripts.ci.migrated_test_database
+            poetry run pytest tests/integration/test_lead_list_date_filters_postgres.py tests/integration/test_lead_list_search_postgres.py -v --tb=short -o 'addopts=' --junitxml=validation-results/postgres.xml
+          ) > validation-results/postgres.txt 2>&1 &
+          postgres_pid=$!
+          failed=0
+          for item in "static:$static_pid" "standards:$standards_pid" "unit-architecture:$unit_pid" "postgres:$postgres_pid"; do
+            name="${item%%:*}"
+            pid="${item##*:}"
+            if wait "$pid"; then
+              echo "$name: PASS" | tee -a validation-results/outcomes.txt
+            else
+              echo "$name: FAIL" | tee -a validation-results/outcomes.txt
+              tail -n 100 "validation-results/$name.txt"
+              failed=1
+            fi
+          done
+          test "$failed" -eq 0
       - name: Push validated application commit for connector-owned scaffold cleanup
         run: |
           git diff --exit-code HEAD -- app docs templates tests
