@@ -56,7 +56,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
 from app.models.auth import ApiKey
 from app.models.catalog import (
     AccessRequirement,
@@ -75,7 +74,7 @@ from app.models.system_user import SystemUser
 from app.schemas.catalog import OfferVersionCreate, OfferVersionUpdate
 from app.services import catalog_billing_governance as billing_governance
 from app.services import settings_spec
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.auth_dependencies import has_permission
 from app.services.common import validate_enum
 from app.services.domain_errors import DomainError
@@ -451,30 +450,21 @@ def admission_actor_label(principal: AdmissionPrincipal) -> str:
 
 def _admission_actor_evidence(
     principal: AdmissionPrincipal,
-) -> tuple[str | None, str | None]:
-    """``(actor_id, actor_type)`` evidence strings for the billing-governance
-    audit participant — attribution only, never an authorization input."""
+) -> AuditActor:
+    """Typed billing-governance attribution, never an authorization input."""
 
     if isinstance(principal, StaffPrincipal):
-        return str(principal.system_user_id), "system_user"
+        return AuditActor.user(str(principal.system_user_id))
     if isinstance(principal, ApiKeyPrincipal):
-        return str(principal.api_key_id), "api_key"
+        return AuditActor.api_key(str(principal.api_key_id))
     if isinstance(principal, SubscriberPrincipal):
-        return str(principal.subscriber_id), "subscriber"
+        return AuditActor.user(str(principal.subscriber_id))
     if isinstance(principal, MachineCredentialPrincipal):
-        # NOT "machine_credential": app.models.audit.AuditActorType has no
-        # such member, so the billing-governance audit adapter's own
-        # _actor_type() fallback would silently relabel this as
-        # AuditActorType.system — collapsing a distinct, authenticated
-        # credential attribution class into an anonymous system action.
-        # "api_key" is the exact class this principal belonged to before
-        # this module ever distinguished it from a legacy local key (see
-        # MachineCredentialPrincipal's own docstring); the richer
-        # "machine_credential:<id>" distinction lives in the free-text
-        # admission_actor_label/event actor string above, not in this
-        # strictly-enumerated evidence field.
-        return str(principal.credential_id), "api_key"
-    return None, None
+        # The audit enum has no machine_credential member. Preserve the
+        # authenticated credential class as api_key rather than allowing a
+        # string fallback to relabel it as an anonymous system action.
+        return AuditActor.api_key(str(principal.credential_id))
+    return AuditActor.system()
 
 
 def _subscriber_role_names(db: Session, subscriber_id: UUID) -> tuple[str, ...]:
@@ -734,7 +724,6 @@ def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) 
     ):
         return
 
-    from types import SimpleNamespace
     from uuid import uuid4
 
     from app.services import erp_staff_access
@@ -754,17 +743,20 @@ def record_leave_denial_evidence(db: Session, exc: OfferAccessRequirementError) 
             "principal_id": principal_id,
             "principal_type": exc.details.get("principal_type"),
         }
-        restriction = SimpleNamespace(
-            restriction_id=exc.details.get("restriction_id"),
-            source_system=exc.details.get("restriction_source_system"),
-        )
+        restriction_id = exc.details.get("restriction_id")
+        source_system = exc.details.get("restriction_source_system")
+        if not isinstance(restriction_id, str) or not restriction_id:
+            raise ValueError("leave denial lacks restriction identity")
+        if not isinstance(source_system, str) or not source_system:
+            raise ValueError("leave denial lacks restriction source")
         request_id = exc.details.get("request_id")
 
         def _operation() -> None:
-            erp_staff_access.audit_denied_write(
+            erp_staff_access.audit_denied_write_identity(
                 db,
                 auth=auth,
-                restriction=restriction,
+                restriction_id=restriction_id,
+                source_system=source_system,
                 request_id=request_id,
                 permission_key=ADMISSION_SCOPE,
             )
@@ -1050,9 +1042,8 @@ def _lock_key(*parts: object) -> int:
 def _acquire_xact_lock(db: Session, *parts: object) -> None:
     """Transaction-scoped advisory lock, released at commit/rollback.
 
-    No-op on non-PostgreSQL engines (SQLite tests), mirroring
-    ``app/services/radio_registration.py::acquire_mac_lock`` and
-    ``app/services/crm_subscriber_provisioning.py::_serialize_key``.
+    No-op on non-PostgreSQL engines (SQLite tests), as in
+    ``app/services/radio_registration.py::acquire_mac_lock``.
     """
 
     bind = db.get_bind()
@@ -1372,17 +1363,13 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
                 retryable=False,
             ) from exc
 
-    evidence_actor_id, evidence_actor_type = _admission_actor_evidence(
-        command.principal
-    )
     billing_governance.stage_billing_catalog_change(
         db,
         action="version_created",
         entity_type="offer_version",
         entity_id=version.id,
         changes=data,
-        actor_id=evidence_actor_id,
-        actor_type=evidence_actor_type,
+        actor=_admission_actor_evidence(command.principal),
         offer_id=version.offer_id,
     )
     actor_label = admission_actor_label(command.principal)
@@ -1525,17 +1512,13 @@ def _update(db: Session, command: UpdateOfferVersionCommand) -> OfferVersion:
         "offer_version", changes
     )
     if critical_changes:
-        evidence_actor_id, evidence_actor_type = _admission_actor_evidence(
-            command.principal
-        )
         billing_governance.stage_billing_catalog_change(
             db,
             action="version_updated",
             entity_type="offer_version",
             entity_id=version.id,
             changes=critical_changes,
-            actor_id=evidence_actor_id,
-            actor_type=evidence_actor_type,
+            actor=_admission_actor_evidence(command.principal),
             offer_id=version.offer_id,
         )
     return version
@@ -1977,8 +1960,7 @@ def _classify(
         action="offer_access_requirement_classified",
         entity_type="offer_version",
         entity_id=str(version.id),
-        actor_type=AuditActorType.user,
-        actor_id=actor,
+        actor=AuditActor.user(str(command.authorized_system_user_id)),
         request_id=str(command.context.correlation_id),
         metadata=evidence,
     )

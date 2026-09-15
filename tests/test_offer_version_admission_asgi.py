@@ -170,17 +170,19 @@ def _offer(db_session):
     )
 
 
-def _apply_active_leave_restriction(db_session, user: SystemUser) -> None:
+def _apply_active_leave_restriction(db_session, user: SystemUser) -> tuple[str, str]:
     """A REAL ``ErpStaffLeaveRestriction`` row — not a mock of
     ``staff_write_restricted`` — so the request below genuinely exercises
     the whole leave-restriction decision, not an injected substitute for
     it."""
 
     now = datetime.now(UTC)
+    source_system = "test"
+    restriction_id = f"asgi-{uuid.uuid4().hex[:8]}"
     db_session.add(
         ErpStaffLeaveRestriction(
-            source_system="test",
-            restriction_id=f"asgi-{uuid.uuid4().hex[:8]}",
+            source_system=source_system,
+            restriction_id=restriction_id,
             erp_employee_id=f"emp-{uuid.uuid4().hex[:8]}",
             system_user_id=user.id,
             effective_from=now - timedelta(days=1),
@@ -192,6 +194,7 @@ def _apply_active_leave_restriction(db_session, user: SystemUser) -> None:
         )
     )
     db_session.commit()
+    return restriction_id, source_system
 
 
 def test_unauthorized_admission_is_refused_by_the_mounted_admission_route(
@@ -588,7 +591,7 @@ def test_a_leave_restricted_staff_admission_is_refused_and_leaves_a_durable_audi
         db_session, user, offer_access_requirement.WRITE_PERMISSION
     )
     _grant_direct_permission(db_session, user, offer_access_requirement.ADMISSION_SCOPE)
-    _apply_active_leave_restriction(db_session, user)
+    restriction_id, source_system = _apply_active_leave_restriction(db_session, user)
 
     offer = _offer(db_session)
     app = _mounted_app(db_session)
@@ -621,6 +624,13 @@ def test_a_leave_restricted_staff_admission_is_refused_and_leaves_a_durable_audi
         "a leave-restriction denial through the real mounted route must "
         "leave a durable audit record behind, not just a refused response"
     )
+    assert any(
+        (row.metadata_ or {}).get("restriction_id") == restriction_id
+        and (row.metadata_ or {}).get("source_system") == source_system
+        and (row.metadata_ or {}).get("permission_key")
+        == offer_access_requirement.ADMISSION_SCOPE
+        for row in audit_rows
+    )
 
 
 def test_an_audit_write_failure_never_replaces_the_permission_denied_response(
@@ -629,7 +639,7 @@ def test_an_audit_write_failure_never_replaces_the_permission_denied_response(
     """Round 14 finding 4's other half: a failure recording denial
     evidence must never mask the real refusal underneath it. OBSERVED: the
     mounted app, via a real, issued HTTP POST request, with
-    ``erp_staff_access.audit_denied_write`` forced to raise.
+    ``erp_staff_access.audit_denied_write_identity`` forced to raise.
 
     Break condition: fails (a 500, or any status other than 403) if
     ``record_leave_denial_evidence``'s own failure handling stops
@@ -643,11 +653,13 @@ def test_an_audit_write_failure_never_replaces_the_permission_denied_response(
     _grant_direct_permission(db_session, user, offer_access_requirement.ADMISSION_SCOPE)
     _apply_active_leave_restriction(db_session, user)
 
-    def _broken_audit_denied_write(db, **kwargs):
+    def _broken_audit_denied_write_identity(db, **kwargs):
         raise RuntimeError("simulated audit-write failure")
 
     monkeypatch.setattr(
-        erp_staff_access, "audit_denied_write", _broken_audit_denied_write
+        erp_staff_access,
+        "audit_denied_write_identity",
+        _broken_audit_denied_write_identity,
     )
 
     offer = _offer(db_session)

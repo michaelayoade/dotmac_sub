@@ -49,6 +49,12 @@ isolation.
   not construct the row itself. `unclassified` remains an accepted explicit
   value in Release 1 — the server-side default exists only for historical
   migration, never as an application-level fallback for a new row.
+- New Offer audit calls carry `AuditActor` directly through the
+  billing-governance participant. Existing scalar callers remain on that
+  participant's separate retirement path; Offer does not add another scalar
+  audit-actor caller. The audit enum has no machine-credential member, so an
+  authenticated machine credential retains its `api_key` actor class and
+  exact credential id instead of falling back to an anonymous `system` actor.
 - The field is immutable outside the reviewed classification command:
   `OfferVersionUpdate` has no `access_requirement` field, and
   `OfferVersions.update` calls

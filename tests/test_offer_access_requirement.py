@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from app.models.auth import ApiKey
 from app.models.catalog import (
@@ -74,15 +74,30 @@ def _make_offer(db_session):
             price_basis=PriceBasis.flat,
         ),
     )
-    db_session.commit()
+    # Offers.create refreshes after its own commit, leaving a read transaction.
+    # Commit that transaction without expiring this setup offer: the tests
+    # pass its ID into a registered command, and a lazy refresh of an expired
+    # ID would reopen a caller transaction before that command can start.
+    original_expiry = db_session.expire_on_commit
+    try:
+        db_session.expire_on_commit = False
+        db_session.commit()
+    finally:
+        db_session.expire_on_commit = original_expiry
     return offer
 
 
 def _make_version(db_session, offer, *, access_requirement, version_number=1):
+    # Keep the FK a primitive and settle any unrelated read transaction
+    # before entering the registered command.
+    identity = inspect(offer).identity
+    assert identity is not None and len(identity) == 1
+    offer_id = identity[0]
+    db_session.commit()
     version = catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
-            offer_id=offer.id,
+            offer_id=offer_id,
             version_number=version_number,
             name=f"Fiber 100 v{version_number}",
             service_type=ServiceType.residential,
@@ -1299,36 +1314,81 @@ def test_machine_credential_is_the_only_shadow_mode_admission_principal(db_sessi
 def test_admit_stages_a_machine_admission_with_api_key_actor_type_not_system(
     db_session,
 ):
-    """Forensic-attribution proof (round 12, finding 4). A billing-governance
-    audit entry only ever carries a strictly-enumerated ``AuditActorType``
-    (``system``/``user``/``api_key``/``service``): ``app.models.audit`` has
-    no ``machine_credential`` member, so
-    ``catalog_billing_governance._actor_type`` silently falls back to
-    ``AuditActorType.system`` for anything it doesn't recognize. Returning
-    the free-text string ``"machine_credential"`` as this evidence's
-    ``actor_type`` would therefore record an AUTHENTICATED, AUTHORIZED
-    machine admission as an anonymous system action — losing the exact
-    credential-attribution class this principal held before this module
-    ever distinguished it from a legacy local API key.
+    """Machine admission retains credential attribution in the typed audit
+    actor rather than passing a free-text class through a fallback parser.
 
-    Break condition: this fails if ``_admission_actor_evidence`` ever
-    returns anything other than ``"api_key"`` for a
-    ``MachineCredentialPrincipal`` — including its own now-more-descriptive
-    but WRONG former value, ``"machine_credential"``, which is not a member
-    of ``AuditActorType`` at all."""
+    Break condition: the principal must yield an api_key actor with its exact
+    credential id, not an anonymous system actor or a descriptive label.
+    """
 
-    from app.services.catalog_billing_governance import _actor_type
+    from app.models.audit import AuditActorType
 
     principal = offer_access_requirement.MachineCredentialPrincipal(
         credential_id=uuid4(), scopes=(offer_access_requirement.ADMISSION_SCOPE,)
     )
-    actor_id, actor_type = offer_access_requirement._admission_actor_evidence(principal)
-    assert actor_id == str(principal.credential_id)
-    assert actor_type == "api_key"
-    # And the ENUM this actually feeds must resolve to the real api_key
-    # class, never the system fallback that swallows anything unrecognized.
-    resolved = _actor_type(actor_type)
-    assert resolved.value == "api_key"
+    actor = offer_access_requirement._admission_actor_evidence(principal)
+    assert actor.actor_id == str(principal.credential_id)
+    assert actor.actor_type is AuditActorType.api_key
+
+
+def test_billing_governance_passes_a_typed_actor_to_the_audit_owner(
+    db_session, monkeypatch, caplog
+):
+    """The new Offer path must not turn its typed actor back into scalars.
+
+    Break condition: the staged audit receives the exact typed actor and no
+    legacy id/type fields; a scalar-only bridge cannot satisfy this check.
+    """
+    from app.services import catalog_billing_governance as governance
+
+    principal = offer_access_requirement.MachineCredentialPrincipal(
+        credential_id=uuid4(), scopes=(offer_access_requirement.ADMISSION_SCOPE,)
+    )
+    actor = offer_access_requirement._admission_actor_evidence(principal)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        governance, "stage_audit_event", lambda _db, **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(governance, "record_metric", lambda **_kw: None)
+    monkeypatch.setattr(governance, "record_finding", lambda *_args, **_kw: None)
+
+    governance.stage_billing_catalog_change(
+        db_session,
+        action="version_created",
+        entity_type="offer_version",
+        entity_id=uuid4(),
+        actor=actor,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["actor"] is actor
+    assert "actor_id" not in calls[0]
+    assert "actor_type" not in calls[0]
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == governance.__name__
+        and record.getMessage().startswith("catalog_billing_change ")
+    ]
+    assert len(warnings) == 1
+    assert (
+        f"actor_type={actor.actor_type.value} actor_id={actor.actor_id}" in warnings[0]
+    )
+
+
+def test_billing_governance_refuses_a_typed_and_scalar_actor_mix(db_session):
+    from app.services import catalog_billing_governance as governance
+    from app.services.audit_adapter import AuditActor
+
+    with pytest.raises(ValueError, match="typed audit actor cannot be combined"):
+        governance.stage_billing_catalog_change(
+            db_session,
+            action="version_created",
+            entity_type="offer_version",
+            entity_id=uuid4(),
+            actor=AuditActor.user(str(uuid4())),
+            actor_id="legacy-id",
+        )
 
 
 def test_admit_refuses_a_duplicate_offer_id_and_version_number(db_session):
