@@ -24,12 +24,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
-      - name: Merge reviewed source heads and validate before publication
+      - name: Assemble pinned sources, repair, validate, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE: ${{ runner.temp }}/consolidation-evidence
         run: |
           mkdir -p "$EVIDENCE"
+          cp .github/consolidation-repair.py "$EVIDENCE/repair.py"
           python - <<'PY'
           import json
           import os
@@ -64,15 +65,15 @@ jobs:
           def api(path):
               return json.loads(run("gh", "api", f"repos/{repo}/{path}").stdout)
 
-          prs = {p["number"]: p for p in api("pulls?state=open&per_page=100")}
-          if set(prs) != set(included) | set(excluded):
-              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}")
           git("config", "user.name", "github-actions[bot]")
           git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
           git("config", "merge.conflictStyle", "diff3")
           git("fetch", "origin", "main")
           if git("rev-parse", "origin/main").stdout.strip() != base:
-              raise RuntimeError("Main moved since the conflict review; refusing an unreviewed merge")
+              raise RuntimeError("Main changed since the reviewed consolidation")
+          prs = {p["number"]: p for p in api("pulls?state=open&per_page=100")}
+          if set(prs) != set(included) | set(excluded):
+              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}")
           snapshot = {"base": base, "target": target, "included": [], "excluded": []}
           for number in list(included) + excluded:
               pr = prs[number]
@@ -83,17 +84,16 @@ jobs:
               sha = git("rev-parse", ref).stdout.strip()
               if sha != pr["head"]["sha"] or (number in included and sha != included[number]):
                   raise RuntimeError(f"PR #{number} moved since review")
-              record = {"number": number, "title": pr["title"], "sha": sha, "ref": pr["head"]["ref"]}
-              snapshot["included" if number in included else "excluded"].append(record)
+              snapshot["included" if number in included else "excluded"].append({
+                  "number": number, "title": pr["title"], "sha": sha, "ref": pr["head"]["ref"]
+              })
           (out / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
-          print(json.dumps(snapshot, indent=2), flush=True)
           excluded_commits = set()
           for pr in snapshot["excluded"]:
               excluded_commits.update(git("rev-list", pr["sha"], "--not", base).stdout.split())
           for sha in included.values():
               if excluded_commits.intersection(git("rev-list", sha, "--not", base).stdout.split()):
-                  raise RuntimeError("An included head contains work unique to an excluded PR")
-
+                  raise RuntimeError("Included source contains excluded work")
           git("checkout", "-b", target, base)
           try:
               for pr in snapshot["included"]:
@@ -104,8 +104,6 @@ jobs:
                       conflicts = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
                       (out / f"conflicts-{pr['number']}.diff").write_text(git("diff", "--cc").stdout)
                       if pr["number"] == 3160 and conflicts == ["app/services/web_system_settings_forms.py"]:
-                          # Main already owns the typed atomic form save and correct text
-                          # transport. Do not resurrect the older per-setting writer.
                           git("checkout", "--ours", "--", conflicts[0])
                           git("add", "--", conflicts[0])
                       elif pr["number"] == 3164 and conflicts == ["app/services/sales/service.py"]:
@@ -117,43 +115,58 @@ jobs:
                               raise RuntimeError("Unexpected sales conflict count")
                           match = matches[0]
                           if match.group(2) or not match.group(1).startswith("def _optional_date_filter(") or not match.group(3).startswith("def normalize_lead_date_range("):
-                              raise RuntimeError("Sales conflict differs from reviewed independent helper additions")
+                              raise RuntimeError("Unreviewed sales conflict")
                           path.write_text(text[:match.start()] + match.group(1) + match.group(3) + text[match.end():])
                           git("add", "--", conflicts[0])
                       else:
-                          raise RuntimeError(f"Unreviewed conflict in PR #{pr['number']}: {conflicts}")
+                          raise RuntimeError(f"Unreviewed conflict: {conflicts}")
                       git("commit", "-m", message)
-
-              tree = git("rev-parse", "HEAD^{tree}").stdout.strip()
-              if tree != expected_tree:
-                  raise RuntimeError(f"Assembled tree {tree} differs from locally reviewed {expected_tree}")
+              if git("rev-parse", "HEAD^{tree}").stdout.strip() != expected_tree:
+                  raise RuntimeError("Assembly differs from the locally reviewed source tree")
+              print(run("python", str(out / "repair.py")).stdout, flush=True)
+              repair_paths = git("diff", "--name-only").stdout.splitlines()
+              expected_repairs = {
+                  "app/services/sales/service.py", "app/services/sales/__init__.py",
+                  "app/services/web_sales.py",
+                  "app/services/sot_registry/domains/sales_referrals/lifecycle.py",
+                  "docs/SOT_RELATIONSHIP_MAP.md", "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                  "tests/test_web_sales_quotes_list.py",
+                  "tests/architecture/test_sales_quote_list_query_boundary.py",
+                  "tests/integration/test_quote_list_search_postgres.py",
+              }
+              if set(repair_paths) != expected_repairs:
+                  raise RuntimeError(f"Unexpected repair scope: {repair_paths}")
+              lock = tomllib.loads(pathlib.Path("poetry.lock").read_text())
+              version = next(p["version"] for p in lock["package"] if p["name"] == "ruff")
+              run("python", "-m", "pip", "install", f"ruff=={version}")
+              print(run("python", "-m", "ruff", "format", *[p for p in repair_paths if p.endswith(".py")]).stdout, flush=True)
+              for args in [("check",), ("format", "--check")]:
+                  checked = run("python", "-m", "ruff", *args, "app", "tests", "scripts", "alembic", check=False)
+                  (out / ("ruff-" + args[0] + ".log")).write_text(checked.stdout + checked.stderr)
+                  print(checked.stdout, checked.stderr, flush=True)
+                  if checked.returncode:
+                      raise RuntimeError(f"Ruff {args[0]} failed")
+              run("python", "-m", "compileall", "-q", "app", "tests", "scripts", "alembic")
+              git("diff", "--check")
+              git("add", "--", *repair_paths)
+              git("commit", "-m", "fix(sales): harden consolidated quote date filters and retry views")
               for pr in snapshot["included"]:
                   git("merge-base", "--is-ancestor", pr["sha"], "HEAD")
                   current = api(f"pulls/{pr['number']}")
                   if current["state"] != "open" or current["head"]["sha"] != pr["sha"]:
-                      raise RuntimeError(f"PR #{pr['number']} changed during consolidation")
+                      raise RuntimeError(f"PR #{pr['number']} moved during consolidation")
               for pr in snapshot["excluded"]:
                   if git("merge-base", "--is-ancestor", pr["sha"], "HEAD", check=False).returncode == 0:
-                      raise RuntimeError(f"Excluded PR #{pr['number']} unexpectedly became an ancestor")
-              git("diff", "--exit-code", base, "HEAD", "--", "VERSION", ".github/workflows")
+                      raise RuntimeError(f"Excluded PR #{pr['number']} included unexpectedly")
+              git("diff", "--exit-code", base, "HEAD", "--", "VERSION", ".github/workflows", ".github/consolidation-repair.py", ".github/consolidation-repair.patch.gz.b64")
               git("diff", "--check", f"{base}...HEAD")
-              run("python", "-m", "compileall", "-q", "app", "tests", "scripts", "alembic")
-              lock = tomllib.loads(pathlib.Path("poetry.lock").read_text())
-              ruff = next(p["version"] for p in lock["package"] if p["name"] == "ruff")
-              run("python", "-m", "pip", "install", f"ruff=={ruff}")
-              for args in [("check",), ("format", "--check")]:
-                  result = run("python", "-m", "ruff", *args, "app", "tests", "scripts", "alembic", check=False)
-                  (out / ("ruff-" + args[0] + ".log")).write_text(result.stdout + result.stderr)
-                  print(result.stdout, result.stderr, flush=True)
-                  if result.returncode:
-                      raise RuntimeError(f"Ruff {args[0]} requires repair")
               if git("status", "--porcelain").stdout.strip():
                   raise RuntimeError("Unexpected uncommitted files")
               if git("ls-remote", "--heads", "origin", target).stdout.strip():
-                  raise RuntimeError("Target exists; refusing to overwrite")
+                  raise RuntimeError("Target already exists; refusing to overwrite")
               git("push", "origin", f"HEAD:refs/heads/{target}")
               sha = git("rev-parse", "HEAD").stdout.strip()
-              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "tree": tree, "branch": target, "base": base}, indent=2))
+              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "tree": git("rev-parse", "HEAD^{tree}").stdout.strip(), "branch": target, "base": base}, indent=2))
               print(f"CONSOLIDATED_HEAD={sha}", flush=True)
               print(git("diff", "--stat", f"{base}...HEAD").stdout, flush=True)
           finally:
