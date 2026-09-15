@@ -10,6 +10,10 @@ permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: pr3166-architecture-validation
+  cancel-in-progress: true
+
 jobs:
   repair:
     runs-on: ubuntu-latest
@@ -32,6 +36,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$EVIDENCE"
           cp .github/support/pr3166_architecture_repair.py "$RUNNER_TEMP/pr3166_repair.py"
+          cp .github/support/pr3166_test_contract_repair.py "$RUNNER_TEMP/pr3166_test_contract_repair.py"
           current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
           test "$current" = "$EXPECTED_HEAD"
           git fetch --no-tags --depth=1 origin "$EXPECTED_HEAD"
@@ -66,13 +71,14 @@ jobs:
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/pr3166_repair.py"
+          python "$RUNNER_TEMP/pr3166_test_contract_repair.py"
           python - <<'PY'
           import subprocess
           expected = {
               'app/services/subscriber.py': '3701f35b40e84c1e396f087b08f3f218812e02b9',
               'tests/test_crm_portal_services.py': '8490d26fbd304321ad3484caad297b6ac16d9109',
               'tests/test_customer_portal_notifications.py': '5218a0dcc2fb543878dc24c4462e370472690e87',
-              'tests/test_subscriber_metadata_key_closure.py': '78f872e5a80344f0a6580b7c2cba1fff212a596f',
+              'tests/test_subscriber_metadata_key_closure.py': '3791bae54483c1640599ec54ee6c291434b3731a',
               'docs/SUBSCRIBER_METADATA_OWNERSHIP.md': '51062c2127627cc9c6971fe591120216868efe36',
           }
           for path, sha in expected.items():
@@ -103,24 +109,38 @@ jobs:
         run: |
           set -euo pipefail
           poetry run ruff format app/services/subscriber.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_subscriber_metadata_key_closure.py
+          git diff --check
+          git diff > "$EVIDENCE/repair.patch"
+          git diff --stat | tee "$EVIDENCE/diff-stat.txt"
+          cp tests/architecture/openapi_contract_surface.json "$EVIDENCE/openapi_contract_surface.json"
           poetry run ruff check app tests scripts alembic 2>&1 | tee "$EVIDENCE/ruff-check.log"
           poetry run ruff format --check app tests scripts alembic 2>&1 | tee "$EVIDENCE/ruff-format.log"
           poetry run python -m compileall -q app tests scripts alembic
-          git diff --check
           poetry run mypy app --ignore-missing-imports --no-incremental 2>&1 | tee "$EVIDENCE/mypy.log"
           poetry run lint-imports 2>&1 | tee "$EVIDENCE/import-boundaries.log"
           poetry run bandit -r app -c pyproject.toml -q 2>&1 | tee "$EVIDENCE/bandit.log"
-      - name: Reproduce the failed architecture guards and ownership checks
+      - name: Architecture and all five consolidated behavior regressions
         shell: bash
         run: |
           set -euo pipefail
           poetry run python -m scripts.testing.host_test_policy full-suite
-          poetry run pytest tests/architecture/test_isp_cohort_source_writers.py tests/architecture/test_crm_vocabulary_freeze.py tests/architecture/test_openapi_contract_surface.py tests/architecture/test_subscriber_metadata_ownership.py tests/architecture/test_lead_created_date_ownership.py tests/architecture/test_sales_quote_list_query_boundary.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/architecture-regressions.log"
-      - name: Profile, settings, support and sales behavior regressions
-        shell: bash
-        run: |
-          set -euo pipefail
-          poetry run pytest tests/test_subscriber_metadata_key_closure.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_web_sales_quotes_list.py tests/test_lead_created_date_filters.py tests/test_quote_legacy_list_compatibility.py tests/test_web_customer_crm_routes.py tests/test_team_inbox_assignment.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/behavior-regressions.log"
+          poetry run pytest \
+            tests/architecture/test_isp_cohort_source_writers.py \
+            tests/architecture/test_crm_vocabulary_freeze.py \
+            tests/architecture/test_openapi_contract_surface.py \
+            tests/architecture/test_subscriber_metadata_ownership.py \
+            tests/architecture/test_lead_created_date_ownership.py \
+            tests/architecture/test_sales_quote_list_query_boundary.py \
+            tests/test_subscriber_metadata_key_closure.py \
+            tests/test_crm_portal_services.py \
+            tests/test_customer_portal_notifications.py \
+            tests/test_web_sales_quotes_list.py \
+            tests/test_lead_created_date_filters.py \
+            tests/test_quote_legacy_list_compatibility.py \
+            tests/test_web_customer_crm_routes.py \
+            tests/test_team_inbox_assignment.py \
+            -q -n 4 --tb=short --junitxml="$EVIDENCE/regressions.xml" \
+            2>&1 | tee "$EVIDENCE/regressions.log"
       - name: Commit the validated candidate without changing the PR branch
         shell: bash
         run: |
@@ -141,7 +161,6 @@ jobs:
           PY
           git diff --check
           git diff > "$EVIDENCE/validated-repair.patch"
-          git diff --stat | tee "$EVIDENCE/diff-stat.txt"
           current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
           test "$current" = "$EXPECTED_HEAD"
           test -z "$(git ls-remote origin "refs/heads/$RESULT_BRANCH")"
