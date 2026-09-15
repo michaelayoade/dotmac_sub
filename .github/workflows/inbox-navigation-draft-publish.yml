@@ -108,6 +108,29 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/poetry" config virtualenvs.create true
           "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+      - name: Format the single affected Python test without changing its assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run python - <<'PY'
+          import ast
+          import difflib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          path = Path('tests/test_admin_inbox_workspace_integrity.py')
+          before = path.read_text()
+          subprocess.run(['.venv/bin/ruff', 'format', str(path)], check=True)
+          after = path.read_text()
+          assert ast.dump(ast.parse(before)) == ast.dump(ast.parse(after)), 'Formatter changed test semantics'
+          evidence = Path(os.environ['RUNNER_TEMP'], 'inbox-evidence')
+          (evidence / 'format-only.patch').write_text(''.join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=str(path), tofile=str(path))))
+          subprocess.run(['git', 'add', str(path)], check=True)
+          expected = json.loads((evidence / 'verified-blobs.json').read_text())
+          expected[str(path)] = subprocess.check_output(['git', 'rev-parse', ':' + str(path)], text=True).strip()
+          (evidence / 'verified-blobs.json').write_text(json.dumps(expected, indent=2) + '\n')
+          PY
       - name: Validate lint, compilation, templates and Python regression integration
         shell: bash
         run: |
@@ -132,6 +155,17 @@ jobs:
           test -z "$existing"
           git diff --quiet
           git diff --cached --check
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          expected = json.loads(Path(os.environ['RUNNER_TEMP'], 'inbox-evidence', 'verified-blobs.json').read_text())
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, sha in expected.items():
+              assert subprocess.check_output(['git', 'rev-parse', ':' + path], text=True).strip() == sha, path
+          PY
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(inbox): align filter and pagination state with rendered results'
           test "$(git rev-parse HEAD^)" = "$SOURCE_SHA"
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
