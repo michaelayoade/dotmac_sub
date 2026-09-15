@@ -664,12 +664,15 @@ def test_system_admission_confinement_guard_does_not_flag_a_mere_textual_mention
 
 def test_offer_versions_create_delegates_the_actual_persist_to_the_new_owner():
     offers_service = _source("app/services/catalog/offers.py")
+    owner_service = _source("app/services/catalog/offer_access_requirement.py")
     assert "offer_access_requirement.admit_offer_version(" in offers_service
     assert "offer_access_requirement.AdmitOfferVersionCommand(" in offers_service
     # The adapter must not construct the row itself.
     assert "OfferVersion(**data)" not in offers_service
-    assert "offer_access_requirement.assert_access_requirement_immutable(" in (
-        offers_service
+    # Mutation now delegates too: the owner, not its adapter, checks the
+    # decision-bearing field immediately before applying the update.
+    assert "assert_access_requirement_immutable(data)" in _function_source(
+        owner_service, "_update"
     )
 
 
@@ -702,10 +705,10 @@ def test_offer_access_requirement_owner_actually_performs_the_write():
         "verify_admission_authorization",
     ):
         function_source = _function_source(owner, function_name)
-        assert "db.commit(" not in function_source, (
+        assert "commit" not in _db_completion_calls(function_source), (
             f"{function_name} must never commit its own transaction"
         )
-        assert "db.rollback(" not in function_source, (
+        assert "rollback" not in _db_completion_calls(function_source), (
             f"{function_name} must never roll back its own transaction"
         )
 
@@ -751,7 +754,7 @@ def test_leave_denial_evidence_is_a_registered_command_not_a_committing_helper()
         "record_leave_denial_evidence must actually delegate to a "
         "registered owner command, not merely define one"
     )
-    assert "db.commit(" not in function_source, (
+    assert "commit" not in _db_completion_calls(function_source), (
         "record_leave_denial_evidence must never complete its own "
         "transaction — that is execute_owner_command's job"
     )
@@ -812,6 +815,7 @@ def test_offer_access_requirement_is_registered_as_a_new_contracted_owner():
         "access-classified offer-version admission",
         "immutable access requirement for an exact offer version",
         "reviewed classification of legacy/unclassified versions",
+        "mutation of an already-admitted offer version",
     }
 
 
@@ -910,60 +914,114 @@ def test_609_and_610_downgrade_lock_every_grant_table_before_counting_it():
     removal of any one lock (leaving the other two and every count intact)
     is caught."""
 
+    expected_tables = {
+        "system_user_permissions",
+        "subscriber_permissions",
+        "role_permissions",
+    }
+    lock_template = ast.dump(
+        ast.parse('f"LOCK TABLE {grant_table} IN ACCESS EXCLUSIVE MODE"').body[0].value
+    )
+
+    def _locked_before_first_count(source: str) -> bool:
+        """Inspect the executable loop, not three strings it interpolates."""
+        function = ast.parse(source).body[0]
+        count_lines = [
+            node.lineno
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_direct_grant_count"
+        ]
+        if not count_lines:
+            return False
+        for conditional in ast.walk(function):
+            if not (
+                isinstance(conditional, ast.If)
+                and isinstance(conditional.test, ast.Name)
+                and conditional.test.id == "is_postgres"
+            ):
+                continue
+            for loop in conditional.body:
+                if not (
+                    isinstance(loop, ast.For)
+                    and isinstance(loop.target, ast.Name)
+                    and loop.target.id == "grant_table"
+                    and isinstance(loop.iter, ast.Tuple)
+                ):
+                    continue
+                tables = {
+                    item.value
+                    for item in loop.iter.elts
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                }
+                if (
+                    tables != expected_tables
+                    or len(loop.iter.elts) != len(expected_tables)
+                    or loop.lineno >= min(count_lines)
+                ):
+                    continue
+                for guard in loop.body:
+                    if not (
+                        isinstance(guard, ast.If)
+                        and isinstance(guard.test, ast.Compare)
+                        and isinstance(guard.test.left, ast.Name)
+                        and guard.test.left.id == "grant_table"
+                        and len(guard.test.ops) == 1
+                        and isinstance(guard.test.ops[0], ast.In)
+                        and len(guard.test.comparators) == 1
+                        and isinstance(guard.test.comparators[0], ast.Name)
+                        and guard.test.comparators[0].id == "table_names"
+                    ):
+                        continue
+                    if any(
+                        isinstance(statement, ast.Expr)
+                        and isinstance(statement.value, ast.Call)
+                        and isinstance(statement.value.func, ast.Attribute)
+                        and isinstance(statement.value.func.value, ast.Name)
+                        and statement.value.func.value.id == "op"
+                        and statement.value.func.attr == "execute"
+                        and statement.value.args
+                        and ast.dump(statement.value.args[0]) == lock_template
+                        for statement in guard.body
+                    ):
+                        return True
+        return False
+
     for migration_path in (
         "alembic/versions/609_offer_access_requirement_classify_permission.py",
         "alembic/versions/610_offer_version_admission_permission.py",
     ):
         migration = _source(migration_path)
         downgrade_source = _function_source(migration, "downgrade")
-        first_count_index = downgrade_source.index("_direct_grant_count(")
-
-        lock_texts = tuple(
-            f"LOCK TABLE {grant_table} IN ACCESS EXCLUSIVE MODE"
-            for grant_table in (
-                "system_user_permissions",
-                "subscriber_permissions",
-                "role_permissions",
-            )
-        )
-        for lock_text in lock_texts:
-            assert lock_text in downgrade_source, (
-                f"{migration_path}: downgrade() is missing {lock_text!r}"
-            )
-            assert downgrade_source.index(lock_text) < first_count_index, (
-                f"{migration_path}: {lock_text!r} must precede the first count query"
-            )
-
-        # Sensitivity, round 15 finding 8 correction: the PRIOR version of
-        # this block only asserted that ``.replace()`` removed the string
-        # from ``planted`` — it never re-ran the actual "locked before
-        # counting" check against the planted source, so it proved the
-        # standard library's ``str.replace`` works, not that this test
-        # would catch a real removal. This re-applies the SAME check the
-        # real source had to pass above, to each planted variant, and
-        # requires it to FAIL.
-        def _locked_before_first_count(
-            source: str, expected_lock_texts: tuple[str, ...] = lock_texts
-        ) -> bool:
-            count_index = source.find("_direct_grant_count(")
-            if count_index == -1:
-                return False
-            for lock_text in expected_lock_texts:
-                lock_index = source.find(lock_text)
-                if lock_index == -1 or lock_index >= count_index:
-                    return False
-            return True
-
         assert _locked_before_first_count(downgrade_source), (
             f"{migration_path}: the real, unmodified source unexpectedly "
             "failed its own lock-before-count check"
         )
-        for lock_text in lock_texts:
-            planted = downgrade_source.replace(lock_text, "-- lock removed")
+        for table in expected_tables:
+            original = f'"{table}",'
+            assert original in downgrade_source
+            planted = downgrade_source.replace(original, "", 1)
             assert not _locked_before_first_count(planted), (
-                f"{migration_path}: planted removal of {lock_text!r} was "
+                f"{migration_path}: planted removal of {table!r} was "
                 "not caught by the lock-before-count check"
             )
+        original_call = (
+            'op.execute(f"LOCK TABLE {grant_table} IN ACCESS EXCLUSIVE MODE")'
+        )
+        assert original_call in downgrade_source
+        planted = downgrade_source.replace(original_call, "pass", 1)
+        assert not _locked_before_first_count(planted)
+        indented_call = "                " + original_call
+        assert indented_call in downgrade_source
+        planted = downgrade_source.replace(
+            indented_call,
+            "                if False:\n                    " + original_call,
+            1,
+        )
+        assert not _locked_before_first_count(planted), (
+            f"{migration_path}: an unreachable lock must not satisfy the guard"
+        )
 
 
 def _function_source(module_source: str, function_name: str) -> str:
@@ -983,6 +1041,34 @@ def _function_source(module_source: str, function_name: str) -> str:
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
             return "".join(lines[node.lineno - 1 : node.end_lineno])
     raise AssertionError(f"no top-level function named {function_name!r} found")
+
+
+def _db_completion_calls(function_source: str) -> set[str]:
+    """Find executable `db.commit()`/`db.rollback()` calls, not prose.
+
+    A source-substring check was fooled by an owner docstring explaining why
+    `db.commit()` is forbidden: it saw the warning as a live transaction call.
+    """
+    tree = ast.parse(function_source)
+    return {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "db"
+        and node.func.attr in {"commit", "rollback"}
+    }
+
+
+def test_db_completion_detector_ignores_prose_but_sees_a_real_call():
+    assert (
+        _db_completion_calls(
+            'def owner(db):\n    """Never call db.commit() here."""\n    return None\n'
+        )
+        == set()
+    )
+    assert _db_completion_calls("def owner(db):\n    db.commit()\n") == {"commit"}
 
 
 def test_migration_uses_set_local_not_a_bare_set_for_timeouts():

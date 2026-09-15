@@ -327,8 +327,8 @@ def _machine_principal(
         # principal_type "api_key" for backward compatibility with every
         # existing has_permission/require_permission consumer, but a
         # consumer that must treat the two differently (e.g. offer-version
-        # admission's machine-credential shadow/would-refuse migration,
-        # app/services/catalog/offer_access_requirement.py) reads THIS
+        # admission's machine-credential shadow/would-refuse migration)
+        # reads THIS
         # field rather than guessing from principal_id shape.
         "credential_kind": "machine",
     }
