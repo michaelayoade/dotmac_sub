@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
-      - name: Snapshot sources and merge only the requested PRs
+      - name: Merge reviewed source heads and validate before publication
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE: ${{ runner.temp }}/consolidation-evidence
@@ -34,11 +34,21 @@ jobs:
           import json
           import os
           import pathlib
+          import re
           import subprocess
+          import tomllib
 
           repo = "michaelayoade/dotmac_sub"
-          included = [3160, 3161, 3162, 3163, 3164]
+          included = {
+              3160: "2698af3559378290844176b2e20a0192c067ae75",
+              3161: "40635b2f5877c26049ec4dcbc0c458bb17638788",
+              3162: "1f918ec471c3bc235d2aa5de77ce2adb9730c4d8",
+              3163: "f3db00341b571b99402a141caac0a643936f8812",
+              3164: "c80626e40d39d575eaa216ea7442ec064bb00f93",
+          }
           excluded = [2992, 3154, 3155, 3159]
+          base = "dc2573702ed9340fbfc4f44850905d48caea385a"
+          expected_tree = "4edc6810507b92ec0db016a4cf5b60b4901bdb61"
           target = "consolidate/open-prs-20260915"
           out = pathlib.Path(os.environ["EVIDENCE"])
 
@@ -55,57 +65,68 @@ jobs:
               return json.loads(run("gh", "api", f"repos/{repo}/{path}").stdout)
 
           prs = {p["number"]: p for p in api("pulls?state=open&per_page=100")}
-          if set(prs) != set(included + excluded):
-              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}; expected the nine reviewed PRs")
-          snapshot = {"included": [], "excluded": [], "target": target}
+          if set(prs) != set(included) | set(excluded):
+              raise RuntimeError(f"Open PR inventory changed: {sorted(prs)}")
           git("config", "user.name", "github-actions[bot]")
           git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
           git("config", "merge.conflictStyle", "diff3")
           git("fetch", "origin", "main")
-          base = git("rev-parse", "origin/main").stdout.strip()
-          snapshot["base"] = base
-          for number in included + excluded:
+          if git("rev-parse", "origin/main").stdout.strip() != base:
+              raise RuntimeError("Main moved since the conflict review; refusing an unreviewed merge")
+          snapshot = {"base": base, "target": target, "included": [], "excluded": []}
+          for number in list(included) + excluded:
               pr = prs[number]
               if pr["base"]["ref"] != "main":
                   raise RuntimeError(f"PR #{number} is not based on main")
               ref = f"refs/remotes/origin/consolidation-pr-{number}"
               git("fetch", "origin", f"refs/pull/{number}/head:{ref}")
               sha = git("rev-parse", ref).stdout.strip()
-              if sha != pr["head"]["sha"]:
-                  raise RuntimeError(f"PR #{number} moved while snapshotting")
+              if sha != pr["head"]["sha"] or (number in included and sha != included[number]):
+                  raise RuntimeError(f"PR #{number} moved since review")
               record = {"number": number, "title": pr["title"], "sha": sha, "ref": pr["head"]["ref"]}
               snapshot["included" if number in included else "excluded"].append(record)
           (out / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
           print(json.dumps(snapshot, indent=2), flush=True)
-
           excluded_commits = set()
           for pr in snapshot["excluded"]:
               excluded_commits.update(git("rev-list", pr["sha"], "--not", base).stdout.split())
-          for pr in snapshot["included"]:
-              overlap = excluded_commits.intersection(git("rev-list", pr["sha"], "--not", base).stdout.split())
-              if overlap:
-                  raise RuntimeError(f"PR #{pr['number']} includes commits unique to an excluded PR: {sorted(overlap)}")
+          for sha in included.values():
+              if excluded_commits.intersection(git("rev-list", sha, "--not", base).stdout.split()):
+                  raise RuntimeError("An included head contains work unique to an excluded PR")
 
           git("checkout", "-b", target, base)
           try:
               for pr in snapshot["included"]:
-                  print(f"Merging PR #{pr['number']}: {pr['sha']}", flush=True)
-                  merged = git("merge", "--no-ff", "-m", f"Merge PR #{pr['number']}: {pr['title']}", pr["sha"], check=False)
+                  message = f"Merge PR #{pr['number']}: {pr['title']}"
+                  merged = git("merge", "--no-ff", "-m", message, pr["sha"], check=False)
                   print(merged.stdout, merged.stderr, flush=True)
                   if merged.returncode:
                       conflicts = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
-                      (out / "conflicts.diff").write_text(git("diff", "--cc").stdout)
-                      for path in conflicts:
-                          dest = out / "conflicts" / path
-                          dest.parent.mkdir(parents=True, exist_ok=True)
-                          dest.write_text(pathlib.Path(path).read_text())
-                          for stage in (1, 2, 3):
-                              blob = git("show", f":{stage}:{path}", check=False)
-                              if blob.returncode == 0:
-                                  pathlib.Path(str(dest) + f".stage{stage}").write_text(blob.stdout)
-                      (out / "result.json").write_text(json.dumps({"status": "conflict", "pr": pr["number"], "paths": conflicts}, indent=2))
-                      raise RuntimeError(f"Review required for PR #{pr['number']}: {conflicts}")
+                      (out / f"conflicts-{pr['number']}.diff").write_text(git("diff", "--cc").stdout)
+                      if pr["number"] == 3160 and conflicts == ["app/services/web_system_settings_forms.py"]:
+                          # Main already owns the typed atomic form save and correct text
+                          # transport. Do not resurrect the older per-setting writer.
+                          git("checkout", "--ours", "--", conflicts[0])
+                          git("add", "--", conflicts[0])
+                      elif pr["number"] == 3164 and conflicts == ["app/services/sales/service.py"]:
+                          path = pathlib.Path(conflicts[0])
+                          text = path.read_text()
+                          pattern = r"<<<<<<< HEAD\n(.*?)\|\|\|\|\|\|\| [0-9a-f]+\n(.*?)=======\n(.*?)>>>>>>> " + pr["sha"] + r"\n"
+                          matches = list(re.finditer(pattern, text, re.S))
+                          if len(matches) != 1:
+                              raise RuntimeError("Unexpected sales conflict count")
+                          match = matches[0]
+                          if match.group(2) or not match.group(1).startswith("def _optional_date_filter(") or not match.group(3).startswith("def normalize_lead_date_range("):
+                              raise RuntimeError("Sales conflict differs from reviewed independent helper additions")
+                          path.write_text(text[:match.start()] + match.group(1) + match.group(3) + text[match.end():])
+                          git("add", "--", conflicts[0])
+                      else:
+                          raise RuntimeError(f"Unreviewed conflict in PR #{pr['number']}: {conflicts}")
+                      git("commit", "-m", message)
 
+              tree = git("rev-parse", "HEAD^{tree}").stdout.strip()
+              if tree != expected_tree:
+                  raise RuntimeError(f"Assembled tree {tree} differs from locally reviewed {expected_tree}")
               for pr in snapshot["included"]:
                   git("merge-base", "--is-ancestor", pr["sha"], "HEAD")
                   current = api(f"pulls/{pr['number']}")
@@ -117,13 +138,22 @@ jobs:
               git("diff", "--exit-code", base, "HEAD", "--", "VERSION", ".github/workflows")
               git("diff", "--check", f"{base}...HEAD")
               run("python", "-m", "compileall", "-q", "app", "tests", "scripts", "alembic")
+              lock = tomllib.loads(pathlib.Path("poetry.lock").read_text())
+              ruff = next(p["version"] for p in lock["package"] if p["name"] == "ruff")
+              run("python", "-m", "pip", "install", f"ruff=={ruff}")
+              for args in [("check",), ("format", "--check")]:
+                  result = run("python", "-m", "ruff", *args, "app", "tests", "scripts", "alembic", check=False)
+                  (out / ("ruff-" + args[0] + ".log")).write_text(result.stdout + result.stderr)
+                  print(result.stdout, result.stderr, flush=True)
+                  if result.returncode:
+                      raise RuntimeError(f"Ruff {args[0]} requires repair")
               if git("status", "--porcelain").stdout.strip():
-                  raise RuntimeError("Unexpected uncommitted files after consolidation")
+                  raise RuntimeError("Unexpected uncommitted files")
               if git("ls-remote", "--heads", "origin", target).stdout.strip():
-                  raise RuntimeError("Target branch already exists; refusing to overwrite")
+                  raise RuntimeError("Target exists; refusing to overwrite")
               git("push", "origin", f"HEAD:refs/heads/{target}")
               sha = git("rev-parse", "HEAD").stdout.strip()
-              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "branch": target, "base": base}, indent=2))
+              (out / "result.json").write_text(json.dumps({"status": "pushed", "sha": sha, "tree": tree, "branch": target, "base": base}, indent=2))
               print(f"CONSOLIDATED_HEAD={sha}", flush=True)
               print(git("diff", "--stat", f"{base}...HEAD").stdout, flush=True)
           finally:
