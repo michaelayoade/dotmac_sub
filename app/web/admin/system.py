@@ -81,6 +81,7 @@ from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
 )
+from app.services import account_recovery
 from app.services import web_system_profiles as web_system_profiles_service
 from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services import web_system_role_forms as web_system_role_forms_service
@@ -4295,7 +4296,7 @@ def geocode_tool_job_status(
 @router.get(
     "/tools/restore",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:read"))],
+    dependencies=[Depends(require_permission("customer:account_recovery:read"))],
 )
 def restore_tool_page(
     request: Request,
@@ -4305,6 +4306,9 @@ def restore_tool_page(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    # `build_page_state` is READ-ONLY (no mutation, no purge — see its
+    # docstring). Repeated GETs must never change persisted state; enforced
+    # by tests/test_system_restore_tool_service.py.
     state = web_system_restore_tool_service.build_page_state(
         db,
         query=q,
@@ -4325,11 +4329,13 @@ def restore_tool_page(
 
 @router.post(
     "/tools/restore/{subscriber_id}",
-    dependencies=[Depends(require_permission("system:settings:write"))],
+    dependencies=[Depends(require_permission("customer:account_recovery:restore"))],
 )
 def restore_tool_restore(
     request: Request,
     subscriber_id: UUID,
+    confirmation_fingerprint: str = Form(...),
+    reason: str = Form(...),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user
@@ -4338,14 +4344,21 @@ def restore_tool_restore(
     actor_id = (
         str(current_user.get("subscriber_id"))
         if current_user.get("subscriber_id")
-        else None
+        else "admin"
     )
 
-    result = web_system_restore_tool_service.restore_subscriber(
-        db,
-        subscriber_id=str(subscriber_id),
-        actor_id=actor_id,
-    )
+    try:
+        outcome = web_system_restore_tool_service.restore_via_recovery(
+            db,
+            subscriber_id=str(subscriber_id),
+            confirmation_fingerprint=confirmation_fingerprint,
+            actor_id=actor_id,
+            reason=reason,
+        )
+    except account_recovery.AccountRecoveryError as exc:
+        # HTTP mapping/error translation is owned here, not in the service.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     log_audit_event(
         db=db,
         request=request,
@@ -4353,7 +4366,7 @@ def restore_tool_restore(
         entity_type="subscriber",
         entity_id=str(subscriber_id),
         actor_id=actor_id,
-        metadata={"restored_counts": result.get("touched", {})},
+        metadata={"outcome": outcome.kind.value},
     )
     return RedirectResponse(
         url=f"/admin/system/tools/restore?q={quote_plus(str(subscriber_id))}",
@@ -4362,20 +4375,52 @@ def restore_tool_restore(
 
 
 @router.post(
-    "/tools/restore/settings",
-    dependencies=[Depends(require_permission("system:settings:write"))],
+    "/tools/restore/{subscriber_id}/rebaseline",
+    dependencies=[Depends(require_permission("customer:account_recovery:rebaseline"))],
 )
-def restore_tool_settings(
+def restore_tool_rebaseline(
     request: Request,
-    retention_days: int = Form(90),
+    subscriber_id: UUID,
+    confirmation_fingerprint: str = Form(...),
+    affected_resource_types: str = Form(...),
+    reason: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    value = web_system_restore_tool_service.set_retention_days(
-        db,
-        days=retention_days,
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = (
+        str(current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else "admin"
+    )
+    types = tuple(
+        sorted({t.strip() for t in affected_resource_types.split(",") if t.strip()})
+    )
+
+    try:
+        web_system_restore_tool_service.rebaseline_via_recovery(
+            db,
+            subscriber_id=str(subscriber_id),
+            confirmation_fingerprint=confirmation_fingerprint,
+            affected_resource_types=types,
+            actor_id=actor_id,
+            reason=reason,
+        )
+    except account_recovery.AccountRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    log_audit_event(
+        db=db,
+        request=request,
+        action="rebaseline",
+        entity_type="subscriber",
+        entity_id=str(subscriber_id),
+        actor_id=actor_id,
+        metadata={"affected_resource_types": list(types)},
     )
     return RedirectResponse(
-        url=f"/admin/system/tools/restore?q={quote_plus(request.query_params.get('q', ''))}&selected_id={quote_plus(request.query_params.get('selected_id', ''))}&retention={value}",
+        url=f"/admin/system/tools/restore?q={quote_plus(str(subscriber_id))}",
         status_code=303,
     )
 

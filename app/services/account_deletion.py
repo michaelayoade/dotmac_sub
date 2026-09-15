@@ -23,6 +23,7 @@ from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import transition_account_status
 from app.services.audit_adapter import record_audit_event
+from app.services.billing_automation import CancellationCreditIntent
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ def request_deletion(
             SubscriberStatus.canceled,
             reason=clean_reason or "Customer requested account deletion",
             source="customer:self_service_deletion",
+            credit_intent=CancellationCreditIntent.CUSTOMER_REQUESTED_TERMINATION,
         )
 
     # Stamp who/why for operations + the eventual personal-data purge.

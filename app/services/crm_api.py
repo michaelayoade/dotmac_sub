@@ -40,6 +40,7 @@ from app.services.account_lifecycle import (
     transition_account_status,
 )
 from app.services.audit_adapter import stage_audit_event
+from app.services.billing_automation import CancellationCreditIntent
 from app.services.common import round_money
 from app.services.invoice_collectibility import (
     open_invoice_balance,
@@ -2061,7 +2062,16 @@ def create_subscription(
                 "Duplicate CRM external reference",
                 "crm_subscription_create",
                 emit=False,
-                generate_credit=False,
+                # An orphaned duplicate created by a race on the same CRM
+                # external reference: it never represented a real customer
+                # decision to terminate, and it is not part of the
+                # recoverable-deletion tombstone system either. It is an
+                # administrative correction of an error that should never
+                # have persisted, so no credit is owed —
+                # ADMINISTRATIVE_CORRECTION, not ADMINISTRATIVE_TERMINATION
+                # (a real termination) or ADMINISTRATIVE_RECOVERABLE_DELETION
+                # (this is not tombstone/recovery evidence).
+                credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
             )
             invoice.is_active = False
             session.commit()

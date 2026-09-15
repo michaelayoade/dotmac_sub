@@ -11,8 +11,13 @@ writer is a build failure, not a re-audit finding.
 Allowlisted writers (each an explicit ownership decision):
 
 - ``app/services/account_lifecycle.py`` — the transition owner.
-- ``app/services/web_system_restore_tool.py`` — snapshot-restore tooling:
-  reinstates recorded state; not a business transition.
+
+``app/services/web_system_restore_tool.py`` was removed from this allowlist:
+it no longer writes ``.status`` directly at all. It is now a typed
+read/adapter layer over ``app/services/account_recovery.py``, which itself
+never decides or mutates subscription state directly — every reversal goes
+through ``account_lifecycle.restore_subscription_detailed`` with
+``ActivationIntent.DELETION_RECOVERY``.
 
 Detection is AST-based, not string matching: any attribute assignment whose
 target is named ``status`` and whose right-hand side references
@@ -38,7 +43,6 @@ APP_DIR = PROJECT_ROOT / "app"
 
 ALLOWED_WRITERS = {
     "app/services/account_lifecycle.py",
-    "app/services/web_system_restore_tool.py",
 }
 
 

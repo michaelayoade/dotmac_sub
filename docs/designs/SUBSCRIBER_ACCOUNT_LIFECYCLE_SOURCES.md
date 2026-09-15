@@ -7,6 +7,44 @@ behaviour.
 **Verdict: build no new module. The capability decomposes across two existing
 Starter owners plus assembly-level coordination.**
 
+## 2026-09-13 status update — what was actually built, and why it does not contradict this verdict
+
+This document's "no new module" verdict is about the **fleet-wide,
+cross-repo `dotmac-customers`/`dotmac-records` package boundary**: do not
+publish a third distributable package for account lifecycle. It was never a
+verdict against Sub having its own named, SOT-registered concern for
+concerns 1–3, the same way `customer.billing_approval` is its own registered
+service inside `app/services/` without being a separate installable
+package.
+
+What shipped is exactly that: **`customer.account_recovery`**
+(`app/services/account_recovery.py`, contracted in
+`app/services/sot_registry/domains/customer_context.py`, models in
+`app/models/account_recovery.py`) — a Sub-local SOT service, not a new
+distributable module, covering concerns **1–3** (deletion request/execution
+state, restoration eligibility and precedence, and affected-resource
+references-and-versions — exactly the fix this document calls for below).
+Concerns **4–5** (purge eligibility and terminal purge, retention and
+legal-hold decisions) are explicitly and deliberately **NOT** built here —
+they remain open, Records-owned debt (see `app/web/admin/system.py`'s
+restore-tool route and `app/services/web_system_restore_tool.py`'s
+docstring). The former GET-driven automatic purge is removed with no
+replacement, rather than migrated, because building a replacement purge
+mechanism was explicitly out of scope for this change.
+
+Every defect this document records against the OLD
+`web_system_restore_tool.py` cascade is now moot, not worked around: that
+file no longer contains ANY of the nine-resource cascade code (routed or
+direct-flip). It is a typed read/adapter layer over
+`customer.account_recovery`, which restores only the ONE resource type it
+registers as a participant (`subscription`) and reports
+`blocked_missing_participants` — with zero mutation — for every account
+whose deletion evidence names a resource type nothing owns anymore
+(invoice, payment, service_order, radius_account, radius_user,
+ip_assignment, ont_assignment, splitter_assignment, cpe_device). See
+"What Sub implements today" and "`recovery_snapshot` is removed, not
+re-homed" below for the historical shape this replaced.
+
 ## The capability
 
 *Subscriber account lifecycle* covers:

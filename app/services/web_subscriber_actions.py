@@ -16,7 +16,6 @@ from app.schemas.subscriber import SubscriberUpdate
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
-from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services.audit_helpers import log_audit_event
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
@@ -294,23 +293,6 @@ def update_subscriber_from_form(
     return subscriber, before, after
 
 
-def delete_subscriber(
-    db: Session, subscriber_id: UUID, actor_id: str | None = None
-) -> None:
-    subscriber = subscriber_service.subscribers.get(
-        db=db, subscriber_id=str(subscriber_id)
-    )
-    if subscriber.is_active:
-        raise HTTPException(
-            status_code=409, detail="Deactivate subscriber before deleting."
-        )
-    web_system_restore_tool_service.mark_subscriber_deleted(
-        db=db,
-        subscriber_id=str(subscriber_id),
-        actor_id=actor_id,
-    )
-
-
 def bulk_set_subscriber_status(
     db: Session, subscriber_ids: list[str], is_active: bool
 ) -> tuple[int, int]:
@@ -335,35 +317,6 @@ def bulk_set_subscriber_status(
             failed_count += 1
             continue
     return updated_count, failed_count
-
-
-def bulk_delete_inactive_subscribers(
-    db: Session,
-    subscriber_ids: list[str],
-    actor_id: str | None = None,
-) -> tuple[int, int, int]:
-    deleted_count = 0
-    skipped_active = 0
-    failed_count = 0
-    for subscriber_id in subscriber_ids:
-        try:
-            subscriber = subscriber_service.subscribers.get(
-                db=db, subscriber_id=subscriber_id
-            )
-            if subscriber.is_active:
-                skipped_active += 1
-                continue
-            web_system_restore_tool_service.mark_subscriber_deleted(
-                db=db,
-                subscriber_id=str(subscriber_id),
-                actor_id=actor_id,
-            )
-            deleted_count += 1
-        except Exception as exc:
-            logger.error("Failed to delete subscriber %s: %s", subscriber_id, exc)
-            failed_count += 1
-            continue
-    return deleted_count, skipped_active, failed_count
 
 
 def toggle_comment_todo(

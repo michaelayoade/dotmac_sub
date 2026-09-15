@@ -638,6 +638,256 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.account_recovery",
+            module="app.services.account_recovery",
+            owns=(
+                "deletion and recovery eligibility",
+                "deletion tombstones",
+                "recovery evidence re-baselining",
+                "recovery confirmation",
+            ),
+            depends_on=(
+                "customer.accounts",
+                "access.subscription_lifecycle",
+                "events.dispatcher",
+                "observability.audit_log",
+            ),
+            notes=(
+                "Fail-closed and participant-gated: a deletion generation "
+                "restores only when every resource type its evidence names "
+                "is a REGISTERED participant (today: subscription only). An "
+                "unsupported type returns blocked_missing_participants with "
+                "zero mutation rather than a partial restore. This owner "
+                "never decides or mutates Subscription state directly — "
+                "only access.subscription_lifecycle's "
+                "restore_subscription_detailed, called with "
+                "ActivationIntent.DELETION_RECOVERY, may reverse a canceled "
+                "subscription. request_recoverable_deletion additionally "
+                "runs a PREFLIGHT before canceling any subscription: if a "
+                "pending subscription currently carries an active add-on, "
+                "an active enforcement lock, or an active service IP "
+                "assignment — consequences "
+                "access.subscription_lifecycle.cancel_subscription would "
+                "trigger but this owner cannot yet reverse — the whole "
+                "request is refused with zero mutation "
+                "(blocked_unsupported_consequence) instead of only being "
+                "discovered at restore time."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="deletion and recovery eligibility",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical account recovery tombstone",),
+                    ),
+                    ConcernContract(
+                        name="deletion tombstones",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "account recovery command evidence",
+                            "canonical account lifecycle state",
+                            "canonical subscription lifecycle state",
+                        ),
+                        canonical_writer="customer.account_recovery",
+                    ),
+                    ConcernContract(
+                        name="recovery evidence re-baselining",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "account recovery command evidence",
+                            "canonical account recovery tombstone",
+                        ),
+                        canonical_writer="customer.account_recovery",
+                    ),
+                    ConcernContract(
+                        name="recovery confirmation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "account recovery command evidence",
+                            "canonical account recovery tombstone",
+                            "canonical subscription lifecycle state",
+                        ),
+                        canonical_writer="customer.account_recovery",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="account recovery command evidence",
+                        owner="customer.account_recovery",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed deletion, restore, or re-baseline command with "
+                            "actor, reason, correlation, and command/idempotency "
+                            "identity"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical account recovery tombstone",
+                        owner="customer.account_recovery",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "locked AccountRecoveryRecord and its "
+                            "AccountRecoverySubscriptionSnapshot rows for the "
+                            "current open or blocked generation"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical account lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="locked Subscriber row (is_active, billing_enabled)",
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "locked Subscription.status rows; reversed only via "
+                            "restore_subscription_detailed with "
+                            "ActivationIntent.DELETION_RECOVERY"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each command (request_recoverable_deletion, "
+                        "restore_account, rebaseline_recovery_evidence) enters "
+                        "execute_owner_command exactly once; the executor opens "
+                        "the root transaction, commits it on a clean return, and "
+                        "rolls it back on any exception. Adapters "
+                        "(web_system_restore_tool.py, web_subscriber_actions.py, "
+                        "app/web/admin/system.py) construct the typed command and "
+                        "its CommandContext and never call db.commit() themselves."
+                    ),
+                    locking=(
+                        "The Subscriber locks first, then the current open/blocked "
+                        "AccountRecoveryRecord, then every affected Subscription in "
+                        "stable UUID order — the same order for tombstoning and "
+                        "restoration so the two can never deadlock against each "
+                        "other. The reserved IdempotencyKey row is locked with "
+                        "SELECT ... FOR UPDATE before either order, serializing a "
+                        "concurrent replay against the in-flight original."
+                    ),
+                    idempotency=(
+                        "Every command carries a required CommandContext."
+                        "idempotency_key, reserved as a row in the shared "
+                        "idempotency_keys table (scoped per command kind). A "
+                        "retry presenting the SAME key returns the ORIGINAL typed "
+                        "outcome — replayed by re-reading the now-canonical "
+                        "AccountRecoveryRecord/snapshot state, never a cached "
+                        "decision — while a later reuse of that key with a "
+                        "DIFFERENT input fingerprint (account, actor, reason, "
+                        "confirmation_fingerprint, or affected_resource_types, "
+                        "depending on the command) fails closed as a typed "
+                        "idempotency_input_conflict rather than silently "
+                        "re-executing or raising a raw integrity error. A second "
+                        "open-generation request for an already-open account "
+                        "still fails as generation_already_open — that check is "
+                        "eligibility, not replay. Restoration and re-baselining "
+                        "remain additionally fingerprint-bound: a stale or "
+                        "mismatched confirmation_fingerprint is refused with zero "
+                        "mutation."
+                    ),
+                    retries=(
+                        "Adapters retry a transient transaction failure with the "
+                        "same typed command and the same idempotency_key. A "
+                        "missing account, a missing open generation, a "
+                        "fingerprint mismatch, and an idempotency_input_conflict "
+                        "fail closed and are not retryable with the same key."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "customer.account_recovery"
+                        ),
+                        "customer.account_recovery.account_not_found",
+                        "customer.account_recovery.no_open_generation",
+                        "customer.account_recovery.generation_already_open",
+                        "customer.account_recovery.fingerprint_mismatch",
+                        "customer.account_recovery.rebaseline_would_narrow_evidence",
+                        "customer.account_recovery.unknown_resource_type",
+                        "customer.account_recovery.command_scope_mismatch",
+                        "customer.account_recovery.invalid_idempotency_key",
+                        "customer.account_recovery.idempotency_account_mismatch",
+                        "customer.account_recovery.idempotency_conflict",
+                        "customer.account_recovery.idempotency_input_conflict",
+                        "customer.account_recovery.invalid_replay_evidence",
+                    ),
+                    mapping_owner="admin web adapter (app/web/admin/system.py)",
+                    fail_closed_on=(
+                        "missing account",
+                        "no open recovery generation",
+                        "confirmation fingerprint mismatch",
+                        "an affected resource type with no registered participant",
+                        "a re-baseline that would narrow previously-recorded "
+                        "evidence",
+                        "an idempotency key reused with a materially different "
+                        "command",
+                        "a command presented outside its required write scope",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "account_recovery.deletion_tombstoned",
+                        "account_recovery.restored",
+                        "account_recovery.rebaselined",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Additive payload fields only within schema version 1."
+                    ),
+                    replay=(
+                        "Replay consumes the committed tombstone, restoration, or "
+                        "re-baseline outcome; it never re-decides or rewrites "
+                        "source state."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "web_system_restore_tool.py's own metadata_-JSON "
+                        "deletion/snapshot/cascade mechanism, and "
+                        "account_deletion.py's separate metadata_ deletion flag "
+                        "lineage"
+                    ),
+                    new_owner="customer.account_recovery",
+                    verification=(
+                        "Model constraint tests, fail-closed participant-gating "
+                        "tests, fingerprint sensitivity tests, migration structural "
+                        "tests, and the restore-tool boundary/read-only tests."
+                    ),
+                    cutover_gate=(
+                        "web_system_restore_tool.py contains no "
+                        "invoice/payment/service-order/credential/RADIUS/IP/ONT/"
+                        "splitter/CPE mutation code and no direct Subscription "
+                        "status write; every restoration goes through this owner."
+                    ),
+                    fallback_retirement=(
+                        "Both legacy metadata_-JSON lineages are backfilled into "
+                        "typed rows and their keys removed by migration "
+                        "607_account_recovery_evidence; the GET-driven automatic "
+                        "purge is removed with no replacement (Records-owned "
+                        "scheduled-purge debt)."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md",
+                    "docs/SUBSCRIBER_METADATA_OWNERSHIP.md",
+                    "docs/designs/ACCOUNT_RECOVERY_PARTICIPANT_ARCHITECTURE.md",
+                ),
+                test_refs=(
+                    "tests/architecture/test_account_recovery_boundary.py",
+                    "tests/test_system_restore_tool_service.py",
+                    "tests/integration/test_account_recovery_migration.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.identity_scope",
             module="app.services.customer_context",
             owns=(

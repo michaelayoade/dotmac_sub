@@ -38,6 +38,7 @@ from app.services.account_lifecycle import (
     cancel_subscription,
     transition_subscription_status,
 )
+from app.services.billing_automation import CancellationCreditIntent
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.form_contracts import FormConsequence, FormContract
@@ -667,7 +668,14 @@ def _correct(
         "Mistaken subscription replaced by reviewed correction",
         _SOURCE,
         emit=True,
-        generate_credit=False,
+        # A reviewed administrative correction moving continuous service from
+        # a mistaken subscription record to the correct one — not a real
+        # termination (the customer never decided to end service) and not a
+        # recoverable deletion (this is not tombstone/recovery evidence), so
+        # this is ADMINISTRATIVE_CORRECTION: credit is suppressed rather than
+        # evaluated, since service never actually stopped and a credit here
+        # would be a data-correction artifact, not a real cancellation credit.
+        credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
     )
     restored = transition_subscription_status(
         db,

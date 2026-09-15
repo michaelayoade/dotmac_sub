@@ -22,9 +22,9 @@ compatibility projection, and nothing decides anything from it.
 
 | | |
 |---|---|
-| Direct writer modules | **8** |
+| Direct writer modules | ~~8~~ **7** (2026-09-13: `web_system_restore_tool` retired — see the update note below) |
 | Read-only modules | **14** |
-| Distinct keys | **34** |
+| Distinct keys | **34**, ~~less the 7 retired `recovery_*` keys~~ |
 | Keys written by more than one module | 1 (`subscriber_category`) |
 | Keys any admin can invent at runtime | **unbounded** — see the wildcard below |
 
@@ -78,18 +78,33 @@ Facts nothing else records. Losing them loses the fact.
 
 | Key | Written by | Owner to hold it | Shape |
 |---|---|---|---|
-| `recovery_deleted_at` | `web_system_restore_tool` | **`customer.account_lifecycle`** (new) | timestamp |
-| `recovery_deleted_by` | `web_system_restore_tool` | `customer.account_lifecycle` | actor id |
-| `recovery_purged_at` | `web_system_restore_tool` | `customer.account_lifecycle` | timestamp, terminal |
-| `recovery_last_restored_at` | `web_system_restore_tool` | `customer.account_lifecycle` | timestamp |
-| `recovery_last_restored_by` | `web_system_restore_tool` | `customer.account_lifecycle` | actor id |
-| `account_deletion_requested_at` | `account_deletion` | `customer.account_lifecycle` | timestamp |
-| `account_deletion_reason` | `account_deletion` | `customer.account_lifecycle` | free text |
+| `recovery_deleted_at`, `recovery_deleted_by`, `recovery_purge_due_at`, `recovery_purged_at`, `recovery_last_restored_at`, `recovery_last_restored_by`, `recovery_snapshot` | ~~`web_system_restore_tool`~~ **RETIRED** | **`customer.account_recovery`** (`app/services/account_recovery.py` — registered 2026-09-13) | n/a — typed `AccountRecoveryRecord` / `AccountRecoverySubscriptionSnapshot` rows now |
+| `account_deletion_requested_at` | `account_deletion` | `customer.accounts` (typed column pending) | timestamp |
+| `account_deletion_reason` | `account_deletion` | `customer.accounts` (typed column pending) | free text |
 | `portal_read_notification_keys` | `customer_portal_notifications` | **`customer.portal_notifications`** | unbounded list — see below |
 | 7 × `*_notifications`, `sms_updates` | `web_customer_actions` | **`customer.notification_policy`** (exists) | booleans |
 
-**Two deletion lineages, one lifecycle.** `account_deletion` writes
-`account_deletion_*`; `web_system_restore_tool` writes `recovery_deleted_*`.
+> **2026-09-13 update.** The `web_system_restore_tool` lineage above (seven
+> keys, including `recovery_snapshot`) is DONE, not merely planned: it moved
+> to the newly-registered `customer.account_recovery` SOT owner (see
+> `docs/SOT_RELATIONSHIP_MAP.md`), migration `607_account_recovery_evidence`
+> backfilled every existing row into typed `AccountRecoveryRecord` /
+> `AccountRecoverySubscriptionSnapshot` rows and removed the seven keys from
+> `metadata_`, and `app/services/subscriber_metadata_keys.py` no longer
+> declares them at all — a retired key is deleted from that registry, not
+> relabeled. `web_system_restore_tool.py` is now a typed read/adapter layer
+> with no `metadata_` access whatsoever. The `account_deletion_*` pair is a
+> SEPARATE, still-active, still-unmigrated lineage: self-service deletion is
+> never recoverable (no `AccountRecoveryRecord` is created for it), so it
+> stayed out of `customer.account_recovery`'s scope and still has no typed
+> home (the table below lists it as `customer.accounts (typed column
+> pending)`). See `docs/designs/SUBSCRIBER_ACCOUNT_LIFECYCLE_SOURCES.md` for
+> the full before/after.
+
+**Two deletion lineages, one lifecycle — now one retired, one still open.**
+`account_deletion` writes `account_deletion_*` and remains unmigrated.
+`web_system_restore_tool` used to write `recovery_deleted_*`; that lineage is
+retired per the update above.
 They record the same event — this account was deleted — in different key
 families, written by different modules, with no relationship between them and
 no rule about which wins. That is the strongest single argument for extracting
@@ -189,9 +204,13 @@ receivers are called `target`, `existing` or `record`.
 ## Order of work
 
 1. **Close the wildcard.** Nothing else holds while it is open.
-2. **Extract account recovery** — the highest-risk writer, both deletion
-   lineages, `recovery_snapshot`, and the purge sweep. Lower the ratchet 8 → 7
-   in the same change.
+2. ~~**Extract account recovery** — the highest-risk writer, both deletion
+   lineages, `recovery_snapshot`, and the purge sweep. Lower the ratchet 8 →
+   7 in the same change.~~ **DONE 2026-09-13** for the `web_system_restore_tool`
+   lineage (`customer.account_recovery`, ratchet lowered 8 → 7). The
+   `account_deletion` lineage was explicitly out of scope for that
+   extraction (self-service deletion is never recoverable) and remains
+   open.
 3. `portal_read_notification_keys` → a real table.
 4. Notification preferences → `customer.notification_policy`, which exists.
 5. `nin_*` → read from the ledger; the projection becomes display-only and the
@@ -203,19 +222,34 @@ receivers are called `target`, `existing` or `record`.
    `crm_customer_name_remediation_digest` → the kernel idempotency owner.
 9. Splynx and CRM provenance → a named provenance column, frozen.
 
-## `recovery_snapshot` is not metadata
+## `recovery_snapshot` is not metadata (historical — resolved 2026-09-13)
 
-Called out separately because it is not a key like the others.
-`web_system_restore_tool._build_snapshot` serialises a subscriber's
+Called out separately because it was not a key like the others.
+`web_system_restore_tool._build_snapshot` used to serialise a subscriber's
 subscriptions, service orders and CPE devices — ids, statuses, cancellation
 timestamps — into a JSON value on the subscriber row, and
-`_apply_soft_delete_cascade` then soft-deletes the real rows. The snapshot is
+`_apply_soft_delete_cascade` then soft-deleted the real rows. The snapshot was
 the **only** record of what the account looked like before deletion, and
-restoring reads it back.
+restoring read it back.
 
-So it is recovery evidence carrying real referential meaning, held in a column
-with no schema, no constraint, no foreign key and no size bound, on the same row
-whose deletion it describes. It cannot be validated, cannot be queried, and
-cannot be repaired if it is wrong. Extracting account recovery means giving this
-a typed home with real references — which is why account recovery is the first
-conversion and not a later one.
+So it was recovery evidence carrying real referential meaning, held in a
+column with no schema, no constraint, no foreign key and no size bound, on
+the same row whose deletion it describes — it could not be validated, could
+not be queried, and could not be repaired if it was wrong. This is exactly
+why account recovery was the first conversion and not a later one.
+
+**Resolution.** `app/models/account_recovery.py`'s
+`AccountRecoverySubscriptionSnapshot` table replaces it: one row per
+subscription per deletion generation, a real foreign key to
+`subscriptions.id` (`RESTRICT`), a real foreign key to its parent
+`account_recovery_records.id` (`CASCADE`), a `UNIQUE(recovery_record_id,
+subscription_id)` constraint, and typed `pre_deletion_status` /
+`pre_deletion_offer_version_id` columns instead of an untyped blob. Service
+orders and CPE devices are NOT part of the new typed model at all —
+`web_system_restore_tool.py`'s cascade code for them was removed outright,
+not re-homed, because `customer.account_recovery` registers only
+`subscription` as a supported recovery participant; a legacy row whose old
+snapshot named a service order or CPE device is backfilled fail-closed (see
+migration `607_account_recovery_evidence`) and reports
+`blocked_missing_participants` rather than silently claiming it can restore
+resources nothing owns anymore.

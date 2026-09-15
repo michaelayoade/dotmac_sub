@@ -18,8 +18,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import ApiKey, MFAMethod, UserCredential
-from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.enforcement_lock import EnforcementLock
@@ -46,6 +44,7 @@ from app.schemas.subscriber import (
     SubscriberCreate,
     SubscriberUpdate,
 )
+from app.services import account_recovery
 from app.services import account_status_commands, customer_portal
 from app.services import billing_day as billing_day_service
 from app.services import catalog as catalog_service
@@ -619,7 +618,19 @@ def _status_impact_token(
 def _delete_impact(
     db: Session, resolved: ResolvedCustomerBulkScope
 ) -> tuple[dict[str, object], str]:
-    """Return exact deletion eligibility and a token that detects state drift."""
+    """Return exact deletion eligibility and a token that detects state drift.
+
+    Deletion now opens a recoverable ``account_recovery`` generation rather
+    than hard-deleting: a subscriber with subscriptions is still eligible
+    (its subscriptions are canceled, with a non-credited intent, as part of
+    the same generation) unless one of them carries a consequence that
+    generation cannot yet reverse — that per-subscription preflight is only
+    knowable at execution time, inside `request_recoverable_deletion`, so
+    `with_subscriptions` stays informational (what will be canceled) and no
+    longer excludes a row from `eligible`. `active` still does, since
+    `delete_person_customer`/`delete_business_customer` still require the
+    account be deactivated first.
+    """
     customer_ids = [customer.id for customer in resolved.customers]
     with_subscriptions = set(
         db.scalars(
@@ -629,20 +640,17 @@ def _delete_impact(
         ).all()
     )
     active_now = sum(1 for customer in resolved.customers if customer.is_active)
-    subscription_blocked = sum(
+    subscription_impacted = sum(
         1 for customer in resolved.customers if customer.id in with_subscriptions
     )
-    eligible = sum(
-        1
-        for customer in resolved.customers
-        if not customer.is_active and customer.id not in with_subscriptions
-    )
+    eligible = sum(1 for customer in resolved.customers if not customer.is_active)
     impact: dict[str, object] = {
         "total": resolved.matched_count,
         "eligible": eligible,
         "active": active_now,
-        "with_subscriptions": subscription_blocked,
+        "with_subscriptions": subscription_impacted,
         "destructive": True,
+        "recoverable": True,
     }
     token = membership_scope_token(
         f"{resolved.scope}:customer_delete",
@@ -719,15 +727,16 @@ def bulk_update_customer_status_from_payload(
 
 
 def bulk_delete_customers_from_payload(
-    db: Session, payload: dict[str, Any]
+    db: Session, payload: dict[str, Any], *, actor_id: str | None = None
 ) -> dict[str, object]:
     resolved = resolve_bulk_customer_scope(db, payload)
     if not resolved.customers:
         raise HTTPException(status_code=400, detail="No customers matched this scope")
 
-    # Deletion is permanent: bind the preview not only to membership but to
-    # each row's active/subscription eligibility so newly eligible rows cannot
-    # be deleted under a stale impact statement.
+    # Deletion is recoverable, not destroyed data, but it is still consequential
+    # (cancels subscriptions, tombstones the account): bind the preview not
+    # only to membership but to each row's active/subscription state so a
+    # newly-changed row cannot be deleted under a stale impact statement.
     impact, confirmation_token = _delete_impact(db, resolved)
 
     if bool(payload.get("preview_only")):
@@ -748,7 +757,7 @@ def bulk_delete_customers_from_payload(
         confirmation_token=confirmation_token,
     )
     result = bulk_delete_customers(
-        db=db, customer_ids=_bulk_id_refs(resolved.customers)
+        db=db, customer_ids=_bulk_id_refs(resolved.customers), actor_id=actor_id
     )
     return {
         **result,
@@ -3033,41 +3042,95 @@ def deactivate_business_customer(
     )
 
 
-def delete_person_customer(db: Session, customer_id: str) -> None:
+def _request_recoverable_customer_deletion(
+    db: Session, customer_id: str, actor_id: str | None
+) -> None:
+    """Route an admin-initiated customer deletion through account recovery.
+
+    This is the ONE place an admin-initiated deletion (person or business)
+    opens an ``account_recovery`` deletion generation — both
+    ``delete_person_customer`` and ``delete_business_customer`` funnel through
+    here, so there is a single admin-delete code path rather than two
+    divergent implementations. Self-service, customer-requested deletion
+    (`app/services/account_deletion.py`, `CancellationCreditIntent
+    .CUSTOMER_REQUESTED_TERMINATION`) is a deliberately separate, permanent,
+    non-recoverable path and never calls this function.
+
+    There is no client-supplied nonce here (the admin delete control is a
+    bare button/DELETE, not a form) and this action has no natural
+    review-step fingerprint, unlike restore/rebaseline — so the idempotency
+    key folds in a fresh command id per call, the same convention
+    ``_subscriber_party_binding_command_context`` in
+    `app/web/admin/customers.py` already uses for the identical situation.
+    A genuine double-submit is therefore never silently replayed against a
+    stale, pre-restore tombstone; it instead surfaces the account-recovery
+    module's own ``generation_already_open`` conflict as a safe, typed 409.
+
+    ``subscriber_service.subscribers.get`` above this call opens an implicit
+    read transaction (SQLAlchemy autobegins on SELECT); ``request_recoverable
+    _deletion`` enters ``execute_owner_command``, which requires a
+    transaction-free session at entry, so the caller must release that read
+    transaction first (see the identical `db_session_adapter
+    .release_read_transaction` call sites in `app/web/admin/customers.py`'s
+    payment-intent-cancel routes).
+    """
+    actor = actor_id or "admin"
+    account_id = UUID(str(customer_id))
+    db_session_adapter.release_read_transaction(db)
+    command_id = uuid4()
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=actor,
+        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+        reason="Administrative recoverable deletion via customer admin action",
+        idempotency_key=f"admin-delete-customer:{account_id}:{command_id}",
+    )
+    command = account_recovery.RequestRecoverableDeletionCommand(
+        account_id=account_id,
+        context=context,
+        requested_by=actor,
+        deleted_by=actor,
+    )
+    try:
+        outcome = account_recovery.request_recoverable_deletion(db, command)
+    except account_recovery.AccountRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(outcome, account_recovery.DeletionPreflightBlocked):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Deletion refused: unsupported consequence(s) "
+                f"{', '.join(outcome.unsupported_consequences)} would affect "
+                "subscription(s) "
+                f"{', '.join(str(i) for i in outcome.blocked_subscription_ids)}."
+            ),
+        )
+
+
+def delete_person_customer(
+    db: Session, customer_id: str, *, actor_id: str | None = None
+) -> None:
     subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if subscriber.is_active:
         raise HTTPException(
             status_code=409, detail="Deactivate customer before deleting."
         )
-
-    db.query(UserCredential).filter(
-        UserCredential.subscriber_id == subscriber.id
-    ).delete(synchronize_session=False)
-    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.query(AuthSession).filter(AuthSession.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.commit()
-    subscriber_service.subscribers.delete(db=db, subscriber_id=customer_id)
+    _request_recoverable_customer_deletion(db, customer_id, actor_id)
 
 
-def delete_business_customer(db: Session, customer_id: str) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    if (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .count()
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Delete subscriptions before deleting business customer.",
-        )
-    delete_person_customer(db, customer_id)
+def delete_business_customer(
+    db: Session, customer_id: str, *, actor_id: str | None = None
+) -> None:
+    # The old subscription-count guard existed only because the retired
+    # hard-delete could not safely remove a subscriber row with subscriptions
+    # still attached. `account_recovery.request_recoverable_deletion` cancels
+    # every attached subscription itself (or returns `DeletionPreflightBlocked`
+    # if any of them carries a consequence it cannot yet reverse), so the
+    # guard is now redundant with — and would only prevent using — that
+    # capability. `delete_person_customer` still enforces the `is_active`
+    # precondition below, matching the person-delete path.
+    delete_person_customer(db, customer_id, actor_id=actor_id)
 
 
 def bulk_update_customer_status(
@@ -3141,7 +3204,14 @@ def bulk_update_customer_status(
 def bulk_delete_customers(
     db: Session,
     customer_ids: list[dict[str, str]],
+    *,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
+    # Both branches delegate to the single admin-delete entry points
+    # (`delete_person_customer`/`delete_business_customer`), which themselves
+    # funnel through `_request_recoverable_customer_deletion` — there is no
+    # separate bulk hard-delete implementation to keep in sync with the
+    # single-item path.
     deleted_count = 0
     skipped: list[dict[str, str]] = []
     for item in customer_ids:
@@ -3159,43 +3229,7 @@ def bulk_delete_customers(
                         }
                     )
                     continue
-                if subscriber.is_active:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Customer is still active",
-                        }
-                    )
-                    continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                db.query(UserCredential).filter(
-                    UserCredential.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(MFAMethod).filter(
-                    MFAMethod.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(AuthSession).filter(
-                    AuthSession.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
-                )
-                subscriber_service.subscribers.delete(
-                    db=db, subscriber_id=str(customer_id)
-                )
+                delete_person_customer(db, str(customer_id), actor_id=actor_id)
                 deleted_count += 1
             elif customer_type == "business":
                 subscriber = db.get(Subscriber, customer_id)
@@ -3208,20 +3242,7 @@ def bulk_delete_customers(
                         }
                     )
                     continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                delete_person_customer(db, str(customer_id))
+                delete_business_customer(db, str(customer_id), actor_id=actor_id)
                 deleted_count += 1
         except Exception as exc:
             skipped.append(

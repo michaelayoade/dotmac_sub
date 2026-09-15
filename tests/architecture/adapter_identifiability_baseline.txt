@@ -84,7 +84,7 @@ app/services/web_system_geocode_tool.py 1
 app/services/web_system_health.py 3
 app/services/web_system_overview.py 3
 app/services/web_system_profiles.py 18
-app/services/web_system_restore_tool.py 34
+app/services/web_system_restore_tool.py 2
 app/services/web_system_role_forms.py 4
 app/services/web_system_roles.py 8
 app/services/web_system_scheduler.py 1

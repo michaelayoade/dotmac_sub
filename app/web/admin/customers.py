@@ -2625,10 +2625,10 @@ def person_delete(
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """Delete a person."""
+    """Delete a person (recoverable — see `account_recovery`)."""
     try:
         web_customer_actions_service.delete_person_customer(
-            db=db, customer_id=customer_id
+            db=db, customer_id=customer_id, actor_id=_get_actor_id(request)
         )
         from app.web.admin import get_current_user
 
@@ -2687,11 +2687,12 @@ def business_delete(
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """Delete a business customer."""
+    """Delete a business customer (recoverable — see `account_recovery`)."""
     try:
         web_customer_actions_service.delete_business_customer(
             db=db,
             customer_id=customer_id,
+            actor_id=_get_actor_id(request),
         )
         from app.web.admin import get_current_user
 
@@ -3164,10 +3165,10 @@ def bulk_delete_customers(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
-    """Bulk delete customers (only inactive customers without subscribers)."""
+    """Bulk delete customers (recoverable — see `account_recovery`)."""
     try:
         return web_customer_actions_service.bulk_delete_customers_from_payload(
-            db=db, payload=data
+            db=db, payload=data, actor_id=_get_actor_id(request)
         )
     except HTTPException:
         raise

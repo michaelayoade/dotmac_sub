@@ -21,9 +21,6 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     TERMINAL_STATUSES,
-    clear_account_lifecycle_override,
-    compute_account_status,
-    enable_subscription,
     transition_account_status,
 )
 from app.services.audit_adapter import stage_audit_event
@@ -267,21 +264,20 @@ def change_account_billing_approval(
             )
             account.billing_enabled = True
             if restore_owned_disable:
-                clear_account_lifecycle_override(
+                # One typed account-reactivation request to the lifecycle
+                # owner. This module no longer clears the override and loops
+                # over subscriptions itself — `transition_account_status`
+                # (one of the six admissible `_require_billing_approval` call
+                # sites, `ActivationIntent.ACCOUNT_STATUS_TRANSITION`) owns
+                # clearing the override and reactivating every non-active
+                # subscription in one place.
+                transition_account_status(
                     db,
                     str(account.id),
+                    SubscriberStatus.active,
                     reason=command.context.reason,
                     source=source,
                 )
-                for subscription in subscriptions:
-                    if subscription.status == SubscriptionStatus.disabled:
-                        enable_subscription(
-                            db,
-                            str(subscription.id),
-                            reason=command.context.reason,
-                            source=source,
-                        )
-                compute_account_status(db, str(account.id))
                 action = BillingApprovalAction.restored
             else:
                 action = (
