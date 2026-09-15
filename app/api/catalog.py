@@ -273,9 +273,11 @@ def _offer_access_requirement_http_error(
 
     if exc.code.endswith("invalid_access_requirement"):
         return _http(422)
-    if exc.code.endswith("immutable_access_requirement"):
+    if exc.code.endswith(
+        ("immutable_access_requirement", "immutable_offer_version_identity")
+    ):
         return _http(409)
-    if exc.code.endswith("offer_not_found"):
+    if exc.code.endswith(("offer_not_found", "offer_version_not_found")):
         return _http(404)
     if exc.code.endswith("permission_denied"):
         return _http(403)
@@ -1020,30 +1022,28 @@ def list_offer_versions(
     tags=["offer-versions"],
 )
 def update_offer_version(
-    request: Request,
     version_id: str,
     payload: OfferVersionUpdate,
     db: Session = Depends(get_db),
     auth: dict = Depends(_require_offer_version_admission),
 ):
-    actor_id, actor_type = _actor(auth)
     # Resolved and passed explicitly (not discarded) — round 13 finding 3:
     # the route's own dependency authorizes ADMISSION only. The mutation
     # itself must recheck through the same owner, immediately before it
-    # mutates, inside its own transaction — OfferVersions.update does that
-    # recheck; this is the typed principal it re-verifies against the live
-    # database, the same shape _admission_principal's docstring promises
-    # for POST.
+    # mutates, inside its own transaction — offer_access_requirement.
+    # update_offer_version (a registered owner command as of round 16) does
+    # that recheck; this is the typed principal it re-verifies against the
+    # live database, the same shape _admission_principal's docstring
+    # promises for POST. Audit attribution is derived from this principal
+    # inside the command itself, not from separate actor_id/actor_type
+    # arguments.
     principal = _admission_principal(auth)
     try:
         return catalog_service.offer_versions.update(
             db,
             version_id,
             payload,
-            actor_id=actor_id,
-            actor_type=actor_type,
             principal=principal,
-            request_id=_request_id(request),
         )
     except OfferAccessRequirementError as exc:
         offer_access_requirement.record_leave_denial_evidence(db, exc)

@@ -507,30 +507,12 @@ class OfferPrices(CRUDManager[OfferPrice]):
         db.commit()
 
 
-def _assert_offer_version_identity_immutable(update_payload: dict) -> None:
-    """Fail closed if any update path ever carries ``offer_id`` or
-    ``version_number``.
-
-    ``(offer_id, version_number)`` is this row's immutable identity, enforced
-    at admission by ``offer_access_requirement.admit_offer_version``'s
-    advisory lock, existence check, and DB-level unique constraint
-    (``uq_offer_versions_offer_id_version_number``). ``OfferVersionUpdate``
-    deliberately has neither field, so this should be unreachable in
-    practice — defense in depth, matching
-    ``offer_access_requirement.assert_access_requirement_immutable``'s same
-    shape, against a future edit reintroducing either field on the update
-    schema with no lock/duplicate-check guarding it.
-    """
-
-    identity_fields = {"offer_id", "version_number"} & set(update_payload)
-    if identity_fields:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "offer_versions.offer_id and .version_number are immutable "
-                f"outside admission; got: {sorted(identity_fields)}"
-            ),
-        )
+#: _assert_offer_version_identity_immutable used to live here. Round 16
+#: (Michael's ruling on round 15 finding 3) moved it to
+#: offer_access_requirement.py alongside the rest of the update mutation
+#: logic, when OfferVersions.update stopped constructing/mutating the row
+#: itself and became a thin adapter over the new, registered
+#: update_offer_version owner command.
 
 
 class OfferVersions(CRUDManager[OfferVersion]):
@@ -686,56 +668,52 @@ class OfferVersions(CRUDManager[OfferVersion]):
         payload: OfferVersionUpdate,
         *,
         principal: "offer_access_requirement.AdmissionPrincipal",
-        actor_id: str | None = None,
-        actor_type: str | None = None,
         request_id: str | None = None,
     ):
-        """Mutate an already-admitted offer version.
+        """Thin adapter. The actual mutation, read-only validation, the
+        in-transaction authorization recheck, and the billing-governance
+        audit participant are owned by
+        ``service_intent.offer_access_requirement.update_offer_version``
+        (round 16 — Michael's ruling on round 15 finding 3) — this method
+        builds the command and returns its result; it never mutates the
+        row or completes the transaction itself. Before this, ``update``
+        called ``db.commit()`` directly: a direct caller with unrelated
+        pending work in the same session had that work silently committed
+        alongside the version update, regardless of that caller's own
+        intent.
 
-        ``principal`` is REQUIRED (round 13 finding 3): the route's own
-        gate (``_require_offer_version_admission``) authorizes ADMISSION
-        only — reaching this method proves nothing about whether the
-        caller's grant is still valid by the time the mutation actually
-        happens. This method re-verifies through the SAME owner
-        (``offer_access_requirement.verify_admission_authorization``)
-        IMMEDIATELY before the mutation below, inside this method's own
-        transaction, against the LIVE database — never trusted from the
-        route's earlier check alone. A caller with no authenticated actor
-        (internal/test code) must pass ``SystemAdmission`` explicitly, the
-        same escape hatch admission uses; there is no silent default.
+        ``principal`` is REQUIRED: the route's own gate
+        (``_require_offer_version_admission``) authorizes ADMISSION only —
+        reaching this method proves nothing about whether the caller's
+        grant is still valid by the time the mutation actually happens.
+        ``update_offer_version`` re-verifies through the SAME owner
+        (``authorize_offer_version_admission``, via
+        ``verify_admission_authorization``) immediately before the
+        mutation, inside its own transaction, against the LIVE database —
+        never trusted from the route's earlier check alone. A caller with
+        no authenticated actor (internal/test code) must pass
+        ``SystemAdmission`` explicitly; there is no silent default.
+        Audit attribution is derived from ``principal`` itself inside the
+        command (the same evidence-derivation admission already uses),
+        not from separate ``actor_id``/``actor_type`` arguments.
         """
 
-        version = db.get(OfferVersion, version_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Offer version not found")
-        data = payload.model_dump(exclude_unset=True)
-        offer_access_requirement.assert_access_requirement_immutable(data)
-        _assert_offer_version_identity_immutable(data)
-        changes = billing_governance.billing_field_changes(version, data)
-        billing_governance.assert_offer_version_update_safe(db, version, changes)
-        # Immediately before the mutation, not at the top of this method —
-        # narrowing the window between the re-check and the write it gates
-        # to the read-only validation above, which touches no session state.
-        offer_access_requirement.verify_admission_authorization(
-            db, principal, request_id=request_id
+        command_id = uuid4()
+        version = offer_access_requirement.update_offer_version(
+            db,
+            offer_access_requirement.UpdateOfferVersionCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=offer_access_requirement.admission_actor_label(principal),
+                    scope=offer_access_requirement.ADMISSION_SCOPE,
+                    reason="offer version updated via catalog API",
+                ),
+                offer_version_id=UUID(str(version_id)),
+                payload=payload,
+                principal=principal,
+            ),
         )
-        for key, value in data.items():
-            setattr(version, key, value)
-        critical_changes = billing_governance.billing_critical_changes(
-            "offer_version", changes
-        )
-        if critical_changes:
-            billing_governance.stage_billing_catalog_change(
-                db,
-                action="version_updated",
-                entity_type="offer_version",
-                entity_id=version.id,
-                changes=critical_changes,
-                actor_id=actor_id,
-                actor_type=actor_type,
-                offer_id=version.offer_id,
-            )
-        db.commit()
         db.refresh(version)
         return version
 
