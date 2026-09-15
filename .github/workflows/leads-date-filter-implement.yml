@@ -10,7 +10,7 @@ permissions:
   actions: read
 concurrency:
   group: leads-date-filter-development
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   validate:
     if: github.repository == 'michaelayoade/dotmac_sub' && github.ref == 'refs/heads/feat/sales-leads-date-filter'
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Apply exact reviewed implementation
         run: |
           python3 - <<'PY'
@@ -53,7 +53,32 @@ jobs:
           git apply --check /tmp/leads-date-filter.patch
           git apply --index /tmp/leads-date-filter.patch
           git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'app/services/admin_workflow_guidance.py',
+              'app/services/sales/__init__.py',
+              'app/services/sales/service.py',
+              'app/services/sot_registry/domains/sales_referrals/lifecycle.py',
+              'app/services/web_sales.py',
+              'app/web/admin/sales.py',
+              'docs/SOT_RELATIONSHIP_MAP.md',
+              'docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md',
+              'templates/admin/sales/leads/index.html',
+              'tests/architecture/test_lead_list_query_boundary.py',
+              'tests/integration/test_lead_list_date_filters_postgres.py',
+              'tests/test_sales_lead_date_filters.py',
+              'tests/test_web_sales_leads_list.py',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          if changed != expected:
+              raise SystemExit(f'Unexpected staged paths: {changed ^ expected}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m 'feat(sales): add created-date filters to the Leads list'
           mkdir -p validation-results
+          git rev-parse HEAD > validation-results/implementation-commit.txt
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
@@ -129,34 +154,11 @@ jobs:
           if any(os.environ.get(name) != 'success' for name in names):
               raise SystemExit('Validation incomplete: no implementation commit will be published.')
           PY
-      - name: Commit and push only the validated feature files
+      - name: Push only the validated feature candidate
         run: |
-          python3 - <<'PY'
-          import subprocess
-          expected = {
-              'app/services/admin_workflow_guidance.py',
-              'app/services/sales/__init__.py',
-              'app/services/sales/service.py',
-              'app/services/sot_registry/domains/sales_referrals/lifecycle.py',
-              'app/services/web_sales.py',
-              'app/web/admin/sales.py',
-              'docs/SOT_RELATIONSHIP_MAP.md',
-              'docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md',
-              'templates/admin/sales/leads/index.html',
-              'tests/architecture/test_lead_list_query_boundary.py',
-              'tests/integration/test_lead_list_date_filters_postgres.py',
-              'tests/test_sales_lead_date_filters.py',
-              'tests/test_web_sales_leads_list.py',
-          }
-          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
-          if changed != expected:
-              raise SystemExit(f'Unexpected staged paths: {changed ^ expected}')
-          PY
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git -c core.hooksPath=/dev/null commit -m 'feat(sales): add created-date filters to the Leads list'
+          git diff --exit-code HEAD -- app docs templates tests
           git push origin HEAD:refs/heads/feat/sales-leads-date-filter
-          git rev-parse HEAD | tee validation-results/implementation-commit.txt
+          git rev-parse HEAD
       - uses: actions/upload-artifact@v4
         if: always()
         with:
