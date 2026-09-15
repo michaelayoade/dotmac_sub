@@ -1,0 +1,165 @@
+name: Validate and publish inbox navigation draft
+
+on:
+  push:
+    branches: [work/inbox-navigation-publish-20260915]
+    paths: [.github/workflows/inbox-navigation-draft-publish.yml]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: inbox-navigation-draft-publication-20260915
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: 55a69bdce87772d19ab659a77385c3f65ffc1e20
+      TARGET_BRANCH: fix/inbox-list-navigation-20260915
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: isolated-inbox-regression-validation-not-for-production
+      REDIS_URL: redis://127.0.0.1:9/0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify exact reviewed patch and isolate main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/inbox-evidence"
+          python - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import os
+          from pathlib import Path
+          encoded = Path('.github/support/inbox-navigation-patch.gz.b64').read_text()
+          # Correct the single verified transport transcription, then require
+          # the original reviewed patch checksum; never accept altered code.
+          encoded = encoded.replace('PMVdMJk9NfQw0Npr', 'PMVdMJk9NfQwNpr', 1)
+          patch = gzip.decompress(base64.b64decode(encoded.strip(), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'c8890601c2e572ca9f28aeec53006f26d5b2479299598ad0754150d914fd5929'
+          Path(os.environ['RUNNER_TEMP'], 'inbox.patch').write_bytes(patch)
+          PY
+          current=$(git ls-remote origin refs/heads/main | cut -f1)
+          test "$current" = "$SOURCE_SHA"
+          existing=$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH")
+          test -z "$existing"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          git apply --check "$RUNNER_TEMP/inbox.patch"
+          git apply --index "$RUNNER_TEMP/inbox.patch"
+          git diff --cached --check
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          expected = {
+              'docs/designs/ADMIN_INBOX_WORKSPACE.md': '91b8ec9d787d5cdd7111a2518cdd1da6ec246136',
+              'static/js/admin-inbox.js': '81bbeb15bc6de656bae01e4bc91f31e79e8e651e',
+              'templates/admin/inbox/_sidebar.html': 'f5f5484b19b5ee014c673d11aa6daaf159d2ac06',
+              'templates/admin/inbox/index.html': 'f4003c6fdc7b060dfea9406ff19b16f79df90821',
+              'tests/js/inbox_navigation.test.js': '555605767392b68417d9492799311982882911d5',
+              'tests/test_admin_inbox_navigation_js.py': 'ab38d24d0b0c04a09c903de8367fc8c39cebed5e',
+              'tests/test_admin_inbox_workspace_integrity.py': '0ab7cbb3acc6745aff55ad9212be0268fd57321b',
+          }
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, sha in expected.items():
+              assert subprocess.check_output(['git', 'rev-parse', ':' + path], text=True).strip() == sha, path
+          Path(os.environ['RUNNER_TEMP'], 'inbox-evidence', 'verified-blobs.json').write_text(json.dumps(expected, indent=2) + '\n')
+          PY
+      - name: Run focused and complete JavaScript regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check static/js/admin-inbox.js
+          node --test tests/js/inbox_navigation.test.js | tee "$RUNNER_TEMP/inbox-evidence/focused-node.tap"
+          node --test tests/js/*.test.js tests/js/*.test.cjs | tee "$RUNNER_TEMP/inbox-evidence/all-node.tap"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Restore exact main CI environment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 35013173972
+          repository: michaelayoade/dotmac_sub
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/inbox-python
+      - name: Configure repository-pinned Python environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/inbox-python/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/inbox-python/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+      - name: Validate lint, compilation, templates and Python regression integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run ruff check app tests scripts alembic | tee "$RUNNER_TEMP/inbox-evidence/ruff-check.log"
+          poetry run ruff format --check app tests scripts alembic | tee "$RUNNER_TEMP/inbox-evidence/ruff-format.log"
+          poetry run python -m compileall -q app tests scripts alembic
+          poetry run python - <<'PY'
+          from pathlib import Path
+          from jinja2 import Environment
+          for name in ('templates/admin/inbox/_sidebar.html', 'templates/admin/inbox/index.html'):
+              Environment().parse(Path(name).read_text())
+          PY
+          poetry run pytest -q tests/test_admin_inbox_navigation_js.py tests/test_admin_inbox_workspace_integrity.py --junitxml="$RUNNER_TEMP/inbox-evidence/focused-python.xml" | tee "$RUNNER_TEMP/inbox-evidence/focused-python.log"
+      - name: Commit and publish only the reviewed feature diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$SOURCE_SHA"
+          existing=$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH")
+          test -z "$existing"
+          git diff --quiet
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(inbox): align filter and pagination state with rendered results'
+          test "$(git rev-parse HEAD^)" = "$SOURCE_SHA"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$(git rev-parse HEAD)"
+          git show --stat --oneline HEAD | tee "$RUNNER_TEMP/inbox-evidence/commit-stat.txt"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          result = {
+              'repository': 'michaelayoade/dotmac_sub',
+              'branch': os.environ['TARGET_BRANCH'],
+              'base_sha': os.environ['SOURCE_SHA'],
+              'head_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'tree_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'workflow_run_id': os.environ['GITHUB_RUN_ID'],
+              'draft_required': True,
+              'remaining': ['Full normal PR CI', 'Live browser and staging acceptance', 'Separate server-latency investigation'],
+          }
+          Path(os.environ['RUNNER_TEMP'], 'inbox-evidence', 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          PY
+      - name: Preserve publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inbox-navigation-draft-publication-evidence
+          path: ${{ runner.temp }}/inbox-evidence/
+          retention-days: 7
+          if-no-files-found: error
