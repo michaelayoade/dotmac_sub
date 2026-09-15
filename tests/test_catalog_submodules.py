@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.catalog import (
+    AccessRequirement,
     AccessType,
     AddOnType,
     BillingCycle,
@@ -66,6 +67,10 @@ from app.schemas.catalog import (
     ValidationAddOnRequest,
 )
 from app.services import catalog as catalog_service
+from app.services.catalog.offer_access_requirement import (
+    OfferAccessRequirementError,
+    SystemAdmission,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -285,6 +290,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="Fiber 50 v1",
@@ -292,15 +298,24 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         assert version.id is not None
         assert version.version_number == 1
 
     def test_create_offer_version_offer_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc_info:
+        """The migrated service correctly raises the transport-neutral
+        ``OfferAccessRequirementError`` (code ``offer_not_found``) from
+        ``service_intent.offer_access_requirement.admit_offer_version`` — not
+        a raw ``HTTPException``, which only the API layer
+        (``app/api/catalog.py``'s ``_offer_access_requirement_http_error``)
+        translates this into."""
+
+        with pytest.raises(OfferAccessRequirementError) as exc_info:
             catalog_service.offer_versions.create(
                 db_session,
                 OfferVersionCreate(
+                    access_requirement=AccessRequirement.unclassified,
                     offer_id=uuid.uuid4(),
                     version_number=1,
                     name="Ghost v1",
@@ -308,14 +323,16 @@ class TestOfferVersions:
                     access_type=AccessType.fiber,
                     price_basis=PriceBasis.flat,
                 ),
+                principal=SystemAdmission(reason="test fixture"),
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.code.endswith("offer_not_found")
 
     def test_list_offer_versions(self, db_session):
         offer = _make_offer(db_session)
         catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -323,6 +340,7 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         items = catalog_service.offer_versions.list(
             db_session,
@@ -340,6 +358,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -347,11 +366,13 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         updated = catalog_service.offer_versions.update(
             db_session,
             str(version.id),
             OfferVersionUpdate(name="v1-updated"),
+            principal=SystemAdmission(reason="test fixture"),
         )
         assert updated.name == "v1-updated"
 
@@ -360,6 +381,7 @@ class TestOfferVersions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -367,8 +389,13 @@ class TestOfferVersions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
-        catalog_service.offer_versions.delete(db_session, str(version.id))
+        catalog_service.offer_versions.delete(
+            db_session,
+            str(version.id),
+            principal=SystemAdmission(reason="test fixture"),
+        )
         db_session.refresh(version)
         assert version.is_active is False
 
@@ -384,6 +411,7 @@ class TestOfferVersionPrices:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -391,6 +419,7 @@ class TestOfferVersionPrices:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         price = catalog_service.offer_version_prices.create(
             db_session,
@@ -418,6 +447,7 @@ class TestOfferVersionPrices:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=offer.id,
                 version_number=1,
                 name="v1",
@@ -425,6 +455,7 @@ class TestOfferVersionPrices:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         price = catalog_service.offer_version_prices.create(
             db_session,
@@ -1624,6 +1655,7 @@ class TestSubscriptions:
         version = catalog_service.offer_versions.create(
             db_session,
             OfferVersionCreate(
+                access_requirement=AccessRequirement.unclassified,
                 offer_id=first_offer.id,
                 version_number=1,
                 name="Plan A v1",
@@ -1631,6 +1663,7 @@ class TestSubscriptions:
                 access_type=AccessType.fiber,
                 price_basis=PriceBasis.flat,
             ),
+            principal=SystemAdmission(reason="test fixture"),
         )
         sub = catalog_service.subscriptions.create(
             db_session,

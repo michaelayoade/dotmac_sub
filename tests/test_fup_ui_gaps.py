@@ -6,10 +6,11 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import FormData
 
-from app.models.catalog import AccessType, PriceBasis, ServiceType
+from app.models.catalog import AccessRequirement, AccessType, PriceBasis, ServiceType
 from app.models.fup import FupRule
 from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate
 from app.services import catalog as catalog_service
+from app.services.catalog.offer_access_requirement import SystemAdmission
 from app.services.fup import fup_policies
 from app.services.web_fup import handle_add_rule, handle_update_rule
 from tests.fup_helpers import (
@@ -34,6 +35,7 @@ def _create_offer(db_session, *, name: str, code: str):
     catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
+            access_requirement=AccessRequirement.unclassified,
             offer_id=offer.id,
             version_number=1,
             name=f"{name} v1",
@@ -41,6 +43,7 @@ def _create_offer(db_session, *, name: str, code: str):
             access_type=AccessType.fiber,
             price_basis=PriceBasis.flat,
         ),
+        principal=SystemAdmission(reason="test fixture"),
     )
     return offer
 
