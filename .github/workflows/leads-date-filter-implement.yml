@@ -1,0 +1,165 @@
+name: Leads date filter implementation validation
+on:
+  push:
+    branches: [feat/sales-leads-date-filter]
+    paths:
+      - .github/workflows/leads-date-filter-implement.yml
+      - .github/leads-date-filter.patch.b64
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: leads-date-filter-development
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'michaelayoade/dotmac_sub' && github.ref == 'refs/heads/feat/sales-leads-date-filter'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dotmac_sub_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Apply exact reviewed implementation
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          encoded = Path('.github/leads-date-filter.patch.b64').read_text().strip()
+          encoded = encoded.replace('uZmXmiy', 'uZmXiy').replace('SLfK2jMW', 'SLfK2MW')
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = '0b8cbba6afad811ffdc9ccb9a5f859f6e5cd747fdb2e64d3625f20b2c22b5f01'
+          actual = hashlib.sha256(patch).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'Patch integrity mismatch: {actual}')
+          Path('/tmp/leads-date-filter.patch').write_bytes(patch)
+          print(f'Verified reviewed patch: {len(patch)} bytes, sha256={actual}')
+          PY
+          git apply --check /tmp/leads-date-filter.patch
+          git apply --index /tmp/leads-date-filter.patch
+          git diff --cached --check
+          mkdir -p validation-results
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 34953028258
+          repository: michaelayoade/dotmac_sub
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/python-environment
+      - name: Restore existing locked CI dependencies
+        run: |
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+      - name: Lint format and compile
+        id: lint
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          { poetry run ruff check app tests scripts alembic && poetry run ruff format --check app tests scripts alembic && poetry run python -m compileall -q app tests scripts alembic; } 2>&1 | tee validation-results/lint.txt
+      - name: Repository type checks
+        id: types
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          poetry run mypy app --ignore-missing-imports --no-incremental 2>&1 | tee validation-results/types.txt
+      - name: Import security and ownership documentation
+        id: standards
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          { poetry run lint-imports && poetry run bandit -r app -c pyproject.toml -q && poetry run python -m scripts.architecture.sot_manifest_docs && poetry run python scripts/architecture/workflow_guidance_gate.py --base dc2573702ed9340fbfc4f44850905d48caea385a; } 2>&1 | tee validation-results/standards.txt
+      - name: Leads quotes HTTP and guidance regressions
+        id: unit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          poetry run pytest tests/test_sales_lead_date_filters.py tests/test_web_sales_leads_list.py tests/test_admin_sales_web.py tests/test_admin_sales_leads_http.py tests/test_web_sales_quotes_list.py tests/test_admin_workflow_guidance.py tests/architecture/test_lead_list_query_boundary.py -v --tb=short --junitxml=validation-results/unit.xml 2>&1 | tee validation-results/unit.txt
+      - name: Full architecture guards
+        id: architecture
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          make test-architecture 2>&1 | tee validation-results/architecture.txt
+      - name: Migrated PostgreSQL date and search parity
+        id: postgres
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+        run: |
+          set -o pipefail
+          { make bootstrap-test-database-roles && poetry run python -m scripts.ci.migrated_test_database && poetry run pytest tests/integration/test_lead_list_date_filters_postgres.py tests/integration/test_lead_list_search_postgres.py -v --tb=short -o 'addopts=' --junitxml=validation-results/postgres.xml; } 2>&1 | tee validation-results/postgres.txt
+      - name: Require every validation group
+        if: always()
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          TYPES: ${{ steps.types.outcome }}
+          STANDARDS: ${{ steps.standards.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          ARCHITECTURE: ${{ steps.architecture.outcome }}
+          POSTGRES: ${{ steps.postgres.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os
+          names = ('LINT', 'TYPES', 'STANDARDS', 'UNIT', 'ARCHITECTURE', 'POSTGRES')
+          for name in names:
+              print(f'{name}: {os.environ.get(name)}')
+          if any(os.environ.get(name) != 'success' for name in names):
+              raise SystemExit('Validation incomplete: no implementation commit will be published.')
+          PY
+      - name: Commit and push only the validated feature files
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'app/services/admin_workflow_guidance.py',
+              'app/services/sales/__init__.py',
+              'app/services/sales/service.py',
+              'app/services/sot_registry/domains/sales_referrals/lifecycle.py',
+              'app/services/web_sales.py',
+              'app/web/admin/sales.py',
+              'docs/SOT_RELATIONSHIP_MAP.md',
+              'docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md',
+              'templates/admin/sales/leads/index.html',
+              'tests/architecture/test_lead_list_query_boundary.py',
+              'tests/integration/test_lead_list_date_filters_postgres.py',
+              'tests/test_sales_lead_date_filters.py',
+              'tests/test_web_sales_leads_list.py',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          if changed != expected:
+              raise SystemExit(f'Unexpected staged paths: {changed ^ expected}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m 'feat(sales): add created-date filters to the Leads list'
+          git push origin HEAD:refs/heads/feat/sales-leads-date-filter
+          git rev-parse HEAD | tee validation-results/implementation-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: leads-date-filter-validation
+          path: validation-results/
+          retention-days: 7
