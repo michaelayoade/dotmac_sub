@@ -659,7 +659,7 @@ class OfferVersionCreate(OfferVersionBase):
 class OfferVersionUpdate(BaseModel):
     # offer_id and version_number are deliberately NOT here: together they
     # are this row's immutable identity (a DB-level unique constraint on the
-    # pair — alembic/versions/610_offer_versions_unique_version_number.py).
+    # pair — alembic/versions/611_offer_versions_unique_version_number.py).
     # Letting either change on an update would let a PATCH race a concurrent
     # admission targeting the same pair with no advisory lock or duplicate
     # check guarding it. Same pattern as access_requirement's exclusion

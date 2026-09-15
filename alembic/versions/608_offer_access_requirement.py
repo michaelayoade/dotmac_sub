@@ -24,8 +24,8 @@ destructive DDL, then refuses (fails closed) whenever any row has left
 ``unclassified`` or any classification row exists; repair forward instead of
 downgrading past real data.
 
-Revision ID: 607_offer_access_requirement
-Revises: 606_project_task_subtasks
+Revision ID: 608_offer_access_requirement
+Revises: 607_inbox_lead_identity_expiry
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "607_offer_access_requirement"
-down_revision: str | None = "606_project_task_subtasks"
+revision: str = "608_offer_access_requirement"
+down_revision: str | None = "607_inbox_lead_identity_expiry"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
