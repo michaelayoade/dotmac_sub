@@ -3239,6 +3239,15 @@ UUIDs. Routes and templates only transport and render the owner-defined scope.
     to the owner-provided URL; the template uses shared sortable-header,
     pagination, page-size, and keyboard-visible row-action controls.
 
+17a. The admin Lead list's created-date scope is owned by `sales.service`.
+    `normalize_lead_list_query` supplies the same typed date, filter, sort, and
+    pagination normalization to successful reads and database-failure retries.
+    Last 7/30 days mean today plus the previous 6/29 UTC calendar days; custom
+    dates include both endpoints. The shared predicate tuple filters Lead rows,
+    exact count, and Total/Open/Won/Pipeline Value before pagination. Existing
+    list/count/summary callers remain unfiltered by date unless they opt into
+    the typed list query. This adds no writer, migration, or background job.
+
 18. The admin Quote list remains owned by `sales.service`; no separate UI
     search owner exists. Its typed Quote list specification normalizes search,
     status, Lead, stable sort, and pagination once, and the exact predicate set

@@ -29,7 +29,7 @@ native models (``app/models/sales.py``), with the deltas applied:
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum, StrEnum
 from typing import TypeVar
@@ -219,6 +219,12 @@ class LeadListSortDirection(StrEnum):
     DESC = "desc"
 
 
+class LeadListDatePreset(StrEnum):
+    LAST_7_DAYS = "last_7_days"
+    LAST_30_DAYS = "last_30_days"
+    CUSTOM = "custom"
+
+
 @dataclass(frozen=True, slots=True)
 class LeadListQueryInput:
     """Raw adapter values for the authoritative Lead list query."""
@@ -233,6 +239,9 @@ class LeadListQueryInput:
     sort_direction: str | None = None
     page: int = 1
     page_size: int = 25
+    date_preset: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +258,9 @@ class LeadListQuery:
     sort_direction: LeadListSortDirection
     page: int
     page_size: int
+    date_preset: LeadListDatePreset | None = None
+    date_from: date | None = None
+    date_to: date | None = None
 
     @property
     def offset(self) -> int:
@@ -348,6 +360,8 @@ class _LeadListFilters:
     owner_agent_id: uuid.UUID | None
     lead_source: str | None
     is_active: bool
+    created_from: datetime | None = None
+    created_to_exclusive: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,27 +418,58 @@ def _optional_enum_filter(
         return None
 
 
-def _normalize_lead_list_query(
-    db: Session,
+def _optional_lead_date(value: str | None) -> date | None:
+    candidate = (value or "").strip()
+    if len(candidate) != 10 or candidate[4] != "-" or candidate[7] != "-":
+        return None
+    try:
+        return date.fromisoformat(candidate)
+    except ValueError:
+        return None
+
+
+def normalize_lead_list_query(
     request: LeadListQueryInput,
+    *,
+    today: date | None = None,
 ) -> LeadListQuery:
-    pipeline_id = _optional_uuid_filter(request.pipeline_id)
-    stage_id = _optional_uuid_filter(request.stage_id)
-    if pipeline_id is not None and stage_id is not None:
-        selected_stage = (
-            db.query(PipelineStage)
-            .filter(PipelineStage.id == stage_id)
-            .filter(PipelineStage.is_active.is_(True))
-            .one_or_none()
-        )
-        if selected_stage is not None and selected_stage.pipeline_id != pipeline_id:
-            stage_id = None
+    """Normalize list/retry state without database access or side effects.
+
+    Created dates are UTC calendar days, including both selected dates. Invalid
+    custom ranges are cleared like other stale list filters. The maximum date is
+    excluded as an end boundary because its following midnight is not representable.
+    """
+
+    preset = _optional_enum_filter(request.date_preset, LeadListDatePreset)
+    date_from: date | None = None
+    date_to: date | None = None
+    if preset in (LeadListDatePreset.LAST_7_DAYS, LeadListDatePreset.LAST_30_DAYS):
+        current_day = today if today is not None else datetime.now(UTC).date()
+        days = 7 if preset is LeadListDatePreset.LAST_7_DAYS else 30
+        # Keep injected boundary clocks just as safe as user-entered dates.
+        if current_day != date.max and current_day.toordinal() >= days:
+            date_from = current_day - timedelta(days=days - 1)
+            date_to = current_day
+        else:
+            preset = None
+    elif preset is LeadListDatePreset.CUSTOM:
+        requested_from = _optional_lead_date(request.date_from)
+        requested_to = _optional_lead_date(request.date_to)
+        if (
+            requested_from is not None
+            and requested_to is not None
+            and requested_from <= requested_to < date.max
+        ):
+            date_from = requested_from
+            date_to = requested_to
+        else:
+            preset = None
 
     return LeadListQuery(
         search_term=normalize_lead_search(request.search_term),
         status=_optional_enum_filter(request.status, LeadStatus),
-        pipeline_id=pipeline_id,
-        stage_id=stage_id,
+        pipeline_id=_optional_uuid_filter(request.pipeline_id),
+        stage_id=_optional_uuid_filter(request.stage_id),
         owner_agent_id=_optional_uuid_filter(request.owner_agent_id),
         lead_source=_optional_enum_filter(request.lead_source, LeadSource),
         sort_field=(
@@ -437,7 +482,30 @@ def _normalize_lead_list_query(
         ),
         page=max(1, request.page),
         page_size=request.page_size if request.page_size in (10, 25, 50, 100) else 25,
+        date_preset=preset,
+        date_from=date_from,
+        date_to=date_to,
     )
+
+
+def _normalize_lead_list_query(
+    db: Session,
+    request: LeadListQueryInput,
+) -> LeadListQuery:
+    normalized = normalize_lead_list_query(request)
+    if normalized.pipeline_id is not None and normalized.stage_id is not None:
+        selected_stage = (
+            db.query(PipelineStage)
+            .filter(PipelineStage.id == normalized.stage_id)
+            .filter(PipelineStage.is_active.is_(True))
+            .one_or_none()
+        )
+        if (
+            selected_stage is not None
+            and selected_stage.pipeline_id != normalized.pipeline_id
+        ):
+            normalized = replace(normalized, stage_id=None)
+    return normalized
 
 
 def _normalize_quote_list_query(
@@ -639,6 +707,10 @@ def _lead_list_predicates(
         predicates.append(Lead.status == filters.status)
     if filters.lead_source is not None:
         predicates.append(func.lower(Lead.lead_source) == filters.lead_source.lower())
+    if filters.created_from is not None:
+        predicates.append(Lead.created_at >= filters.created_from)
+    if filters.created_to_exclusive is not None:
+        predicates.append(Lead.created_at < filters.created_to_exclusive)
     if filters.search_term is not None:
         predicates.append(_lead_search_predicate(filters.search_term))
     return tuple(predicates)
@@ -653,6 +725,16 @@ def _lead_list_filters(query: LeadListQuery) -> _LeadListFilters:
         owner_agent_id=query.owner_agent_id,
         lead_source=query.lead_source.value if query.lead_source is not None else None,
         is_active=True,
+        created_from=(
+            datetime.combine(query.date_from, time.min, tzinfo=UTC)
+            if query.date_from is not None
+            else None
+        ),
+        created_to_exclusive=(
+            datetime.combine(query.date_to + timedelta(days=1), time.min, tzinfo=UTC)
+            if query.date_to is not None
+            else None
+        ),
     )
 
 

@@ -234,6 +234,9 @@ def leads_list(
     page: int = Query(default=1),
     per_page: int = Query(default=25),
     db: Session = Depends(get_db),
+    date_preset: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ):
     try:
         state = web_sales_service.build_leads_list_context(
@@ -244,6 +247,9 @@ def leads_list(
             owner_agent_id=owner_agent_id,
             lead_source=lead_source,
             search=search,
+            date_preset=date_preset,
+            date_from=date_from,
+            date_to=date_to,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=page,
@@ -252,7 +258,17 @@ def leads_list(
     except SQLAlchemyError:
         logger.exception("sales_leads_list_load_failed")
         state = web_sales_service.build_leads_failure_context(
+            status=status,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            owner_agent_id=owner_agent_id,
+            lead_source=lead_source,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
             search=search,
+            date_preset=date_preset,
+            date_from=date_from,
+            date_to=date_to,
             page=page,
             per_page=per_page,
         )

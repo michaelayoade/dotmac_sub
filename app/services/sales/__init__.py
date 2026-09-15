@@ -8,6 +8,7 @@
 from app.services.sales import reports, selfserve
 from app.services.sales.service import (
     LEAD_SOURCE_OPTIONS,
+    LeadListDatePreset,
     LeadListQuery,
     LeadListQueryInput,
     LeadListQueryResult,
@@ -26,6 +27,7 @@ from app.services.sales.service import (
     QuoteListSortField,
     Quotes,
     leads,
+    normalize_lead_list_query,
     normalize_lead_search,
     normalize_quote_search,
     pipeline_stages,
@@ -36,6 +38,7 @@ from app.services.sales.service import (
 
 __all__ = [
     "LEAD_SOURCE_OPTIONS",
+    "LeadListDatePreset",
     "LeadListQuery",
     "LeadListQueryInput",
     "LeadListQueryResult",
@@ -54,6 +57,7 @@ __all__ = [
     "QuoteListSortField",
     "Quotes",
     "leads",
+    "normalize_lead_list_query",
     "normalize_lead_search",
     "normalize_quote_search",
     "pipeline_stages",

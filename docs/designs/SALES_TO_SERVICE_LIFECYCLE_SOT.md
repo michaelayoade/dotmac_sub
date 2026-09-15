@@ -186,8 +186,19 @@ depend on HTTP request/response or exception types.
   the stored encrypted value; immutable origin/source and converted-account
   reseller ownership fail closed.
 - List contract: server-side search across Lead title plus authoritative
-  contact name/email/phone, status/pipeline/stage/owner/source filters,
-  updated/created ordering, 10/25/50/100 page sizes, and URL-preserved state.
+  contact name/email/phone, status/pipeline/stage/owner/source and created-date
+  filters, updated/created ordering, 10/25/50/100 page sizes, and URL-preserved state.
+  Created date range offers All time (default), Last 7 days, Last 30 days, and
+  Custom date range. Presets include the current UTC calendar day plus the
+  preceding 6 or 29 days; custom start/end dates are inclusive. Predicates use
+  `created_at >= start midnight` and `< midnight after the end date` in UTC,
+  never `updated_at` or expected-close dates. Dates through 9999-12-30 are
+  supported as end dates; missing, malformed, reversed, and overflowing custom
+  ranges canonicalize to All time like other stale filters. Date parameters
+  without a recognized preset are cleared. Changing filters resets page to one;
+  sorting, pagination, and page-size navigation preserve the complete scope.
+  Reset clears every filter. The same pure typed normalizer preserves safe
+  date/filter/sort state in retry URLs without querying the failed database.
 - Query contract: `sales.service` accepts one typed Lead list input, collapses
   search whitespace, canonicalizes stale filters/sort/page values, and applies
   one shared predicate set to rows, unique count, pagination, and summary.

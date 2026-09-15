@@ -321,6 +321,9 @@ LEAD_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("pipeline_id", "Pipeline", filterable=True),
         ListFieldDefinition("stage_id", "Stage", filterable=True),
         ListFieldDefinition("owner_agent_id", "Owner", filterable=True),
+        ListFieldDefinition("date_preset", "Created date range", filterable=True),
+        ListFieldDefinition("date_from", "Start date", filterable=True),
+        ListFieldDefinition("date_to", "End date", filterable=True),
         ListFieldDefinition("created_at", "Created", sortable=True),
         ListFieldDefinition("updated_at", "Updated", sortable=True),
     ),
@@ -537,6 +540,25 @@ def _lead_contact_views(
     return views, subscriber_map
 
 
+def _lead_list_filter_values(
+    normalized: sales_service.LeadListQuery,
+) -> dict[str, str | None]:
+    return {
+        "status": normalized.status.value if normalized.status is not None else None,
+        "date_preset": normalized.date_preset.value if normalized.date_preset else None,
+        "date_from": normalized.date_from.isoformat() if normalized.date_from else None,
+        "date_to": normalized.date_to.isoformat() if normalized.date_to else None,
+        "pipeline_id": str(normalized.pipeline_id) if normalized.pipeline_id else None,
+        "stage_id": str(normalized.stage_id) if normalized.stage_id else None,
+        "owner_agent_id": (
+            str(normalized.owner_agent_id) if normalized.owner_agent_id else None
+        ),
+        "lead_source": (
+            normalized.lead_source.value if normalized.lead_source is not None else None
+        ),
+    }
+
+
 def build_leads_list_context(
     db: Session,
     *,
@@ -550,8 +572,14 @@ def build_leads_list_context(
     page: int,
     per_page: int,
     owner_agent_id: str | None = None,
+    date_preset: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
     requested_filters = {
+        "date_preset": date_preset,
+        "date_from": date_from,
+        "date_to": date_to,
         "status": status,
         "pipeline_id": pipeline_id,
         "stage_id": stage_id,
@@ -563,6 +591,9 @@ def build_leads_list_context(
         db,
         sales_service.LeadListQueryInput(
             search_term=search,
+            date_preset=date_preset,
+            date_from=date_from,
+            date_to=date_to,
             status=status,
             pipeline_id=pipeline_id,
             stage_id=stage_id,
@@ -575,17 +606,7 @@ def build_leads_list_context(
         ),
     )
     normalized = result.query
-    normalized_filters = {
-        "status": normalized.status.value if normalized.status is not None else None,
-        "pipeline_id": str(normalized.pipeline_id) if normalized.pipeline_id else None,
-        "stage_id": str(normalized.stage_id) if normalized.stage_id else None,
-        "owner_agent_id": (
-            str(normalized.owner_agent_id) if normalized.owner_agent_id else None
-        ),
-        "lead_source": (
-            normalized.lead_source.value if normalized.lead_source is not None else None
-        ),
-    }
+    normalized_filters = _lead_list_filter_values(normalized)
     list_query = LEAD_LIST_DEFINITION.build_query(
         search=normalized.search_term,
         filters=normalized_filters,
@@ -626,6 +647,9 @@ def build_leads_list_context(
         "stage_id": normalized_filters["stage_id"] or "",
         "owner_agent_id": normalized_filters["owner_agent_id"] or "",
         "lead_source": normalized_filters["lead_source"] or "",
+        "date_preset": normalized_filters["date_preset"] or "",
+        "date_from": normalized_filters["date_from"] or "",
+        "date_to": normalized_filters["date_to"] or "",
         "search": list_query.search or "",
         "lead_statuses": lead_status_values(),
         "lead_sources": lead_source_options,
@@ -649,17 +673,44 @@ def build_leads_failure_context(
     search: str | None,
     page: int,
     per_page: int,
+    status: str | None = None,
+    pipeline_id: str | None = None,
+    stage_id: str | None = None,
+    owner_agent_id: str | None = None,
+    lead_source: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    date_preset: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
-    safe_per_page = (
-        per_page
-        if per_page in LEAD_LIST_DEFINITION.per_page_options
-        else LEAD_LIST_DEFINITION.default_per_page
+    """Preserve safe list/retry scope without querying an unavailable database."""
+
+    normalized = sales_service.normalize_lead_list_query(
+        sales_service.LeadListQueryInput(
+            search_term=search,
+            status=status,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            owner_agent_id=owner_agent_id,
+            lead_source=lead_source,
+            sort_field=sort_by,
+            sort_direction=sort_dir,
+            page=page,
+            page_size=per_page,
+            date_preset=date_preset,
+            date_from=date_from,
+            date_to=date_to,
+        )
     )
+    filters = _lead_list_filter_values(normalized)
     list_query = LEAD_LIST_DEFINITION.build_query(
-        search=sales_service.normalize_lead_search(search),
-        filters={},
-        page=max(1, page),
-        per_page=safe_per_page,
+        search=normalized.search_term,
+        filters=filters,
+        sort_by=normalized.sort_field.value,
+        sort_dir=normalized.sort_direction.value,
+        page=normalized.page,
+        per_page=normalized.page_size,
     )
     page_meta = PageMeta.from_query(list_query, 0)
     return {
@@ -668,14 +719,17 @@ def build_leads_failure_context(
         "canonicalization_needed": False,
         "page_meta": page_meta,
         "page": 1,
-        "per_page": safe_per_page,
+        "per_page": normalized.page_size,
         "total": 0,
         "total_pages": 1,
-        "status": "",
-        "pipeline_id": "",
-        "stage_id": "",
-        "owner_agent_id": "",
-        "lead_source": "",
+        "status": filters["status"] or "",
+        "pipeline_id": filters["pipeline_id"] or "",
+        "stage_id": filters["stage_id"] or "",
+        "owner_agent_id": filters["owner_agent_id"] or "",
+        "lead_source": filters["lead_source"] or "",
+        "date_preset": filters["date_preset"] or "",
+        "date_from": filters["date_from"] or "",
+        "date_to": filters["date_to"] or "",
         "search": list_query.search or "",
         "lead_statuses": lead_status_values(),
         "lead_sources": list(sales_service.LEAD_SOURCE_OPTIONS),
@@ -695,7 +749,7 @@ def build_leads_failure_context(
             "total_value": None,
             "currency": "",
         },
-        "filters_active": bool(list_query.search),
+        "filters_active": bool(list_query.search or list_query.filters),
         "api_error": "Leads could not be loaded. No CRM data was changed.",
         "retry_url": list_query.url("/admin/sales/leads"),
     }

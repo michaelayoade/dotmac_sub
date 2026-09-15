@@ -250,7 +250,10 @@ SERVICES: tuple[SOTService, ...] = (
             "sort, and pagination once. Their row and count projections share "
             "one predicate specification; related Party, active contact-point, "
             "and Subscriber matches use correlated EXISTS predicates so JSON-"
-            "bearing Lead and Quote rows are never subjected to full-row DISTINCT."
+            "bearing Lead and Quote rows are never subjected to full-row DISTINCT. "
+            "Lead created-date presets and inclusive custom ranges use UTC calendar "
+            "boundaries shared by rows, count, and pipeline summary. The pure typed "
+            "Lead normalizer also owns safe retry state without database access."
         ),
     ),
 )

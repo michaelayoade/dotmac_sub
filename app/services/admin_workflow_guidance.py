@@ -748,6 +748,11 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open Sales Orders to review funding and hand approved work to the service workflow.",
         "Verify the customer or lead identity before changing stage, pricing, or ownership.",
         route_templates=("/admin/sales",),
+        notes=(
+            "On the Leads list, choose All time, Last 7 days, Last 30 days, or Custom date range, enter both custom dates when selected, then choose Filter.",
+            "Created dates use UTC and include both selected days. Rows and Total, Open, Won, and Pipeline Value cards use the same date and other filters.",
+            "Sorting and pagination retain the date range; Reset returns to All time. Incomplete, invalid, or reversed custom dates are cleared to All time.",
+        ),
     ),
     _guide(
         "service-requests",
