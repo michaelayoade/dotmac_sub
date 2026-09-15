@@ -1,0 +1,171 @@
+name: Validate and publish requested consolidation
+on:
+  push:
+    branches: ['chore/consolidation-workbench-20260915']
+    paths: ['.github/workflows/consolidation-publish.yml']
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: consolidation-publish-20260915
+  cancel-in-progress: false
+jobs:
+  validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_SHA: dc2573702ed9340fbfc4f44850905d48caea385a
+      INPUT_SHA: 4d166c4670e16a9c948009c7e89753b4ae4a672d
+      TARGET_BRANCH: consolidate/open-prs-20260915
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: ci-test-secret-key-not-for-production # pragma: allowlist secret
+      REDIS_URL: redis://127.0.0.1:9/0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dc2573702ed9340fbfc4f44850905d48caea385a
+          fetch-depth: 0
+      - name: Import verified native consolidation commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse origin/main)" = "$BASE_SHA"
+          while read -r number expected; do
+            actual=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${number}" --jq '.head.sha')
+            test "$actual" = "$expected"
+            git fetch --no-tags origin "+refs/pull/${number}/head:refs/remotes/origin/source-pr-${number}"
+            test "$(git rev-parse "origin/source-pr-${number}")" = "$expected"
+          done <<'SOURCES'
+          3160 2698af3559378290844176b2e20a0192c067ae75
+          3161 40635b2f5877c26049ec4dcbc0c458bb17638788
+          3162 1f918ec471c3bc235d2aa5de77ce2adb9730c4d8
+          3163 f3db00341b571b99402a141caac0a643936f8812
+          3164 c80626e40d39d575eaa216ea7442ec064bb00f93
+          SOURCES
+          bundle="$RUNNER_TEMP/consolidated.bundle"
+          : > "$bundle"
+          for blob in 3006ce08f480ee9f80089dc48186361e0255334c 88ef782aabc6241576bdeb72082ec6a66f1ef13b 6e5a1c56b5c63b461bd811c80bde51e8a81c5208; do
+            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${blob}" --jq '.content' | base64 --decode >> "$bundle"
+          done
+          echo "df3471822be8214c94355273ff45e9796e11f2bd7a6125aeb60e43b44e44c349  $bundle" | sha256sum --check
+          git bundle verify "$bundle"
+          git fetch "$bundle" HEAD
+          test "$(git rev-parse FETCH_HEAD)" = "$INPUT_SHA"
+          git checkout -b "$TARGET_BRANCH" "$INPUT_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          for number in 3160 3161 3162 3163 3164; do
+            git merge-base --is-ancestor "origin/source-pr-${number}" HEAD
+          done
+          for number in 2992 3154 3155 3159; do
+            git fetch --no-tags origin "refs/pull/${number}/head"
+            excluded=$(git rev-parse FETCH_HEAD)
+            if ! git merge-base --is-ancestor "$excluded" "$BASE_SHA"; then
+              if git merge-base --is-ancestor "$excluded" HEAD; then
+                echo "Excluded PR head is present: $number" >&2
+                exit 1
+              fi
+            fi
+          done
+          git diff --exit-code "$BASE_SHA" HEAD -- VERSION alembic .github pyproject.toml poetry.lock '*baseline*'
+          git diff --exit-code origin/source-pr-3164 HEAD -- pyproject.toml poetry.lock
+          git diff --check "$BASE_SHA" HEAD
+          git diff --stat "$BASE_SHA" HEAD
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Restore matching dependency artifact from successful source CI
+        uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 34978430085
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/python-environment
+      - name: Prepare isolated Python environment
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+          git config user.name 'Consolidation Assistant'
+          git config user.email 'consolidation@users.noreply.github.com'
+      - name: Regenerate and constrain intentional additive API contract
+        run: |
+          set -euo pipefail
+          poetry run python scripts/update_openapi_contract.py
+          poetry run python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          path = 'tests/architecture/openapi_contract_surface.json'
+          old = json.loads(subprocess.check_output(['git', 'show', f'HEAD:{path}']))
+          new = json.loads(Path(path).read_text())
+          assert old['routes'] == new['routes'], 'Unexpected API route change'
+          added = set(new['schemas']) - set(old['schemas'])
+          removed = set(old['schemas']) - set(new['schemas'])
+          changed = {key for key in old['schemas'] if key in new['schemas'] and old['schemas'][key] != new['schemas'][key]}
+          assert added == {'SubscriberNotificationPreferencesUpdate'}, added
+          assert not removed, removed
+          assert changed == {'SubscriberUpdate'}, changed
+          print('Verified additive notification-preference schema and unchanged routes.')
+          PY
+          git diff -- tests/architecture/openapi_contract_surface.json
+          git add tests/architecture/openapi_contract_surface.json
+          git commit -m 'test: regenerate additive notification-preference API contract'
+      - name: Repository static checks
+        run: |
+          set -euo pipefail
+          poetry run ruff check app tests scripts alembic
+          poetry run ruff format --check app tests scripts alembic
+          poetry run python -m compileall -q app tests scripts alembic
+          poetry run python -m scripts.architecture.sot_manifest_docs
+          poetry run python scripts/architecture/workflow_guidance_gate.py --base "$BASE_SHA"
+          poetry run mypy app --ignore-missing-imports --no-incremental
+          git diff --check "$BASE_SHA" HEAD
+      - name: Validate preserved feature behavior and inherited failure paths
+        run: |
+          set -euo pipefail
+          poetry run pytest -q -n 4 --max-worker-restart=0 --tb=short \
+            tests/test_web_system_settings_forms.py \
+            tests/test_team_inbox_assignment.py \
+            tests/test_customer_portal_notifications.py \
+            tests/test_web_customer_details.py \
+            tests/test_web_customer_crm_routes.py \
+            tests/test_customer_portal_quotes.py \
+            tests/test_admin_sales_web.py \
+            tests/test_web_sales_quotes_list.py \
+            tests/test_web_sales_leads_list.py \
+            tests/test_lead_created_date_filters.py \
+            tests/test_quote_created_date_filters.py \
+            tests/architecture/test_lead_created_date_ownership.py \
+            tests/architecture/test_quote_created_date_ownership.py \
+            --junitxml="$RUNNER_TEMP/consolidation-focused.xml"
+      - name: Publish only the new consolidation branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$TARGET_BRANCH" = 'consolidate/open-prs-20260915'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$BASE_SHA"
+          test -z "$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH")"
+          git diff --exit-code "$BASE_SHA" HEAD -- VERSION alembic .github '*baseline*'
+          git status --short
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git log -1 --format='%H %T' | tee "$RUNNER_TEMP/consolidation-published.txt"
+      - name: Retain review evidence
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/consolidation-evidence"
+          git diff "$BASE_SHA" HEAD > "$RUNNER_TEMP/consolidation-evidence/final.patch"
+          git log --oneline "$BASE_SHA"..HEAD > "$RUNNER_TEMP/consolidation-evidence/commits.txt"
+          cp "$RUNNER_TEMP"/consolidation-focused.xml "$RUNNER_TEMP/consolidation-evidence/" 2>/dev/null || true
+          cp "$RUNNER_TEMP"/consolidation-published.txt "$RUNNER_TEMP/consolidation-evidence/" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consolidation-validation-evidence
+          path: ${{ runner.temp }}/consolidation-evidence/
+          retention-days: 3
