@@ -1,0 +1,167 @@
+name: PR 3166 architecture repair validation
+
+on:
+  push:
+    branches: [work/pr3166-architecture-validation-20260915]
+    paths:
+      - .github/workflows/pr3166-architecture-validation.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_HEAD: 5067b40e2655fd97ef13ab0de62352662220e54e
+      TARGET_BRANCH: consolidate/open-prs-20260915
+      RESULT_BRANCH: work/pr3166-validated-architecture-repair-20260915
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: ci-pr3166-validation-not-for-production
+      REDIS_URL: redis://127.0.0.1:9/0
+      EVIDENCE: ${{ runner.temp }}/pr3166-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Isolate the exact reviewed PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          cp .github/support/pr3166_architecture_repair.py "$RUNNER_TEMP/pr3166_repair.py"
+          current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$current" = "$EXPECTED_HEAD"
+          git fetch --no-tags --depth=1 origin "$EXPECTED_HEAD"
+          git checkout --detach "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Restore the exact PR CI dependency artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 35001501809
+          repository: michaelayoade/dotmac_sub
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pr3166-python
+      - name: Configure the repository-pinned environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/pr3166-python/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/pr3166-python/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+          .venv/bin/python --version
+          .venv/bin/python -m ruff --version
+      - name: Apply the reviewed repair and regenerate the API contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/pr3166_repair.py"
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'app/services/subscriber.py': '3701f35b40e84c1e396f087b08f3f218812e02b9',
+              'tests/test_crm_portal_services.py': '8490d26fbd304321ad3484caad297b6ac16d9109',
+              'tests/test_customer_portal_notifications.py': '5218a0dcc2fb543878dc24c4462e370472690e87',
+              'tests/test_subscriber_metadata_key_closure.py': '78f872e5a80344f0a6580b7c2cba1fff212a596f',
+              'docs/SUBSCRIBER_METADATA_OWNERSHIP.md': '51062c2127627cc9c6971fe591120216868efe36',
+          }
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == sha, (path, actual, sha)
+          print('Applied files match the locally reviewed repair exactly.')
+          PY
+          poetry run python scripts/update_openapi_contract.py 2>&1 | tee "$EVIDENCE/openapi-generator.log"
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          path = 'tests/architecture/openapi_contract_surface.json'
+          old = json.loads(subprocess.check_output(['git', 'show', f'{os.environ["EXPECTED_HEAD"]}:{path}'], text=True))
+          new = json.loads(pathlib.Path(path).read_text())
+          assert old['api_prefix'] == new['api_prefix']
+          assert old['routes'] == new['routes'], 'Unexpected route change'
+          added = set(new['schemas']) - set(old['schemas'])
+          removed = set(old['schemas']) - set(new['schemas'])
+          changed = {k for k in old['schemas'].keys() & new['schemas'].keys() if old['schemas'][k] != new['schemas'][k]}
+          assert added == {'SubscriberNotificationPreferencesUpdate'}, added
+          assert not removed, removed
+          assert changed == {'SubscriberUpdate'}, changed
+          report = {'added_schemas': sorted(added), 'changed_schemas': sorted(changed), 'removed_schemas': sorted(removed), 'routes_unchanged': True}
+          pathlib.Path(os.environ['EVIDENCE'], 'contract-review.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report))
+          PY
+      - name: Repository-wide static checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run ruff format app/services/subscriber.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_subscriber_metadata_key_closure.py
+          poetry run ruff check app tests scripts alembic 2>&1 | tee "$EVIDENCE/ruff-check.log"
+          poetry run ruff format --check app tests scripts alembic 2>&1 | tee "$EVIDENCE/ruff-format.log"
+          poetry run python -m compileall -q app tests scripts alembic
+          git diff --check
+          poetry run mypy app --ignore-missing-imports --no-incremental 2>&1 | tee "$EVIDENCE/mypy.log"
+          poetry run lint-imports 2>&1 | tee "$EVIDENCE/import-boundaries.log"
+          poetry run bandit -r app -c pyproject.toml -q 2>&1 | tee "$EVIDENCE/bandit.log"
+      - name: Reproduce the failed architecture guards and ownership checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run python -m scripts.testing.host_test_policy full-suite
+          poetry run pytest tests/architecture/test_isp_cohort_source_writers.py tests/architecture/test_crm_vocabulary_freeze.py tests/architecture/test_openapi_contract_surface.py tests/architecture/test_subscriber_metadata_ownership.py tests/architecture/test_lead_created_date_ownership.py tests/architecture/test_quote_created_date_ownership.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/architecture-regressions.log"
+      - name: Profile, settings, support and sales behavior regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run pytest tests/test_subscriber_metadata_key_closure.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_quote_created_date_filters.py tests/test_lead_created_date_filters.py tests/test_quote_legacy_list_compatibility.py tests/test_web_customer_crm_routes.py tests/test_team_inbox_assignment.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/behavior-regressions.log"
+      - name: Commit the validated candidate without changing the PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'app/services/subscriber.py',
+              'docs/SUBSCRIBER_METADATA_OWNERSHIP.md',
+              'tests/test_crm_portal_services.py',
+              'tests/test_customer_portal_notifications.py',
+              'tests/test_subscriber_metadata_key_closure.py',
+              'tests/architecture/openapi_contract_surface.json',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert changed == expected, (changed - expected, expected - changed)
+          assert not subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).strip()
+          PY
+          git diff --check
+          git diff > "$EVIDENCE/validated-repair.patch"
+          git diff --stat | tee "$EVIDENCE/diff-stat.txt"
+          current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$current" = "$EXPECTED_HEAD"
+          test -z "$(git ls-remote origin "refs/heads/$RESULT_BRANCH")"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/services/subscriber.py docs/SUBSCRIBER_METADATA_OWNERSHIP.md tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_subscriber_metadata_key_closure.py tests/architecture/openapi_contract_surface.json
+          git commit -m 'fix(profile): preserve preference intent within architecture boundaries'
+          git push origin "HEAD:refs/heads/$RESULT_BRANCH"
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = {'sha': sha, 'parent': os.environ['EXPECTED_HEAD'], 'branch': os.environ['RESULT_BRANCH'], 'pr_branch_unchanged': True}
+          pathlib.Path(os.environ['EVIDENCE'], 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result))
+          PY
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr3166-architecture-repair-evidence
+          path: ${{ runner.temp }}/pr3166-evidence
+          retention-days: 7
+          if-no-files-found: error
