@@ -18,10 +18,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/consolidation-diagnostics/logs" "$RUNNER_TEMP/consolidation-diagnostics/tools"
           for job in 104321613148 104328666690 104328666796 104328666706 104328378105 104328666616 104328378055 104328300956 104328666725; do
-            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${job}/logs" > "$RUNNER_TEMP/consolidation-diagnostics/logs/${job}.log"
+            gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${job}/logs" > "$RUNNER_TEMP/consolidation-diagnostics/logs/${job}.log"
           done
           python -m pip download --only-binary=:all: --no-deps ruff==0.15.0 -d "$RUNNER_TEMP/consolidation-diagnostics/tools"
-          grep -hE 'FAILED |error: |AssertionError:|TypeError:|AttributeError:' "$RUNNER_TEMP/consolidation-diagnostics/logs/"*.log | tail -70 || true
       - uses: actions/upload-artifact@v4
         with:
           name: consolidation-diagnostics
