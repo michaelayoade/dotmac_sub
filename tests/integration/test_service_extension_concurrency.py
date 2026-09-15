@@ -54,11 +54,13 @@ def test_concurrent_apply_admits_one_transition_and_one_evidence_set(engine):
                 price_basis=PriceBasis.flat,
             ),
         )
+        offer_id = offer.id
+        setup.commit()
         catalog_service.offer_versions.create(
             setup,
             OfferVersionCreate(
                 access_requirement=AccessRequirement.unclassified,
-                offer_id=offer.id,
+                offer_id=offer_id,
                 version_number=1,
                 name=f"Extension Concurrency {suffix} v1",
                 service_type=ServiceType.residential,

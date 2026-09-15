@@ -117,7 +117,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "previous_access_requirement = 'unclassified'",
-            name="ck_offer_access_requirement_classifications_previous_unclassified",
+            name="ck_offer_access_cls_previous_unclassified",
         ),
         sa.CheckConstraint(
             "new_access_requirement IN ('network_access', 'no_network_access')",
