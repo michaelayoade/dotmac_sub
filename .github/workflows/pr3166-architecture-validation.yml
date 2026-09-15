@@ -115,12 +115,12 @@ jobs:
         run: |
           set -euo pipefail
           poetry run python -m scripts.testing.host_test_policy full-suite
-          poetry run pytest tests/architecture/test_isp_cohort_source_writers.py tests/architecture/test_crm_vocabulary_freeze.py tests/architecture/test_openapi_contract_surface.py tests/architecture/test_subscriber_metadata_ownership.py tests/architecture/test_lead_created_date_ownership.py tests/architecture/test_quote_created_date_ownership.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/architecture-regressions.log"
+          poetry run pytest tests/architecture/test_isp_cohort_source_writers.py tests/architecture/test_crm_vocabulary_freeze.py tests/architecture/test_openapi_contract_surface.py tests/architecture/test_subscriber_metadata_ownership.py tests/architecture/test_lead_created_date_ownership.py tests/architecture/test_sales_quote_list_query_boundary.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/architecture-regressions.log"
       - name: Profile, settings, support and sales behavior regressions
         shell: bash
         run: |
           set -euo pipefail
-          poetry run pytest tests/test_subscriber_metadata_key_closure.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_quote_created_date_filters.py tests/test_lead_created_date_filters.py tests/test_quote_legacy_list_compatibility.py tests/test_web_customer_crm_routes.py tests/test_team_inbox_assignment.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/behavior-regressions.log"
+          poetry run pytest tests/test_subscriber_metadata_key_closure.py tests/test_crm_portal_services.py tests/test_customer_portal_notifications.py tests/test_web_sales_quotes_list.py tests/test_lead_created_date_filters.py tests/test_quote_legacy_list_compatibility.py tests/test_web_customer_crm_routes.py tests/test_team_inbox_assignment.py -q -n 4 --tb=short 2>&1 | tee "$EVIDENCE/behavior-regressions.log"
       - name: Commit the validated candidate without changing the PR branch
         shell: bash
         run: |
