@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     env:
       BASE_SHA: dc2573702ed9340fbfc4f44850905d48caea385a
-      INPUT_SHA: 4d166c4670e16a9c948009c7e89753b4ae4a672d
+      INPUT_SHA: 79d562f2bffd6c25b6fe66e4b954eac252747dfb
       TARGET_BRANCH: consolidate/open-prs-20260915
       DATABASE_URL: sqlite:///./test.db
       SECRET_KEY: ci-test-secret-key-not-for-production # pragma: allowlist secret
@@ -51,6 +51,12 @@ jobs:
           echo "df3471822be8214c94355273ff45e9796e11f2bd7a6125aeb60e43b44e44c349  $bundle" | sha256sum --check
           git bundle verify "$bundle"
           git fetch "$bundle" HEAD
+          test "$(git rev-parse FETCH_HEAD)" = '4d166c4670e16a9c948009c7e89753b4ae4a672d'
+          repairs="$RUNNER_TEMP/consolidation-final-repairs.bundle"
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/cf9da5834715d475aa83ae116938dd9f636723d2" --jq '.content' | base64 --decode > "$repairs"
+          echo "2562706b20102002103b6b61573e6cab92f3fa1c5310ab300cc4d680c21df051  $repairs" | sha256sum --check
+          git bundle verify "$repairs"
+          git fetch "$repairs" HEAD
           test "$(git rev-parse FETCH_HEAD)" = "$INPUT_SHA"
           git checkout -b "$TARGET_BRANCH" "$INPUT_SHA"
           git merge-base --is-ancestor "$BASE_SHA" HEAD
@@ -131,6 +137,7 @@ jobs:
             tests/test_web_system_settings_forms.py \
             tests/test_team_inbox_assignment.py \
             tests/test_customer_portal_notifications.py \
+            tests/test_subscriber_notification_preferences_contract.py \
             tests/test_web_customer_details.py \
             tests/test_web_customer_crm_routes.py \
             tests/test_customer_portal_quotes.py \
