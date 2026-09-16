@@ -39,6 +39,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import account_recovery, rbac_catalog, settings_spec
 from app.services import (
     billing as billing_service,
 )
@@ -51,7 +52,6 @@ from app.services import import_runs as import_runs_service
 from app.services import module_manager as module_manager_service
 from app.services import nextcloud_talk_staff as nextcloud_talk_staff_service
 from app.services import radius_reject as radius_reject_service
-from app.services import rbac_catalog, settings_spec
 from app.services import (
     scheduler as scheduler_service,
 )
@@ -82,7 +82,6 @@ from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
 )
-from app.services import account_recovery
 from app.services import web_system_profiles as web_system_profiles_service
 from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services import web_system_role_forms as web_system_role_forms_service
@@ -4329,6 +4328,8 @@ def restore_tool_page(
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            "restore_submission_key": uuid4(),
+            "rebaseline_submission_key": uuid4(),
             **state,
         },
     )
@@ -4342,6 +4343,7 @@ def restore_tool_restore(
     request: Request,
     subscriber_id: UUID,
     confirmation_fingerprint: str = Form(...),
+    submission_key: UUID = Form(...),
     reason: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -4359,6 +4361,7 @@ def restore_tool_restore(
             db,
             subscriber_id=str(subscriber_id),
             confirmation_fingerprint=confirmation_fingerprint,
+            submission_key=submission_key,
             actor_id=actor_id,
             reason=reason,
         )
@@ -4389,6 +4392,7 @@ def restore_tool_rebaseline(
     request: Request,
     subscriber_id: UUID,
     confirmation_fingerprint: str = Form(...),
+    submission_key: UUID = Form(...),
     affected_resource_types: str = Form(...),
     reason: str = Form(...),
     db: Session = Depends(get_db),
@@ -4410,6 +4414,7 @@ def restore_tool_rebaseline(
             db,
             subscriber_id=str(subscriber_id),
             confirmation_fingerprint=confirmation_fingerprint,
+            submission_key=submission_key,
             affected_resource_types=types,
             actor_id=actor_id,
             reason=reason,

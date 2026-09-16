@@ -496,9 +496,7 @@ def delete_subscriber(
                     "subscription(s) that cannot yet be reversed."
                 ),
                 "details": {
-                    "unsupported_consequences": list(
-                        outcome.unsupported_consequences
-                    ),
+                    "unsupported_consequences": list(outcome.unsupported_consequences),
                     "blocked_subscription_ids": [
                         str(i) for i in outcome.blocked_subscription_ids
                     ],

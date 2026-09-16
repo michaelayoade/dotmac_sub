@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
@@ -36,11 +37,9 @@ from app.db import Base
 
 # The closed, typed reason a deletion happened. Only
 # `administrative_recoverable_deletion` is restorable through this owner;
-# the other two values exist so a legacy row backfilled from either retired
-# lineage (`account_deletion.py`'s self-service flag, or
-# `web_system_restore_tool.py`'s prior snapshot/cascade tool) can still be
-# represented honestly even though today only recoverable deletions are
-# created going forward by the reviewed admin recovery tool.
+# the other two values remain typed vocabulary for permanent terminations.
+# The active self-service `account_deletion_*` metadata lineage is NOT
+# backfilled into recovery records; only the retired restore-tool cascade is.
 CUSTOMER_REQUESTED_TERMINATION = "customer_requested_termination"
 ADMINISTRATIVE_TERMINATION = "administrative_termination"
 ADMINISTRATIVE_RECOVERABLE_DELETION = "administrative_recoverable_deletion"
@@ -123,9 +122,7 @@ class AccountRecoveryRecord(Base):
             name="ck_account_recovery_fingerprint_length",
         ),
         CheckConstraint(
-            "deletion_intent in ('"
-            + "','".join(DELETION_INTENT_VALUES)
-            + "')",
+            "deletion_intent in ('" + "','".join(DELETION_INTENT_VALUES) + "')",
             name="ck_account_recovery_deletion_intent",
         ),
         # Exactly one open (or blocked-but-not-yet-restored) generation per
@@ -138,6 +135,7 @@ class AccountRecoveryRecord(Base):
             postgresql_where=(
                 (column("state") == "open") | (column("state") == "blocked")
             ),
+            sqlite_where=((column("state") == "open") | (column("state") == "blocked")),
         ),
         CheckConstraint(
             "(state = 'open' AND restored_at IS NULL) OR "
@@ -175,14 +173,18 @@ class AccountRecoveryRecord(Base):
         default=AccountRecoveryState.open,
     )
 
+    # PostgreSQL owns the deployed ARRAY; SQLite's JSON variant only keeps the
+    # non-authoritative unit fixture able to construct and round-trip this row.
     affected_resource_types: Mapped[list[str]] = mapped_column(
-        ARRAY(String(48)), nullable=False
+        ARRAY(String(48)).with_variant(JSON(), "sqlite"), nullable=False
     )
 
     command_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False, unique=True
     )
-    correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
     idempotency_key: Mapped[str | None] = mapped_column(String(160))
 
     confirmation_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -202,6 +204,80 @@ class AccountRecoveryRecord(Base):
         back_populates="recovery_record",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+
+
+class AccountRecoveryBlockedPreflight(Base):
+    """Immutable replay evidence for a no-mutation deletion refusal.
+
+    The shared idempotency row holds only a bounded reference to this row;
+    subscription IDs and unsupported consequence names cannot fit in its
+    120-character ``ref_id`` column for an ordinary multi-service account.
+    """
+
+    __tablename__ = "account_recovery_blocked_preflight"
+
+    idempotency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("idempotency_keys.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    blocked_subscription_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String(36)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    unsupported_consequences: Mapped[list[str]] = mapped_column(
+        ARRAY(String(48)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+
+
+class AccountRecoveryCommandOutcome(Base):
+    """Immutable exact deletion/restore/rebaseline result for one idempotency key."""
+
+    __tablename__ = "account_recovery_command_outcomes"
+
+    idempotency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("idempotency_keys.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("account_recovery_records.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    generation: Mapped[int | None] = mapped_column(Integer)
+    affected_subscription_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String(36)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    restored_subscription_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String(36)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    unrestored_subscription_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String(36)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    drifted_subscription_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String(36)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    missing_participant_types: Mapped[list[str]] = mapped_column(
+        ARRAY(String(48)).with_variant(JSON(), "sqlite"), nullable=False
+    )
+    confirmation_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    fingerprint_revision: Mapped[int | None] = mapped_column(Integer)
+    affected_resource_types: Mapped[list[str]] = mapped_column(
+        ARRAY(String(48)).with_variant(JSON(), "sqlite"), nullable=False
     )
 
 

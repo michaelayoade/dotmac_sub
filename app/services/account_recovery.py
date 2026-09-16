@@ -30,18 +30,23 @@ from app.models.account_recovery import (
     RESOURCE_TYPE_ADD_ON,
     RESOURCE_TYPE_ENFORCEMENT_LOCK,
     RESOURCE_TYPE_IP_ASSIGNMENT,
+    AccountRecoveryBlockedPreflight,
+    AccountRecoveryCommandOutcome,
     AccountRecoveryRecord,
     AccountRecoveryState,
     AccountRecoverySubscriptionSnapshot,
 )
+from app.models.audit import AuditActorType
 from app.models.catalog import Subscription, SubscriptionAddOn
 from app.models.enforcement_lock import EnforcementLock
 from app.models.idempotency import IdempotencyKey
 from app.models.network import IPAssignment
 from app.models.subscriber import Subscriber
-from app.services.account_lifecycle import ActivationIntent, restore_subscription_detailed
+from app.services.account_lifecycle import (
+    ActivationIntent,
+    restore_subscription_detailed,
+)
 from app.services.audit_adapter import stage_audit_event
-from app.models.audit import AuditActorType
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -171,9 +176,7 @@ class RecoveryBlocked:
 
 @dataclass(frozen=True, slots=True)
 class RecoveryRestored:
-    kind: RecoveryOutcomeKind = field(
-        default=RecoveryOutcomeKind.restored, init=False
-    )
+    kind: RecoveryOutcomeKind = field(default=RecoveryOutcomeKind.restored, init=False)
     record_id: UUID
     account_id: UUID
     restored_subscription_ids: tuple[UUID, ...]
@@ -209,9 +212,13 @@ class RecoveryBlockedByOfferDrift:
     reactivating would either silently overwrite intervening evidence or
     reactivate the subscription against stale evidence — neither is "restore
     exactly what this deletion changed". This fails closed instead, zero
-    mutation, naming exactly which subscriptions drifted so an operator can
-    rebaseline (``rebaseline_recovery_evidence``) or investigate before
-    retrying. The record stays in its current ``open``/``blocked`` state.
+    mutation, naming exactly which subscriptions drifted for manual review.
+    ``rebaseline_recovery_evidence`` only adds verified affected resource
+    types; it cannot change an immutable offer-version snapshot or clear this
+    blocker. A separately authorized correction through the Offer owner must
+    restore a truthful matching current version before a fresh review/retry;
+    any snapshot amendment requires a separate audited contract. The record
+    stays in its current ``open``/``blocked`` state.
     """
 
     kind: RecoveryOutcomeKind = field(
@@ -397,41 +404,25 @@ def _resolve_replay(reservation: IdempotencyKey, input_fingerprint: str) -> UUID
 _BLOCKED_REF_MARKER = "blocked"
 
 
-def _pack_blocked_preflight_ref(
-    input_fingerprint: str,
-    *,
-    account_id: UUID,
-    blocked_subscription_ids: tuple[UUID, ...],
-    unsupported_consequences: tuple[str, ...],
-) -> str:
-    """Pack a preflight refusal into the reservation's ``ref_id``.
+def _pack_blocked_preflight_ref(input_fingerprint: str, idempotency_id: UUID) -> str:
+    """Bind a bounded reference to the typed, durable refusal row.
 
     No `AccountRecoveryRecord` exists for a preflight-blocked request (zero
-    mutation happened), so the refusal itself — not an entity id — is what
-    must be replayable: a retry with the same key+inputs must reproduce the
-    SAME refusal rather than being treated as a fresh reservation that could
-    later actually execute the deletion.
+    mutation happened). The refusal row is the immutable replay source; the
+    shared ledger's 120-character ``ref_id`` cannot hold its variable-length
+    subscription and consequence lists.
     """
-    return ":".join(
-        (
-            input_fingerprint,
-            _BLOCKED_REF_MARKER,
-            str(account_id),
-            ",".join(str(i) for i in blocked_subscription_ids),
-            ",".join(unsupported_consequences),
-        )
-    )
+    return f"{input_fingerprint}:{_BLOCKED_REF_MARKER}:{idempotency_id}"
 
 
 def _resolve_request_deletion_replay(
-    reservation: IdempotencyKey, input_fingerprint: str
+    db: Session, reservation: IdempotencyKey, input_fingerprint: str
 ) -> tuple[UUID, None] | tuple[None, DeletionPreflightBlocked] | tuple[None, None]:
     """Return ``(record_id, None)``, ``(None, blocked_outcome)``, or ``(None, None)``.
 
     Mirrors `_resolve_replay`'s input-fingerprint conflict check, but also
-    recognizes the packed preflight-blocked shape from
-    `_pack_blocked_preflight_ref` and reconstructs that refusal directly —
-    there is no record to load it from.
+    recognizes a bounded preflight-blocked reference and loads the immutable
+    refusal row. There is no recovery tombstone to load for this outcome.
     """
     if not reservation.ref_id:
         return None, None
@@ -444,41 +435,62 @@ def _resolve_request_deletion_replay(
         )
     marker, marker_sep, blocked_payload = remainder.partition(":")
     if marker_sep and marker == _BLOCKED_REF_MARKER:
-        account_part, _, rest = blocked_payload.partition(":")
-        blocked_part, _, consequences_part = rest.partition(":")
-        blocked_ids = tuple(
-            UUID(i) for i in blocked_part.split(",") if i
-        )
-        consequences = tuple(c for c in consequences_part.split(",") if c)
+        try:
+            blocked_id = UUID(blocked_payload)
+        except ValueError as exc:
+            raise _error(
+                "invalid_replay_evidence",
+                "Stored account-recovery replay evidence is invalid.",
+            ) from exc
+        blocked = db.get(AccountRecoveryBlockedPreflight, blocked_id)
+        if (
+            blocked_id != reservation.id
+            or blocked is None
+            or blocked.account_id != reservation.account_id
+            or blocked.input_fingerprint != input_fingerprint
+        ):
+            raise _error(
+                "invalid_replay_evidence",
+                "Stored account-recovery replay evidence is invalid.",
+            )
         return None, DeletionPreflightBlocked(
-            account_id=UUID(account_part),
-            blocked_subscription_ids=blocked_ids,
-            unsupported_consequences=consequences,
+            account_id=blocked.account_id,
+            blocked_subscription_ids=tuple(
+                UUID(value) for value in blocked.blocked_subscription_ids
+            ),
+            unsupported_consequences=tuple(blocked.unsupported_consequences),
         )
     return UUID(remainder), None
 
 
-def _replay_request_outcome(db: Session, record_id: UUID) -> DeletionTombstone:
-    record = db.get(AccountRecoveryRecord, record_id)
-    if record is None:
+def _replay_request_outcome(
+    db: Session, reservation: IdempotencyKey, record_id: UUID, input_fingerprint: str
+) -> DeletionTombstone:
+    stored = _load_command_outcome(db, reservation, record_id, input_fingerprint)
+    if (
+        stored.kind != "deletion_tombstone"
+        or stored.generation is None
+        or stored.confirmation_fingerprint is None
+    ):
         raise _error(
             "invalid_replay_evidence",
             "Stored account-recovery replay evidence is invalid.",
-            record_id=str(record_id),
         )
-    subscription_ids = tuple(
-        db.scalars(
-            select(AccountRecoverySubscriptionSnapshot.subscription_id)
-            .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
-            .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
-        ).all()
-    )
+    try:
+        subscription_ids = tuple(
+            UUID(value) for value in stored.affected_subscription_ids
+        )
+    except ValueError as exc:
+        raise _error(
+            "invalid_replay_evidence",
+            "Stored account-recovery replay evidence is invalid.",
+        ) from exc
     return DeletionTombstone(
-        record_id=record.id,
-        account_id=record.account_id,
-        generation=record.generation,
-        confirmation_fingerprint=record.confirmation_fingerprint,
-        affected_resource_types=tuple(record.affected_resource_types),
+        record_id=record_id,
+        account_id=stored.account_id,
+        generation=stored.generation,
+        confirmation_fingerprint=stored.confirmation_fingerprint,
+        affected_resource_types=tuple(stored.affected_resource_types),
         affected_subscription_ids=subscription_ids,
     )
 
@@ -518,83 +530,142 @@ def _drifted_offer_version_ids(
     return tuple(drifted)
 
 
-def _replay_restore_outcome(db: Session, record_id: UUID) -> RecoveryOutcome:
-    """Re-derive the current, canonical restore outcome for a replay.
+def _store_command_outcome(
+    db: Session,
+    reservation: IdempotencyKey,
+    input_fingerprint: str,
+    outcome: DeletionTombstone | RecoveryOutcome | RebaselineApplied,
+) -> None:
+    """Commit the original typed decision with its effect and ledger row."""
+    if isinstance(outcome, DeletionTombstone):
+        kind = "deletion_tombstone"
+        generation = outcome.generation
+        affected_subscription_ids = [
+            str(value) for value in outcome.affected_subscription_ids
+        ]
+        confirmation_fingerprint = outcome.confirmation_fingerprint
+        fingerprint_revision = None
+        affected_resource_types = list(outcome.affected_resource_types)
+    elif isinstance(outcome, RebaselineApplied):
+        kind = "rebaseline_applied"
+        generation = None
+        affected_subscription_ids = []
+        confirmation_fingerprint = outcome.new_confirmation_fingerprint
+        fingerprint_revision = outcome.fingerprint_revision
+        affected_resource_types = list(outcome.affected_resource_types)
+    else:
+        kind = outcome.kind.value
+        generation = None
+        affected_subscription_ids = []
+        confirmation_fingerprint = None
+        fingerprint_revision = None
+        affected_resource_types = []
+    db.add(
+        AccountRecoveryCommandOutcome(
+            idempotency_id=reservation.id,
+            account_id=reservation.account_id,
+            record_id=outcome.record_id,
+            input_fingerprint=input_fingerprint,
+            kind=kind,
+            generation=generation,
+            affected_subscription_ids=affected_subscription_ids,
+            restored_subscription_ids=[
+                str(value)
+                for value in getattr(outcome, "restored_subscription_ids", ())
+            ],
+            unrestored_subscription_ids=[
+                str(value)
+                for value in getattr(outcome, "unrestored_subscription_ids", ())
+            ],
+            drifted_subscription_ids=[
+                str(value) for value in getattr(outcome, "drifted_subscription_ids", ())
+            ],
+            missing_participant_types=list(
+                getattr(outcome, "missing_participant_types", ())
+            ),
+            confirmation_fingerprint=confirmation_fingerprint,
+            fingerprint_revision=fingerprint_revision,
+            affected_resource_types=affected_resource_types,
+        )
+    )
+    db.flush()
 
-    Deliberately reads CURRENT subscription/record state rather than
-    replaying a cached decision: this owner never re-decides or rewrites
-    source state, so a replay is a read of the same canonical truth the
-    original call would read if it ran again right now — not a stored
-    snapshot that could grow stale relative to it.
-    """
+
+def _load_command_outcome(
+    db: Session,
+    reservation: IdempotencyKey,
+    record_id: UUID,
+    input_fingerprint: str,
+) -> AccountRecoveryCommandOutcome:
+    stored = db.get(AccountRecoveryCommandOutcome, reservation.id)
     record = db.get(AccountRecoveryRecord, record_id)
-    if record is None:
+    if (
+        stored is None
+        or stored.account_id != reservation.account_id
+        or stored.record_id != record_id
+        or stored.input_fingerprint != input_fingerprint
+        or record is None
+        or record.account_id != reservation.account_id
+    ):
         raise _error(
             "invalid_replay_evidence",
             "Stored account-recovery replay evidence is invalid.",
-            record_id=str(record_id),
         )
-    affected = tuple(record.affected_resource_types)
-    missing = sorted(set(affected) - REGISTERED_RECOVERY_PARTICIPANTS)
-    unknown = sorted(set(affected) - KNOWN_RESOURCE_TYPES)
-    if unknown:
-        missing = sorted(set(missing) | set(unknown))
-    if missing:
-        return RecoveryBlocked(record_id=record.id, missing_participant_types=tuple(missing))
-
-    snapshots = list(
-        db.scalars(
-            select(AccountRecoverySubscriptionSnapshot)
-            .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
-            .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
-        ).all()
-    )
-    eligible = _eligible_snapshots_for_restore(snapshots)
-
-    drifted = _drifted_offer_version_ids(db, eligible)
-    if drifted:
-        return RecoveryBlockedByOfferDrift(
-            record_id=record.id,
-            account_id=record.account_id,
-            drifted_subscription_ids=drifted,
-        )
-
-    restored_ids: list[UUID] = []
-    unrestored_ids: list[UUID] = []
-    for snapshot in eligible:
-        subscription = db.get(Subscription, snapshot.subscription_id)
-        if subscription is not None and subscription.status.value != "canceled":
-            restored_ids.append(snapshot.subscription_id)
-        else:
-            unrestored_ids.append(snapshot.subscription_id)
-
-    if unrestored_ids:
-        return RecoveryPartiallyRestored(
-            record_id=record.id,
-            account_id=record.account_id,
-            restored_subscription_ids=tuple(restored_ids),
-            unrestored_subscription_ids=tuple(unrestored_ids),
-        )
-    return RecoveryRestored(
-        record_id=record.id,
-        account_id=record.account_id,
-        restored_subscription_ids=tuple(restored_ids),
-    )
+    return stored
 
 
-def _replay_rebaseline_outcome(db: Session, record_id: UUID) -> RebaselineApplied:
-    record = db.get(AccountRecoveryRecord, record_id)
-    if record is None:
+def _replay_restore_outcome(
+    db: Session, reservation: IdempotencyKey, record_id: UUID, input_fingerprint: str
+) -> RecoveryOutcome:
+    """Replay the original result even after a later attempt changes state."""
+    stored = _load_command_outcome(db, reservation, record_id, input_fingerprint)
+    try:
+        if stored.kind == RecoveryOutcomeKind.blocked_missing_participants:
+            return RecoveryBlocked(record_id, tuple(stored.missing_participant_types))
+        if stored.kind == RecoveryOutcomeKind.blocked_offer_version_drift:
+            return RecoveryBlockedByOfferDrift(
+                record_id,
+                stored.account_id,
+                tuple(UUID(value) for value in stored.drifted_subscription_ids),
+            )
+        restored = tuple(UUID(value) for value in stored.restored_subscription_ids)
+        if stored.kind == RecoveryOutcomeKind.partially_restored:
+            return RecoveryPartiallyRestored(
+                record_id,
+                stored.account_id,
+                restored,
+                tuple(UUID(value) for value in stored.unrestored_subscription_ids),
+            )
+        if stored.kind == RecoveryOutcomeKind.restored:
+            return RecoveryRestored(record_id, stored.account_id, restored)
+    except ValueError as exc:
         raise _error(
             "invalid_replay_evidence",
             "Stored account-recovery replay evidence is invalid.",
-            record_id=str(record_id),
+        ) from exc
+    raise _error(
+        "invalid_replay_evidence", "Stored account-recovery replay evidence is invalid."
+    )
+
+
+def _replay_rebaseline_outcome(
+    db: Session, reservation: IdempotencyKey, record_id: UUID, input_fingerprint: str
+) -> RebaselineApplied:
+    stored = _load_command_outcome(db, reservation, record_id, input_fingerprint)
+    if (
+        stored.kind != "rebaseline_applied"
+        or stored.confirmation_fingerprint is None
+        or stored.fingerprint_revision is None
+    ):
+        raise _error(
+            "invalid_replay_evidence",
+            "Stored account-recovery replay evidence is invalid.",
         )
     return RebaselineApplied(
-        record_id=record.id,
-        new_confirmation_fingerprint=record.confirmation_fingerprint,
-        fingerprint_revision=record.fingerprint_revision,
-        affected_resource_types=tuple(record.affected_resource_types),
+        record_id,
+        stored.confirmation_fingerprint,
+        stored.fingerprint_revision,
+        tuple(stored.affected_resource_types),
     )
 
 
@@ -690,12 +761,14 @@ def request_recoverable_deletion(
             idempotency_key=command.context.idempotency_key,
         )
         replay_record_id, replay_blocked = _resolve_request_deletion_replay(
-            reservation, input_fingerprint
+            db, reservation, input_fingerprint
         )
         if replay_blocked is not None:
             return replay_blocked
         if replay_record_id is not None:
-            return _replay_request_outcome(db, replay_record_id)
+            return _replay_request_outcome(
+                db, reservation, replay_record_id, input_fingerprint
+            )
 
         existing_open = db.execute(
             select(AccountRecoveryRecord.id).where(
@@ -741,11 +814,17 @@ def request_recoverable_deletion(
                 # fresh reservation that could later actually execute the
                 # deletion once the blocking consequence is cleared out from
                 # under a caller who believes they're still replaying.
+                db.add(
+                    AccountRecoveryBlockedPreflight(
+                        idempotency_id=reservation.id,
+                        account_id=command.account_id,
+                        input_fingerprint=input_fingerprint,
+                        blocked_subscription_ids=[str(item) for item in blocked_ids],
+                        unsupported_consequences=list(unsupported),
+                    )
+                )
                 reservation.ref_id = _pack_blocked_preflight_ref(
-                    input_fingerprint,
-                    account_id=command.account_id,
-                    blocked_subscription_ids=blocked_ids,
-                    unsupported_consequences=unsupported,
+                    input_fingerprint, reservation.id
                 )
                 db.flush()
                 return DeletionPreflightBlocked(
@@ -849,7 +928,7 @@ def request_recoverable_deletion(
             account_id=subscriber.id,
         )
 
-        return DeletionTombstone(
+        outcome = DeletionTombstone(
             record_id=record.id,
             account_id=command.account_id,
             generation=generation,
@@ -857,6 +936,8 @@ def request_recoverable_deletion(
             affected_resource_types=affected_types,
             affected_subscription_ids=tuple(s.id for s in subscriptions),
         )
+        _store_command_outcome(db, reservation, input_fingerprint, outcome)
+        return outcome
 
     return execute_owner_command(
         db,
@@ -896,7 +977,9 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
             # replay evidence directly rather than requiring the generation
             # to still be open, or a genuine replay of exactly this terminal
             # outcome would wrongly fail closed as `no_open_generation`.
-            return _replay_restore_outcome(db, replay_id)
+            return _replay_restore_outcome(
+                db, reservation, replay_id, input_fingerprint
+            )
 
         record = _lock_open_record(db, command.account_id)
 
@@ -926,15 +1009,18 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
         if missing:
             record.state = AccountRecoveryState.blocked
             reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
-            db.flush()
-            return RecoveryBlocked(
+            outcome: RecoveryOutcome = RecoveryBlocked(
                 record_id=record.id, missing_participant_types=tuple(missing)
             )
+            _store_command_outcome(db, reservation, input_fingerprint, outcome)
+            return outcome
 
         snapshots = list(
             db.scalars(
                 select(AccountRecoverySubscriptionSnapshot)
-                .where(AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id)
+                .where(
+                    AccountRecoverySubscriptionSnapshot.recovery_record_id == record.id
+                )
                 .order_by(AccountRecoverySubscriptionSnapshot.subscription_id)
             ).all()
         )
@@ -951,21 +1037,19 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
             # re-deriving a possibly different one, but do not touch record
             # state — the generation stays exactly as retryable as before.
             reservation.ref_id = _pack_replay_ref(input_fingerprint, record.id)
-            db.flush()
-            return RecoveryBlockedByOfferDrift(
+            outcome = RecoveryBlockedByOfferDrift(
                 record_id=record.id,
                 account_id=command.account_id,
                 drifted_subscription_ids=drifted,
             )
+            _store_command_outcome(db, reservation, input_fingerprint, outcome)
+            return outcome
 
         restored_ids: list[UUID] = []
         unrestored_ids: list[UUID] = []
         for snapshot in eligible:
             subscription = db.get(Subscription, snapshot.subscription_id)
-            if (
-                subscription is not None
-                and subscription.status.value != "canceled"
-            ):
+            if subscription is not None and subscription.status.value != "canceled":
                 # Already in the target restored state from a prior partial
                 # attempt (or was never actually canceled) — treat as
                 # already-restored rather than re-invoking
@@ -1023,12 +1107,14 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
                 actor=command.context.actor,
                 account_id=subscriber.id,
             )
-            return RecoveryPartiallyRestored(
+            outcome = RecoveryPartiallyRestored(
                 record_id=record.id,
                 account_id=command.account_id,
                 restored_subscription_ids=tuple(restored_ids),
                 unrestored_subscription_ids=tuple(unrestored_ids),
             )
+            _store_command_outcome(db, reservation, input_fingerprint, outcome)
+            return outcome
 
         record.state = AccountRecoveryState.restored
         record.restored_at = datetime.now(UTC)
@@ -1069,11 +1155,13 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
             account_id=subscriber.id,
         )
 
-        return RecoveryRestored(
+        outcome = RecoveryRestored(
             record_id=record.id,
             account_id=command.account_id,
             restored_subscription_ids=tuple(restored_ids),
         )
+        _store_command_outcome(db, reservation, input_fingerprint, outcome)
+        return outcome
 
     return execute_owner_command(
         db,
@@ -1098,7 +1186,6 @@ def rebaseline_recovery_evidence(
     _validate_scope(command.context.scope)
 
     def operation() -> RebaselineApplied:
-        record = _lock_open_record(db, command.account_id)
         input_fingerprint = _input_fingerprint(
             str(command.account_id),
             command.confirmation_fingerprint,
@@ -1114,7 +1201,11 @@ def rebaseline_recovery_evidence(
         )
         replay_id = _resolve_replay(reservation, input_fingerprint)
         if replay_id is not None:
-            return _replay_rebaseline_outcome(db, replay_id)
+            return _replay_rebaseline_outcome(
+                db, reservation, replay_id, input_fingerprint
+            )
+
+        record = _lock_open_record(db, command.account_id)
 
         recomputed = _fingerprint(
             account_id=record.account_id,
@@ -1200,12 +1291,14 @@ def rebaseline_recovery_evidence(
             account_id=record.account_id,
         )
 
-        return RebaselineApplied(
+        outcome = RebaselineApplied(
             record_id=record.id,
             new_confirmation_fingerprint=new_fingerprint,
             fingerprint_revision=record.fingerprint_revision,
             affected_resource_types=tuple(record.affected_resource_types),
         )
+        _store_command_outcome(db, reservation, input_fingerprint, outcome)
+        return outcome
 
     return execute_owner_command(
         db,
@@ -1231,16 +1324,20 @@ class RecoveryEligibility:
 
 def describe_recovery_eligibility(db: Session, account_id: UUID) -> RecoveryEligibility:
     """Read-only query: never mutates, never locks for update."""
-    record = db.execute(
-        select(AccountRecoveryRecord)
-        .where(
-            AccountRecoveryRecord.account_id == account_id,
-            AccountRecoveryRecord.state.in_(
-                (AccountRecoveryState.open, AccountRecoveryState.blocked)
-            ),
+    record = (
+        db.execute(
+            select(AccountRecoveryRecord)
+            .where(
+                AccountRecoveryRecord.account_id == account_id,
+                AccountRecoveryRecord.state.in_(
+                    (AccountRecoveryState.open, AccountRecoveryState.blocked)
+                ),
+            )
+            .order_by(AccountRecoveryRecord.generation.desc())
         )
-        .order_by(AccountRecoveryRecord.generation.desc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if record is None:
         return RecoveryEligibility(
             account_id=account_id,

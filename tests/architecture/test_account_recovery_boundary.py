@@ -16,8 +16,9 @@ def _source(path: Path) -> str:
 
 def test_only_subscription_is_a_registered_participant() -> None:
     source = _source(SERVICE)
-    assert 'REGISTERED_RECOVERY_PARTICIPANTS: frozenset[str] = frozenset({"subscription"})' in (
-        source
+    assert (
+        'REGISTERED_RECOVERY_PARTICIPANTS: frozenset[str] = frozenset({"subscription"})'
+        in (source)
     )
 
 
@@ -118,4 +119,6 @@ def test_build_page_state_is_read_only() -> None:
         if isinstance(node, ast.Dict):
             for key in node.keys:
                 if isinstance(key, ast.Constant) and key.value == "purged_count":
-                    raise AssertionError("build_page_state must not return purged_count")
+                    raise AssertionError(
+                        "build_page_state must not return purged_count"
+                    )

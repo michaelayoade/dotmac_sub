@@ -18,8 +18,8 @@ from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     ALLOWED_RESTORERS,
-    ActivationIntent,
     PAYMENT_TRIGGERS,
+    ActivationIntent,
     RestorationOutcome,
     payment_clearable_reasons,
     restore_subscription,

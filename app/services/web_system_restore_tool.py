@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -135,15 +134,14 @@ def build_page_state(
 
 
 def _replay_safe_idempotency_key(*parts: str) -> str:
-    """Deterministic key for a form re-submission of the SAME review step.
+    """Bounded key for a form re-submission of the SAME review step.
 
     Each admin form here always carries the record's current
     ``confirmation_fingerprint`` (obtained from the review step this action
     confirms). That fingerprint changes on every generation/revision, so a
-    key derived from it collapses a genuine double-submit (same fingerprint)
-    into one replayed outcome while a later, distinct review (new
-    fingerprint) always gets its own key — never a stale cross-generation
-    replay.
+    server-rendered submission UUID distinguishes a later review even when
+    the fingerprint did not change after a partial or drifted restoration.
+    A duplicate POST from the same form retains the UUID and replays.
     """
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
@@ -153,6 +151,7 @@ def restore_via_recovery(
     *,
     subscriber_id: str,
     confirmation_fingerprint: str,
+    submission_key: UUID,
     actor_id: str,
     reason: str,
 ) -> account_recovery.RecoveryOutcome:
@@ -171,7 +170,10 @@ def restore_via_recovery(
         scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
         reason=reason,
         idempotency_key=_replay_safe_idempotency_key(
-            "account-recovery:restore", subscriber_id, confirmation_fingerprint
+            "account-recovery:restore",
+            subscriber_id,
+            confirmation_fingerprint,
+            str(submission_key),
         ),
     )
     command = account_recovery.RestoreAccountCommand(
@@ -187,6 +189,7 @@ def rebaseline_via_recovery(
     *,
     subscriber_id: str,
     confirmation_fingerprint: str,
+    submission_key: UUID,
     affected_resource_types: tuple[str, ...],
     actor_id: str,
     reason: str,
@@ -205,6 +208,7 @@ def rebaseline_via_recovery(
             "account-recovery:rebaseline",
             subscriber_id,
             confirmation_fingerprint,
+            str(submission_key),
             ",".join(sorted(affected_resource_types)),
         ),
     )

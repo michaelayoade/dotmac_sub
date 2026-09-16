@@ -119,9 +119,7 @@ def test_apply_goes_through_the_lifecycle_owner_not_a_raw_field_write(
         def close(self):
             pass
 
-    monkeypatch.setattr(
-        script, "SessionLocal", lambda: _NoCloseSession(db_session)
-    )
+    monkeypatch.setattr(script, "SessionLocal", lambda: _NoCloseSession(db_session))
 
     rc = script.main(execute=True)
     assert rc == 0
@@ -129,7 +127,4 @@ def test_apply_goes_through_the_lifecycle_owner_not_a_raw_field_write(
     db_session.refresh(sub)
     assert sub.status == SubscriptionStatus.canceled
     assert sub.cancel_reason is not None
-    assert (
-        "terminal subscriber" in sub.cancel_reason
-        or "QA" in sub.cancel_reason
-    )
+    assert "terminal subscriber" in sub.cancel_reason or "QA" in sub.cancel_reason

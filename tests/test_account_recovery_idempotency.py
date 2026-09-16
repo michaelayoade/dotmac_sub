@@ -12,6 +12,7 @@ decision or raising a raw integrity error.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,7 +21,11 @@ from app.models.catalog import SubscriptionStatus
 from app.services import account_recovery
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
-from tests.test_account_lifecycle import _make_offer, _make_subscriber, _make_subscription
+from tests.test_account_lifecycle import (
+    _make_offer,
+    _make_subscriber,
+    _make_subscription,
+)
 
 
 def _deletion_command(
@@ -129,6 +134,37 @@ def test_duplicate_deletion_request_replays_the_original_tombstone(db_session) -
     )
 
 
+def test_deletion_replay_keeps_original_fingerprint_after_rebaseline(
+    db_session,
+) -> None:
+    account_id, subscription_id = _make_account(db_session)
+    original = account_recovery.request_recoverable_deletion(
+        db_session,
+        _deletion_command(account_id, idempotency_key="delete-then-rebaseline"),
+    )
+    assert isinstance(original, account_recovery.DeletionTombstone)
+
+    db_session_adapter.release_read_transaction(db_session)
+    revised = account_recovery.rebaseline_recovery_evidence(
+        db_session,
+        _rebaseline_command(
+            account_id,
+            confirmation_fingerprint=original.confirmation_fingerprint,
+            affected_resource_types=("subscription", "enforcement_lock"),
+            idempotency_key="review-after-delete",
+        ),
+    )
+    assert revised.new_confirmation_fingerprint != original.confirmation_fingerprint
+
+    db_session_adapter.release_read_transaction(db_session)
+    replay = account_recovery.request_recoverable_deletion(
+        db_session,
+        _deletion_command(account_id, idempotency_key="delete-then-rebaseline"),
+    )
+    assert replay == original
+    assert replay.affected_subscription_ids == (subscription_id,)
+
+
 def test_duplicate_deletion_key_with_different_reason_is_a_typed_conflict(
     db_session,
 ) -> None:
@@ -188,6 +224,55 @@ def test_duplicate_restore_replays_the_original_outcome(db_session) -> None:
     assert isinstance(second, account_recovery.RecoveryRestored)
     assert second.record_id == first.record_id
     assert second.restored_subscription_ids == first.restored_subscription_ids
+
+
+def test_partial_restore_replays_original_after_fresh_key_succeeds(
+    db_session, monkeypatch
+) -> None:
+    account_id, subscription_id = _make_account(db_session)
+    tombstone = account_recovery.request_recoverable_deletion(
+        db_session, _deletion_command(account_id, idempotency_key="del-partial-replay")
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            account_recovery,
+            "restore_subscription_detailed",
+            lambda *_args, **_kwargs: SimpleNamespace(subscription_reactivated=False),
+        )
+        first = account_recovery.restore_account(
+            db_session,
+            _restore_command(
+                account_id,
+                confirmation_fingerprint=tombstone.confirmation_fingerprint,
+                idempotency_key="partial-restore-key",
+            ),
+        )
+    assert isinstance(first, account_recovery.RecoveryPartiallyRestored)
+    assert first.unrestored_subscription_ids == (subscription_id,)
+
+    db_session_adapter.release_read_transaction(db_session)
+    completed = account_recovery.restore_account(
+        db_session,
+        _restore_command(
+            account_id,
+            confirmation_fingerprint=tombstone.confirmation_fingerprint,
+            idempotency_key="fresh-restore-key",
+        ),
+    )
+    assert isinstance(completed, account_recovery.RecoveryRestored)
+
+    db_session_adapter.release_read_transaction(db_session)
+    replay = account_recovery.restore_account(
+        db_session,
+        _restore_command(
+            account_id,
+            confirmation_fingerprint=tombstone.confirmation_fingerprint,
+            idempotency_key="partial-restore-key",
+        ),
+    )
+    assert replay == first
 
 
 def test_duplicate_restore_key_with_different_actor_is_a_typed_conflict(
@@ -256,6 +341,47 @@ def test_duplicate_rebaseline_replays_the_original_outcome(db_session) -> None:
     assert second.record_id == first.record_id
     assert second.new_confirmation_fingerprint == first.new_confirmation_fingerprint
     assert second.fingerprint_revision == first.fingerprint_revision
+
+
+def test_rebaseline_replays_original_revision_after_later_review(db_session) -> None:
+    account_id, _ = _make_account(db_session)
+    tombstone = account_recovery.request_recoverable_deletion(
+        db_session,
+        _deletion_command(account_id, idempotency_key="del-rebaseline-replay"),
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    first = account_recovery.rebaseline_recovery_evidence(
+        db_session,
+        _rebaseline_command(
+            account_id,
+            confirmation_fingerprint=tombstone.confirmation_fingerprint,
+            affected_resource_types=("subscription",),
+            idempotency_key="first-rebaseline-key",
+        ),
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    later = account_recovery.rebaseline_recovery_evidence(
+        db_session,
+        _rebaseline_command(
+            account_id,
+            confirmation_fingerprint=first.new_confirmation_fingerprint,
+            affected_resource_types=("subscription", "enforcement_lock"),
+            idempotency_key="later-rebaseline-key",
+        ),
+    )
+    assert later.fingerprint_revision > first.fingerprint_revision
+
+    db_session_adapter.release_read_transaction(db_session)
+    replay = account_recovery.rebaseline_recovery_evidence(
+        db_session,
+        _rebaseline_command(
+            account_id,
+            confirmation_fingerprint=tombstone.confirmation_fingerprint,
+            affected_resource_types=("subscription",),
+            idempotency_key="first-rebaseline-key",
+        ),
+    )
+    assert replay == first
 
 
 def test_duplicate_rebaseline_key_with_different_resource_types_is_a_typed_conflict(

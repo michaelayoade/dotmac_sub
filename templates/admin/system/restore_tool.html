@@ -58,7 +58,7 @@
                                 <div class="text-xs text-slate-500">{{ item.id }}</div>
                             </td>
                             <td class="px-4 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.email }}{% if item.phone %}<br>{{ item.phone }}{% endif %}</td>
-                            <td class="px-4 py-2 text-xs text-slate-600 dark:text-slate-300">{{ record.deleted_at }}</td>
+                            <td class="px-4 py-2 text-xs text-slate-600 dark:text-slate-300">{{ record.deleted_at|local_datetime }}</td>
                             <td class="px-4 py-2 text-xs text-slate-600 dark:text-slate-300">{{ record.state.value }}</td>
                             <td class="px-4 py-2 text-right text-xs">
                                 <a href="/admin/system/tools/restore?q={{ query | urlencode }}&selected_id={{ item.id }}" class="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 dark:bg-slate-700 dark:text-slate-100">Review</a>
@@ -84,12 +84,14 @@
             <div class="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-200">
                 Blocked — no registered recovery participant for:
                 {{ selected_eligibility.missing_participant_types|join(', ') }}.
-                Restoration is refused with no state change until this is
-                re-baselined or a participant is registered.
+                Restoration is refused with no state change until the missing
+                participant is registered. Re-baselining cannot remove an
+                unsupported resource type.
             </div>
             <form method="POST" action="/admin/system/tools/restore/{{ selected_id }}/rebaseline" class="space-y-2">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="confirmation_fingerprint" value="{{ selected_eligibility.confirmation_fingerprint }}" />
+                <input type="hidden" name="submission_key" value="{{ rebaseline_submission_key }}" />
                 <label class="mb-1 block text-xs font-medium text-slate-500">Affected resource types (comma-separated, superset only)</label>
                 <input type="text" name="affected_resource_types" value="{{ selected_eligibility.affected_resource_types|join(',') }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
                 <label class="mb-1 block text-xs font-medium text-slate-500">Reviewer reason</label>
@@ -100,6 +102,7 @@
             <form method="POST" action="/admin/system/tools/restore/{{ selected_id }}" class="mt-2 space-y-2" onsubmit="return confirm('Proceed with restoration?');">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="confirmation_fingerprint" value="{{ selected_eligibility.confirmation_fingerprint }}" />
+                <input type="hidden" name="submission_key" value="{{ restore_submission_key }}" />
                 <label class="mb-1 block text-xs font-medium text-slate-500">Reason</label>
                 <input type="text" name="reason" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
                 <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Restore account</button>

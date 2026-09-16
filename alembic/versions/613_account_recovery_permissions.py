@@ -1,7 +1,7 @@
 """Add customer.account_recovery permissions, seeded only to the admin role.
 
-Revision ID: 608_account_recovery_permissions
-Revises: 607_account_recovery_evidence
+Revision ID: 613_account_recovery_permissions
+Revises: 612_account_recovery_evidence
 Create Date: 2026-09-13
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "608_account_recovery_permissions"
-down_revision: str | None = "607_account_recovery_evidence"
+revision: str = "613_account_recovery_permissions"
+down_revision: str | None = "612_account_recovery_evidence"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -49,8 +49,8 @@ DECLARED_METADATA_KEYS: Final[dict[str, str]] = {
     # `recovery_snapshot`) is RETIRED, not merely relabeled: nothing reads or
     # writes any of those seven keys anymore.
     # `customer.account_recovery` (app/services/account_recovery.py) is
-    # their typed home, migration 607_account_recovery_evidence backfilled
-    # every existing row into a typed `AccountRecoveryRecord` +
+    # their typed home, migration 612_account_recovery_evidence backfilled
+    # every existing restore-tool row into a typed `AccountRecoveryRecord` +
     # `AccountRecoverySubscriptionSnapshot` and removed the keys from
     # `metadata_`, and per this module's own rule ("retiring a key means
     # deleting its entry in the same change that moves it") their entries

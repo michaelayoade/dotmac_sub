@@ -4,6 +4,8 @@ from app.models.access_invitation import (  # noqa: F401
     AccessInvitationStatus,
 )
 from app.models.account_recovery import (  # noqa: F401
+    AccountRecoveryBlockedPreflight,
+    AccountRecoveryCommandOutcome,
     AccountRecoveryRecord,
     AccountRecoveryState,
     AccountRecoverySubscriptionSnapshot,

@@ -774,9 +774,13 @@ DOMAIN = DomainSOT(
                         "idempotency_key, reserved as a row in the shared "
                         "idempotency_keys table (scoped per command kind). A "
                         "retry presenting the SAME key returns the ORIGINAL typed "
-                        "outcome — replayed by re-reading the now-canonical "
-                        "AccountRecoveryRecord/snapshot state, never a cached "
-                        "decision — while a later reuse of that key with a "
+                        "outcome. A preflight refusal replays from "
+                        "account_recovery_blocked_preflight; restore and "
+                        "re-baseline and a deletion tombstone replay from immutable "
+                        "account_recovery_command_outcomes rows stored in the "
+                        "same owner transaction as the effect and idempotency "
+                        "reservation. Later commands cannot rewrite the original "
+                        "result. A later reuse of that key with a "
                         "DIFFERENT input fingerprint (account, actor, reason, "
                         "confirmation_fingerprint, or affected_resource_types, "
                         "depending on the command) fails closed as a typed "
@@ -821,10 +825,8 @@ DOMAIN = DomainSOT(
                         "no open recovery generation",
                         "confirmation fingerprint mismatch",
                         "an affected resource type with no registered participant",
-                        "a re-baseline that would narrow previously-recorded "
-                        "evidence",
-                        "an idempotency key reused with a materially different "
-                        "command",
+                        "a re-baseline that would narrow previously-recorded evidence",
+                        "an idempotency key reused with a materially different command",
                         "a command presented outside its required write scope",
                     ),
                 ),
@@ -832,6 +834,7 @@ DOMAIN = DomainSOT(
                     event_types=(
                         "account_recovery.deletion_tombstoned",
                         "account_recovery.restored",
+                        "account_recovery.partially_restored",
                         "account_recovery.rebaselined",
                     ),
                     schema_version=1,
@@ -849,9 +852,7 @@ DOMAIN = DomainSOT(
                     state=AuthorityMigrationState.CUT_OVER,
                     old_owner=(
                         "web_system_restore_tool.py's own metadata_-JSON "
-                        "deletion/snapshot/cascade mechanism, and "
-                        "account_deletion.py's separate metadata_ deletion flag "
-                        "lineage"
+                        "deletion/snapshot/cascade mechanism"
                     ),
                     new_owner="customer.account_recovery",
                     verification=(
@@ -866,11 +867,12 @@ DOMAIN = DomainSOT(
                         "status write; every restoration goes through this owner."
                     ),
                     fallback_retirement=(
-                        "Both legacy metadata_-JSON lineages are backfilled into "
-                        "typed rows and their keys removed by migration "
-                        "607_account_recovery_evidence; the GET-driven automatic "
-                        "purge is removed with no replacement (Records-owned "
-                        "scheduled-purge debt)."
+                        "The restore-tool metadata_-JSON lineage is backfilled "
+                        "into typed rows and its seven keys removed by migration "
+                        "612_account_recovery_evidence; the distinct self-service "
+                        "account_deletion_* lineage remains unmigrated and never "
+                        "recoverable. The GET-driven automatic purge is removed "
+                        "with no replacement (Records-owned scheduled-purge debt)."
                     ),
                 ),
                 steward="customer operations",

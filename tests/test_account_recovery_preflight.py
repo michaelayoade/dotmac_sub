@@ -17,21 +17,27 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
 from app.models.account_recovery import AccountRecoveryRecord
 from app.models.catalog import AddOn, AddOnType, SubscriptionAddOn, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.idempotency import IdempotencyKey
 from app.services import account_recovery
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
-from tests.test_account_lifecycle import _make_offer, _make_subscriber, _make_subscription
+from tests.test_account_lifecycle import (
+    _make_offer,
+    _make_subscriber,
+    _make_subscription,
+)
 
 
 def _add_on(db: Session) -> AddOn:
-    add_on = AddOn(name=f"Test Add-on {uuid.uuid4().hex[:6]}", addon_type=AddOnType.custom)
+    add_on = AddOn(
+        name=f"Test Add-on {uuid.uuid4().hex[:6]}", addon_type=AddOnType.custom
+    )
     db.add(add_on)
     db.flush()
     return add_on
@@ -64,7 +70,9 @@ def test_active_add_on_blocks_deletion_with_zero_mutation(db_session) -> None:
     )
     add_on = _add_on(db_session)
     db_session.add(
-        SubscriptionAddOn(subscription_id=subscription.id, add_on_id=add_on.id, end_at=None)
+        SubscriptionAddOn(
+            subscription_id=subscription.id, add_on_id=add_on.id, end_at=None
+        )
     )
     db_session.commit()
 
@@ -87,6 +95,51 @@ def test_active_add_on_blocks_deletion_with_zero_mutation(db_session) -> None:
         .count()
         == 0
     )
+
+
+def test_multi_subscription_preflight_refusal_replays_with_bounded_reference(
+    db_session,
+) -> None:
+    subscriber = _make_subscriber(db_session)
+    offer = _make_offer(db_session)
+    first = _make_subscription(db_session, subscriber, offer)
+    second = _make_subscription(db_session, subscriber, offer)
+    account_id = subscriber.id
+    blocked_ids = {first.id, second.id}
+    add_on = _add_on(db_session)
+    db_session.add(
+        SubscriptionAddOn(subscription_id=first.id, add_on_id=add_on.id, end_at=None)
+    )
+    db_session.commit()
+
+    key = f"preflight:{uuid.uuid4()}"
+    command = _command(account_id, idempotency_key=key)
+    db_session_adapter.release_read_transaction(db_session)
+    blocked = account_recovery.request_recoverable_deletion(db_session, command)
+    assert isinstance(blocked, account_recovery.DeletionPreflightBlocked)
+    assert set(blocked.blocked_subscription_ids) == blocked_ids
+    reservation = (
+        db_session.query(IdempotencyKey)
+        .filter(
+            IdempotencyKey.scope == "account_recovery:request_deletion",
+            IdempotencyKey.key == key,
+        )
+        .one()
+    )
+    assert reservation.ref_id is not None
+    assert len(reservation.ref_id) <= 120
+
+    # A later retry with the same key is the original refusal, even if the
+    # unsupported add-on has since ended. A new review needs a new key.
+    db_session.query(SubscriptionAddOn).filter(
+        SubscriptionAddOn.subscription_id == first.id
+    ).update({"end_at": datetime.now(UTC)})
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+    replayed = account_recovery.request_recoverable_deletion(
+        db_session, _command(account_id, idempotency_key=key)
+    )
+    assert replayed == blocked
 
 
 def test_ended_add_on_does_not_block_deletion(db_session) -> None:
@@ -124,6 +177,7 @@ def test_active_enforcement_lock_blocks_deletion_with_zero_mutation(db_session) 
             subscription_id=subscription.id,
             subscriber_id=subscriber.id,
             reason=EnforcementReason.overdue,
+            source="test:account_recovery_preflight",
             is_active=True,
         )
     )
@@ -159,6 +213,7 @@ def test_resolved_enforcement_lock_does_not_block_deletion(db_session) -> None:
             subscription_id=subscription.id,
             subscriber_id=subscriber.id,
             reason=EnforcementReason.overdue,
+            source="test:account_recovery_preflight",
             is_active=False,
             resolved_at=datetime.now(UTC),
             resolved_by="test",
@@ -185,7 +240,9 @@ def test_already_canceled_subscription_is_never_preflight_checked(db_session) ->
     # An add-on left dangling on an already-canceled subscription must not
     # block a deletion that touches nothing new on it.
     db_session.add(
-        SubscriptionAddOn(subscription_id=subscription.id, add_on_id=add_on.id, end_at=None)
+        SubscriptionAddOn(
+            subscription_id=subscription.id, add_on_id=add_on.id, end_at=None
+        )
     )
     db_session.commit()
 

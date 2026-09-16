@@ -21,7 +21,6 @@ from app.models.enforcement_lock import (
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     ALLOWED_RESTORERS,
-    ActivationIntent,
     activate_subscription,
     cancel_subscription,
     compute_account_status,

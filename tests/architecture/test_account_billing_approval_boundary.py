@@ -132,8 +132,7 @@ def test_exactly_six_call_sites_each_pass_a_typed_activation_intent() -> None:
         for call in calls:
             member = _typed_intent_member(call)
             assert member is not None, (
-                f"{name} calls _require_billing_approval with no explicit "
-                "intent="
+                f"{name} calls _require_billing_approval with no explicit intent="
             )
             if name == _FORWARDS_ITS_OWN_INTENT_PARAMETER:
                 assert _requires_typed_intent_parameter(source, name), (
@@ -210,26 +209,20 @@ def test_sensitivity_an_unexpected_seventh_call_site_is_detected() -> None:
     )
     sites = _billing_approval_call_sites(mutated)
     assert set(sites) != EXPECTED_BILLING_APPROVAL_CALL_SITES
-    assert "some_new_function" in (
-        set(sites) - EXPECTED_BILLING_APPROVAL_CALL_SITES
-    )
+    assert "some_new_function" in (set(sites) - EXPECTED_BILLING_APPROVAL_CALL_SITES)
 
 
 def test_sensitivity_an_untyped_or_wrong_intent_call_is_detected() -> None:
     no_intent = _SYNTHETIC_SIX.replace(
         "intent=ActivationIntent.ACCOUNT_STATUS_REQUEST", ""
     ).replace("intent=x, )", ")")
-    call = _billing_approval_call_sites(no_intent)[
-        "apply_requested_account_status"
-    ][0]
+    call = _billing_approval_call_sites(no_intent)["apply_requested_account_status"][0]
     assert _typed_intent_member(call) is None
 
     wrong_type = _SYNTHETIC_SIX.replace(
         "intent=ActivationIntent.ACCOUNT_STATUS_REQUEST", 'intent="active"'
     )
-    call = _billing_approval_call_sites(wrong_type)[
-        "apply_requested_account_status"
-    ][0]
+    call = _billing_approval_call_sites(wrong_type)["apply_requested_account_status"][0]
     assert _typed_intent_member(call) == "<non-typed>"
 
 

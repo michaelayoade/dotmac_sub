@@ -1,21 +1,11 @@
-"""Create customer.account_recovery evidence tables and backfill both legacy
-deletion-evidence lineages.
+"""Create customer.account_recovery evidence tables and backfill the retired
+administrative restore-tool lineage.
 
-Revision ID: 607_account_recovery_evidence
-Revises: 606_project_task_subtasks
+Revision ID: 612_account_recovery_evidence
+Revises: 611_offer_versions_unique_version_number
 Create Date: 2026-09-13
 
-Two competing legacy lineages recorded a subscriber deletion before this
-owner existed, both as JSON in ``subscribers.metadata_``:
-
-1. ``app/services/account_deletion.py`` (self-service soft-delete) — keys
-   ``account_deletion_requested_at`` / ``account_deletion_reason``. This
-   lineage NEVER touched anything beyond the subscriber's own subscriptions
-   (it only calls `transition_account_status`), so it is safe to backfill as
-   affecting exactly ``{subscription}`` — that is a true structural fact
-   about that code path, not an invented narrower history.
-
-2. ``app/services/web_system_restore_tool.py``'s retired cascade — keys
+``app/services/web_system_restore_tool.py``'s retired cascade wrote keys
    ``recovery_deleted_at`` / ``recovery_deleted_by`` / ``recovery_snapshot``
    / ``recovery_purge_due_at`` / ``recovery_purged_at``. This lineage
    touched invoices, payments, service orders, RADIUS accounts/users, IP/ONT
@@ -28,9 +18,10 @@ owner existed, both as JSON in ``subscribers.metadata_``:
    that mutated more than subscriptions unless the stored snapshot proves it
    did not, in this instance).
 
-Legacy JSON keys are removed from ``metadata_`` only after the corresponding
-typed row exists, in the same migration, so there is never a window with
-neither representation.
+The distinct self-service ``account_deletion_*`` lineage remains active,
+permanent and unmigrated; this migration neither interprets nor removes it.
+Restore-tool JSON keys are removed from ``metadata_`` only after their typed
+row exists in the same migration.
 """
 
 from __future__ import annotations
@@ -38,14 +29,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
+from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "607_account_recovery_evidence"
-down_revision: str | None = "606_project_task_subtasks"
+revision: str = "612_account_recovery_evidence"
+down_revision: str | None = "611_offer_versions_unique_version_number"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -94,9 +86,7 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column(
-            "state", sa.String(length=16), nullable=False, server_default="open"
-        ),
+        sa.Column("state", sa.String(length=16), nullable=False, server_default="open"),
         sa.Column(
             "affected_resource_types",
             postgresql.ARRAY(sa.String(length=48)),
@@ -105,9 +95,7 @@ def upgrade() -> None:
         sa.Column("command_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("correlation_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("idempotency_key", sa.String(length=160), nullable=True),
-        sa.Column(
-            "confirmation_fingerprint", sa.String(length=128), nullable=False
-        ),
+        sa.Column("confirmation_fingerprint", sa.String(length=128), nullable=False),
         sa.Column(
             "fingerprint_revision", sa.Integer(), nullable=False, server_default="1"
         ),
@@ -159,7 +147,9 @@ def upgrade() -> None:
         ),
         sa.Column("pre_deletion_status", sa.String(length=32), nullable=False),
         sa.Column(
-            "pre_deletion_offer_version_id", postgresql.UUID(as_uuid=True), nullable=True
+            "pre_deletion_offer_version_id",
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
         ),
         sa.UniqueConstraint(
             "recovery_record_id",
@@ -172,7 +162,7 @@ def upgrade() -> None:
 
 
 def _backfill_legacy_evidence() -> None:
-    """Create typed rows for both legacy lineages, then strip their JSON keys.
+    """Create typed rows for the retired tool lineage, then strip its keys.
 
     Runs as raw SQL/Python inside the migration transaction so it is
     forward-only and safe to re-run (guarded by NOT EXISTS on account_id +
@@ -183,17 +173,27 @@ def _backfill_legacy_evidence() -> None:
     rows = conn.execute(
         sa.text(
             "SELECT id, metadata_ FROM subscribers "
-            "WHERE metadata_ IS NOT NULL AND ("
-            "  metadata_::jsonb ? 'account_deletion_requested_at' "
-            "  OR metadata_::jsonb ? 'recovery_deleted_at'"
-            ")"
+            "WHERE metadata_ IS NOT NULL "
+            "AND (metadata_::jsonb ? 'recovery_deleted_at' "
+            "OR metadata_::jsonb ? 'recovery_purged_at')"
         )
     ).fetchall()
 
     for subscriber_id, metadata_raw in rows:
-        metadata = metadata_raw if isinstance(metadata_raw, dict) else json.loads(
-            metadata_raw or "{}"
+        metadata = (
+            metadata_raw
+            if isinstance(metadata_raw, dict)
+            else json.loads(metadata_raw or "{}")
         )
+
+        # The retired tool made purge a terminal, non-recoverable boundary.
+        # No typed Records disposition exists in this slice, so opening a
+        # recovery generation (or erasing the marker) would invent authority.
+        if metadata.get("recovery_purged_at"):
+            raise RuntimeError(
+                "Refusing to backfill a purged restore-tool row without a "
+                "typed terminal Records disposition"
+            )
 
         already = conn.execute(
             sa.text(
@@ -205,34 +205,70 @@ def _backfill_legacy_evidence() -> None:
         if already:
             continue
 
-        subscription_rows = conn.execute(
-            sa.text(
-                "SELECT id, status, offer_version_id FROM subscriptions "
-                "WHERE subscriber_id = :account_id"
-            ),
-            {"account_id": subscriber_id},
-        ).fetchall()
+        current_subscription_ids = {
+            UUID(str(row[0]))
+            for row in conn.execute(
+                sa.text(
+                    "SELECT id FROM subscriptions WHERE subscriber_id = :account_id"
+                ),
+                {"account_id": subscriber_id},
+            ).fetchall()
+        }
 
-        has_tool_lineage = bool(metadata.get("recovery_deleted_at"))
-        has_self_service_lineage = bool(
-            metadata.get("account_deletion_requested_at")
-        )
+        if not metadata.get("recovery_deleted_at"):
+            raise RuntimeError(
+                "Refusing to discard incomplete restore-tool deletion evidence"
+            )
 
-        if has_tool_lineage:
-            snapshot = metadata.get("recovery_snapshot") or {}
+        subscription_snapshots: list[tuple[UUID, str]] = []
+        if metadata.get("recovery_deleted_at"):
+            snapshot = metadata.get("recovery_snapshot")
+            if not isinstance(snapshot, dict) or not isinstance(
+                snapshot.get("subscriptions"), list
+            ):
+                raise RuntimeError(
+                    "Refusing to backfill restore-tool evidence without its "
+                    "original subscription snapshot"
+                )
+            seen_subscription_ids: set[UUID] = set()
+            for item in snapshot["subscriptions"]:
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("status"), str)
+                    or not item["status"]
+                ):
+                    raise RuntimeError(
+                        "Refusing to backfill malformed subscription snapshot evidence"
+                    )
+                try:
+                    sub_id = UUID(str(item["id"]))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Refusing to backfill malformed subscription snapshot identity"
+                    ) from exc
+                if (
+                    sub_id not in current_subscription_ids
+                    or sub_id in seen_subscription_ids
+                ):
+                    raise RuntimeError(
+                        "Refusing to backfill missing or duplicate subscription snapshot"
+                    )
+                seen_subscription_ids.add(sub_id)
+                subscription_snapshots.append((sub_id, item["status"]))
             affected = {"subscription"}
-            if isinstance(snapshot, dict):
-                if snapshot.get("service_orders"):
-                    affected.add("service_order")
-                if snapshot.get("cpe_devices"):
-                    affected.add("cpe_device")
+            if snapshot.get("service_orders"):
+                affected.add("service_order")
+            if snapshot.get("cpe_devices"):
+                affected.add("cpe_device")
             # Fail closed: this cascade could touch invoices, payments,
             # RADIUS, IP/ONT/splitter assignments, and the snapshot never
             # recorded those categories at all, so their involvement can
             # never be excluded from the stored evidence alone.
             affected.update(_CASCADE_ALWAYS_AFFECTED)
             deletion_intent = "administrative_recoverable_deletion"
-            deleted_by = str(metadata.get("recovery_deleted_by") or "system_restore_tool")
+            deleted_by = str(
+                metadata.get("recovery_deleted_by") or "system_restore_tool"
+            )
             deleted_at = metadata.get("recovery_deleted_at")
             reason = "Backfilled from retired web_system_restore_tool.py lineage"
             last_restored_at = metadata.get("recovery_last_restored_at")
@@ -246,25 +282,6 @@ def _backfill_legacy_evidence() -> None:
                 state = "open"
                 restored_at = None
                 restored_by = None
-        elif has_self_service_lineage:
-            # Structurally true: this lineage only ever calls
-            # `transition_account_status`, which only cancels subscriptions.
-            affected = {"subscription"}
-            deletion_intent = "customer_requested_termination"
-            deleted_by = "customer:self_service_deletion"
-            deleted_at = metadata.get("account_deletion_requested_at")
-            reason = metadata.get("account_deletion_reason") or (
-                "Backfilled from retired account_deletion.py metadata lineage"
-            )
-            # Self-service deletion was never recoverable, so it is
-            # backfilled directly as restored. `deleted_at` is the only
-            # timestamp evidence this lineage recorded, so it also stands in
-            # for `restored_at` to satisfy the state/timestamp CHECK.
-            state = "restored"
-            restored_at = deleted_at
-            restored_by = deleted_by
-        else:
-            continue
 
         record_id = conn.execute(sa.text("SELECT gen_random_uuid()")).scalar()
         command_id = conn.execute(sa.text("SELECT gen_random_uuid()")).scalar()
@@ -283,9 +300,7 @@ def _backfill_legacy_evidence() -> None:
         # mirrors the exact algorithm `account_recovery.py::_fingerprint`
         # uses at runtime (see other migrations, e.g. 268/474, which take
         # the same approach for the identical reason).
-        fingerprint = hashlib.sha256(
-            fingerprint_source.encode("utf-8")
-        ).hexdigest()
+        fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
 
         conn.execute(
             sa.text(
@@ -320,7 +335,7 @@ def _backfill_legacy_evidence() -> None:
             },
         )
 
-        for sub_id, status, offer_version_id in subscription_rows:
+        for sub_id, status in subscription_snapshots:
             conn.execute(
                 sa.text(
                     "INSERT INTO account_recovery_subscription_snapshots ("
@@ -328,21 +343,18 @@ def _backfill_legacy_evidence() -> None:
                     "pre_deletion_status, pre_deletion_offer_version_id"
                     ") VALUES ("
                     "gen_random_uuid(), :record_id, :subscription_id, "
-                    ":status, :offer_version_id"
+                    ":status, NULL"
                     ")"
                 ),
                 {
                     "record_id": record_id,
                     "subscription_id": sub_id,
                     "status": status,
-                    "offer_version_id": offer_version_id,
                 },
             )
 
         cleaned = dict(metadata)
         for key in (
-            "account_deletion_requested_at",
-            "account_deletion_reason",
             "recovery_deleted_at",
             "recovery_deleted_by",
             "recovery_purge_due_at",
@@ -362,14 +374,14 @@ def downgrade() -> None:
     # Tombstones must not silently disappear. Downgrading this migration is
     # refused once any typed row exists post-cutover (including the legacy
     # backfill this same migration performs) rather than attempting a lossy
-    # rehydration back into the two retired, incompatible JSON shapes.
+    # rehydration back into the retired JSON shape.
     conn = op.get_bind()
     count = conn.execute(
         sa.text("SELECT count(*) FROM account_recovery_records")
     ).scalar()
     if count:
         raise RuntimeError(
-            "Refusing to downgrade 607_account_recovery_evidence: "
+            "Refusing to downgrade 612_account_recovery_evidence: "
             f"{count} account_recovery_records row(s) exist and downgrading "
             "would silently drop tombstone lineage. Manually verify and "
             "clear before downgrading."

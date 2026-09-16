@@ -23,10 +23,7 @@ def test_correction_owner_uses_one_public_transaction_and_flush_only_participant
     assert "stage_access_credential_binding(" in source
     assert "fup_state.clear(" in source
     assert "cancel_subscription(" in source
-    assert (
-        "credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION"
-        in source
-    )
+    assert "credit_intent=CancellationCreditIntent.ADMINISTRATIVE_CORRECTION" in source
     assert "generate_credit" not in source
     binding_source = BINDING_OWNER.read_text(encoding="utf-8")
     assert ".commit(" not in binding_source

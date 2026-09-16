@@ -45,8 +45,7 @@ from app.schemas.subscriber import (
     SubscriberNotificationPreferencesUpdate,
     SubscriberUpdate,
 )
-from app.services import account_recovery
-from app.services import account_status_commands, customer_portal
+from app.services import account_recovery, account_status_commands, customer_portal
 from app.services import billing_day as billing_day_service
 from app.services import catalog as catalog_service
 from app.services import notification as notification_service

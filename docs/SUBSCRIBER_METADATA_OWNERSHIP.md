@@ -116,8 +116,8 @@ the administrative recovery owner.
 > **2026-09-13 update.** The `web_system_restore_tool` lineage (seven
 > keys, including `recovery_snapshot`) moved
 > to the newly-registered `customer.account_recovery` SOT owner (see
-> `docs/SOT_RELATIONSHIP_MAP.md`), migration `607_account_recovery_evidence`
-> backfilled every existing row into typed `AccountRecoveryRecord` /
+> `docs/SOT_RELATIONSHIP_MAP.md`), migration `612_account_recovery_evidence`
+> backfilled every existing restore-tool row into typed `AccountRecoveryRecord` /
 > `AccountRecoverySubscriptionSnapshot` rows and removed the seven keys from
 > `metadata_`, and `app/services/subscriber_metadata_keys.py` no longer
 > declares them at all — a retired key is deleted from that registry, not
@@ -269,6 +269,6 @@ orders and CPE devices are NOT part of the new typed model at all —
 not re-homed, because `customer.account_recovery` registers only
 `subscription` as a supported recovery participant; a legacy row whose old
 snapshot named a service order or CPE device is backfilled fail-closed (see
-migration `607_account_recovery_evidence`) and reports
+migration `612_account_recovery_evidence`) and reports
 `blocked_missing_participants` rather than silently claiming it can restore
 resources nothing owns anymore.
