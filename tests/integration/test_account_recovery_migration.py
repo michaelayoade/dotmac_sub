@@ -94,6 +94,13 @@ def test_evidence_migration_backfills_before_removing_legacy_keys() -> None:
     )
 
 
+def test_backfill_uses_physical_subscriber_metadata_column() -> None:
+    source = EVIDENCE.read_text(encoding="utf-8")
+    assert '"SELECT id, metadata FROM subscribers "' in source
+    assert '"UPDATE subscribers SET metadata = :metadata WHERE id = :id"' in source
+    assert '"SELECT id, metadata_ FROM subscribers "' not in source
+
+
 def test_evidence_migration_never_narrows_tool_lineage_to_subscription_only() -> None:
     """Fail-closed: the retired cascade tool's rows must always include the
     non-subscription categories it could have touched, since the JSON

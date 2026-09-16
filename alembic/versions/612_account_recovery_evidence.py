@@ -172,10 +172,10 @@ def _backfill_legacy_evidence() -> None:
 
     rows = conn.execute(
         sa.text(
-            "SELECT id, metadata_ FROM subscribers "
-            "WHERE metadata_ IS NOT NULL "
-            "AND (metadata_::jsonb ? 'recovery_deleted_at' "
-            "OR metadata_::jsonb ? 'recovery_purged_at')"
+            "SELECT id, metadata FROM subscribers "
+            "WHERE metadata IS NOT NULL "
+            "AND (metadata::jsonb ? 'recovery_deleted_at' "
+            "OR metadata::jsonb ? 'recovery_purged_at')"
         )
     ).fetchall()
 
@@ -365,7 +365,7 @@ def _backfill_legacy_evidence() -> None:
         ):
             cleaned.pop(key, None)
         conn.execute(
-            sa.text("UPDATE subscribers SET metadata_ = :metadata WHERE id = :id"),
+            sa.text("UPDATE subscribers SET metadata = :metadata WHERE id = :id"),
             {"metadata": json.dumps(cleaned), "id": subscriber_id},
         )
 
