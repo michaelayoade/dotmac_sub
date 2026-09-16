@@ -2578,7 +2578,7 @@ class CancellationCreditIntent(enum.StrEnum):
     deliberately distinct and never share a code path: a recoverable
     deletion tombstones the account and is restorable through
     `customer.account_recovery`; an administrative correction (duplicate
-    CRM record cleanup, mistaken-subscription correction) is a permanent
+    customer-record cleanup, mistaken-subscription correction) is a permanent
     data fix undoing a record that never represented a real customer
     decision, and it is never recorded or restored through the recovery
     system.
@@ -2598,7 +2598,7 @@ def cancellation_credit_intent_should_evaluate(
     A recoverable administrative deletion (the account-recovery tombstone
     path) never generates a credit: the subscription is expected to be
     reversed by the registered recovery participant, not settled as a real
-    termination. An administrative correction (duplicate CRM record
+    termination. An administrative correction (duplicate customer record
     cleanup, mistaken-subscription correction) also never generates a
     credit — it undoes a record that should never have persisted as an
     active subscription, not a real termination — but it is a SEPARATE

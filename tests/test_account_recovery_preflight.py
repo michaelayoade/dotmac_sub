@@ -25,6 +25,7 @@ from app.models.catalog import AddOn, AddOnType, SubscriptionAddOn, Subscription
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.idempotency import IdempotencyKey
 from app.services import account_recovery
+from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from tests.test_account_lifecycle import (
@@ -59,6 +60,7 @@ def _command(
         ),
         requested_by="admin",
         deleted_by="admin",
+        audit_actor=AuditActor.user("admin"),
     )
 
 

@@ -886,23 +886,17 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
     SourceSurface(
         path="app/services/web_system_restore_tool.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        authority=AuthorityRole.PARALLEL_WRITER,
-        boundary=BoundaryRole.PERSISTS,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
         reachability=Reachability.INTERNAL_ONLY,
-        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
+        owning_service="customer.account_recovery",
         registry_declared=False,
         open_question=None,
         note=(
-            "A restore tool reactivates accounts and rewrites their `metadata` blob. "
-            "Decided 2026-08-21: Customers owns recovery INTENT and the existing "
-            "cross-domain cascade is decomposed, so this tool stops reaching into "
-            "account rows and asks the account owner to restore instead. Decomposing "
-            "the cascade is what makes the cohort-1 half separable at all — today one "
-            "restore touches invoices, payments, credentials, RADIUS, IP assignments "
-            "and ONT assignments in the same pass, and only the account rows are "
-            "cohort 1."
+            "A retired restore tool is now a typed adapter over the account-recovery "
+            "owner and no longer writes cohort state directly."
         ),
     ),
     SourceSurface(
@@ -1187,6 +1181,22 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         note=(
             "An applied migration writing back-office reference columns on "
             "`organizations`; applied, so it cannot run again."
+        ),
+    ),
+    SourceSurface(
+        path="alembic/versions/612_account_recovery_evidence.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "An applied migration backfilling typed account-recovery evidence and "
+            "clearing the retired restore-tool metadata lineage."
         ),
     ),
 )

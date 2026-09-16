@@ -38,6 +38,7 @@ from app.services import (
     account_status_commands,
 )
 from app.services import subscriber as subscriber_service
+from app.services.audit_adapter import AuditActor
 from app.services.auth_dependencies import require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -473,6 +474,11 @@ def delete_subscriber(
         context=context,
         requested_by=actor,
         deleted_by=actor,
+        audit_actor=(
+            AuditActor.api_key(principal_id)
+            if actor_type == "api_key"
+            else AuditActor.user(principal_id)
+        ),
     )
     try:
         outcome = account_recovery.request_recoverable_deletion(db, command)

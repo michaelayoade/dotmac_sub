@@ -17,8 +17,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.account_recovery import AccountRecoveryRecord
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.catalog import SubscriptionStatus
 from app.services import account_recovery
+from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from tests.test_account_lifecycle import (
@@ -44,6 +46,7 @@ def _deletion_command(
         ),
         requested_by="admin",
         deleted_by="admin",
+        audit_actor=AuditActor.user("admin"),
     )
 
 
@@ -132,6 +135,38 @@ def test_duplicate_deletion_request_replays_the_original_tombstone(db_session) -
         .count()
         == 1
     )
+
+
+def test_api_key_deletion_retains_typed_audit_principal(db_session) -> None:
+    account_id, _ = _make_account(db_session)
+    command_id = uuid.uuid4()
+    account_recovery.request_recoverable_deletion(
+        db_session,
+        account_recovery.RequestRecoverableDeletionCommand(
+            account_id=account_id,
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="api_key:key-123",
+                scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+                reason="API-key administrative deletion",
+                idempotency_key="api-key-deletion-test",
+            ),
+            requested_by="api_key:key-123",
+            deleted_by="api_key:key-123",
+            audit_actor=AuditActor.api_key("key-123"),
+        ),
+    )
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == "customer.account_recovery.deletion_tombstoned",
+            AuditEvent.entity_id == str(account_id),
+        )
+        .one()
+    )
+    assert audit.actor_type is AuditActorType.api_key
+    assert audit.actor_id == "key-123"
 
 
 def test_deletion_replay_keeps_original_fingerprint_after_rebaseline(

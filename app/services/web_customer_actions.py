@@ -58,7 +58,7 @@ from app.services.account_billing_approval import (
     change_account_billing_approval,
 )
 from app.services.account_lifecycle import compute_account_status, derive_account_status
-from app.services.audit_adapter import record_audit_event, stage_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event, stage_audit_event
 from app.services.branding_config import get_brand
 from app.services.bulk_actions import (
     BulkSelection,
@@ -3091,6 +3091,7 @@ def _request_recoverable_customer_deletion(
         context=context,
         requested_by=actor,
         deleted_by=actor,
+        audit_actor=AuditActor.user(actor),
     )
     try:
         outcome = account_recovery.request_recoverable_deletion(db, command)

@@ -74,7 +74,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from tests/integration/test_team_inbox_contact_link_concurrency.py: two
 #: PostgreSQL concurrency proofs for reviewed endpoint links and first-inbound
 #: identity claims, each with its own `sessionmaker`.
-TEST_FIXTURE_BASELINE_TOTAL = 131
+#: +1 from tests/integration/test_account_recovery_concurrency.py: an isolated
+#: two-session PostgreSQL proof that a first-use recovery key serializes on
+#: the account row lock and replays one committed tombstone.
+TEST_FIXTURE_BASELINE_TOTAL = 132
 
 
 def _baseline() -> dict[str, int]:

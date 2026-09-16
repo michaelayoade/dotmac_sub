@@ -718,7 +718,8 @@ DOMAIN = DomainSOT(
                         source=(
                             "typed deletion, restore, or re-baseline command with "
                             "actor, reason, correlation, and command/idempotency "
-                            "identity"
+                            "identity; deletion also carries the authenticated "
+                            "typed audit principal (user or API key)"
                         ),
                     ),
                     AuthorityInput(
@@ -761,13 +762,14 @@ DOMAIN = DomainSOT(
                         "its CommandContext and never call db.commit() themselves."
                     ),
                     locking=(
-                        "The Subscriber locks first, then the current open/blocked "
-                        "AccountRecoveryRecord, then every affected Subscription in "
-                        "stable UUID order — the same order for tombstoning and "
-                        "restoration so the two can never deadlock against each "
-                        "other. The reserved IdempotencyKey row is locked with "
-                        "SELECT ... FOR UPDATE before either order, serializing a "
-                        "concurrent replay against the in-flight original."
+                        "The Subscriber locks first for every command, including "
+                        "re-baselining, so two commands for one account serialize "
+                        "even before an idempotency-key row exists. An existing "
+                        "IdempotencyKey row is then locked with SELECT ... FOR "
+                        "UPDATE; fresh restore/re-baseline next lock the current "
+                        "open/blocked AccountRecoveryRecord, and deletion or "
+                        "restoration locks affected Subscriptions in stable UUID "
+                        "order. The shared order prevents cross-command deadlocks."
                     ),
                     idempotency=(
                         "Every command carries a required CommandContext."
@@ -781,7 +783,8 @@ DOMAIN = DomainSOT(
                         "same owner transaction as the effect and idempotency "
                         "reservation. Later commands cannot rewrite the original "
                         "result. A later reuse of that key with a "
-                        "DIFFERENT input fingerprint (account, actor, reason, "
+                        "DIFFERENT input fingerprint (account, typed audit "
+                        "principal, actor, reason, "
                         "confirmation_fingerprint, or affected_resource_types, "
                         "depending on the command) fails closed as a typed "
                         "idempotency_input_conflict rather than silently "

@@ -36,7 +36,6 @@ from app.models.account_recovery import (
     AccountRecoveryState,
     AccountRecoverySubscriptionSnapshot,
 )
-from app.models.audit import AuditActorType
 from app.models.catalog import Subscription, SubscriptionAddOn
 from app.models.enforcement_lock import EnforcementLock
 from app.models.idempotency import IdempotencyKey
@@ -46,7 +45,7 @@ from app.services.account_lifecycle import (
     ActivationIntent,
     restore_subscription_detailed,
 )
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -116,13 +115,15 @@ class RequestRecoverableDeletionCommand:
     instead of erroring or re-mutating. ``requested_by``/``deleted_by``
     stay separate domain fields (who asked vs. who is recorded as the
     executing actor) — distinct from ``context.actor``, the command's own
-    audit identity.
+    command identity. ``audit_actor`` retains the authenticated principal
+    type for the forensic audit row; an API key is never mislabeled a user.
     """
 
     account_id: UUID
     context: CommandContext
     requested_by: str
     deleted_by: str
+    audit_actor: AuditActor
 
 
 @dataclass(frozen=True, slots=True)
@@ -752,6 +753,8 @@ def request_recoverable_deletion(
             str(command.account_id),
             command.requested_by,
             command.deleted_by,
+            command.audit_actor.actor_type.value,
+            command.audit_actor.actor_id or "",
             command.context.reason,
         )
         reservation = _reserve_idempotency(
@@ -906,8 +909,7 @@ def request_recoverable_deletion(
             action="customer.account_recovery.deletion_tombstoned",
             entity_type="subscriber",
             entity_id=str(command.account_id),
-            actor_type=AuditActorType.user,
-            actor_id=command.deleted_by,
+            actor=command.audit_actor,
             request_id=str(command.context.correlation_id),
             metadata={
                 "record_id": str(record.id),
@@ -1085,8 +1087,7 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
                 action="customer.account_recovery.partially_restored",
                 entity_type="subscriber",
                 entity_id=str(command.account_id),
-                actor_type=AuditActorType.user,
-                actor_id=command.context.actor,
+                actor=AuditActor.user(command.context.actor),
                 request_id=str(record.correlation_id),
                 metadata={
                     "record_id": str(record.id),
@@ -1134,8 +1135,7 @@ def restore_account(db: Session, command: RestoreAccountCommand) -> RecoveryOutc
             action="customer.account_recovery.restored",
             entity_type="subscriber",
             entity_id=str(command.account_id),
-            actor_type=AuditActorType.user,
-            actor_id=command.context.actor,
+            actor=AuditActor.user(command.context.actor),
             request_id=str(record.correlation_id),
             metadata={
                 "record_id": str(record.id),
@@ -1186,6 +1186,11 @@ def rebaseline_recovery_evidence(
     _validate_scope(command.context.scope)
 
     def operation() -> RebaselineApplied:
+        # Serialize absent-key reservation against another command for this
+        # account before checking the mutable generation fingerprint. A row
+        # lock on an existing idempotency key alone cannot protect the first
+        # insert, because there is no key row to lock yet.
+        _lock_subscriber(db, command.account_id)
         input_fingerprint = _input_fingerprint(
             str(command.account_id),
             command.confirmation_fingerprint,
@@ -1269,8 +1274,7 @@ def rebaseline_recovery_evidence(
             action="customer.account_recovery.rebaselined",
             entity_type="subscriber",
             entity_id=str(command.account_id),
-            actor_type=AuditActorType.user,
-            actor_id=command.context.actor,
+            actor=AuditActor.user(command.context.actor),
             request_id=str(record.correlation_id),
             metadata={
                 "record_id": str(record.id),
