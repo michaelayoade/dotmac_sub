@@ -11,6 +11,7 @@ owns exactly:
 - access-classified offer-version admission
 - the immutable access requirement for an exact offer version
 - reviewed classification of legacy/unclassified versions
+- mutation of an already-admitted offer version
 
 It is a new, complete, fully-contracted `ServiceContract`
 (`app/services/sot_registry/domains/service_intent_control_plane.py`), not an
@@ -228,6 +229,52 @@ this module's `ServiceContract`.
   same transaction, carrying bounded identifiers, the old/new value, the
   command/correlation ids, the review reference, and the authenticated
   principal.
+
+## Update command
+
+`offer_access_requirement.update_offer_version` (command
+`UpdateOfferVersionCommand`, `OwnerCommandDefinition` name
+`update_offer_version`, concern `mutation of an already-admitted offer
+version`) is the ONE path that mutates an already-admitted `OfferVersion`
+row's fields. `OfferVersions.update` (`app/services/catalog/offers.py`) is a
+THIN ADAPTER over it — it builds the command and reads the result; it does
+not mutate the row or complete the transaction itself.
+
+- **One transaction, one owner.** Lookup, read-only validation, the
+  in-transaction authorization recheck, the mutation, and the
+  billing-governance audit participant all run inside ONE
+  `execute_owner_command` boundary owned by this module (round 16 — before
+  this, `OfferVersions.update` called `db.commit()` directly, so a caller
+  with unrelated pending work in the same session had that work silently
+  committed alongside the version update; `execute_owner_command` now
+  refuses to run at all with a pending caller transaction instead).
+- **Admission authority, re-verified, not assumed.** `UpdateOfferVersionCommand.principal`
+  is a REQUIRED, typed `AdmissionPrincipal` — the same closed union
+  admission uses (`StaffPrincipal` | `ApiKeyPrincipal` |
+  `SubscriberPrincipal` | `MachineCredentialPrincipal` | `SystemAdmission`,
+  validated at construction). It is re-verified, immediately before the
+  mutation and inside this command's own transaction, against the exact same
+  owner as admission: `verify_admission_authorization` delegates to
+  `authorize_offer_version_admission` — the compound `catalog:write AND
+  (catalog:billing_write OR catalog:offer_version:admission)` rule AND the
+  ERP staff leave-write restriction. `app/api/catalog.py`'s `PATCH
+  /offer-versions/{version_id}` route delegates the same way admission's
+  `POST` route does: its own dependency (`_require_offer_version_admission`)
+  authorizes admission only, and the command re-checks the identical owner
+  immediately before it writes — one decision, not two that could drift
+  apart.
+- **Identity is immutable outside admission.** `(offer_id, version_number)`
+  and `access_requirement` cannot be edited through this command:
+  `_assert_offer_version_identity_immutable` and
+  `assert_access_requirement_immutable` both fail closed against
+  `OfferVersionUpdate`'s payload before any mutation is applied — defense in
+  depth, since `OfferVersionUpdate` has neither field today.
+- **Evidence.** A billing-critical change stages a billing-governance audit
+  participant (`stage_billing_catalog_change`, action `version_updated`)
+  carrying the resolved admission principal's audit evidence, in the same
+  transaction as the mutation. A denial raises `OfferAccessRequirementError`
+  and records leave-denial evidence (`record_leave_denial_evidence`) the
+  same way admission does.
 
 ## RBAC: a claimed identity checked against real grants, not a free-text label
 
