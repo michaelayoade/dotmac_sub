@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -161,6 +162,14 @@ _REVIEW_REFERENCE_MAX_LENGTH = 200
 #: several other owners already use, rather than a bespoke per-owner table.
 _ADMISSION_IDEMPOTENCY_SCOPE = "offer_version_admission"
 
+# The shared ledger's generic account/ref columns are not an admission
+# contract.  Admission stores its produced-row identity and request
+# fingerprint together in ref_id, while account_id remains unused.
+_ADMISSION_RESULT_EVIDENCE_RE = re.compile(
+    r"(?P<offer_version_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\|"
+    r"(?P<fingerprint>[0-9a-f]{64})\Z"
+)
+
 #: Name of the DB-level unique constraint on
 #: ``(offer_versions.offer_id, offer_versions.version_number)``
 #: (``alembic/versions/611_offer_versions_unique_version_number.py``). Used
@@ -173,6 +182,24 @@ _DUPLICATE_VERSION_NUMBER_CONSTRAINT = "uq_offer_versions_offer_id_version_numbe
 
 class OfferAccessRequirementError(DomainError):
     """Fail-closed offer-access-requirement admission/classification error."""
+
+
+def _encode_admission_result_evidence(offer_version_id: UUID, fingerprint: str) -> str:
+    """Bind the produced OfferVersion identity to its request fingerprint."""
+
+    encoded = f"{offer_version_id}|{fingerprint}"
+    if _ADMISSION_RESULT_EVIDENCE_RE.fullmatch(encoded) is None:
+        raise ValueError("invalid admission result evidence")
+    return encoded
+
+
+def _decode_admission_result_evidence(value: str | None) -> tuple[UUID, str]:
+    """Decode strict, lowercase admission replay evidence."""
+
+    match = _ADMISSION_RESULT_EVIDENCE_RE.fullmatch(value or "")
+    if match is None:
+        raise ValueError("invalid admission result evidence")
+    return UUID(match["offer_version_id"]), match["fingerprint"]
 
 
 def _error(
@@ -1229,7 +1256,22 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
             )
         )
         if reservation is not None:
-            if reservation.ref_id != fingerprint:
+            try:
+                evidence_version_id, evidence_fingerprint = (
+                    _decode_admission_result_evidence(reservation.ref_id)
+                )
+            except ValueError:
+                raise _error(
+                    "idempotency_conflict",
+                    "The prior admission has missing or malformed result evidence.",
+                    offer_id=str(payload.offer_id),
+                    version_number=payload.version_number,
+                    retryable=False,
+                ) from None
+            if (
+                reservation.account_id is not None
+                or evidence_fingerprint != fingerprint
+            ):
                 raise _error(
                     "idempotency_conflict",
                     "This idempotency key was already used for a different "
@@ -1238,7 +1280,7 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
                     version_number=payload.version_number,
                     retryable=False,
                 )
-            replayed_version = db.get(OfferVersion, reservation.account_id)
+            replayed_version = db.get(OfferVersion, evidence_version_id)
             if replayed_version is None:
                 raise _error(
                     "idempotency_conflict",
@@ -1344,8 +1386,8 @@ def _admit(db: Session, command: AdmitOfferVersionCommand) -> AdmitOfferVersionR
             IdempotencyKey(
                 scope=_ADMISSION_IDEMPOTENCY_SCOPE,
                 key=key,
-                account_id=version.id,
-                ref_id=fingerprint,
+                account_id=None,
+                ref_id=_encode_admission_result_evidence(version.id, fingerprint),
             )
         )
         try:

@@ -26,6 +26,7 @@ from app.models.catalog import (
     PriceBasis,
     ServiceType,
 )
+from app.models.idempotency import IdempotencyKey
 from app.models.rbac import (
     Permission,
     Role,
@@ -1639,3 +1640,175 @@ def test_admit_command_rejects_a_principal_outside_the_closed_union():
         _build(None)
     with pytest.raises(TypeError):
         _build("system_user:not-a-real-principal")
+
+
+def _admit_evidence_command(offer, *, key, version_number=1, name=None):
+    command_id = uuid4()
+    return AdmitOfferVersionCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor="system:test",
+            scope=ADMISSION_SCOPE,
+            reason="test admission",
+            idempotency_key=key,
+        ),
+        payload=OfferVersionCreate(
+            offer_id=offer.id,
+            version_number=version_number,
+            name=name or f"Fiber 100 v{version_number}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            access_requirement=AccessRequirement.unclassified,
+        ),
+        principal=SystemAdmission(reason="test admission"),
+    )
+
+
+def _stored_reservation(db_session, key):
+    row = db_session.scalar(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope
+            == offer_access_requirement._ADMISSION_IDEMPOTENCY_SCOPE,
+            IdempotencyKey.key == key,
+        )
+    )
+    db_session.commit()
+    return row
+
+
+def test_admit_replay_binds_evidence_through_ref_id_and_leaves_account_id_unused(
+    db_session,
+):
+    """Break condition: this proves the repair itself, not just its outward
+    behaviour — if ``_admit`` reverted to writing
+    ``IdempotencyKey(account_id=version.id, ref_id=fingerprint)`` (the
+    original defect), the ``account_id is None`` assertion below would fail
+    even though the replay would still — coincidentally — return the right
+    row today. This is the accept-direction control for the whole group:
+    without it, a version that refuses every replay (e.g. always raising
+    ``idempotency_conflict``) would still pass the malformed/conflict/missing
+    tests below."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-evidence-{uuid4()}"
+
+    first = admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+    assert first.replayed is False
+
+    stored = _stored_reservation(db_session, key)
+    assert stored is not None
+    assert stored.account_id is None
+    assert stored.ref_id == f"{first.offer_version.id}|" + stored.ref_id.split("|")[1]
+
+    second = admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+    assert second.replayed is True
+    assert second.offer_version.id == first.offer_version.id
+
+
+@pytest.mark.parametrize(
+    "malformed_ref_id",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("not-an-evidence-string", id="no-separator"),
+        pytest.param(
+            "550E8400-E29B-41D4-A716-446655440000|" + "a" * 64,
+            id="uppercase-uuid",
+        ),
+        pytest.param("not-a-uuid|" + "a" * 64, id="bad-uuid"),
+        pytest.param(
+            "550e8400-e29b-41d4-a716-446655440000|" + "a" * 63,
+            id="short-digest",
+        ),
+    ],
+)
+def test_admit_refuses_a_replay_with_malformed_result_evidence(
+    db_session, malformed_ref_id
+):
+    """Break condition: removing the ``try/except ValueError`` wrapped
+    around ``_decode_admission_result_evidence(reservation.ref_id)`` in
+    ``_admit`` — a malformed ``ref_id`` would then raise a raw, uncaught
+    ``ValueError`` out of ``_admit`` instead of the typed
+    ``idempotency_conflict`` this test requires via
+    ``pytest.raises(OfferAccessRequirementError)``."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-malformed-{uuid4()}"
+
+    admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+
+    stored = _stored_reservation(db_session, key)
+    stored.ref_id = malformed_ref_id
+    db_session.commit()
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+    assert excinfo.value.code.endswith("idempotency_conflict")
+    assert "malformed" in excinfo.value.message.lower()
+
+
+def test_admit_refuses_a_replay_with_a_different_fingerprint_for_stored_evidence(
+    db_session,
+):
+    """Break condition: removing the
+    ``evidence_fingerprint != fingerprint`` comparison (or replacing it with
+    a check against ``reservation.account_id``/some other unrelated field)
+    would let a second, DIFFERENT admission payload silently replay the
+    first admission's result instead of refusing — this is the refusal
+    control that ``test_admit_replay_with_matching_key_and_payload_returns_
+    the_original_row``'s accept-direction case guards against."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-conflict-{uuid4()}"
+
+    first = admit_offer_version(
+        db_session, _admit_evidence_command(offer, key=key, name="Fiber 100 v1")
+    )
+    db_session.rollback()
+    assert first.replayed is False
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(
+            db_session,
+            _admit_evidence_command(
+                offer, key=key, version_number=2, name="Fiber 100 v2 (different)"
+            ),
+        )
+    db_session.rollback()
+    assert excinfo.value.code.endswith("idempotency_conflict")
+
+
+def test_admit_refuses_a_replay_whose_evidenced_offer_version_row_is_gone(
+    db_session,
+):
+    """Break condition: removing the ``if replayed_version is None: raise
+    ...`` check immediately after ``db.get(OfferVersion,
+    evidence_version_id)`` — without it, ``_admit`` would return
+    ``AdmitOfferVersionResult(offer_version=None, replayed=True)`` instead of
+    a typed, non-retryable refusal, handing the caller ``None`` where a real
+    row is expected."""
+
+    offer = _make_offer(db_session)
+    key = f"admit-missing-{uuid4()}"
+
+    first = admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+
+    stale_version = db_session.scalar(
+        select(OfferVersion).where(OfferVersion.id == first.offer_version.id)
+    )
+    assert stale_version is not None
+    db_session.delete(stale_version)
+    db_session.commit()
+
+    with pytest.raises(OfferAccessRequirementError) as excinfo:
+        admit_offer_version(db_session, _admit_evidence_command(offer, key=key))
+    db_session.rollback()
+    assert excinfo.value.code.endswith("idempotency_conflict")
+    assert excinfo.value.retryable is False
