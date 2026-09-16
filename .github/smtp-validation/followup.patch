@@ -1,0 +1,113 @@
+diff --git a/app/services/admin_workflow_guidance.py b/app/services/admin_workflow_guidance.py
+index 882cc9a28..a492e0c08 100644
+--- a/app/services/admin_workflow_guidance.py
++++ b/app/services/admin_workflow_guidance.py
+@@ -669,6 +669,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
+         "Send a controlled reply from each route and confirm the delivered From address matches that team.",
+         notes=(
+             "The OpenBao field is secret/settings/crypto#settings_encryption_keyring; bootstrap it before saving secret-valued settings, then recreate API and Celery processes.",
++            "The SMTP Test checks connection and authentication, not delivery. A saved credential that cannot be decrypted or resolved stops the test before SMTP connects; fix the keyring or secret reference rather than disabling encryption.",
++            "Use the SMTP provider's matching credentials: a Mailcow mailbox app password is not a Resend API key. Confirm delivery separately with one controlled message.",
+             "A sender profile does not select itself for a team. The mailbox route's Reply sender owns that mapping.",
+             "Do not use support as the default to conceal a missing NOC or sales sender mapping.",
+         ),
+diff --git a/app/services/email.py b/app/services/email.py
+index 705f3a3af..5aeb19f2f 100644
+--- a/app/services/email.py
++++ b/app/services/email.py
+@@ -1119,7 +1119,9 @@ def send_email_with_config(
+         server.quit()
+         return True
+     except smtplib.SMTPAuthenticationError as exc:
+-        logger.error("SMTP authentication failed for %s: %s", to_email, exc)
++        logger.error(
++            "SMTP authentication failed for %s code=%s", to_email, exc.smtp_code
++        )
+         return False
+     except Exception as e:
+         logger.error(f"Failed to send email to {to_email}: {e}")
+@@ -1319,7 +1321,9 @@ def send_email(
+                 "SMTP authentication failed for sensitive email to %s", to_email
+             )
+         else:
+-            logger.error("SMTP authentication failed for %s: %s", to_email, exc)
++            logger.error(
++                "SMTP authentication failed for %s code=%s", to_email, exc.smtp_code
++            )
+         if notification and db is not None:
+             notification.status = NotificationStatus.failed
+             notification.last_error = "SMTP authentication failed"
+diff --git a/app/services/team_inbox_outbound.py b/app/services/team_inbox_outbound.py
+index b2e9a0c1c..24612dff1 100644
+--- a/app/services/team_inbox_outbound.py
++++ b/app/services/team_inbox_outbound.py
+@@ -967,10 +967,10 @@ def send_inbox_reply(
+         subject=subject,
+         body=payload.body_text or _plain_text_reply(payload),
+         now=now,
+-        from_address=config.get("from_email"),
++        from_address=config.from_email,
+         metadata={
+             "service_team_id": sender.service_team_id,
+-            "sender_key": config.get("sender_key") or sender.sender_key,
++            "sender_key": config.sender_key or sender.sender_key,
+             "activity": sender.activity,
+         },
+         existing_message=existing_message,
+@@ -981,9 +981,9 @@ def send_inbox_reply(
+         message_id=result.message_id,
+         notification_id=result.notification_id,
+         service_team_id=sender.service_team_id,
+-        sender_key=config.get("sender_key") or sender.sender_key,
++        sender_key=config.sender_key or sender.sender_key,
+         activity=sender.activity,
+-        from_address=config.get("from_email"),
++        from_address=config.from_email,
+         to_email=to_email,
+         reason=result.reason,
+     )
+diff --git a/tests/test_smtp_sender_credentials.py b/tests/test_smtp_sender_credentials.py
+index add01d257..8d3c66b5b 100644
+--- a/tests/test_smtp_sender_credentials.py
++++ b/tests/test_smtp_sender_credentials.py
+@@ -506,3 +506,40 @@ def test_bad_sender_does_not_block_other_queued_email(
+     assert second.status == NotificationStatus.delivered
+     assert result["delivered"] == 1
+     assert smtp.logins == [("support@example.test", "support-synthetic-credential")]
++
++
++@pytest.mark.parametrize("selected_config", [False, True])
++def test_send_auth_failure_never_logs_provider_credential_echo(
++    db_session: Session,
++    smtp: RecordingSMTP,
++    monkeypatch: pytest.MonkeyPatch,
++    caplog: pytest.LogCaptureFixture,
++    selected_config: bool,
++) -> None:
++    _sender(db_session)
++
++    def reject(_username: str, _password: str) -> tuple[int, bytes]:
++        raise smtplib.SMTPAuthenticationError(535, PASSWORD.encode())
++
++    monkeypatch.setattr(smtp, "login", reject)
++    if selected_config:
++        config = email_service.get_smtp_config(db_session, sender_key="finance")
++        sent = email_service.send_email_with_config(
++            config=config,
++            to_email="test@example.test",
++            subject="Test only",
++            body_html="<p>Test only</p>",
++        )
++    else:
++        sent = email_service.send_email(
++            db=db_session,
++            to_email="test@example.test",
++            subject="Test only",
++            body_html="<p>Test only</p>",
++            sender_key="finance",
++            track=False,
++        )
++    assert sent is False
++    assert PASSWORD not in caplog.text
++    assert "code=535" in caplog.text
++    assert smtp.messages == []
