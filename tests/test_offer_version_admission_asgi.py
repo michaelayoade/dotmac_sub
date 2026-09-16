@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.api import catalog as api_catalog
@@ -61,6 +61,18 @@ from app.services.catalog.offer_access_requirement import (
 )
 from app.services.erp_staff_access import StaffLeaveRestrictionStatus
 from app.services.owner_commands import CommandContext
+
+
+@pytest.fixture(autouse=True)
+def _owner_command_session(db_session):
+    """Keep fixture identities usable after explicit owner-command commits."""
+
+    original_expiry = db_session.expire_on_commit
+    db_session.expire_on_commit = False
+    try:
+        yield
+    finally:
+        db_session.expire_on_commit = original_expiry
 
 
 def _mounted_app(db_session) -> FastAPI:
@@ -92,7 +104,6 @@ def _system_user(db_session) -> SystemUser:
     )
     db_session.add(user)
     db_session.commit()
-    db_session.refresh(user)
     return user
 
 
@@ -291,6 +302,9 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
     user = _system_user(db_session)
     unprivileged_user = _system_user(db_session)
     offer = _offer(db_session)
+    user_id = user.id
+    offer_id = offer.id
+    unprivileged_user_id = unprivileged_user.id
 
     # The real, guarded app: refuses.
     real_app = _mounted_app(db_session)
@@ -309,6 +323,7 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
         },
     )
     assert guarded_response.status_code == 403
+    db_session.commit()
 
     # The planted removal: a handler with the SAME service call the real
     # route makes, registered directly with no admission dependency at
@@ -321,12 +336,18 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
             db=Depends(get_db),
             auth: dict = Depends(require_user_auth),
         ):
-            return catalog_service.offer_versions.create(
-                db, payload, principal=principal_factory()
-            )
+            try:
+                return catalog_service.offer_versions.create(
+                    db, payload, principal=principal_factory()
+                )
+            except offer_access_requirement.OfferAccessRequirementError as exc:
+                raise HTTPException(status_code=403, detail=exc.message) from exc
 
         unguarded_app.add_api_route(
-            "/api/v1/offer-versions", _unguarded_create_offer_version, methods=["POST"]
+            "/api/v1/offer-versions",
+            _unguarded_create_offer_version,
+            methods=["POST"],
+            status_code=201,
         )
         unguarded_app.dependency_overrides[get_db] = lambda: db_session
         unguarded_app.dependency_overrides[require_user_auth] = lambda: _auth_for(user)
@@ -357,18 +378,19 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
         "both authorization layers — this is why SystemAdmission "
         "construction is independently confined to an allowlist elsewhere"
     )
+    db_session.close()
 
     # (2) Dependency removal alone, with a real, unprivileged StaffPrincipal:
     # the command's own recheck still refuses. Defense in depth holds.
     staff_app = _make_unguarded_app(
         lambda: offer_access_requirement.StaffPrincipal(
-            system_user_id=unprivileged_user.id
+            system_user_id=unprivileged_user_id
         )
     )
     staff_response = TestClient(staff_app).post(
         "/api/v1/offer-versions",
         json={
-            "offer_id": str(offer.id),
+            "offer_id": str(offer_id),
             "version_number": 3,
             "name": "v3",
             "service_type": "residential",
@@ -387,60 +409,20 @@ def test_removing_the_admission_dependency_lets_an_unchecked_principal_through(
     )
 
 
-def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
+def test_changed_authorization_verdict_after_validation_refuses_patch(
     db_session, monkeypatch
 ):
-    """Round 13 finding 3's direct proof, and the one property nothing
-    else in this suite covers. OBSERVED: the mounted app, via a single
-    real, issued HTTP PATCH request whose dependency chain — including
-    ``_require_offer_version_admission`` and ``OfferVersions.update``'s own
-    in-transaction ``verify_admission_authorization`` recheck — executes
-    for real against the real database.
+    """Prove the mounted PATCH rechecks authorization after validation.
 
-    A synchronous, single-process test cannot literally run a second,
-    concurrent transaction mid-request without a heavier multi-connection
-    harness this suite does not have; the accepted way to test a
-    TOCTOU/revocation race in one process is to inject the "concurrent"
-    revocation AT the exact seam between the two decisions under test, then
-    verify the LATER decision (the one actually being tested) observes the
-    committed change.
+    The route precheck sees the real grant. At the read-only validation seam
+    inside the owner command, this test changes the authorization owner's
+    verdict and counts only calls made afterward. A 403 proves that a later
+    recheck ran and its denial reached HTTP; a recheck moved before validation
+    would miss the changed verdict.
 
-    PLACEMENT, narrowed precisely (round 15 finding 6 correction — the
-    round 14 version of this docstring overclaimed what the fixture
-    actually establishes). The round-13 version of this test injected the
-    revocation in ``_admission_principal``, which the ROUTE calls BEFORE
-    ``OfferVersions.update`` is ever entered, so a recheck moved to the
-    very TOP of ``update`` would have observed the revocation just as
-    well as the real placement. Round 14 moved the injection to wrap
-    ``catalog_billing_governance.assert_offer_version_update_safe`` (the
-    read-only validation call immediately before
-    ``verify_admission_authorization`` in the real function) — genuinely
-    stronger, but still NOT a proof of "immediately before the write" or
-    "inside the same transaction" in the strict sense:
-
-    - It distinguishes a recheck placed BEFORE this validation seam (would
-      miss the revocation, return 200) from one placed AFTER it (observes
-      the revocation, returns 403) — it does NOT distinguish "immediately
-      after the seam" from "after the seam, with other statements before
-      the actual mutation": a recheck moved later still, but still after
-      this exact injection point, would pass this test identically.
-    - The revocation is committed on the SAME session/request the
-      mutation itself uses (the accepted single-process TOCTOU-injection
-      technique described above) — this test does not independently
-      verify the check and the mutation share one transaction boundary;
-      that currently follows from reading ``OfferVersions.update``'s own
-      source (no intervening commit), not from anything this test
-      observes on its own.
-
-    What this test DOES prove, at that narrower scope: a grant revoked
-    after ``update``'s read-only validation runs, but before its recheck,
-    is observed by that recheck — it is not a stale, top-of-function check
-    a later revocation could slip past.
-
-    Break condition: this fails (a 200 where it must be 403) if
-    ``OfferVersions.update`` stops calling ``verify_admission_authorization``
-    AFTER its read-only validation, or if that call is ever moved earlier
-    than the injection point below.
+    This is a unit seam test, not a real concurrent database revocation or a
+    proof of cross-transaction visibility. That requires two PostgreSQL
+    sessions and separate migration/integration evidence.
     """
 
     from app.services import catalog_billing_governance
@@ -475,18 +457,39 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
         catalog_billing_governance.assert_offer_version_update_safe
     )
 
+    post_validation_rechecks = 0
+    verdict_changed = False
+    real_authorize = offer_access_requirement.authorize_offer_version_admission
+
+    def _authorize_with_changed_verdict(db, claims, *, request_id=None):
+        if verdict_changed:
+            nonlocal post_validation_rechecks
+            post_validation_rechecks += 1
+            raise offer_access_requirement.OfferAccessRequirementError(
+                code="service_intent.offer_access_requirement.permission_denied",
+                message="permission revoked at validation seam",
+                details={},
+                retryable=False,
+            )
+        return real_authorize(db, claims, request_id=request_id)
+
+    monkeypatch.setattr(
+        offer_access_requirement,
+        "authorize_offer_version_admission",
+        _authorize_with_changed_verdict,
+    )
+
     def _assert_update_safe_that_revokes_mid_update(db, version, changes):
         # Runs FROM INSIDE OfferVersions.update, after it has already
         # started executing (past its own entry and the earlier
         # immutability checks) and immediately BEFORE
         # verify_admission_authorization's recheck — the precise window
-        # round 13 finding 3 closes, and the one a check moved to the top
-        # of update() would NOT observe. Revokes and COMMITS for real,
-        # simulating a concurrent transaction landing in that window.
+        # round 13 finding 3 closes. The owner transaction is already active,
+        # so a same-session commit would violate its transaction guard; inject
+        # the changed verdict at this validation seam instead.
+        nonlocal verdict_changed
         result = real_assert_update_safe(db, version, changes)
-        _revoke_direct_permission(
-            db_session, user, offer_access_requirement.ADMISSION_SCOPE
-        )
+        verdict_changed = True
         return result
 
     monkeypatch.setattr(
@@ -500,12 +503,13 @@ def test_a_grant_revoked_between_admission_and_mutation_still_refuses_the_patch(
         json={"name": "renamed after revocation"},
     )
     assert patch_response.status_code == 403, (
-        "a grant revoked mid-update, AFTER its read-only validation seam "
-        "but before verify_admission_authorization's recheck, must still "
-        "refuse the write — a recheck moved to the TOP of update() (before "
-        "this seam) would have missed this revocation and returned 200 "
+        "a changed authorization verdict injected AFTER its read-only "
+        "validation seam but before verify_admission_authorization's recheck "
+        "must refuse the write — a recheck moved to the TOP of update() (before "
+        "this seam) would have missed the changed verdict and returned 200 "
         "instead"
     )
+    assert post_validation_rechecks > 0
 
 
 def test_machine_admission_succeeds_via_shadow_mode_through_the_mounted_route(
@@ -732,7 +736,7 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     def _fake_staff_write_restricted(db, auth, *, method, at=None):
         if auth.get("principal_type") == "system_user" and auth.get(
             "principal_id"
-        ) == str(user.id):
+        ) == str(user_id):
             return sentinel_restriction
         return None
 
@@ -741,6 +745,8 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
     )
 
     offer = _offer(db_session)
+    user_id = user.id
+    offer_id = offer.id
 
     # --- Route delegator: real, mounted, issued HTTP request. ---
     app = _mounted_app(db_session)
@@ -759,6 +765,7 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
         },
     )
     assert route_response.status_code == 403
+    db_session.close()
 
     # --- Command delegator: direct admit_offer_version call, no route,
     # no ASGI stack, same monkeypatched sentinel, same principal. ---
@@ -770,12 +777,12 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
                 context=CommandContext(
                     command_id=command_id,
                     correlation_id=command_id,
-                    actor=f"system_user:{user.id}",
+                    actor=f"system_user:{user_id}",
                     scope=offer_access_requirement.ADMISSION_SCOPE,
                     reason="round 15 finding 7 centerpiece parity test",
                 ),
                 payload=OfferVersionCreate(
-                    offer_id=offer.id,
+                    offer_id=offer_id,
                     version_number=2,
                     name="v2",
                     service_type=ServiceType.residential,
@@ -783,7 +790,7 @@ def test_authorization_owner_refuses_identically_through_route_and_command(
                     price_basis=PriceBasis.flat,
                     access_requirement=AccessRequirement.unclassified,
                 ),
-                principal=StaffPrincipal(system_user_id=user.id),
+                principal=StaffPrincipal(system_user_id=user_id),
             ),
         )
     db_session.rollback()

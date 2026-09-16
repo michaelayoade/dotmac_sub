@@ -630,7 +630,6 @@ class OfferVersions(CRUDManager[OfferVersion]):
                 principal=resolved_principal,
             ),
         )
-        db.refresh(result.offer_version)
         return result.offer_version
 
     @classmethod
@@ -714,7 +713,6 @@ class OfferVersions(CRUDManager[OfferVersion]):
                 principal=principal,
             ),
         )
-        db.refresh(version)
         return version
 
     @classmethod

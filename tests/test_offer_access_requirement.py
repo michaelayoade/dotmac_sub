@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import inspect, select
 
+from app.db import finish_read_transaction
 from app.models.auth import ApiKey
 from app.models.catalog import (
     AccessRequirement,
@@ -61,7 +62,19 @@ from app.services.catalog.offer_access_requirement import (
     preview_classify_offer_version_access_requirement,
     principal_label,
 )
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import CommandContext, OwnerCommandError
+
+
+@pytest.fixture(autouse=True)
+def _owner_command_session(db_session):
+    """Keep fixture identities usable after explicit owner-command commits."""
+
+    original_expiry = db_session.expire_on_commit
+    db_session.expire_on_commit = False
+    try:
+        yield
+    finally:
+        db_session.expire_on_commit = original_expiry
 
 
 def _make_offer(db_session):
@@ -94,7 +107,7 @@ def _make_version(db_session, offer, *, access_requirement, version_number=1):
     identity = inspect(offer).identity
     assert identity is not None and len(identity) == 1
     offer_id = identity[0]
-    db_session.commit()
+    finish_read_transaction(db_session)
     version = catalog_service.offer_versions.create(
         db_session,
         OfferVersionCreate(
@@ -187,7 +200,6 @@ def _make_subscriber(db_session) -> Subscriber:
     )
     db_session.add(subscriber)
     db_session.commit()
-    db_session.refresh(subscriber)
     return subscriber
 
 
@@ -221,7 +233,6 @@ def _admission_api_key(db_session, *, scopes: list[str]) -> ApiKey:
     )
     db_session.add(api_key)
     db_session.commit()
-    db_session.refresh(api_key)
     return api_key
 
 
@@ -248,8 +259,84 @@ def _preview(db_session, version, proposed, review_reference="JIRA-42"):
             review_reference=review_reference,
         ),
     )
-    db_session.rollback()
+    # This is a read-only boundary. Commit it without expiring setup entities,
+    # so later access to their IDs cannot implicitly reopen a caller tx.
+    db_session.commit()
     return preview
+
+
+def test_offer_adapter_returns_transaction_free_with_production_expiry(db_session):
+    """The adapter does not refresh after the owner command boundary.
+
+    With SQLAlchemy's production default, the immediate return is
+    transaction-free; accessing an expired ORM attribute deliberately opens a
+    read transaction, and the next owner command refuses that ambient state.
+    """
+
+    offer = _make_offer(db_session)
+    offer_id = offer.id
+    db_session.expire_on_commit = True
+    db_session.commit()
+
+    result = catalog_service.offer_versions.create(
+        db_session,
+        OfferVersionCreate(
+            offer_id=offer_id,
+            version_number=99,
+            name="Production expiry canary",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            access_requirement=AccessRequirement.unclassified,
+        ),
+        principal=SystemAdmission(reason="production expiry canary"),
+    )
+    assert db_session.in_transaction() is False
+    _ = result.id
+    assert db_session.in_transaction() is True
+    with pytest.raises(OwnerCommandError, match="transaction-free"):
+        catalog_service.offer_versions.create(
+            db_session,
+            OfferVersionCreate(
+                offer_id=offer_id,
+                version_number=100,
+                name="Ambient transaction refusal",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+                access_requirement=AccessRequirement.unclassified,
+            ),
+            principal=SystemAdmission(reason="ambient transaction refusal"),
+        )
+    db_session.rollback()
+
+
+def test_offer_update_adapter_returns_transaction_free_with_production_expiry(
+    db_session,
+):
+    """Updating must not refresh the committed row into a new read transaction."""
+
+    offer = _make_offer(db_session)
+    version = _make_version(
+        db_session, offer, access_requirement=AccessRequirement.unclassified
+    )
+    identity = inspect(version).identity
+    assert identity is not None and len(identity) == 1
+    version_id = identity[0]
+    assert db_session.in_transaction() is False
+
+    db_session.expire_on_commit = True
+    updated = catalog_service.offer_versions.update(
+        db_session,
+        str(version_id),
+        OfferVersionUpdate(name="Updated with production expiry"),
+        principal=SystemAdmission(reason="production update expiry canary"),
+    )
+    assert db_session.in_transaction() is False
+    assert inspect(updated).identity == (version_id,)
+    assert updated.name == "Updated with production expiry"
+    assert db_session.in_transaction() is True
+    db_session.rollback()
 
 
 # --------------------------------------------------------------------------
@@ -1288,6 +1375,7 @@ def test_machine_credential_is_the_only_shadow_mode_admission_principal(db_sessi
         offer_access_requirement.SystemAdmission(reason="non-growth probe"),
     )
     for index, principal in enumerate(unauthorized_principals):
+        db_session.close()
         try:
             admit_offer_version(
                 db_session,
@@ -1299,7 +1387,7 @@ def test_machine_credential_is_the_only_shadow_mode_admission_principal(db_sessi
         else:
             bypassed.add(type(principal))
         finally:
-            db_session.rollback()
+            db_session.commit()
 
     assert bypassed == {
         offer_access_requirement.SystemAdmission,

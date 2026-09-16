@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from app.db import finish_read_transaction
 from app.models.catalog import (
     AccessRequirement,
     AccessType,
@@ -72,6 +73,19 @@ from app.services.catalog.offer_access_requirement import (
     SystemAdmission,
 )
 
+
+@pytest.fixture(autouse=True)
+def _owner_command_session(db_session):
+    """Keep committed fixture identities from reopening read transactions."""
+
+    original_expiry = db_session.expire_on_commit
+    db_session.expire_on_commit = False
+    try:
+        yield
+    finally:
+        db_session.expire_on_commit = original_expiry
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,7 +101,9 @@ def _make_offer(db, **overrides):
         price_basis=PriceBasis.flat,
     )
     defaults.update(overrides)
-    return catalog_service.offers.create(db, CatalogOfferCreate(**defaults))
+    offer = catalog_service.offers.create(db, CatalogOfferCreate(**defaults))
+    finish_read_transaction(db)
+    return offer
 
 
 def _make_addon(db, **overrides):
