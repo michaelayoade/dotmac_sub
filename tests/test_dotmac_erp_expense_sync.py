@@ -2398,7 +2398,20 @@ def test_write_back_dispatch_skips_expense_projection_when_flow_not_owned_by_sub
     outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
     db_session.refresh(request)
     row = _outbox_rows(db_session, request)[0]
-    assert request.expense_claim_reference is None
+    # `_FakeERPClient.approve_expense_claim` always merges a real (randomly
+    # generated) `claim_id` into its outcome regardless of `post_outcomes`
+    # content (it's listed before `**supplied` in the merge, so an empty
+    # `post_outcomes=[{}]` cannot suppress it) — so the initial delivery
+    # genuinely links the request right away, while ownership is still sub.
+    # Make that explicit rather than assuming otherwise.
+    assert request.expense_claim_reference is not None
+
+    # Simulate a dropped write-back (e.g. a later rollback), same pattern as
+    # the repair tests above — this is the realistic precondition for a
+    # SECOND, later (re-)dispatch attempt from a poll.
+    request.expense_claim_reference = None
+    request.expense_claim_status = None
+    db_session.commit()
 
     # Ownership moves back to CRM before this row's write-back is
     # (re)dispatched from a later poll.
