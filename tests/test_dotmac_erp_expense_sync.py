@@ -2019,6 +2019,86 @@ def test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow(db_sessi
     assert request.expense_claim_status is None
 
 
+def test_repair_stops_mid_batch_when_ownership_flips(db_session, monkeypatch):
+    """``repair_expense_claim_writebacks`` makes no live ERP call, but it does
+    a real DB write/commit per row across a batch (up to 500) — the ownership
+    gate is re-checked before EVERY row, not once before the loop, so a
+    mid-batch flip stops the rows reached after it in this same run. Unlike
+    the poll functions, there's no live network round trip inside a single
+    row's own processing here, so a single pre-row check (no post-apply
+    recheck) is sufficient — nothing external can change ownership again
+    between that check and the synchronous re-apply for the SAME row.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+
+    first = _make_submitted_request(db_session, crm_work_order_id="wo-repair-first")
+    _approve(db_session, first)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[{"claim_id": "ERP-REPAIR-A", "status": "approved"}]
+        ),
+    )
+    db_session.refresh(first)
+    assert first.expense_claim_reference == "ERP-REPAIR-A"
+
+    second = _make_submitted_request(db_session, crm_work_order_id="wo-repair-second")
+    _approve(db_session, second)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[{"claim_id": "ERP-REPAIR-B", "status": "approved"}]
+        ),
+    )
+    db_session.refresh(second)
+    assert second.expense_claim_reference == "ERP-REPAIR-B"
+
+    # Simulate a dropped write-back for both, same as the single-row repair
+    # tests above.
+    first.expense_claim_reference = None
+    first.expense_claim_status = None
+    second.expense_claim_reference = None
+    second.expense_claim_status = None
+    db_session.commit()
+
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+
+    # No live ERP call to hook here (unlike the poll tests' fake-client
+    # override) — simulate the mid-batch flip as a plain ownership mutation
+    # that happens right after the first row's own re-apply, by wrapping the
+    # exact function the loop calls per row.
+    original_apply_claim_response = expense_sync.apply_claim_response
+    calls: list[str] = []
+
+    def _apply_then_flip_after_first(request, response):
+        original_apply_claim_response(request, response)
+        calls.append(str(request.id))
+        if len(calls) == 1:
+            ownership_row.owner = SyncFlowOwner.crm.value
+            db_session.commit()
+
+    monkeypatch.setattr(
+        expense_sync, "apply_claim_response", _apply_then_flip_after_first
+    )
+
+    result = expense_sync.repair_expense_claim_writebacks(db_session)
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    # Only the first row's response was ever (re-)applied.
+    assert len(calls) == 1
+    assert result["repaired"] == 1
+    assert result["skipped_not_owned"] == 1
+    assert first.expense_claim_reference == "ERP-REPAIR-A"
+    # The second row, reached only after the flip, must NOT be repaired.
+    assert second.expense_claim_reference is None
+
+
 def test_unlinked_status_poll_makes_no_erp_call_for_a_crm_owned_expense_flow(
     db_session,
 ):
@@ -2330,11 +2410,13 @@ def test_write_back_dispatch_skips_expense_projection_when_flow_not_owned_by_sub
 
 def test_linked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
     """The per-flow ownership gate inside the linked-claim poll loop is
-    re-checked on EVERY iteration, not once before the loop starts, because
-    each ``get_expense_claim_status`` call is a real, potentially slow ERP
-    network round trip. A flip to CRM partway through a batch must stop the
-    remaining rows in THIS run rather than only being caught on the next
-    scheduled poll.
+    checked BOTH before the ``get_expense_claim_status`` network call (so an
+    already-flipped ownership skips the call entirely) AND again right after
+    it returns and before ``apply_claim_response`` is called (so a flip that
+    happens WHILE that row's own call was in flight still blocks the write).
+    Here the flip happens as a side effect of the FIRST row's own call, so
+    that row's own post-call recheck — not just the second row's pre-call
+    recheck — is what must catch it: neither row's response ends up applied.
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
@@ -2391,23 +2473,36 @@ def test_linked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
 
     result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
 
-    # Only the first row (processed while still sub-owned) made an ERP call.
+    # Only the first row made an ERP call at all — its own call is where the
+    # flip happens, so the second row's PRE-call check already blocks it
+    # before any second call is made.
     assert len(client.status_calls) == 1
-    assert result["skipped_not_owned"] >= 1
+    # Both rows end up skipped: the first via the POST-call recheck (the flip
+    # happened while its own call was in flight), the second via the
+    # PRE-call check (ownership was already flipped by the time it's reached).
+    assert result["skipped_not_owned"] == 2
+    assert result["updated"] == 0
     db_session.refresh(first)
     db_session.refresh(second)
-    assert first.status == "paid"
-    # The second row, reached only after the flip, must NOT be written.
+    # The first row's response ("paid") must NOT be applied — the ownership
+    # flip happened while its own network call was in flight, and the
+    # post-call recheck must catch that before `apply_claim_response` runs.
+    assert first.status == "approved"
+    # The second row, reached only after the flip, must NOT be written either.
     assert second.status == "approved"
 
 
 def test_unlinked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
-    """Same TOCTOU protection as the linked-claim poll loop above, but for
-    ``_poll_unlinked_expense_claims``: the per-flow ownership gate is
-    re-checked on EVERY iteration, not once before the loop, because each
-    ``get_expense_claim_status`` call is a real, potentially slow ERP network
-    round trip. A flip to CRM partway through a batch must stop the
-    remaining rows in THIS run.
+    """Same TOCTOU concern as the linked-claim poll loop, but for
+    ``_poll_unlinked_expense_claims``: its own pre-call ``flow_owned_by_sub``
+    check (re-checked on every iteration, not once before the loop) stops the
+    SECOND row before it ever calls ERP. The FIRST row — the one whose own
+    call is where the flip happens — is protected differently: this path
+    never calls ``apply_claim_response`` directly, it routes through
+    ``outbox.record_polled_outcome`` -> ``_dispatch_flow_writeback``, and
+    that function's own ownership guard (added when the write-back path was
+    first gated) runs AFTER the network call returns — so it catches the
+    first row's flip-during-flight case too. Neither row ends up linked.
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
@@ -2468,11 +2563,25 @@ def test_unlinked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
 
     result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
 
-    # Only the first row (processed while still sub-owned) made an ERP call.
+    # Only the first row made an ERP call at all — its own call is where the
+    # flip happens, so the second row's pre-call check already blocks it
+    # before any second call is made.
     assert len(client.status_calls) == 1
+    # The second row is counted here (its pre-call `flow_owned_by_sub` check
+    # in `_poll_unlinked_expense_claims` fails and increments this counter
+    # directly). The first row's block happens one layer down, inside
+    # `outbox._dispatch_flow_writeback`'s own ownership guard (reached via
+    # `record_polled_outcome`) — that guard only logs and skips the
+    # projection, it does not feed back into this counter, so it does not
+    # add to `skipped_not_owned` here.
     assert result["skipped_not_owned"] >= 1
     db_session.refresh(first)
     db_session.refresh(second)
-    assert first.expense_claim_reference == "ERP-UNLINKED-A"
-    # The second row, reached only after the flip, must NOT be linked.
+    # The first row's own network call is where the flip happens, so by the
+    # time `record_polled_outcome` -> `_dispatch_flow_writeback` runs for it,
+    # ownership has ALREADY flipped (flow_owned_by_sub re-queries fresh, not
+    # cached) — that guard blocks the projection for the first row too, not
+    # just the second. Neither row ends up linked.
+    assert first.expense_claim_reference is None
+    # The second row, reached only after the flip, must NOT be linked either.
     assert second.expense_claim_reference is None
