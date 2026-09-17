@@ -2090,10 +2090,21 @@ def test_repair_stops_mid_batch_when_ownership_flips(db_session, monkeypatch):
 
     db_session.refresh(first)
     db_session.refresh(second)
-    # Only the first row's response was ever (re-)applied.
+    # Only one row's response was ever (re-)applied.
     assert len(calls) == 1
+    assert result["processed"] == 1
     assert result["repaired"] == 1
-    assert result["skipped_not_owned"] == 1
+    # Each fully-submitted-and-approved request stages TWO accepted outbox
+    # events (the submit and the approve transitions — see
+    # `test_repair_makes_no_erp_call_and_no_writeback_for_a_crm_owned_flow`'s
+    # `skipped_not_owned == 2` for one request), so two requests here produce
+    # FOUR candidate rows total. Exactly one of `first`'s two rows is reached
+    # before the flip and gets repaired; the OTHER of `first`'s two rows and
+    # BOTH of `second`'s rows are all reached after the flip and are skipped
+    # by the per-row ownership check (which runs before the
+    # already-has-a-reference check, so the second of `first`'s own rows is
+    # counted here too, not silently filtered by already having a reference).
+    assert result["skipped_not_owned"] == 3
     assert first.expense_claim_reference == "ERP-REPAIR-A"
     # The second row, reached only after the flip, must NOT be repaired.
     assert second.expense_claim_reference is None
@@ -2417,6 +2428,15 @@ def test_linked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
     Here the flip happens as a side effect of the FIRST row's own call, so
     that row's own post-call recheck — not just the second row's pre-call
     recheck — is what must catch it: neither row's response ends up applied.
+
+    SCOPE NOTE: the flip and both ownership checks here run through the SAME
+    ``db_session`` as the code under test, so this proves same-session
+    visibility only — a change committed on this session becomes visible to
+    a later query on this session. It does NOT prove cross-session/genuinely
+    concurrent visibility (e.g. a different Celery worker's commit): that
+    depends on ``flow_owned_by_sub`` never returning an already
+    identity-mapped, un-refreshed object across sessions, which is a
+    separate, not-yet-verified property (see the debt register).
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
@@ -2503,6 +2523,15 @@ def test_unlinked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
     that function's own ownership guard (added when the write-back path was
     first gated) runs AFTER the network call returns — so it catches the
     first row's flip-during-flight case too. Neither row ends up linked.
+
+    SCOPE NOTE: the flip and every ownership check here run through the SAME
+    ``db_session`` as the code under test, so this proves same-session
+    visibility only — a change committed on this session becomes visible to
+    a later query on this session. It does NOT prove cross-session/genuinely
+    concurrent visibility (e.g. a different Celery worker's commit): that
+    depends on ``flow_owned_by_sub`` never returning an already
+    identity-mapped, un-refreshed object across sessions, which is a
+    separate, not-yet-verified property (see the debt register).
     """
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)

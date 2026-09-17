@@ -1259,7 +1259,15 @@ SERVICES: tuple[SOTService, ...] = (
                 locking=(
                     "Submission locks the scoped active work order; approval, "
                     "rejection, and payment initiation lock the active expense "
-                    "request before their transitions."
+                    "request before their transitions. The ERP expense-claim "
+                    "payment outcome reconciler is caller-committed and takes no "
+                    "row lock of its own; it relies on the per-flow ownership "
+                    "gate (checked before and after each row's ERP call, or once "
+                    "per row in the repair sweep) rather than database-level "
+                    "locking to bound its write window — see the debt register "
+                    "for the row-locking/command-wrapping gap this leaves, "
+                    "shared identically with material's equivalent automated "
+                    "write-back path."
                 ),
                 idempotency=(
                     "A unique client reference replays only when the normalized "
