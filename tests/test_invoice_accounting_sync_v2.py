@@ -711,3 +711,19 @@ class TestAccountingSyncReadScope:
             == 200
         )
         assert billing_client.get("/invoices/sync", headers=headers).status_code == 200
+
+    def test_unrelated_scope_is_refused_by_v2(self, db_session, billing_client) -> None:
+        # Pins the authorization floor against a future accidental widening:
+        # holding some OTHER, unrelated permission must not reach the v2 feed.
+        raw = _api_key(db_session, scopes=["reports:billing:read"], raw="unrelated-key")
+        response = billing_client.get(
+            "/invoices/accounting-sync/v2", headers={"x-api-key": raw}
+        )
+        assert response.status_code == 403
+
+    def test_no_scope_is_refused_by_v2(self, db_session, billing_client) -> None:
+        raw = _api_key(db_session, scopes=[], raw="empty-scope-key")
+        response = billing_client.get(
+            "/invoices/accounting-sync/v2", headers={"x-api-key": raw}
+        )
+        assert response.status_code == 403

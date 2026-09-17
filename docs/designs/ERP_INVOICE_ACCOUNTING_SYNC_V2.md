@@ -11,10 +11,20 @@ journals, tax transactions, and financial statements. The version-2 feed is a
 read-only resolver between those owners; it does not post accounting and it
 never changes an Invoice.
 
-The endpoint is `GET /api/v1/invoices/accounting-sync/v2`. It is additive and
-uses the same `billing:invoice:read` permission as the existing
-`GET /api/v1/invoices/sync` feed. The existing feed stays unchanged during
-shadow validation.
+The endpoint is `GET /api/v1/invoices/accounting-sync/v2`. It is additive.
+
+Authorization: the v2 endpoint accepts EITHER the existing
+`billing:invoice:read` permission OR the narrower
+`integration:accounting_sync:read` scope (for a future ERP accounting-sync
+machine principal — kept out of the ordinary role builder, see
+`scripts/seed/seed_rbac.py`). Holding `integration:accounting_sync:read`
+alone does not grant access to the legacy `GET /api/v1/invoices/sync` feed,
+which keeps requiring `billing:invoice:read` only and gained no new scope.
+
+The legacy feed's authorization is unchanged; its query surface is not: both
+`GET /api/v1/invoices/sync` and `GET /api/v1/invoices/accounting-sync/v2` now
+also accept the optional `after_updated_at`/`after_id` keyset-cursor pair
+described below.
 
 The durable `integration.dotmac_erp_billing_adapter` outbox remains the target
 cross-application boundary under ADR 0007. This pull feed exists to stop the
