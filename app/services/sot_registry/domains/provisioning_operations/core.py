@@ -1376,7 +1376,9 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     drift_signal=(
                         "ERP reports a payment intent or paid claim state that differs "
-                        "from the request's erp_payment metadata projection."
+                        "from the request's erp_payment metadata projection, or ERP "
+                        "reports the claim's payment as paid while the request's own "
+                        "status/paid_at pair still shows it unpaid."
                     ),
                     rebuild_operation=(
                         "Poll the ERP expense-claim status endpoint by the stable Sub "

@@ -535,25 +535,24 @@ def _poll_unlinked_expense_claims(
     failed after delivery. Keyed on Sub's own request id, same as the linked
     poll below — see ``client.get_expense_claim_status``'s docstring.
 
-    OWNERSHIP GUARD: ``flow_owned_by_sub`` is checked once up front, since
-    ownership is a per-flow switch, not per-row. A status poll is a real ERP
-    API call about a row that may belong to a flow ownership has since moved
-    back to CRM — skipped, not polled, when not owned. Skipped rows are
-    counted separately from ``processed``/``updated`` so the caller's own
-    sweep numbers stay honest.
+    OWNERSHIP GUARD: ``flow_owned_by_sub`` is re-checked on EVERY iteration,
+    not once up front, since each ``get_expense_claim_status`` call below is a
+    real, potentially slow ERP network round trip — a flip mid-batch must
+    stop the remaining rows in this same run rather than only being caught on
+    the next scheduled poll. Skipped rows are counted separately from
+    ``processed``/``updated`` so the caller's own sweep numbers stay honest.
     """
     processed = 0
     updated = 0
     skipped_not_owned = 0
     errors: list[str] = []
-    owned = flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim)
     for row in outbox.unlinked_delivered_events(
         db, flow=FieldErpSyncFlow.expense_claim, limit=limit
     ):
         request = db.get(FieldExpenseRequest, row.entity_id)
         if request is None or request.expense_claim_reference:
             continue
-        if not owned:
+        if not flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim):
             skipped_not_owned += 1
             logger.info(
                 "expense_sync: skipping unlinked status poll for %s — sub does "

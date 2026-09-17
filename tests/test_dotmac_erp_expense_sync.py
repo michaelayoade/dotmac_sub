@@ -1872,6 +1872,7 @@ def test_historical_preapproval_event_is_never_delivered(db_session):
 
 
 def test_refresh_updates_status_for_in_flight_claim(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
     request = _make_submitted_request(db_session)
     request.expense_system = "dotmac_erp"
     request.expense_claim_reference = "ERP-CLAIM-9"
@@ -2398,3 +2399,80 @@ def test_linked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
     assert first.status == "paid"
     # The second row, reached only after the flip, must NOT be written.
     assert second.status == "approved"
+
+
+def test_unlinked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
+    """Same TOCTOU protection as the linked-claim poll loop above, but for
+    ``_poll_unlinked_expense_claims``: the per-flow ownership gate is
+    re-checked on EVERY iteration, not once before the loop, because each
+    ``get_expense_claim_status`` call is a real, potentially slow ERP network
+    round trip. A flip to CRM partway through a batch must stop the
+    remaining rows in THIS run.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+
+    first = _make_submitted_request(db_session, crm_work_order_id="wo-unlinked-first")
+    _approve(db_session, first)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(first)
+    first_row = _outbox_rows(db_session, first)[0]
+    first_row.status = FieldErpSyncStatus.sent.value
+    first_row.erp_response = {}
+    first.expense_claim_reference = None
+    first.expense_claim_status = None
+    db_session.commit()
+
+    second = _make_submitted_request(db_session, crm_work_order_id="wo-unlinked-second")
+    _approve(db_session, second)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(second)
+    second_row = _outbox_rows(db_session, second)[0]
+    second_row.status = FieldErpSyncStatus.sent.value
+    second_row.erp_response = {}
+    second.expense_claim_reference = None
+    second.expense_claim_status = None
+    db_session.commit()
+
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+
+    class _FlipOwnershipAfterFirstUnlinkedCallClient(_FakeERPClient):
+        """Simulates ownership moving to CRM mid-batch, right after the first
+        real ERP network call the unlinked-poll loop makes."""
+
+        def get_expense_claim_status(self, source_claim_id):
+            result = super().get_expense_claim_status(source_claim_id)
+            if len(self.status_calls) == 1:
+                ownership_row.owner = SyncFlowOwner.crm.value
+                db_session.commit()
+            return result
+
+    client = _FlipOwnershipAfterFirstUnlinkedCallClient(
+        status_outcomes=[
+            {
+                "claim_id": "ERP-UNLINKED-A",
+                "claim_number": "EXP-UA",
+                "status": "approved",
+            },
+            {
+                "claim_id": "ERP-UNLINKED-B",
+                "claim_number": "EXP-UB",
+                "status": "approved",
+            },
+        ]
+    )
+
+    result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
+
+    # Only the first row (processed while still sub-owned) made an ERP call.
+    assert len(client.status_calls) == 1
+    assert result["skipped_not_owned"] >= 1
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert first.expense_claim_reference == "ERP-UNLINKED-A"
+    # The second row, reached only after the flip, must NOT be linked.
+    assert second.expense_claim_reference is None
