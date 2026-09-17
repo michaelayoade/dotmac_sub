@@ -398,6 +398,25 @@ def _extract_claim_status(response: dict | None) -> str | None:
     return status[:40] if status else None
 
 
+def _apply_erp_expense_payment_outcome(
+    request: FieldExpenseRequest,
+    *,
+    claim_status: str,
+    observed_at: datetime,
+) -> None:
+    """Project ERP's confirmed expense-claim payment fact onto the local row.
+
+    ERP owns the paid fact — payment intent, transfer execution, settlement,
+    and reconciliation all happen there. This is Sub's only writer of the
+    resulting local ``approved -> paid`` projection; it never decides that an
+    expense was paid on its own, and it is a no-op for every other local
+    status (submitted, rejected, canceled, or already paid).
+    """
+    if claim_status == "paid" and request.status == "approved":
+        request.paid_at = request.paid_at or observed_at
+        request.status = "paid"
+
+
 def apply_claim_response(request: FieldExpenseRequest, response: dict | None) -> None:
     """Write an ERP claim response back onto a ``FieldExpenseRequest``.
 
@@ -453,9 +472,9 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
 
     request.expense_claim_status = claim_status
     now = datetime.now(UTC)
-    if claim_status == "paid" and request.status == "approved":
-        request.paid_at = request.paid_at or now
-        request.status = "paid"
+    _apply_erp_expense_payment_outcome(
+        request, claim_status=claim_status, observed_at=now
+    )
 
 
 def _apply_payment_projection(

@@ -2186,3 +2186,60 @@ def test_diagnostics_excludes_a_row_whose_writeback_actually_landed(db_session):
 
     flow_report = report[FieldErpSyncFlow.expense_claim.value]
     assert flow_report["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# ERP expense-claim payment outcome observation — extracted projection helper
+# ---------------------------------------------------------------------------
+
+
+def test_apply_erp_expense_payment_outcome_marks_approved_claim_paid():
+    request = FieldExpenseRequest(status="approved", paid_at=None)
+    observed_at = datetime(2026, 1, 5, tzinfo=UTC)
+
+    expense_sync._apply_erp_expense_payment_outcome(
+        request, claim_status="paid", observed_at=observed_at
+    )
+
+    assert request.status == "paid"
+    assert request.paid_at == observed_at
+
+
+def test_apply_erp_expense_payment_outcome_is_idempotent_on_replay():
+    already_paid_at = datetime(2025, 12, 1, tzinfo=UTC)
+    request = FieldExpenseRequest(status="paid", paid_at=already_paid_at)
+    later_observed_at = datetime(2026, 1, 5, tzinfo=UTC)
+
+    expense_sync._apply_erp_expense_payment_outcome(
+        request, claim_status="paid", observed_at=later_observed_at
+    )
+
+    assert request.status == "paid"
+    assert request.paid_at == already_paid_at
+
+
+def test_apply_erp_expense_payment_outcome_ignores_non_paid_claim_status():
+    request = FieldExpenseRequest(status="approved", paid_at=None)
+    observed_at = datetime(2026, 1, 5, tzinfo=UTC)
+
+    expense_sync._apply_erp_expense_payment_outcome(
+        request, claim_status="approved", observed_at=observed_at
+    )
+
+    assert request.status == "approved"
+    assert request.paid_at is None
+
+
+@pytest.mark.parametrize(
+    "starting_status", ["submitted", "rejected", "canceled", "paid"]
+)
+def test_apply_erp_expense_payment_outcome_only_fires_from_approved(starting_status):
+    request = FieldExpenseRequest(status=starting_status, paid_at=None)
+    observed_at = datetime(2026, 1, 5, tzinfo=UTC)
+
+    expense_sync._apply_erp_expense_payment_outcome(
+        request, claim_status="paid", observed_at=observed_at
+    )
+
+    assert request.status == starting_status
+    assert request.paid_at is None

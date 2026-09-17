@@ -894,6 +894,7 @@ SERVICES: tuple[SOTService, ...] = (
             "field expense lifecycle ERP delivery staging",
             "dead expense delivery recovery",
             "dead expense payment delivery recovery",
+            "ERP expense-claim payment outcome observation",
             "field expense payment initiation and ERP delivery staging",
             "field expense vendor picker",
             "requester-owned field expense history",
@@ -1024,6 +1025,15 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical approved expense request",
                         "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="ERP expense-claim payment outcome observation",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "canonical field expense request state",
+                        "ERP expense claim and payment status observation",
                     ),
                     canonical_writer="operations.expense_requests",
                 ),
