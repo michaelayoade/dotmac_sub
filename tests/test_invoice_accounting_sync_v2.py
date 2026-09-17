@@ -595,7 +595,16 @@ def test_keyset_walk_does_not_skip_a_stationary_row_when_an_earlier_row_is_updat
     # downstream consumer is idempotent on (invoice, source_updated_at)),
     # not a duplicate: A was never returned at this later position before.
     assert [item.source_invoice_id for item in page3.items] == [row_a.id]
-    assert page3.items[0].updated_at == t4
+    # SQLite's DATETIME column drops tzinfo on round-trip (unlike PostgreSQL),
+    # and this assertion now exercises a genuine reload — `apply_sync_page`
+    # sets `populate_existing=True`, so this is no longer the same in-memory
+    # `row_a` object mutated above, it's a fresh read from the DB. Normalize
+    # before comparing, same as the PostgreSQL dual-session counterpart in
+    # tests/integration/test_invoice_accounting_sync_keyset_postgres.py.
+    observed_updated_at = page3.items[0].updated_at
+    if observed_updated_at.tzinfo is None:
+        observed_updated_at = observed_updated_at.replace(tzinfo=UTC)
+    assert observed_updated_at.astimezone(UTC) == t4
 
 
 def test_keyset_replay_is_deterministic_when_nothing_changes(
