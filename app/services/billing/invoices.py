@@ -3008,6 +3008,27 @@ class Invoices(ListResponseMixin):
         after_updated_at: datetime | None = None,
         after_id: UUID | None = None,
     ):
+        """Legacy accounting-sync page — typed-boundary deviation, documented.
+
+        This service (and ``list_for_sync`` below) predates this repo's typed
+        cross-component-boundary rule and still accepts transport-layer
+        ``str``/``bool`` primitives and returns a ``dict[str, Any]`` envelope,
+        unlike the v2 feed's ``InvoiceAccountingSyncQuery``/``ListResponse``.
+        This change only threads the two new optional keyset-cursor params
+        through the existing shape; it does not migrate it, because the
+        future ProductPort/Integrator work this cursor exists for targets the
+        v2 typed feed exclusively (see
+        ``docs/designs/ERP_INVOICE_ACCOUNTING_SYNC_V2.md``) — the legacy feed
+        stays as the pull job's existing backstop. A full typed migration of
+        this legacy boundary is tracked separately, not part of this slice.
+
+        A partial ``after_updated_at``/``after_id`` pair raises a plain
+        ``ValueError`` from ``apply_sync_page`` (not an HTTP-mapped error) if
+        called directly rather than through the API layer — the sole current
+        caller, ``app.api.billing.sync_invoices``, already validates the pair
+        and returns 422 before reaching here. Any new direct caller of this
+        service must perform the same validation itself.
+        """
         items = cls.list_for_sync(
             db,
             account_id,
