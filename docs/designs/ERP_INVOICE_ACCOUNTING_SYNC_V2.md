@@ -101,6 +101,27 @@ bounded. A typed `invoice_id` filter permits one explicit operator replay
 without rewinding the global cursor or scanning another customer's invoices.
 The query takes no locks and writes no data.
 
+Paging supports two modes, both accepted by `GET /invoices/accounting-sync/v2`
+(and the legacy `GET /invoices/sync` feed, which shares the same underlying
+`apply_sync_page` helper):
+
+- **Offset** (default, unchanged): `limit`/`offset`, as above.
+- **Keyset cursor** (additive, optional): `after_updated_at`/`after_id`,
+  supplied together — never one without the other (HTTP 422 otherwise).
+  Paging advances by `(updated_at, id) > (after_updated_at, after_id)`
+  instead of `OFFSET`, so a concurrent update to an unrelated row cannot
+  re-sort it across a page boundary and skip a row the walk has not reached
+  yet — the concrete hazard offset paging has under concurrent writes.
+
+Revision semantics under the keyset cursor: `updated_at` is mutable, so the
+cursor cannot promise "each row exactly once" across a walk that overlaps
+concurrent writes — a row genuinely modified after being observed legitimately
+reappears with its new revision later in the walk, and this is intended, not
+a bug (ERP is idempotent on the source invoice id plus its source
+`updated_at`). What the cursor does guarantee is narrower and is the actual
+fix: a row whose own `(updated_at, id)` never changes during the walk is
+never skipped.
+
 ERP must treat `blocked` as a durable data outcome, not as a transient exception:
 record the issue keyed by source invoice and source revision, advance the pull
 cursor after recording it, and retry only after `updated_at` changes or an

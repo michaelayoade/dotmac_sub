@@ -2964,6 +2964,8 @@ class Invoices(ListResponseMixin):
         offset: int,
         *,
         updated_since: datetime | None = None,
+        after_updated_at: datetime | None = None,
+        after_id: UUID | None = None,
     ):
         """Return the ordered ERP invoice delta without detail-only relations."""
         query = db.query(Invoice).options(
@@ -2988,13 +2990,35 @@ class Invoices(ListResponseMixin):
             updated_since=updated_since,
             limit=limit,
             offset=offset,
+            after_updated_at=after_updated_at,
+            after_id=after_id,
         ).all()
 
     @classmethod
-    def sync_list_response(cls, db: Session, **kwargs):
-        limit = kwargs["limit"]
-        offset = kwargs["offset"]
-        items = cls.list_for_sync(db, **kwargs)
+    def sync_list_response(
+        cls,
+        db: Session,
+        *,
+        account_id: str | None = None,
+        status: str | None = None,
+        is_active: bool | None = None,
+        updated_since: datetime | None = None,
+        limit: int,
+        offset: int,
+        after_updated_at: datetime | None = None,
+        after_id: UUID | None = None,
+    ):
+        items = cls.list_for_sync(
+            db,
+            account_id,
+            status,
+            is_active,
+            limit,
+            offset,
+            updated_since=updated_since,
+            after_updated_at=after_updated_at,
+            after_id=after_id,
+        )
         return sync_page_response(items, limit=limit, offset=offset)
 
     @staticmethod
