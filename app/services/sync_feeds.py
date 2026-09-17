@@ -44,6 +44,19 @@ def apply_sync_page(
     re-sort it across a page boundary and drop an untouched row from the
     walk entirely.
     """
+    # A caller that holds one session open across several pages of a walk
+    # (the shape a keyset cursor exists to support) would otherwise get back
+    # its OWN stale, identity-mapped Python object for any row it already
+    # touched earlier in that session — SQLAlchemy's default query behavior
+    # does not refresh an already-identity-mapped row's attributes from a
+    # fresh SELECT. `populate_existing` forces every row this query returns
+    # to be refreshed from what was just read, so a row updated by another
+    # session mid-walk is picked up on its current revision rather than
+    # silently replayed as of whenever this session first saw it. See
+    # `app/services/network_operation_dispatch.py` and
+    # `app/services/prepaid_draft_reconciliation.py` for the same pattern
+    # used elsewhere in this codebase for the identical staleness concern.
+    query = query.execution_options(populate_existing=True)
     if updated_since is not None:
         query = query.filter(model.updated_at >= updated_since)
     query = query.order_by(model.updated_at.asc(), model.id.asc())
