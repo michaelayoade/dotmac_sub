@@ -1622,7 +1622,9 @@
    "params": [
     "header:authorization",
     "header:x-api-key",
-    "path:subscriber_id!"
+    "path:subscriber_id!",
+    "query:idempotency_key",
+    "query:reason"
    ],
    "request": null,
    "responses": {

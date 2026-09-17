@@ -19,6 +19,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     ALLOWED_RESTORERS,
     PAYMENT_TRIGGERS,
+    ActivationIntent,
     RestorationOutcome,
     payment_clearable_reasons,
     restore_subscription,
@@ -62,6 +63,7 @@ def test_successful_restore_reports_restored_and_no_blockers(db_session, subscri
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -89,6 +91,7 @@ def test_payment_cannot_clear_an_admin_lock_and_says_so(db_session, subscription
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -124,6 +127,7 @@ def test_partial_clear_reports_the_surviving_blockers(db_session, subscription):
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -157,6 +161,7 @@ def test_fup_is_not_reported_as_payment_unclearable(db_session, subscription):
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -188,6 +193,7 @@ def test_lifecycle_override_is_exposed_but_never_cleared(db_session, subscriptio
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -219,6 +225,7 @@ def test_blocked_settlement_lands_on_the_operator_worklist(db_session, subscript
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
     db_session.flush()
@@ -256,6 +263,7 @@ def test_worklist_entry_is_deduplicated_across_repeated_attempts(
             str(subscription.id),
             trigger="payment",
             resolved_by="payment:test",
+            intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
             emit=False,
         )
     db_session.flush()
@@ -276,6 +284,7 @@ def test_worklist_entry_clears_once_access_is_restored(db_session, subscription)
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
     db_session.flush()
@@ -286,6 +295,7 @@ def test_worklist_entry_clears_once_access_is_restored(db_session, subscription)
         str(subscription.id),
         trigger="admin",
         resolved_by="admin:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
     clear_financially_settled_but_access_blocked(db_session, str(subscription.id))
@@ -312,6 +322,7 @@ def test_a_payment_clearable_blocker_is_critical_on_the_worklist(
         # `payment` is NOT an allowed restorer for `prepaid`; only `top_up` is.
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
     db_session.flush()
@@ -344,6 +355,7 @@ def test_facade_reports_nothing_needed_doing_as_false(db_session, subscription):
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -456,6 +468,7 @@ def test_facade_reports_a_restore_blocked_by_an_override_as_transitioned(
         str(subscription.id),
         trigger="payment",
         resolved_by="payment:test",
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         emit=False,
     )
 
@@ -494,5 +507,6 @@ def test_missing_subscription_still_raises(db_session):
             str(uuid4()),
             trigger="payment",
             resolved_by="payment:test",
+            intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
             emit=False,
         )

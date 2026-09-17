@@ -55,7 +55,9 @@ _IP_ASSIGNMENT_DEACTIVATORS = {
     "app/services/network/subscriber_wan_ipam.py",  # debt: ONT WAN claims
     "app/services/provisioning_helpers.py",  # debt: provisioning reclaim
     "app/services/subscriber.py",  # debt: subscriber deletion cleanup
-    "app/services/web_system_restore_tool.py",  # debt: restore tooling
+    # app/services/web_system_restore_tool.py removed: it no longer touches
+    # IPAssignment (or any other participant model) at all — it is now a
+    # typed read/adapter layer over app/services/account_recovery.py.
 }
 
 

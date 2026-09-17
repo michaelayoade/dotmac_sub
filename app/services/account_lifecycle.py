@@ -70,6 +70,8 @@ from app.services.subscription_lifecycle_evidence import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from app.services.billing_automation import CancellationCreditIntent
+
 logger = logging.getLogger(__name__)
 
 
@@ -273,6 +275,19 @@ ACCOUNT_OVERRIDE_STATUSES = frozenset(
     }
 )
 
+# The canonical billable account statuses: an account in one of these already
+# receives (or is being actively pursued for) active service. `new`,
+# `disabled`, and `canceled` are not billable and require the narrow,
+# explicitly typed admission paths documented on `ActivationIntent`.
+CANONICAL_BILLABLE_ACCOUNT_STATUSES = frozenset(
+    {
+        SubscriberStatus.active,
+        SubscriberStatus.blocked,
+        SubscriberStatus.suspended,
+        SubscriberStatus.delinquent,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AccountUnsuspendResult:
@@ -322,12 +337,51 @@ def is_terminal_status(status: SubscriptionStatus | None) -> bool:
     return status in _TERMINAL
 
 
+class ActivationIntent(StrEnum):
+    """Closed set of admissible reasons this module may require billing approval.
+
+    Exactly one member names each of the six call sites that invoke
+    ``_require_billing_approval`` — no caller name, source string, or
+    permissive default may substitute for passing one of these explicitly.
+    ``tests/architecture/test_account_billing_approval_boundary.py`` asserts,
+    by AST inspection (not a line count), that every call site is one of
+    these six enclosing functions and that each passes a member of this
+    enum, never a bare string or an omitted argument.
+
+    ``DELETION_RECOVERY`` is the one member not hardcoded internally: it is
+    threaded through from an external caller (``restore_subscription_detailed``
+    only) because that function is the sole place recovering a canceled
+    subscription's access is legal, and only for the registered
+    ``customer.account_recovery`` participant (see ``app/services/account_recovery.py``).
+    """
+
+    ACCOUNT_STATUS_REQUEST = "account_status_request"
+    SUBSCRIPTION_RESTORATION = "subscription_restoration"
+    SUBSCRIPTION_ACTIVATION_FROM_PENDING = "subscription_activation_from_pending"
+    SUBSCRIPTION_REACTIVATION_FROM_DISABLED = "subscription_reactivation_from_disabled"
+    ACCOUNT_STATUS_TRANSITION = "account_status_transition"
+    ACCOUNT_UNSUSPEND = "account_unsuspend"
+    DELETION_RECOVERY = "deletion_recovery"
+
+
 def _require_billing_approval(
     db: Session,
     *,
     subscriber_id: str,
+    intent: ActivationIntent,
 ) -> Subscriber:
-    """Fail closed before any transition that would provide active service."""
+    """Fail closed before any transition that would provide active service.
+
+    ``intent`` must be an explicit :class:`ActivationIntent` member. Active
+    service always requires ``billing_enabled=True`` regardless of intent;
+    this is the one guard-logic rule that applies uniformly across every
+    admissible call site.
+    """
+    if not isinstance(intent, ActivationIntent):
+        raise TypeError(
+            "_require_billing_approval requires an explicit ActivationIntent, "
+            f"got {intent!r}"
+        )
     subscriber = db.get(Subscriber, subscriber_id)
     if subscriber is None:
         raise ValueError(f"Subscriber {subscriber_id} not found")
@@ -402,7 +456,11 @@ def apply_requested_account_status(
             db, subscriber_id, reason=reason, source=source
         )
     if status == SubscriberStatus.active:
-        _require_billing_approval(db, subscriber_id=subscriber_id)
+        _require_billing_approval(
+            db,
+            subscriber_id=subscriber_id,
+            intent=ActivationIntent.ACCOUNT_STATUS_REQUEST,
+        )
         has_subscription = (
             db.scalars(
                 select(Subscription.id)
@@ -856,6 +914,7 @@ def restore_subscription_detailed(
     trigger: str,
     resolved_by: str,
     *,
+    intent: ActivationIntent,
     reason: EnforcementReason | None = None,
     notes: str | None = None,
     emit: bool = True,
@@ -869,6 +928,14 @@ def restore_subscription_detailed(
     override. The defect this replaces was silence — the operator was told
     nothing, so a customer who had genuinely paid stayed dark with no worklist
     entry and no stated required action.
+
+    ``intent`` is required and explicit (no default): ordinary callers pass
+    ``ActivationIntent.SUBSCRIPTION_RESTORATION``. Only
+    ``ActivationIntent.DELETION_RECOVERY`` — used exclusively by the
+    registered ``customer.account_recovery`` participant — may restore a
+    subscription whose status is ``canceled`` rather than a suspended
+    equivalent; every other caller passing that status still gets the normal
+    "not suspended" refusal below.
     """
     # Lock the subscription row to prevent concurrent restore races
     subscription = db.execute(
@@ -877,7 +944,12 @@ def restore_subscription_detailed(
     if not subscription:
         raise ValueError(f"Subscription {subscription_id} not found")
 
-    if subscription.status not in SUSPENDED_EQUIVALENT:
+    is_recovery_of_canceled = (
+        intent is ActivationIntent.DELETION_RECOVERY
+        and subscription.status == SubscriptionStatus.canceled
+    )
+
+    if subscription.status not in SUSPENDED_EQUIVALENT and not is_recovery_of_canceled:
         logger.warning(
             "restore_subscription called but subscription %s is %s, not suspended",
             subscription_id,
@@ -896,7 +968,88 @@ def restore_subscription_detailed(
     _require_billing_approval(
         db,
         subscriber_id=str(subscription.subscriber_id),
+        intent=intent,
     )
+
+    if is_recovery_of_canceled:
+        # A canceled subscription's enforcement locks were already resolved by
+        # `cancel_subscription`'s call to `resolve_all_locks`; there is
+        # nothing left to clear here, and `resolve_locks_for_trigger` assumes
+        # a still-suspended subscription. Reactivation is otherwise identical
+        # to the ordinary "no remaining lock" restoration path below.
+        if reactivation_blocked_by_active_login(db, subscription):
+            logger.warning(
+                "Subscription %s not restored via recovery: subscriber %s "
+                "already has an active subscription on login %r",
+                subscription.id,
+                subscription.subscriber_id,
+                subscription.login,
+            )
+            compute_account_status(db, str(subscription.subscriber_id))
+            return _build_restoration_result(
+                db,
+                subscription,
+                trigger=trigger,
+                outcome=RestorationOutcome.blocked_by_active_login,
+                resolved_count=0,
+                subscription_reactivated=False,
+                access_restored=False,
+            )
+
+        prev_status = subscription.status
+        restored_at = _aware_utc(evidence_effective_at) or datetime.now(UTC)
+        _stage_missing_activation_billing_anchor(
+            db,
+            subscription,
+            base_at=restored_at,
+            source=BillingAnchorProjectionSource.lifecycle_resume,
+            evidence_ref=(
+                evidence_context.idempotency_key
+                if evidence_context is not None and evidence_context.idempotency_key
+                else f"recover:{subscription.id}:{resolved_by}:{restored_at.isoformat()}"
+            ),
+        )
+        subscription.status = SubscriptionStatus.active
+        subscription.canceled_at = None
+        subscription.cancel_reason = None
+        db.flush()
+        _record_subscription_transition(
+            db,
+            subscription=subscription,
+            from_status=prev_status,
+            to_status=SubscriptionStatus.active,
+            source=resolved_by,
+            reason=notes or trigger,
+            effective_at=evidence_effective_at,
+            context=evidence_context,
+        )
+        if emit:
+            emit_event(
+                db,
+                EventType.subscription_resumed,
+                {
+                    "subscription_id": str(subscription.id),
+                    "trigger": trigger,
+                    "resolved_by": resolved_by,
+                    "from_status": prev_status.value if prev_status else None,
+                    "to_status": SubscriptionStatus.active.value,
+                    "offer_name": subscription.offer.name
+                    if subscription.offer
+                    else None,
+                },
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
+        compute_account_status(db, str(subscription.subscriber_id))
+        return _build_restoration_result(
+            db,
+            subscription,
+            trigger=trigger,
+            outcome=RestorationOutcome.restored,
+            resolved_count=0,
+            subscription_reactivated=True,
+            access_restored=True,
+        )
 
     resolved_count, remaining = resolve_locks_for_trigger(
         db,
@@ -1062,12 +1215,20 @@ def restore_subscription(
 
     Returns:
         True if this call actually restored the subscription to active.
+
+    This facade always means ordinary restoration
+    (``ActivationIntent.SUBSCRIPTION_RESTORATION``); it never exposes the
+    canceled-subscription recovery path, which only
+    ``restore_subscription_detailed`` — called directly by the registered
+    ``customer.account_recovery`` participant with
+    ``ActivationIntent.DELETION_RECOVERY`` — can reach.
     """
     return restore_subscription_detailed(
         db,
         subscription_id,
         trigger,
         resolved_by,
+        intent=ActivationIntent.SUBSCRIPTION_RESTORATION,
         reason=reason,
         notes=notes,
         emit=emit,
@@ -1149,6 +1310,7 @@ def activate_subscription(
     _require_billing_approval(
         db,
         subscriber_id=str(subscription.subscriber_id),
+        intent=ActivationIntent.SUBSCRIPTION_ACTIVATION_FROM_PENDING,
     )
 
     # Sales-created service contracts are gated by the canonical provisioning
@@ -1249,7 +1411,18 @@ def activate_subscription(
             account_id=subscription.subscriber_id,
         )
 
-    compute_account_status(db, str(subscription.subscriber_id))
+    resulting_status = compute_account_status(db, str(subscription.subscriber_id))
+    if resulting_status not in CANONICAL_BILLABLE_ACCOUNT_STATUSES:
+        # `new` is only ever admitted here, for a subscription proven pending
+        # above. If staging activation did not make the account billable, the
+        # activation itself is invalid — raise so the whole transaction rolls
+        # back rather than leaving a `new` account with an `active`
+        # subscription and no billable projection.
+        raise ValueError(
+            "Activation did not produce a billable account status "
+            f"(got {resulting_status.value!r}) for subscriber "
+            f"{subscription.subscriber_id}"
+        )
 
     logger.info("Subscription %s activated", subscription_id)
 
@@ -1339,8 +1512,8 @@ def cancel_subscription(
     cancel_reason: str,
     source: str,
     *,
+    credit_intent: CancellationCreditIntent,
     emit: bool = True,
-    generate_credit: bool = True,
     evidence_context: CommandContext | None = None,
     evidence_effective_at: datetime | None = None,
 ) -> None:
@@ -1351,19 +1524,28 @@ def cancel_subscription(
         subscription_id: Subscription UUID.
         cancel_reason: Cancellation reason (stored on subscription).
         source: Who/what canceled this.
+        credit_intent: The typed reason this cancellation is happening.
+            ``financial.billing_automation``'s
+            ``cancellation_credit_intent_should_evaluate`` is the ONE place
+            that maps this to a credit-evaluate/suppress decision — there is
+            no other ``generate_credit``-style boolean anywhere in the
+            codebase. Required, no default: every caller must say why.
         emit: Whether to emit events.
 
     Raises:
         ValueError: If subscription is already canceled.
 
     Note:
-        Cancellation-credit generation is an optional participant consequence
-        run in its own savepoint. Its failure is logged with a traceback but is
-        NOT yet recorded as durable evidence, so a customer owed a credit can
-        still be missed silently. Closing that requires ``cancel_subscription``
-        to become a registered owner command and use
-        ``owner_commands.execute_owner_savepoint``; tracked separately from the
-        cadence fix.
+        Cancellation-credit generation is a best-effort participant
+        consequence run in its own savepoint
+        (``db.begin_nested()``, deliberately unchanged debt — see
+        ``generate_cancellation_credit``). Its failure is logged with a
+        traceback but is NOT yet recorded as durable evidence, so a customer
+        owed a credit can still be missed silently. Closing that requires
+        ``cancel_subscription`` to become a registered owner command and use
+        ``owner_commands.execute_owner_savepoint``; tracked separately from
+        the cadence fix, and out of scope for the credit-intent unification
+        in this change.
     """
     subscription = db.execute(
         select(Subscription).where(Subscription.id == subscription_id).with_for_update()
@@ -1404,10 +1586,16 @@ def cancel_subscription(
 
     _release_service_ips(db, subscription)
 
-    # Generate credit note for unused portion of the billing period.
+    # Generate credit note for unused portion of the billing period, unless
+    # the unified cancellation-credit-intent policy says this intent
+    # suppresses it (currently only `administrative_recoverable_deletion`).
     # Use a savepoint so a credit note failure doesn't corrupt the
     # cancel transaction (the cancellation itself is already flushed).
-    if generate_credit:
+    from app.services.billing_automation import (
+        cancellation_credit_intent_should_evaluate,
+    )
+
+    if cancellation_credit_intent_should_evaluate(credit_intent):
         try:
             from app.services.billing_automation import generate_cancellation_credit
 
@@ -1548,6 +1736,7 @@ def enable_subscription(
     _require_billing_approval(
         db,
         subscriber_id=str(subscription.subscriber_id),
+        intent=ActivationIntent.SUBSCRIPTION_REACTIVATION_FROM_DISABLED,
     )
     active_locks = get_active_locks(db, subscription_id=str(subscription.id))
     if active_locks:
@@ -1681,6 +1870,7 @@ def transition_subscription_status(
     reason: str,
     source: str,
     emit: bool = True,
+    credit_intent: CancellationCreditIntent | None = None,
     evidence_context: CommandContext | None = None,
     evidence_effective_at: datetime | None = None,
 ) -> bool:
@@ -1736,11 +1926,14 @@ def transition_subscription_status(
         )
         return True
     elif target_status == SubscriptionStatus.canceled:
+        from app.services.billing_automation import CancellationCreditIntent as _CCI
+
         cancel_subscription(
             db,
             subscription_id,
             reason,
             source,
+            credit_intent=credit_intent or _CCI.ADMINISTRATIVE_TERMINATION,
             emit=emit,
             evidence_context=evidence_context,
             evidence_effective_at=evidence_effective_at,
@@ -1777,13 +1970,18 @@ def transition_account_status(
     source: str,
     emit: bool = True,
     preserve_locks: bool = False,
+    credit_intent: CancellationCreditIntent | None = None,
 ) -> SubscriberStatus:
     """Apply an account-level command and align all owned subscription facts."""
     subscriber = db.get(Subscriber, subscriber_id)
     if subscriber is None:
         raise ValueError(f"Subscriber {subscriber_id} not found")
     if target_status == SubscriberStatus.active:
-        _require_billing_approval(db, subscriber_id=subscriber_id)
+        _require_billing_approval(
+            db,
+            subscriber_id=subscriber_id,
+            intent=ActivationIntent.ACCOUNT_STATUS_TRANSITION,
+        )
     subscriptions = list(
         db.scalars(
             select(Subscription).where(Subscription.subscriber_id == subscriber.id)
@@ -1838,6 +2036,9 @@ def transition_account_status(
                     preserve_locks=preserve_locks,
                 )
     elif target_status == SubscriberStatus.canceled:
+        from app.services.billing_automation import CancellationCreditIntent as _CCI
+
+        resolved_credit_intent = credit_intent or _CCI.ADMINISTRATIVE_TERMINATION
         for subscription in subscriptions:
             if subscription.status not in _TERMINAL:
                 cancel_subscription(
@@ -1845,6 +2046,7 @@ def transition_account_status(
                     str(subscription.id),
                     reason,
                     source,
+                    credit_intent=resolved_credit_intent,
                     emit=emit,
                 )
     return compute_account_status(db, subscriber_id)
@@ -1872,7 +2074,11 @@ def unsuspend_account_override(
         raise ValueError(f"Subscriber {subscriber_id} not found")
     if subscriber.lifecycle_override_status != SubscriberStatus.suspended:
         raise ValueError("Account does not have an explicit suspended override")
-    _require_billing_approval(db, subscriber_id=subscriber_id)
+    _require_billing_approval(
+        db,
+        subscriber_id=subscriber_id,
+        intent=ActivationIntent.ACCOUNT_UNSUSPEND,
+    )
 
     recorded_source = str(subscriber.lifecycle_override_source or "").strip()
     subscriptions = list(

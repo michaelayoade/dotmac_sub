@@ -3,6 +3,13 @@ from app.models.access_invitation import (  # noqa: F401
     AccessInvitationPurpose,
     AccessInvitationStatus,
 )
+from app.models.account_recovery import (  # noqa: F401
+    AccountRecoveryBlockedPreflight,
+    AccountRecoveryCommandOutcome,
+    AccountRecoveryRecord,
+    AccountRecoveryState,
+    AccountRecoverySubscriptionSnapshot,
+)
 from app.models.admin_alert import AdminAlert, AdminNotification  # noqa: F401
 from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
 from app.models.ai_insight import (  # noqa: F401

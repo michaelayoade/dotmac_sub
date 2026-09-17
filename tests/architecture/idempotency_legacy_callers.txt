@@ -1,6 +1,7 @@
 app/models/__init__.py
 app/models/idempotency.py
 app/models/task_execution.py
+app/services/account_recovery.py
 app/services/account_status_commands.py
 app/services/billing/addon_contract_backfill.py
 app/services/billing/consolidated_payments.py

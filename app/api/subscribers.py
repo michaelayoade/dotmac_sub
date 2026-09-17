@@ -32,8 +32,13 @@ from app.schemas.subscriber import (
     SubscriberSyncRead,
     SubscriberUpdate,
 )
-from app.services import account_billing_approval, account_status_commands
+from app.services import (
+    account_billing_approval,
+    account_recovery,
+    account_status_commands,
+)
 from app.services import subscriber as subscriber_service
+from app.services.audit_adapter import AuditActor
 from app.services.auth_dependencies import require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -423,8 +428,87 @@ def change_subscriber_billing_approval(
     tags=["subscribers"],
     dependencies=[Depends(require_permission("customer:delete"))],
 )
-def delete_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
-    subscriber_service.subscribers.delete(db, subscriber_id)
+def delete_subscriber(
+    subscriber_id: str,
+    request: Request,
+    reason: str | None = Query(None, max_length=500),
+    idempotency_key: str | None = Query(None, max_length=120),
+    db: Session = Depends(get_db),
+):
+    """Recoverable administrative deletion — routed through account recovery.
+
+    This used to be an unconditional hard delete with no way back. It is now
+    a thin adapter over the ``account_recovery`` owner command: the account is
+    tombstoned (subscriptions canceled with a non-credited intent, the
+    subscriber marked inactive) rather than removed, and can be restored.
+    Self-service, customer-requested deletion is a distinct, deliberately
+    permanent path (`app/services/account_deletion.py`) and is untouched by
+    this endpoint. No `is_active` precondition is enforced here — unlike the
+    admin-portal delete button — to preserve this endpoint's existing
+    contract that any subscriber, active or not, can be deleted.
+    """
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    actor = f"{actor_type}:{principal_id}"
+    account_id = _account_id(subscriber_id)
+    # Confirms the account exists (404 semantics preserved) before entering
+    # the owner-command boundary, matching the account-status/billing-approval
+    # endpoints above.
+    subscriber_service.subscribers.get(db, subscriber_id)
+    db_session_adapter.release_read_transaction(db)
+    command_id = uuid.uuid4()
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=actor,
+        scope=account_recovery.ACCOUNT_RECOVERY_WRITE_SCOPE,
+        reason=reason or "Administrative recoverable deletion via subscriber API",
+        idempotency_key=idempotency_key
+        or f"api-delete-subscriber:{account_id}:{command_id}",
+    )
+    command = account_recovery.RequestRecoverableDeletionCommand(
+        account_id=account_id,
+        context=context,
+        requested_by=actor,
+        deleted_by=actor,
+        audit_actor=(
+            AuditActor.api_key(principal_id)
+            if actor_type == "api_key"
+            else AuditActor.user(principal_id)
+        ),
+    )
+    try:
+        outcome = account_recovery.request_recoverable_deletion(db, command)
+    except DomainError as exc:
+        status_code = 404 if exc.code.endswith("account_not_found") else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+        ) from exc
+    if isinstance(outcome, account_recovery.DeletionPreflightBlocked):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "customer.account_recovery.preflight_blocked",
+                "message": (
+                    "Deletion refused: unsupported consequence(s) would affect "
+                    "subscription(s) that cannot yet be reversed."
+                ),
+                "details": {
+                    "unsupported_consequences": list(outcome.unsupported_consequences),
+                    "blocked_subscription_ids": [
+                        str(i) for i in outcome.blocked_subscription_ids
+                    ],
+                },
+            },
+        )
 
 
 @router.post(

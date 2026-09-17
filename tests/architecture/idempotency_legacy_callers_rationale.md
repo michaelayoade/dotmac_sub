@@ -9,6 +9,33 @@ the reviewed reason each addition was accepted rather than refused, so
 "new callers are forbidden" stays a reviewed containment boundary and not a
 silent expansion.
 
+## `app/services/account_recovery.py` — added 2026-09-16
+
+**Why this reviewed caller is warranted.** `customer.account_recovery` owns
+recoverable deletion, restoration and evidence re-baselining as one
+owner-command transaction per request. Each command must reserve its caller
+key and preserve the original typed outcome, including an unchanged preflight
+refusal or a partial restore. This slice uses Sub's still-authoritative
+`IdempotencyKey` ledger for the reservation and recovery-local immutable
+result rows for values too large to fit in the ledger reference. It does not
+create a second ledger or bypass the exact caller census. The account row is
+locked before the first reservation in all three commands, so same-account
+concurrent retries serialize even when the key row does not yet exist.
+
+**Why this is transitional, not a standing expansion.** ADR-0011's
+2026-08-25 amendment keeps the local ledger authoritative and explicitly
+forbids importing `dotmac_kernel.idempotency` under `app/` until the product
+runtime cutover is composed and verified. The existing offer-admission owner
+below is the same reviewed coexistence case. Adding this path to the sorted
+two-directional baseline makes the exception visible and red-sensitive; it
+does not weaken the detector or authorize further callers.
+
+**Retirement.** Remove this path and its local-ledger reservation when Sub's
+idempotency runtime cutover installs the pinned Kernel distribution, composes
+the correct persistence plane, proves fresh and predecessor migrations plus
+isolation/parity, and migrates the account-recovery owner as an explicit
+domain slice. Do not infer that migration 556's inert storage is adoption.
+
 ## `app/services/catalog/offer_access_requirement.py` — added 2026-09-16
 
 **Why a 33rd caller is warranted.** This module is the sole owner of

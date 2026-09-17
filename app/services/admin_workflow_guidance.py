@@ -929,6 +929,10 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use the specific user, role, module, scheduler, import, export, restore, or maintenance workflow.",
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
         excluded_route_prefixes=("/admin/system/email",),
+        notes=(
+            "In the restore tool, review the current recovery fingerprint and blockers before submitting. A fresh page review provides a fresh submission key; a repeated submission replays its original result.",
+            "Re-baselining may add verified affected resource types, but cannot remove a missing participant or clear offer-version drift. Escalate those blockers for their owning correction path.",
+        ),
     ),
     _guide(
         "settings",

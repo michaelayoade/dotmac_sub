@@ -19,4 +19,3 @@ app/services/customer_portal_notifications.py
 app/services/nin_verifications.py
 app/services/subscriber.py
 app/services/web_customer_actions.py
-app/services/web_system_restore_tool.py

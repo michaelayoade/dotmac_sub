@@ -23,6 +23,15 @@
 # ADDED deliberately. It is the registered `customer.canonical_profile_patch`
 # participant, isolated from `customer.accounts`, and applies only an explicit
 # typed field set inside its calling coordinator's transaction.
+#
+# 2026-09-13 — `web_presenter|app/services/web_system_restore_tool.py`
+# REMOVED: it no longer writes any cohort table directly. It is now a typed
+# read/adapter layer over the new `customer.account_recovery` owner
+# (`app/services/account_recovery.py`), which itself never mutates a
+# subscription directly (see `app/services/account_lifecycle.py`).
+# `migration|alembic/versions/612_account_recovery_evidence.py` ADDED: it
+# backfills both retired deletion-evidence lineages and clears their legacy
+# `subscribers.metadata_` keys as a one-time forward-only repair.
 
 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 cli_script|scripts/migration/backfill_party_status.py
@@ -34,6 +43,7 @@ migration|alembic/versions/045_contact_channels_without_name.py
 migration|alembic/versions/116_add_billing_accounts.py
 migration|alembic/versions/208_map_karu_customers_to_bts.py
 migration|alembic/versions/267_brand_profiles.py
+migration|alembic/versions/612_account_recovery_evidence.py
 migration|alembic/versions/277_lifecycle_communications_sot.py
 migration|alembic/versions/383_replaceable_backoffice_boundary.py
 service|app/services/account_deletion.py
@@ -59,4 +69,3 @@ web_presenter|app/services/web_admin_resellers.py
 web_presenter|app/services/web_customer_actions.py
 web_presenter|app/services/web_customer_details.py
 web_presenter|app/services/web_system_import_wizard.py
-web_presenter|app/services/web_system_restore_tool.py

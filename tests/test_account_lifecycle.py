@@ -30,6 +30,7 @@ from app.services.account_lifecycle import (
     suspend_subscription,
     transition_account_status,
 )
+from app.services.billing_automation import CancellationCreditIntent
 from app.services.events import emit_event
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.types import EventType
@@ -464,6 +465,7 @@ class TestTerminalStates:
             str(subscription.id),
             cancel_reason="prepaid_deactivation",
             source="legacy_prepaid_balance",
+            credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
             emit=False,
         )
 
@@ -492,6 +494,7 @@ class TestTerminalStates:
             str(subscription.id),
             cancel_reason="prepaid_deactivation",
             source="test",
+            credit_intent=CancellationCreditIntent.ADMINISTRATIVE_TERMINATION,
             emit=False,
         )
 

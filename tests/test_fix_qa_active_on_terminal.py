@@ -85,3 +85,46 @@ def test_cancel_removes_from_active_population(db_session, catalog_offer):
     db_session.refresh(sub)
     assert sub.status == SubscriptionStatus.canceled
     assert find_qa_active_on_terminal(db_session) == []
+
+
+def test_apply_goes_through_the_lifecycle_owner_not_a_raw_field_write(
+    db_session, catalog_offer, monkeypatch
+):
+    """``--apply`` must call ``cancel_subscription`` (locks/evidence/typed
+    credit intent), not assign ``.status`` directly.
+
+    Before this change ``main(execute=True)`` wrote ``s.status = canceled``
+    itself and never called ``cancel_subscription`` at all, so
+    ``cancel_reason`` was never set. This fails before the fix (asserting
+    ``cancel_reason`` is not None) and passes after it.
+    """
+    from scripts.one_off import fix_qa_active_on_terminal_subscriber as script
+
+    _, sub = _sub(
+        db_session,
+        catalog_offer,
+        login="qa-test-ghi",
+        sub_status=SubscriptionStatus.active,
+        subscriber_status=SubscriberStatus.canceled,
+    )
+    db_session.commit()
+
+    class _NoCloseSession:
+        def __init__(self, session):
+            self._session = session
+
+        def __getattr__(self, name):
+            return getattr(self._session, name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(script, "SessionLocal", lambda: _NoCloseSession(db_session))
+
+    rc = script.main(execute=True)
+    assert rc == 0
+
+    db_session.refresh(sub)
+    assert sub.status == SubscriptionStatus.canceled
+    assert sub.cancel_reason is not None
+    assert "terminal subscriber" in sub.cancel_reason or "QA" in sub.cancel_reason

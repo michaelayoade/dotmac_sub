@@ -2566,6 +2566,53 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
     }
 
 
+class CancellationCreditIntent(enum.StrEnum):
+    """The closed, typed reason a subscription is being canceled.
+
+    This is the ONLY place cancellation-credit suppression logic lives.
+    `customer_requested_termination` and `administrative_termination` are
+    evaluated for a credit exactly as before; `administrative_recoverable_deletion`
+    and `administrative_correction` are the two intents that suppress credit
+    generation — replacing every former ad hoc `generate_credit=False`
+    boolean across the codebase. The two suppressing intents are
+    deliberately distinct and never share a code path: a recoverable
+    deletion tombstones the account and is restorable through
+    `customer.account_recovery`; an administrative correction (duplicate
+    customer-record cleanup, mistaken-subscription correction) is a permanent
+    data fix undoing a record that never represented a real customer
+    decision, and it is never recorded or restored through the recovery
+    system.
+    """
+
+    CUSTOMER_REQUESTED_TERMINATION = "customer_requested_termination"
+    ADMINISTRATIVE_TERMINATION = "administrative_termination"
+    ADMINISTRATIVE_RECOVERABLE_DELETION = "administrative_recoverable_deletion"
+    ADMINISTRATIVE_CORRECTION = "administrative_correction"
+
+
+def cancellation_credit_intent_should_evaluate(
+    intent: CancellationCreditIntent,
+) -> bool:
+    """True unless ``intent`` is one of the two suppressing intents.
+
+    A recoverable administrative deletion (the account-recovery tombstone
+    path) never generates a credit: the subscription is expected to be
+    reversed by the registered recovery participant, not settled as a real
+    termination. An administrative correction (duplicate customer record
+    cleanup, mistaken-subscription correction) also never generates a
+    credit — it undoes a record that should never have persisted as an
+    active subscription, not a real termination — but it is a SEPARATE
+    intent from `administrative_recoverable_deletion`: it must never be
+    recorded as, or restored through, the account-recovery tombstone
+    system. The remaining two intents are evaluated for a credit exactly as
+    `generate_credit=True` did previously.
+    """
+    return intent not in (
+        CancellationCreditIntent.ADMINISTRATIVE_RECOVERABLE_DELETION,
+        CancellationCreditIntent.ADMINISTRATIVE_CORRECTION,
+    )
+
+
 def generate_cancellation_credit(
     db: Session,
     subscription: Subscription,
@@ -2575,6 +2622,11 @@ def generate_cancellation_credit(
     Generates when the subscription has been billed (has at least one invoice
     line). The credit covers the unused portion from cancellation date to
     next_billing_at.
+
+    Credit generation is best-effort through `cancel_subscription`'s existing
+    `db.begin_nested()` savepoint (deliberately unchanged — see that
+    function's docstring): a failure here is logged with a traceback but is
+    not yet durable evidence of a missed credit.
     """
     from app.schemas.billing import CreditNoteIssuePreviewRequest
     from app.services.billing.credit_notes import CreditNotes

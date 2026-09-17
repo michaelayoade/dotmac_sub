@@ -51,9 +51,14 @@ def test_only_reviewed_owners_may_call_the_evidence_participant() -> None:
         "app/services/account_lifecycle.py",
         "app/services/subscription_lifecycle_evidence.py",
     }
+    # `web_system_restore_tool.py` was removed from this set 2026-09-13: its
+    # old `restore_subscriber` function (the only caller here) is gone —
+    # that file is now a typed read/adapter layer over
+    # `app/services/account_recovery.py`, which reverses a subscription via
+    # `restore_subscription_detailed` (not `record_current_state_baseline`
+    # directly).
     assert _callers("record_current_state_baseline") == {
         "app/services/catalog/subscriptions.py",
-        "app/services/web_system_restore_tool.py",
     }
     assert _callers("SubscriptionLifecycleEvent") == {
         "app/services/subscription_lifecycle_evidence.py"
