@@ -2243,3 +2243,85 @@ def test_apply_erp_expense_payment_outcome_only_fires_from_approved(starting_sta
 
     assert request.status == starting_status
     assert request.paid_at is None
+
+
+def test_linked_status_poll_makes_no_erp_call_for_a_crm_owned_expense_flow(
+    db_session,
+):
+    """The linked-claim poll loop inside ``refresh_expense_claim_statuses``
+    (the ``for request in pending`` loop, distinct from
+    ``_poll_unlinked_expense_claims`` above) makes a real ERP call
+    (``get_expense_claim_status``) for every reference-bearing, in-flight
+    request. It must be skipped once ownership moves back to CRM, mirroring
+    the unlinked-poll and repair-sweep ownership guards.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[
+                {"claim_id": "ERP-3", "claim_number": "EXP-3", "status": "approved"}
+            ]
+        ),
+    )
+    db_session.refresh(request)
+    assert request.expense_claim_reference == "ERP-3"
+    assert request.status == "approved"
+
+    # Ownership moves back to CRM before the poll runs.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    db_session.commit()
+
+    client = _FakeERPClient(status_outcomes=[{"claim_id": "ERP-3", "status": "paid"}])
+    result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
+
+    assert client.status_calls == []
+    assert result["skipped_not_owned"] >= 1
+    db_session.refresh(request)
+    assert request.status == "approved"
+    assert request.expense_claim_status == "approved"
+
+
+def test_write_back_dispatch_skips_expense_projection_when_flow_not_owned_by_sub(
+    db_session,
+):
+    """``_dispatch_flow_writeback`` also runs later from a poll
+    (``record_polled_outcome``), not just right after the original send.
+    Ownership can move back to CRM in between — the expense-claim projection
+    must be skipped rather than writing a stale/unauthorized state onto the
+    request.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_submitted_request(db_session)
+    _approve(db_session, request)
+    outbox.deliver_pending(db_session, client=_FakeERPClient(post_outcomes=[{}]))
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert request.expense_claim_reference is None
+
+    # Ownership moves back to CRM before this row's write-back is
+    # (re)dispatched from a later poll.
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+    ownership_row.owner = SyncFlowOwner.crm.value
+    row.status = FieldErpSyncStatus.accepted.value
+    row.erp_response = {"claim_id": "SHOULD-NOT-LINK", "status": "approved"}
+    db_session.commit()
+
+    outbox._dispatch_flow_writeback(db_session, row)
+
+    db_session.refresh(request)
+    assert request.expense_claim_reference is None
+    assert request.expense_claim_status is None
