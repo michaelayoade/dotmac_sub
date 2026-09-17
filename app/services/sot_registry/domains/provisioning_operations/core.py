@@ -1034,6 +1034,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical field expense request state",
                         "ERP expense claim and payment status observation",
+                        "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
                 ),
@@ -1362,6 +1363,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "canonical approved expense request",
                         "expense ERP delivery cutover control",
+                        "ERP expense claim and payment status observation",
                     ),
                     writer="operations.expense_requests",
                     freshness=(

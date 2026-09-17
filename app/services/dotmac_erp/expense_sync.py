@@ -643,38 +643,40 @@ def refresh_expense_claim_statuses(
         # OWNERSHIP GUARD: same per-flow gate as `_poll_unlinked_expense_claims`
         # and `repair_expense_claim_writebacks` above — a status poll is a real
         # ERP API call, and ownership can move back to CRM after a claim was
-        # linked. Skipped, not polled, when not owned; counted separately so
-        # this sweep's own numbers stay honest.
-        owned = flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim)
-        if not owned:
-            skipped_not_owned += len(pending)
-            if pending:
+        # linked. Re-checked on EVERY iteration, not once before the loop: each
+        # `get_expense_claim_status` call is a real, potentially slow network
+        # round trip, so a flip mid-batch must stop the remaining rows in this
+        # same run rather than only being caught on the next scheduled poll.
+        # Skipped, not polled, when not owned; counted separately so this
+        # sweep's own numbers stay honest.
+        for request in pending:
+            if not flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim):
+                skipped_not_owned += 1
                 logger.info(
-                    "expense_sync: skipping linked status poll for %d request(s)"
-                    " — sub does not own flow 'expense_claim' (sync_flow_ownership)",
-                    len(pending),
+                    "expense_sync: skipping linked status poll for %s — sub "
+                    "does not own flow 'expense_claim' (sync_flow_ownership)",
+                    request.id,
                 )
-        else:
-            for request in pending:
-                processed += 1
-                try:
-                    response = owned_client.get_expense_claim_status(str(request.id))
-                except Exception as exc:  # noqa: BLE001 — one bad claim can't stall the batch
-                    db.rollback()
-                    errors.append(f"{request.id}: {exc}")
-                    logger.warning(
-                        "expense_sync: status refresh failed for %s: %s",
-                        request.id,
-                        exc,
-                    )
-                    continue
-                if not response:
-                    continue
-                before = request.expense_claim_status
-                apply_claim_response(request, response)
-                if request.expense_claim_status != before:
-                    updated += 1
-                db.commit()
+                continue
+            processed += 1
+            try:
+                response = owned_client.get_expense_claim_status(str(request.id))
+            except Exception as exc:  # noqa: BLE001 — one bad claim can't stall the batch
+                db.rollback()
+                errors.append(f"{request.id}: {exc}")
+                logger.warning(
+                    "expense_sync: status refresh failed for %s: %s",
+                    request.id,
+                    exc,
+                )
+                continue
+            if not response:
+                continue
+            before = request.expense_claim_status
+            apply_claim_response(request, response)
+            if request.expense_claim_status != before:
+                updated += 1
+            db.commit()
     finally:
         if created_client:
             owned_client.close()

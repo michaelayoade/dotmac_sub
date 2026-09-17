@@ -2325,3 +2325,76 @@ def test_write_back_dispatch_skips_expense_projection_when_flow_not_owned_by_sub
     db_session.refresh(request)
     assert request.expense_claim_reference is None
     assert request.expense_claim_status is None
+
+
+def test_linked_status_poll_stops_mid_batch_when_ownership_flips(db_session):
+    """The per-flow ownership gate inside the linked-claim poll loop is
+    re-checked on EVERY iteration, not once before the loop starts, because
+    each ``get_expense_claim_status`` call is a real, potentially slow ERP
+    network round trip. A flip to CRM partway through a batch must stop the
+    remaining rows in THIS run rather than only being caught on the next
+    scheduled poll.
+    """
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+
+    first = _make_submitted_request(db_session, crm_work_order_id="wo-first")
+    _approve(db_session, first)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[
+                {"claim_id": "ERP-A", "claim_number": "EXP-A", "status": "approved"}
+            ]
+        ),
+    )
+    db_session.refresh(first)
+    assert first.expense_claim_reference == "ERP-A"
+
+    second = _make_submitted_request(db_session, crm_work_order_id="wo-second")
+    _approve(db_session, second)
+    outbox.deliver_pending(
+        db_session,
+        client=_FakeERPClient(
+            post_outcomes=[
+                {"claim_id": "ERP-B", "claim_number": "EXP-B", "status": "approved"}
+            ]
+        ),
+    )
+    db_session.refresh(second)
+    assert second.expense_claim_reference == "ERP-B"
+
+    ownership_row = (
+        db_session.query(SyncFlowOwnership)
+        .filter(SyncFlowOwnership.flow == FieldErpSyncFlow.expense_claim.value)
+        .one()
+    )
+
+    class _FlipOwnershipAfterFirstCallClient(_FakeERPClient):
+        """Simulates ownership moving to CRM mid-batch, right after the first
+        real ERP network call the loop makes."""
+
+        def get_expense_claim_status(self, source_claim_id):
+            result = super().get_expense_claim_status(source_claim_id)
+            if len(self.status_calls) == 1:
+                ownership_row.owner = SyncFlowOwner.crm.value
+                db_session.commit()
+            return result
+
+    client = _FlipOwnershipAfterFirstCallClient(
+        status_outcomes=[
+            {"claim_id": "ERP-A", "status": "paid"},
+            {"claim_id": "ERP-B", "status": "paid"},
+        ]
+    )
+
+    result = expense_sync.refresh_expense_claim_statuses(db_session, client=client)
+
+    # Only the first row (processed while still sub-owned) made an ERP call.
+    assert len(client.status_calls) == 1
+    assert result["skipped_not_owned"] >= 1
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert first.status == "paid"
+    # The second row, reached only after the flip, must NOT be written.
+    assert second.status == "approved"
