@@ -1,0 +1,154 @@
+name: Log remediation development builder
+
+on:
+  push:
+    branches: ['automation/log-remediation-20260918']
+    paths:
+      - '.automation/logfix-batch.json'
+      - '.github/workflows/log-remediation-builder.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: log-remediation-development-builder
+  cancel-in-progress: false
+
+jobs:
+  prepare-branches:
+    if: github.repository == 'michaelayoade/dotmac_sub'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Apply reviewed patches to isolated feature branches
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          import tomllib
+          from pathlib import Path
+
+          root = Path.cwd()
+          batch_path = root / '.automation/logfix-batch.json'
+          allowed = {
+              'fix/prepaid-renewal-owner-savepoint',
+              'fix/erp-material-refresh-transaction-boundary',
+              'fix/fup-contention-isolation',
+              'fix/ai-intake-classifier-schema',
+              'fix/retired-expense-outbox-selection',
+              'fix/olt-backup-failure-outcomes',
+              'fix/integration-business-outcome-reporting',
+          }
+
+          def git(*args, cwd=root, check=True):
+              return subprocess.run(
+                  ['git', *args], cwd=cwd, check=check,
+                  capture_output=True, text=True,
+              )
+
+          # This branch is a development workspace only. It is never a release
+          # branch and its workflow/specification files never enter a source PR.
+          print('Development base:', git('rev-parse', 'origin/main').stdout.strip())
+          for pattern in (
+              'app/**/AGENTS.md', 'tests/**/AGENTS.md',
+              'docs/**/AGENTS.md',
+          ):
+              for path in sorted(root.glob(pattern)):
+                  print('\nGUIDANCE', path.relative_to(root))
+                  print(path.read_text())
+          for pattern in (
+              'tests/**/*prepaid*draft*', 'tests/**/*owner*command*',
+              'tests/**/*material*sync*', 'tests/**/*fup*',
+              'tests/**/*ai*intake*', 'tests/**/*olt*backup*',
+              'tests/**/*outbox*', 'tests/**/*operational*outcome*',
+              'app/services/sot_registry/domains/*',
+          ):
+              print('FILES', pattern, [str(p.relative_to(root)) for p in sorted(root.glob(pattern)) if p.is_file()])
+
+          if not batch_path.exists():
+              print('No patch batch supplied. No feature branch was changed.')
+              sys.exit(0)
+          batch = json.loads(batch_path.read_text())
+          if not isinstance(batch, list) or not 1 <= len(batch) <= 7:
+              raise ValueError('Expected one to seven explicitly scoped patches')
+          lock = tomllib.loads((root / 'poetry.lock').read_text())
+          ruff_version = next(p['version'] for p in lock['package'] if p['name'] == 'ruff')
+          subprocess.run([sys.executable, '-m', 'pip', 'install', f'ruff=={ruff_version}'], check=True)
+
+          def safe_path(worktree, name):
+              if not isinstance(name, str) or not name.startswith(('app/', 'tests/', 'docs/')):
+                  raise ValueError('Only source, regression tests and documentation are permitted')
+              path = worktree / name
+              if not path.resolve().is_relative_to(worktree.resolve()):
+                  raise ValueError('Path escapes worktree')
+              return path
+
+          for spec in batch:
+              branch = spec['branch']
+              base = spec['base_sha']
+              if branch not in allowed or re.fullmatch(r'[0-9a-f]{40}', base) is None:
+                  raise ValueError('Invalid branch or unpinned base')
+              git('cat-file', '-e', base + '^{commit}')
+              with tempfile.TemporaryDirectory(prefix='logfix-') as temp:
+                  worktree = Path(temp) / 'worktree'
+                  git('worktree', 'add', '--detach', str(worktree), base)
+                  try:
+                      changed = set()
+                      for patch in spec.get('patches', []):
+                          path = safe_path(worktree, patch['path'])
+                          content = path.read_text()
+                          expected = patch.get('count', 1)
+                          if content.count(patch['old']) != expected:
+                              raise ValueError(f"Patch context mismatch: {patch['path']}")
+                          path.write_text(content.replace(patch['old'], patch['new'], expected))
+                          changed.add(patch['path'])
+                      for name, content in spec.get('new_files', {}).items():
+                          path = safe_path(worktree, name)
+                          if path.exists():
+                              raise ValueError(f'New file already exists: {name}')
+                          path.parent.mkdir(parents=True, exist_ok=True)
+                          path.write_text(content)
+                          changed.add(name)
+                      if not changed:
+                          raise ValueError('Refusing an empty implementation')
+                      python_paths = sorted(p for p in changed if p.endswith('.py'))
+                      if python_paths:
+                          for name in python_paths:
+                              compile((worktree / name).read_text(), name, 'exec')
+                          subprocess.run([sys.executable, '-m', 'ruff', 'check', '--select', 'I', '--fix', *python_paths], cwd=worktree, check=True)
+                          subprocess.run([sys.executable, '-m', 'ruff', 'format', *python_paths], cwd=worktree, check=True)
+                          subprocess.run([sys.executable, '-m', 'ruff', 'check', *python_paths], cwd=worktree, check=True)
+                      git('diff', '--check', cwd=worktree)
+                      git('add', '--', *sorted(changed), cwd=worktree)
+                      desired_tree = git('write-tree', cwd=worktree).stdout.strip()
+                      remote = git('ls-remote', '--heads', 'origin', 'refs/heads/' + branch).stdout.strip()
+                      if remote:
+                          remote_sha = remote.split()[0]
+                          git('fetch', '--no-tags', 'origin', remote_sha)
+                          remote_tree = git('rev-parse', remote_sha + '^{tree}').stdout.strip()
+                          if remote_tree == desired_tree:
+                              print('UNCHANGED', branch, remote_sha)
+                              continue
+                          if remote_sha != base:
+                              raise ValueError(f'Remote branch advanced; refusing to overwrite {branch}: {remote_sha}')
+                      git('config', 'user.name', 'github-actions[bot]', cwd=worktree)
+                      git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com', cwd=worktree)
+                      git('commit', '-m', spec['message'], cwd=worktree)
+                      sha = git('rev-parse', 'HEAD', cwd=worktree).stdout.strip()
+                      git('push', 'origin', 'HEAD:refs/heads/' + branch, cwd=worktree)
+                      print('PUBLISHED', branch, sha)
+                      print(git('show', '--stat', '--oneline', 'HEAD', cwd=worktree).stdout)
+                  finally:
+                      git('worktree', 'remove', '--force', str(worktree))
+          PY
