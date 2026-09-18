@@ -1081,6 +1081,13 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             1,
             permission="support:ticket:update",
         ),
+        _action("review-shared-outage", "Review a shared outage", 2),
+        _action(
+            "confirm-infrastructure-ticket",
+            "Confirm infrastructure ticket follow-up",
+            3,
+            permission="support:ticket:create",
+        ),
     ),
     "olt-operational-health": (
         _action("compare-olts", "Compare OLT health", 0),
