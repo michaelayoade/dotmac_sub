@@ -1,0 +1,24 @@
+name: Log remediation source snapshot
+on:
+  push:
+    branches: ['automation/log-remediation-20260918']
+    paths: ['.github/workflows/log-remediation-snapshot.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 362726ffa64ced7d8a418860726523d18dca105d
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/dotmac-sub-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: log-remediation-source-362726ff
+          path: ${{ runner.temp }}/dotmac-sub-source.tar.gz
+          retention-days: 1
+          compression-level: 0
