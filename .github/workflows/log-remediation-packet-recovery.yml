@@ -1,0 +1,64 @@
+name: Recover reviewed log remediation packets
+on:
+  push:
+    branches: ['automation/log-remediation-20260918']
+    paths: ['.github/workflows/log-remediation-packet-recovery.yml']
+permissions:
+  contents: write
+jobs:
+  recover-reviewed-packets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Restore transcription errors and verify original patch digests
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import json
+          import subprocess
+          import sys
+          import textwrap
+          from pathlib import Path
+
+          # Correct transport transcription only. The independently recorded
+          # uncompressed SHA256 must still match before any source is touched.
+          packets = [
+              ('56a9bf2e845a3f7e68b7c41654f0ed24886bbea5',
+               'a6b71bd2e7089d5dcfe37c814498190179a9b91f41362adbb5f9c7d4b722b38a',
+               [('HLfVd9tgo', 'HLfV9tgo')]),
+              ('78ca6c8e43b8166fd640ca204628a06ebda96c64',
+               '507d0207a3cc325715defa4d765c0351f8a9ff947df0cdde77a599e111bef1eb',
+               [('MKas8KXI', 'MKM8KXI')]),
+          ]
+          workflow = Path('.github/workflows/log-remediation-builder.yml').read_text()
+          body = workflow.split("          python - <<'PY'\n", 1)[1]
+          builder = textwrap.dedent(body.rsplit('          PY', 1)[0])
+          compile(builder, '<reviewed-development-builder>', 'exec')
+          for commit, expected, corrections in packets:
+              raw = subprocess.check_output([
+                  'git', 'show', commit + ':.automation/logfix-batch.json',
+              ], text=True)
+              envelope = json.loads(raw)
+              encoded = envelope['data']
+              for old, new in corrections:
+                  if encoded.count(old) != 1:
+                      raise ValueError('Correction context is not unique')
+                  encoded = encoded.replace(old, new, 1)
+              decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+              if hashlib.sha256(decoded).hexdigest() != expected:
+                  raise ValueError('Original reviewed patch digest does not match')
+              specs = json.loads(decoded)
+              Path('.automation/logfix-batch.json').write_text(json.dumps(specs))
+              # Reuse the existing allowlisted, non-force-pushing builder;
+              # compilation, lint and exact source contexts remain mandatory.
+              subprocess.run([sys.executable, '-c', builder], check=True)
+          PY
