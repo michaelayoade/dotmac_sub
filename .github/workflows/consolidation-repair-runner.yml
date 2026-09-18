@@ -1,0 +1,101 @@
+name: Consolidation repair development runner
+on:
+  push:
+    branches: [chore/consolidation-runner-20260918]
+    paths: [.github/workflows/consolidation-repair-runner.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: consolidation-repair-20260918
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: consolidate/open-prs-20260918
+          fetch-depth: 0
+      - name: Pin the source and collect failure evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = b35aaf974ebb287dfe8ca204c95a3c98022de951
+          mkdir -p /tmp/consolidation-repair-evidence
+          gh api repos/michaelayoade/dotmac_sub/actions/jobs/105603460180/logs > /tmp/source-pg.log
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/source-pg.log').read_text(encoding='utf-8-sig').splitlines()
+          selected = []
+          collecting = False
+          for line in lines:
+              if 'FAILURES' in line:
+                  collecting = True
+              if collecting:
+                  selected.append(line)
+              if collecting and ('short test summary' in line or 'warnings summary' in line):
+                  collecting = False
+          selected.extend(line for line in lines if 'FAILED tests/' in line)
+          Path('/tmp/consolidation-repair-evidence/source-postgres-failure.txt').write_text('\n'.join(selected))
+          PY
+          gh api 'repos/michaelayoade/dotmac_sub/contents/consolidation-repair.py?ref=2fa441682b735539666f7cf56e55d59e7201660e' --jq .content | base64 --decode > /tmp/consolidation-repair.py
+          python /tmp/consolidation-repair.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Restore the existing pinned CI Python environment
+        uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 35346171398
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/python-environment
+      - name: Configure development environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" --version
+          "$HOME/.local/bin/poetry" run python --version
+      - name: Format and validate the repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run ruff format tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py app/web/admin/billing_payments.py app/services/admin_workflow_guidance.py
+          poetry run ruff check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/lint.txt
+          poetry run ruff format --check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/format.txt
+          python scripts/architecture/workflow_guidance_gate.py --base 0ba2f8a7228219928b3e24296758dc8ab995313c 2>&1 | tee /tmp/consolidation-repair-evidence/workflow-guidance.txt
+          poetry run pytest -q -o 'addopts=' --tb=short tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py tests/test_admin_workflow_guidance.py tests/test_auth_session_refresh.py tests/test_owner_commands.py tests/test_prepaid_draft_reconciliation_exception_writer.py tests/test_dotmac_erp_material_sync.py tests/test_dotmac_erp_outbox.py tests/test_dotmac_erp_expense_sync.py tests/test_fup_contention_isolation.py tests/test_olt_config_backup_transaction_span.py 2>&1 | tee /tmp/consolidation-repair-evidence/focused-tests.txt
+      - name: Publish only the verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code 0ba2f8a7228219928b3e24296758dc8ab995313c -- VERSION .github/workflows
+          git config user.name 'Dotmac consolidation assistant'
+          git config user.email 'noreply@users.noreply.github.com'
+          git add tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py app/web/admin/billing_payments.py app/services/admin_workflow_guidance.py
+          git diff --cached --binary > /tmp/consolidation-repair-evidence/repair.patch
+          git diff --cached --stat > /tmp/consolidation-repair-evidence/diff-stat.txt
+          git commit -m 'fix: preserve payment preview dates and repair consolidated regression coverage'
+          git push origin HEAD:refs/heads/consolidate/open-prs-20260918
+          git rev-parse HEAD | tee /tmp/consolidation-repair-evidence/head-sha.txt
+          git archive --format=tar.gz --output=/tmp/consolidation-repair-evidence/source.tar.gz HEAD
+      - name: Retain repair and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-repair-evidence
+          path: /tmp/consolidation-repair-evidence
+          retention-days: 3
+          if-no-files-found: error
