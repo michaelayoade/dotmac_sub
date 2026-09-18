@@ -1,0 +1,83 @@
+name: Consolidation development runner
+on:
+  push:
+    branches: [chore/consolidation-runner-20260918]
+    paths: [.github/workflows/consolidation-development-runner.yml]
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+  checks: read
+concurrency:
+  group: consolidation-development-20260918
+  cancel-in-progress: false
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble exact source heads without altering main or source PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo=michaelayoade/dotmac_sub
+          target=consolidate/open-prs-20260918
+          base=0ba2f8a7228219928b3e24296758dc8ab995313c
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$base"
+          if git ls-remote --exit-code --heads origin "$target" >/dev/null; then
+            echo 'Refusing to replace an existing consolidation branch.' >&2
+            exit 1
+          fi
+          git config user.name 'Dotmac consolidation assistant'
+          git config user.email 'noreply@users.noreply.github.com'
+          mkdir -p /tmp/consolidation-evidence
+          for n in 3178 3179 3180 3181 3182 3183 3185 3155 3184; do
+            gh api "repos/$repo/pulls/$n" --jq '{number,title,state,draft,body,head_sha:.head.sha,head_ref:.head.ref,base_ref:.base.ref}' > "/tmp/consolidation-evidence/pr-$n.json"
+            sha=$(jq -r .head_sha "/tmp/consolidation-evidence/pr-$n.json")
+            test "$(jq -r .state "/tmp/consolidation-evidence/pr-$n.json")" = open
+            test "$(jq -r .base_ref "/tmp/consolidation-evidence/pr-$n.json")" = main
+            git fetch origin "$sha:refs/consolidation/pr-$n"
+            gh api "repos/$repo/commits/$sha/check-runs?per_page=100" --jq '[.check_runs[] | {name,status,conclusion,details_url,id}]' > "/tmp/consolidation-evidence/checks-$n.json"
+          done
+          git switch -c "$target" "$base"
+          for n in 3178 3179 3180 3181 3182 3183 3185; do
+            git merge --no-ff --no-edit -m "Merge PR #$n into September 18 consolidation" "refs/consolidation/pr-$n"
+          done
+          for n in 3178 3179 3180 3181 3182 3183 3185; do
+            git merge-base --is-ancestor "refs/consolidation/pr-$n" HEAD
+          done
+          git rev-list HEAD "^$base" | sort > /tmp/consolidation-added-commits
+          for n in 3155 3184; do
+            git rev-list "refs/consolidation/pr-$n" "^$base" | sort > /tmp/consolidation-excluded-commits
+            if test -n "$(comm -12 /tmp/consolidation-added-commits /tmp/consolidation-excluded-commits)"; then
+              echo "Excluded PR #$n contributes unique commits; refusing publication." >&2
+              exit 1
+            fi
+          done
+          git diff --exit-code "$base" HEAD -- VERSION .github/workflows
+          git diff --check "$base" HEAD
+          python -m compileall -q app tests scripts
+          git diff --stat "$base" HEAD | tee /tmp/consolidation-evidence/diff-stat.txt
+          git diff --binary "$base" HEAD > /tmp/consolidation-evidence/consolidated.patch
+          git log --oneline "$base"..HEAD > /tmp/consolidation-evidence/commits.txt
+          git rev-parse HEAD | tee /tmp/consolidation-evidence/head-sha.txt
+          git archive --format=tar.gz --output=/tmp/consolidation-evidence/source.tar.gz HEAD
+          git push origin "HEAD:refs/heads/$target"
+          echo "Consolidation branch: $target" >> "$GITHUB_STEP_SUMMARY"
+          echo "Base: $base" >> "$GITHUB_STEP_SUMMARY"
+          echo "Head: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Included: #3178 #3179 #3180 #3181 #3182 #3183 #3185. Excluded: #3155 #3184. No merge to main or deployment.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload source and exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-development-evidence
+          path: /tmp/consolidation-evidence
+          retention-days: 3
+          if-no-files-found: error
