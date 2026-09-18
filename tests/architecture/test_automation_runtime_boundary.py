@@ -38,7 +38,7 @@ def test_runtime_handler_is_registered_with_explicit_event_scope() -> None:
 
 
 def test_runtime_ledger_is_tenant_isolated_and_permissions_are_granular() -> None:
-    migration = _source("alembic/versions/585_automation_runtime_ledger.py")
+    migration = _source("alembic/versions/614_automation_runtime_ledger.py")
     assert "ENABLE ROW LEVEL SECURITY" in migration
     assert "FORCE ROW LEVEL SECURITY" in migration
     assert "app_current_tenant_id()" in migration

@@ -19,7 +19,7 @@ def test_rule_definition_owner_is_fully_contracted() -> None:
 
 
 def test_rule_tables_are_tenant_isolated_and_versions_are_immutable() -> None:
-    migration = _source("alembic/versions/584_automation_rule_core.py")
+    migration = _source("alembic/versions/613_automation_rule_core.py")
     assert "ENABLE ROW LEVEL SECURITY" in migration
     assert "FORCE ROW LEVEL SECURITY" in migration
     assert "app_current_tenant_id()" in migration

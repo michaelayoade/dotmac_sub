@@ -980,6 +980,18 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 
 
 _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
+    "automation-center": (
+        _action("review-automation-access", "Review Automation Center access", 0),
+        _action("review-automation-modules", "Review eligible modules and events", 1),
+        _action(
+            "review-automation-rules", "Review central rules and execution evidence", 2
+        ),
+        _action(
+            "confirm-automation-boundary",
+            "Confirm the remaining module ownership boundary",
+            3,
+        ),
+    ),
     "admin-workspace": (
         _action("choose-work-area", "Choose the right work area", 0, 1),
         _action("start-customer-work", "Start customer work", 2, 3),
