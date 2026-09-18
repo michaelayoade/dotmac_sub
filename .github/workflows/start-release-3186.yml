@@ -1,0 +1,142 @@
+name: Start approved release for PR 3186
+run-name: Start PR 3186 release at b0f51c12bbd3
+
+# One-shot dispatch adapter on an unmerged operations branch. It never builds
+# its own checkout, edits main, changes checks/tags, or authorizes production.
+on:
+  push:
+    branches: [ops/start-release-3186-20260918]
+    paths: [.github/workflows/start-release-3186.yml]
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write
+
+concurrency:
+  group: start-release-b0f51c12bbd3013fe7c8453fafabf11f32aa68af
+  cancel-in-progress: false
+
+jobs:
+  start:
+    name: Verify merged main and start its immutable candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Wait for exact-main CI, then dispatch the existing release owner once
+        uses: actions/github-script@v7
+        env:
+          CANDIDATE_SHA: b0f51c12bbd3013fe7c8453fafabf11f32aa68af
+          EXPECTED_SOURCE_HEAD: 0d5c322033c9153690f596227ec17f20f1d82fa5
+          STAGING_AUTO_ENABLED: ${{ vars.STAGING_AUTO_DEPLOY_ENABLED }}
+        with:
+          retries: 0
+          script: |
+            const candidate = process.env.CANDIDATE_SHA;
+            const sourceHead = process.env.EXPECTED_SOURCE_HEAD;
+            const repo = {owner: context.repo.owner, repo: context.repo.repo};
+            if (context.repo.owner !== 'michaelayoade' || context.repo.repo !== 'dotmac_sub') {
+              throw new Error('Unexpected repository; refusing dispatch.');
+            }
+            if (!/^[0-9a-f]{40}$/.test(candidate)) {
+              throw new Error('Candidate must be an exact full SHA.');
+            }
+            const pr = (await github.rest.pulls.get({...repo, pull_number: 3186})).data;
+            if (!pr.merged || pr.merge_commit_sha !== candidate || pr.head.sha !== sourceHead) {
+              throw new Error('PR 3186 does not match the approved merge and source revision.');
+            }
+            async function requireCurrentMain() {
+              const branch = (await github.rest.repos.getBranch({...repo, branch: 'main'})).data;
+              if (branch.commit.sha !== candidate) {
+                throw new Error(`Main moved to ${branch.commit.sha}; refusing stale candidate ${candidate}.`);
+              }
+            }
+            const required = ['CI', 'Mobile CI'];
+            const deadline = Date.now() + 35 * 60 * 1000;
+            let previous = '';
+            await core.summary.addHeading('Approved release start: PR #3186')
+              .addRaw(`Merged candidate: ${candidate}\n\n`)
+              .addRaw('Waiting for the exact main push CI. No production authorization or deployment is performed by this adapter.\n\n')
+              .addRaw(`Configured automatic staging: ${process.env.STAGING_AUTO_ENABLED === 'true'}\n`)
+              .write();
+            while (true) {
+              await requireCurrentMain();
+              const response = await github.rest.actions.listWorkflowRunsForRepo({
+                ...repo, head_sha: candidate, event: 'push', per_page: 100,
+              });
+              const runs = response.data.workflow_runs.filter(run =>
+                run.head_sha === candidate && run.head_branch === 'main' && run.event === 'push'
+              );
+              const latest = required.map(name => runs.filter(run => run.name === name)
+                .sort((left, right) => right.id - left.id)[0]);
+              const summary = required.map((name, index) => {
+                const run = latest[index];
+                return `${name}: ${run ? `${run.status}/${run.conclusion || 'pending'} (run ${run.id})` : 'not reported'}`;
+              }).join('; ');
+              if (summary !== previous) {
+                core.info(summary);
+                await core.summary.addRaw(`${summary}\n\n`).write();
+                previous = summary;
+              }
+              if (latest.some(run => run && run.status === 'completed' && run.conclusion !== 'success')) {
+                throw new Error(`Required main checks did not pass: ${summary}`);
+              }
+              if (latest.every(run => run && run.status === 'completed' && run.conclusion === 'success')) {
+                break;
+              }
+              if (Date.now() >= deadline) {
+                throw new Error(`Timed out without a green exact main candidate: ${summary}`);
+              }
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
+            async function candidateRuns() {
+              const response = await github.rest.actions.listWorkflowRuns({
+                ...repo, workflow_id: 'release-candidate.yml', head_sha: candidate,
+                branch: 'main', event: 'workflow_dispatch', per_page: 100,
+              });
+              return response.data.workflow_runs.filter(run => run.head_sha === candidate &&
+                run.head_branch === 'main' && run.event === 'workflow_dispatch')
+                .sort((left, right) => right.id - left.id);
+            }
+            const existing = await candidateRuns();
+            if (existing.length > 0) {
+              const run = existing[0];
+              core.info(`Candidate run already exists: ${run.html_url} (${run.status}/${run.conclusion || 'pending'}). No duplicate dispatch.`);
+              await core.summary.addLink('Existing candidate build', run.html_url).addEOL().write();
+              core.setOutput('candidate_run_id', String(run.id));
+              if (run.status === 'completed' && run.conclusion !== 'success') {
+                throw new Error('Existing candidate attempt was not successful; inspect it instead of creating a duplicate.');
+              }
+              return;
+            }
+            const releaseNames = new Set([
+              'Build release candidate once', 'Deploy main to staging',
+              'Promote staged digest for production', 'Deploy authorized digest to production',
+            ]);
+            for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                {...repo, status, per_page: 100});
+              const active = runs.find(run => releaseNames.has(run.name));
+              if (active) {
+                throw new Error(`Another release operation is active: ${active.html_url}. No dispatch performed.`);
+              }
+            }
+            await requireCurrentMain();
+            await github.rest.actions.createWorkflowDispatch({
+              ...repo, workflow_id: 'release-candidate.yml', ref: 'main',
+              inputs: {candidate_sha: candidate},
+            });
+            core.info(`Dispatched the existing release-candidate.yml on main for ${candidate}.`);
+            await core.summary.addRaw('Existing Build release candidate once workflow dispatched on main. Its standard successful-completion trigger owns automatic staging; production remains a separate authorization.\n\n').write();
+            for (let attempt = 0; attempt < 24; attempt++) {
+              const runs = await candidateRuns();
+              if (runs.length > 0) {
+                const run = runs[0];
+                core.info(`Candidate build: ${run.html_url}`);
+                core.setOutput('candidate_run_id', String(run.id));
+                await core.summary.addLink('Candidate build run', run.html_url).addEOL().write();
+                return;
+              }
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            throw new Error('Dispatch was accepted but its run is not yet visible. Do not repeat the dispatch without checking existing runs.');
