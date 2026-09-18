@@ -27,12 +27,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = b35aaf974ebb287dfe8ca204c95a3c98022de951
           mkdir -p /tmp/consolidation-repair-evidence
-          gh api repos/michaelayoade/dotmac_sub/actions/jobs/105603460180/logs > /tmp/source-pg.log
+          git rev-parse HEAD > /tmp/consolidation-repair-evidence/base-head.txt
+          test "$(git rev-parse HEAD)" = b35aaf974ebb287dfe8ca204c95a3c98022de951
+          gh api --allow-escape-sequences repos/michaelayoade/dotmac_sub/actions/jobs/105603460180/logs > /tmp/source-pg.log
           python - <<'PY'
+          import re
           from pathlib import Path
-          lines = Path('/tmp/source-pg.log').read_text(encoding='utf-8-sig').splitlines()
+          lines = re.sub(r'\x1b\[[0-9;]*m', '', Path('/tmp/source-pg.log').read_text(encoding='utf-8-sig')).splitlines()
           selected = []
           collecting = False
           for line in lines:
@@ -67,19 +69,11 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/poetry" --version
           "$HOME/.local/bin/poetry" run python --version
-      - name: Format and validate the repair
+      - name: Format and commit the local candidate without publishing
         shell: bash
         run: |
           set -euo pipefail
           poetry run ruff format tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py app/web/admin/billing_payments.py app/services/admin_workflow_guidance.py
-          poetry run ruff check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/lint.txt
-          poetry run ruff format --check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/format.txt
-          python scripts/architecture/workflow_guidance_gate.py --base 0ba2f8a7228219928b3e24296758dc8ab995313c 2>&1 | tee /tmp/consolidation-repair-evidence/workflow-guidance.txt
-          poetry run pytest -q -o 'addopts=' --tb=short tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py tests/test_admin_workflow_guidance.py tests/test_auth_session_refresh.py tests/test_owner_commands.py tests/test_prepaid_draft_reconciliation_exception_writer.py tests/test_dotmac_erp_material_sync.py tests/test_dotmac_erp_outbox.py tests/test_dotmac_erp_expense_sync.py tests/test_fup_contention_isolation.py tests/test_olt_config_backup_transaction_span.py 2>&1 | tee /tmp/consolidation-repair-evidence/focused-tests.txt
-      - name: Publish only the verified source changes
-        shell: bash
-        run: |
-          set -euo pipefail
           git diff --check
           git diff --exit-code 0ba2f8a7228219928b3e24296758dc8ab995313c -- VERSION .github/workflows
           git config user.name 'Dotmac consolidation assistant'
@@ -88,9 +82,23 @@ jobs:
           git diff --cached --binary > /tmp/consolidation-repair-evidence/repair.patch
           git diff --cached --stat > /tmp/consolidation-repair-evidence/diff-stat.txt
           git commit -m 'fix: preserve payment preview dates and repair consolidated regression coverage'
+          git rev-parse HEAD > /tmp/consolidation-repair-evidence/candidate-sha.txt
+          git archive --format=tar.gz --output=/tmp/consolidation-repair-evidence/source.tar.gz HEAD
+      - name: Validate the exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run ruff check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/lint.txt
+          poetry run ruff format --check app tests scripts alembic 2>&1 | tee /tmp/consolidation-repair-evidence/format.txt
+          python scripts/architecture/workflow_guidance_gate.py --base 0ba2f8a7228219928b3e24296758dc8ab995313c 2>&1 | tee /tmp/consolidation-repair-evidence/workflow-guidance.txt
+          poetry run pytest -q -o 'addopts=' --tb=short tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py tests/test_admin_workflow_guidance.py tests/test_auth_session_refresh.py tests/test_owner_commands.py tests/test_prepaid_draft_reconciliation_exception_writer.py tests/test_dotmac_erp_material_sync.py tests/test_dotmac_erp_outbox.py tests/test_dotmac_erp_expense_sync.py tests/test_fup_contention_isolation.py tests/test_olt_config_backup_transaction_span.py 2>&1 | tee /tmp/consolidation-repair-evidence/focused-tests.txt
+      - name: Publish only the verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
           git push origin HEAD:refs/heads/consolidate/open-prs-20260918
           git rev-parse HEAD | tee /tmp/consolidation-repair-evidence/head-sha.txt
-          git archive --format=tar.gz --output=/tmp/consolidation-repair-evidence/source.tar.gz HEAD
       - name: Retain repair and validation evidence
         if: always()
         uses: actions/upload-artifact@v4
