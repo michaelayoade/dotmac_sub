@@ -1,0 +1,42 @@
+name: Consolidation acceptance evidence
+on:
+  push:
+    branches: [chore/consolidation-runner-20260918]
+    paths: [.github/workflows/consolidation-acceptance-runner.yml]
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+concurrency:
+  group: consolidation-acceptance-20260918
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_HEAD: 0d5c322033c9153690f596227ec17f20f1d82fa5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0d5c322033c9153690f596227ec17f20f1d82fa5
+          fetch-depth: 0
+      - name: Load the read-only development evidence collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/consolidation-acceptance
+          gh api 'repos/michaelayoade/dotmac_sub/contents/consolidation-acceptance.py?ref=1c79b4e0ca4602be0e9b46209158d1864bee1f14' --jq .content | base64 --decode > /tmp/consolidation-acceptance.py
+      - name: Verify source preservation and all final-head workflows
+        shell: bash
+        run: python /tmp/consolidation-acceptance.py
+      - name: Preserve review evidence regardless of outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-acceptance-evidence
+          path: /tmp/consolidation-acceptance
+          retention-days: 7
+          if-no-files-found: error
