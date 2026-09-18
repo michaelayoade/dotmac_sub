@@ -1,0 +1,132 @@
+name: Consolidation authentication repair development runner
+on:
+  push:
+    branches: [chore/consolidation-runner-20260918]
+    paths: [.github/workflows/consolidation-auth-repair-runner.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: consolidation-auth-repair-20260918
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dotmac_sub_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: consolidate/open-prs-20260918
+          fetch-depth: 0
+      - name: Pin the source and stage regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/consolidation-auth-evidence
+          git rev-parse HEAD > /tmp/consolidation-auth-evidence/base-head.txt
+          test "$(git rev-parse HEAD)" = 9ee4a01b4c67ae8500bedc4456633fdcf56f38fb
+          gh api 'repos/michaelayoade/dotmac_sub/contents/consolidation-auth-repair.py?ref=aa3bb81a8db379cada6f9a57d439bdc5d84c3ae3' --jq .content | base64 --decode > /tmp/consolidation-auth-repair.py
+          python /tmp/consolidation-auth-repair.py tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-environment
+          run-id: 35346171398
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/python-environment
+      - name: Configure development environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then rm .venv; fi
+          tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+      - name: Require both new regressions to fail on the unchanged owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          poetry run pytest -q -o 'addopts=' --tb=short tests/test_auth_session_refresh.py -k runtime_refresh_clock 2>&1 | tee /tmp/consolidation-auth-evidence/regression-before-fix.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" = 1
+          grep -q '2 failed' /tmp/consolidation-auth-evidence/regression-before-fix.txt
+          ! grep -q 'ERROR collecting' /tmp/consolidation-auth-evidence/regression-before-fix.txt
+      - name: Apply the owner repair and update its contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python /tmp/consolidation-auth-repair.py fix
+          poetry run ruff format app/services/auth_session_refresh.py app/services/sot_registry/domains/application_sessions.py tests/test_auth_session_refresh.py
+          poetry run ruff check --fix tests/test_auth_session_refresh.py --select I
+          poetry run ruff format tests/test_auth_session_refresh.py
+          poetry run python -m scripts.architecture.sot_manifest_docs --write
+          git diff --check
+          git diff --exit-code 0ba2f8a7228219928b3e24296758dc8ab995313c -- VERSION .github/workflows
+          git config user.name 'Dotmac consolidation assistant'
+          git config user.email 'noreply@users.noreply.github.com'
+          git add app/services/auth_session_refresh.py app/services/sot_registry/domains/application_sessions.py tests/test_auth_session_refresh.py docs/designs/AUTH_SESSION_REFRESH_CONCURRENCY.md docs/SOT_RELATIONSHIP_MAP.md
+          git diff --cached --binary > /tmp/consolidation-auth-evidence/repair.patch
+          git diff --cached --stat > /tmp/consolidation-auth-evidence/diff-stat.txt
+          git commit -m 'fix: evaluate refresh replay time after acquiring the session row lock'
+          git rev-parse HEAD > /tmp/consolidation-auth-evidence/candidate-sha.txt
+          git archive --format=tar.gz --output=/tmp/consolidation-auth-evidence/source.tar.gz HEAD
+      - name: Validate formatting, contracts and consolidated regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          poetry run ruff check app tests scripts alembic 2>&1 | tee /tmp/consolidation-auth-evidence/lint.txt
+          poetry run ruff format --check app tests scripts alembic 2>&1 | tee /tmp/consolidation-auth-evidence/format.txt
+          poetry run python -m scripts.architecture.sot_manifest_docs
+          python scripts/architecture/workflow_guidance_gate.py --base 0ba2f8a7228219928b3e24296758dc8ab995313c
+          poetry run pytest -q -o 'addopts=' --tb=short tests/test_ai_intake.py tests/test_billing_ledger_overview.py tests/test_billing_historical_dates.py tests/test_admin_workflow_guidance.py tests/test_auth_session_refresh.py tests/test_owner_commands.py tests/test_prepaid_draft_reconciliation_exception_writer.py tests/test_dotmac_erp_material_sync.py tests/test_dotmac_erp_outbox.py tests/test_dotmac_erp_expense_sync.py tests/test_fup_contention_isolation.py tests/test_olt_config_backup_transaction_span.py tests/architecture/test_staff_party_authentication_owner.py tests/architecture/test_session_refresh_transport.py 2>&1 | tee /tmp/consolidation-auth-evidence/focused-tests.txt
+      - name: Verify concurrent renewal against the actual migrated PostgreSQL schema
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          make bootstrap-test-database-roles 2>&1 | tee /tmp/consolidation-auth-evidence/pg-bootstrap.txt
+          poetry run python -m scripts.ci.migrated_test_database 2>&1 | tee /tmp/consolidation-auth-evidence/pg-migration.txt
+          for iteration in 1 2 3 4 5; do
+            PYTHONPATH="$PWD" poetry run pytest -q -o 'addopts=' --tb=short tests/integration/test_auth_session_refresh_concurrency.py 2>&1 | tee "/tmp/consolidation-auth-evidence/pg-concurrency-$iteration.txt"
+          done
+      - name: Publish only the verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git push origin HEAD:refs/heads/consolidate/open-prs-20260918
+          git rev-parse HEAD | tee /tmp/consolidation-auth-evidence/head-sha.txt
+      - name: Retain exact validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidation-auth-evidence
+          path: /tmp/consolidation-auth-evidence
+          retention-days: 3
+          if-no-files-found: error
