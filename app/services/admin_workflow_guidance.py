@@ -1651,6 +1651,12 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         ),
     ),
     AdminHelpNavigationSection(
+        "automation",
+        "Automation Center",
+        ("automation-center",),
+        "automation:hub:read",
+    ),
+    AdminHelpNavigationSection(
         "customers",
         "Customers",
         ("find-customer", "create-customer", "customer-detail"),

@@ -1,6 +1,6 @@
 """Add the Automation Center execution ledger and runtime permissions.
 
-Revision ID: 585_automation_runtime_ledger
+Revision ID: 614_automation_runtime_ledger
 Revises: 584_automation_rule_core
 Create Date: 2026-09-08
 """
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "585_automation_runtime_ledger"
-down_revision: str | None = "584_automation_rule_core"
+revision: str = "614_automation_runtime_ledger"
+down_revision: str | None = "613_automation_rule_core"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

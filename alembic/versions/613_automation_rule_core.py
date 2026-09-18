@@ -1,6 +1,6 @@
 """Add Automation Center rule definitions and immutable versions.
 
-Revision ID: 584_automation_rule_core
+Revision ID: 613_automation_rule_core
 Revises: 583_staff_expense_requesters
 Create Date: 2026-09-08
 """
@@ -16,8 +16,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "584_automation_rule_core"
-down_revision: str | None = "583_staff_expense_requesters"
+revision: str = "613_automation_rule_core"
+down_revision: str | None = "612_shared_outage_work_orders"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

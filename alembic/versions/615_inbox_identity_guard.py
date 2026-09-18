@@ -8,8 +8,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "613_inbox_identity_guard"
-down_revision: str | None = "612_shared_outage_work_orders"
+revision: str = "615_inbox_identity_guard"
+down_revision: str | None = "614_automation_runtime_ledger"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -566,8 +566,9 @@ def _create_infrastructure_ticket(
         action="outage.infrastructure_ticket_created",
         entity_type="outage_incident",
         entity_id=str(incident.id),
-        actor_type=AuditActorType.user,
-        actor_id=str(command.actor_id),
+        actor=AuditActor(
+            actor_type=AuditActorType.user, actor_id=str(command.actor_id)
+        ),
         request_id=str(command.context.command_id),
         metadata={
             "ticket_id": str(ticket.id),
