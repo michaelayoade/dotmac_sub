@@ -679,9 +679,9 @@ def refresh_material_request_statuses(
     )
 
 
-def run_refresh_material_request_statuses() -> dict[str, object]:
-    """Own the background session for ERP material-outcome reconciliation."""
+def run_refresh_material_request_statuses() -> MaterialStatusRefreshOutcome:
+    """Own the background session; keep the result typed until the task adapter."""
     from app.db import task_session
 
     with task_session() as db:
-        return refresh_material_request_statuses(db).as_dict()
+        return refresh_material_request_statuses(db)

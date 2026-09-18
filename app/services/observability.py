@@ -289,14 +289,29 @@ def _task_flag(detail: dict[str, Any], key: str) -> bool:
     )
 
 
+_BUSINESS_OUTCOME_TASKS = frozenset(
+    {
+        "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses",
+        "app.tasks.topology_uisp.run_uisp_topology_sync",
+    }
+)
+
+
 def record_celery_task_success(
     task_name: str,
     *,
-    result: Any = None,
+    result: object = None,
     now: datetime | None = None,
 ) -> None:
-    """Record framework-level Celery task success signals."""
+    """Record framework success without replacing a reported business failure."""
     if not task_name:
+        return
+    if task_name in _BUSINESS_OUTCOME_TASKS and (
+        not isinstance(result, dict) or result.get("operational_outcome") != "completed"
+    ):
+        # These adapters already recorded the typed outcome through this
+        # owner's record_task_run. Missing/unknown evidence also fails closed.
+        # Celery SUCCESS must not refresh last-success on a skip or failure.
         return
     if task_name == "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains":
         from app.services.dotmac_erp.operational_contracts import (
@@ -305,7 +320,7 @@ def record_celery_task_success(
 
         # Completion of a blocked/no-op task is not successful ERP delivery.
         outcome = OperationalSyncRunOutcome.model_validate(result)
-        if outcome.status != "success":
+        if outcome.status != "success" or outcome.errors or outcome.skipped:
             return
     detail = result if isinstance(result, dict) else None
     try:
@@ -359,6 +374,11 @@ def record_celery_task_failure(
 ) -> None:
     """Record framework-level Celery task failure signals."""
     if not task_name:
+        return
+    if task_name in _BUSINESS_OUTCOME_TASKS:
+        # Unexpected failures remain actual task failures, with no sensitive
+        # exception payload copied into the operational result cache.
+        record_task_run(task_name, status="error", counters={}, now=now)
         return
     try:
         if task_name in job_heartbeat.MONEY_JOB_TASKS:

@@ -230,15 +230,15 @@ DOMAIN = DomainSOT(
                         name="typed operational task outcome",
                         owner="observability.structured_operational_logs",
                         kind=AuthorityKind.OBSERVATION,
-                        source="closed event name, outcome, component, and bounded counters emitted after task completion",
+                        source="closed event name, typed business disposition, component, and bounded counters; framework completion alone never proves successful work",
                     ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.NOT_APPLICABLE,
-                    boundary="The observer writes one structured log event and no domain state.",
+                    boundary="The observer writes one structured business-outcome log event and no domain state; only explicit completed outcomes may advance task-success freshness.",
                     locking="No application lock or database transaction is acquired.",
                     idempotency="Each task completion emits one independent observation.",
-                    retries="The observer never retries task work or alters task outcomes.",
+                    retries="The observer never retries work: failed and partial summaries preserve existing per-record recovery and blocked backoff; expected skips and retries are not errors.",
                 ),
                 errors=ErrorContract(domain_codes=(), mapping_owner="task adapters"),
                 migration=MigrationContract(

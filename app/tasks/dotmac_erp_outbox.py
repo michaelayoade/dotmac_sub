@@ -20,6 +20,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.celery_app import celery_app
 from app.services.operational_logging import (
+    OperationalBatchCounts,
     OperationalEventName,
     OperationalLogEvent,
     OperationalOutcome,
@@ -112,7 +113,7 @@ def refresh_expense_claim_statuses() -> dict:
 
 
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_material_request_statuses")
-def refresh_material_request_statuses() -> dict:
+def refresh_material_request_statuses() -> dict[str, object]:
     """Poll ERP for in-flight material-request statuses and refresh mirror fields.
 
     Read-only against ERP: for each synced FieldMaterialRequest still awaiting
@@ -133,27 +134,53 @@ def refresh_material_request_statuses() -> dict:
             run_refresh_material_request_statuses,
         )
 
-        results = run_refresh_material_request_statuses()
+        observation = run_refresh_material_request_statuses()
+        business_outcome = OperationalBatchCounts(
+            processed=observation.processed, failed=observation.failed
+        ).outcome
+        status = business_outcome.recording_status
+        results = observation.as_dict()
     except Exception:
         status = "error"
+        log_operational_event(
+            logger,
+            OperationalLogEvent(
+                name=OperationalEventName.ERP_MATERIAL_STATUS_REFRESH_COMPLETED,
+                outcome=OperationalOutcome.FAILED,
+                component="dotmac_erp",
+                counters={},
+            ),
+        )
         raise
     finally:
         observe_job(
             "refresh_material_request_statuses", status, time.monotonic() - start
         )
 
+    counters = {
+        "processed": observation.processed,
+        "observed": observation.observed,
+        "updated": observation.updated,
+        "skipped_not_owned": observation.skipped_not_owned,
+        "failed": observation.failed,
+    }
     log_operational_event(
         logger,
         OperationalLogEvent(
             name=OperationalEventName.ERP_MATERIAL_STATUS_REFRESH_COMPLETED,
-            outcome=OperationalOutcome.COMPLETED,
+            outcome=business_outcome,
             component="dotmac_erp",
-            counters={
-                key: value for key, value in results.items() if isinstance(value, int)
-            },
+            counters=counters,
         ),
     )
-    return results
+    from app.services.observability import record_task_run
+
+    record_task_run(
+        "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses",
+        status=status,
+        counters=counters,
+    )
+    return {**results, "operational_outcome": business_outcome.value}
 
 
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync")
@@ -220,9 +247,46 @@ def sync_erp_operational_domains() -> dict[str, object]:
     from app.services.dotmac_erp.domain_sync import run_sync_operational_domains
 
     outcome = run_sync_operational_domains()
+    synced = (
+        outcome.projects + outcome.tickets + outcome.project_tasks + outcome.work_orders
+    )
+    # The owner's persisted blocked/retryable state takes precedence over an
+    # intentional retry-not-due skip; it must never be reported as delivery.
+    if outcome.status == "blocked":
+        business_outcome = OperationalOutcome.BLOCKED
+    elif outcome.status == "retryable":
+        business_outcome = OperationalOutcome.COMPLETED_WITH_RETRIES
+    elif outcome.status in {"disabled", "already_running"} or outcome.skipped:
+        business_outcome = OperationalOutcome.SKIPPED
+    elif outcome.errors:
+        business_outcome = OperationalBatchCounts(
+            processed=synced + len(outcome.errors), failed=len(outcome.errors)
+        ).outcome
+    else:
+        business_outcome = OperationalOutcome.COMPLETED
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.ERP_OPERATIONAL_SYNC_COMPLETED,
+            outcome=business_outcome,
+            component="dotmac_erp",
+            counters={
+                "projects": outcome.projects,
+                "tickets": outcome.tickets,
+                "project_tasks": outcome.project_tasks,
+                "work_orders": outcome.work_orders,
+                "failed": len(outcome.errors),
+                "retry_not_due": int(outcome.skipped == "retry_not_due"),
+            },
+        ),
+    )
     job_heartbeat.record_result(
         "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains",
-        status=outcome.status,
+        status=(
+            business_outcome.recording_status
+            if outcome.errors and outcome.status == "success"
+            else outcome.status
+        ),
         detail=outcome.model_dump(mode="json"),
         next_attempt_at=outcome.next_attempt_at,
     )

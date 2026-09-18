@@ -18,12 +18,18 @@ overlapping scheduled/on-demand run is skipped, mirroring app/tasks/events.py.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import record_task_run
+from app.services.operational_logging import (
+    OperationalEventName,
+    OperationalLogEvent,
+    OperationalOutcome,
+    log_operational_event,
+)
 from app.services.topology.coverage_metrics import store_task_stats
 from app.services.uisp import UispClient, UispClientError, uisp_configured
 
@@ -37,15 +43,53 @@ logger = logging.getLogger(__name__)
 _LOCK_TIMEOUT_MS = 30_000
 
 
+def _counter_summary(value: object) -> dict[str, int]:
+    """Normalize the sync's numeric counter transport once, without coercion."""
+    if not isinstance(value, dict):
+        raise TypeError("UISP sync returned an invalid counter summary")
+    counters: dict[str, int] = {}
+    for key, count in value.items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+        ):
+            raise TypeError("UISP sync returned an invalid counter summary")
+        counters[key] = count
+    return counters
+
+
+def _report_outcome(outcome: OperationalOutcome, *, counters: dict[str, int]) -> None:
+    log_operational_event(
+        logger,
+        OperationalLogEvent(
+            name=OperationalEventName.UISP_TOPOLOGY_SYNC_COMPLETED,
+            outcome=outcome,
+            component="uisp",
+            counters=counters,
+        ),
+    )
+    record_task_run(
+        "app.tasks.topology_uisp.run_uisp_topology_sync",
+        status=outcome.recording_status,
+        counters=counters,
+    )
+
+
 @celery_app.task(
     name="app.tasks.topology_uisp.run_uisp_topology_sync",
     soft_time_limit=540,
     time_limit=600,
 )
-def run_uisp_topology_sync() -> dict[str, Any]:
+def run_uisp_topology_sync() -> dict[str, int | str]:
     """Sync UISP customer-device topology into sub's tables."""
     if not uisp_configured():
-        return {"skipped": "uisp_token_missing"}
+        _report_outcome(OperationalOutcome.SKIPPED, counters={})
+        return {
+            "skipped": "uisp_token_missing",
+            "operational_outcome": OperationalOutcome.SKIPPED.value,
+        }
 
     from app.services.topology.uisp_sync import ADVISORY_LOCK_KEY, sync
 
@@ -54,25 +98,46 @@ def run_uisp_topology_sync() -> dict[str, Any]:
     ) as (db, acquired):
         if not acquired:
             logger.info("uisp_topology_sync_skipped: previous run still in progress")
-            return {"skipped": "already_running"}
+            _report_outcome(OperationalOutcome.SKIPPED, counters={})
+            return {
+                "skipped": "already_running",
+                "operational_outcome": OperationalOutcome.SKIPPED.value,
+            }
+        result: dict[str, int | str]
+        counters: dict[str, int] = {}
         try:
             client = UispClient.from_env()
-            result = sync(db, client)
+            counters = _counter_summary(sync(db, client))
             db.commit()
-        except UispClientError as exc:
+            # These are explicit failure counters, not unmatched radios,
+            # reviewed topology disagreements or protected prune decisions.
+            failures = sum(
+                counters.get(key, 0)
+                for key in ("failed", "port_fetch_failures", "link_fetch_failures")
+            )
+            outcome = (
+                OperationalOutcome.PARTIAL if failures else OperationalOutcome.COMPLETED
+            )
+            result = dict(counters)
+        except UispClientError:
             db.rollback()
-            logger.warning("uisp_topology_sync_failed: %s", exc)
-            result = {"error": "uisp_unavailable", "message": str(exc)}
+            outcome = OperationalOutcome.FAILED
+            counters = {"failed_runs": 1}
+            result = {"error": "uisp_unavailable", "message": "UISP API request failed"}
         except SoftTimeLimitExceeded:
             db.rollback()
-            logger.warning("uisp_topology_sync_timed_out")
+            outcome = OperationalOutcome.FAILED
+            counters = {"timed_out": 1}
             result = {"error": "uisp_topology_sync_timed_out"}
-        except Exception as exc:  # noqa: BLE001 - report and roll back
+        except Exception:
             db.rollback()
-            logger.exception("uisp_topology_sync_failed")
-            result = {"error": str(exc)}
-        # Stash the run outcome (success or error) for the topology metrics
-        # exporter; lock-skips above never reach here, so they can't clobber
-        # the last real result.
+            # Earlier phases may already have committed. Preserve factual
+            # failure evidence and let Celery fail, without adding autoretry.
+            store_task_stats("uisp_sync", {"error": "uisp_topology_sync_failed"})
+            _report_outcome(OperationalOutcome.FAILED, counters={"failed_runs": 1})
+            raise
+        # Preserve the existing cache's numeric/error shape. The explicit
+        # framework outcome belongs only to the returned adapter envelope.
         store_task_stats("uisp_sync", result)
-        return result
+        _report_outcome(outcome, counters=counters)
+        return {**result, "operational_outcome": outcome.value}

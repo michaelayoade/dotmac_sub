@@ -452,5 +452,5 @@ def test_uisp_wrapper_stashes_stats(monkeypatch):
 
     result = topology_uisp.run_uisp_topology_sync()
 
-    assert result == {"created": 1, "failed": 629}
+    assert result == {"created": 1, "failed": 629, "operational_outcome": "partial"}
     assert stored == {"uisp_sync": {"created": 1, "failed": 629}}
