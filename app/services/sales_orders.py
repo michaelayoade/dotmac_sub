@@ -685,6 +685,34 @@ def _resolve_installation_amount(db: Session, project: Project) -> Decimal:
     )
 
 
+def _resolve_order_tax_rate_id(db: Session, sales_order: SalesOrder) -> UUID | None:
+    """Resolve the active TaxRate that reproduces the order's recorded tax."""
+
+    tax_total = Decimal(sales_order.tax_total or 0)
+    taxable_total = Decimal(sales_order.total or 0) - tax_total
+    if tax_total <= 0 or taxable_total <= 0:
+        return None
+    expected_percent = (tax_total / taxable_total * Decimal("100")).quantize(
+        Decimal("0.0001")
+    )
+    from app.services.billing_tax_resolution import (
+        resolve_active_tax_rate_id_for_percent,
+    )
+
+    tax_rate_id = resolve_active_tax_rate_id_for_percent(db, expected_percent)
+    if tax_rate_id is not None:
+        return tax_rate_id
+    logger.warning(
+        "installation_invoice_tax_rate_unresolved sales_order_id=%s "
+        "tax_total=%s taxable_total=%s expected_percent=%s",
+        sales_order.id,
+        tax_total,
+        taxable_total,
+        expected_percent,
+    )
+    return None
+
+
 def ensure_installation_invoice_for_sales_order(
     db: Session,
     sales_order_id,
@@ -759,6 +787,26 @@ def ensure_installation_invoice_for_sales_order(
     if not subscriber_id:
         return
 
+    tax_rate_id = _resolve_order_tax_rate_id(db, sales_order)
+    if Decimal(sales_order.tax_total or 0) > 0 and tax_rate_id is None:
+        detail = (
+            "No single active TaxRate reproduces the SalesOrder's recorded tax; "
+            "the installation invoice was not issued."
+        )
+        if not commit:
+            raise SalesOrderLifecycleError(
+                "installation_tax_rate_unresolved", detail, kind="invalid"
+            )
+        _record_invoice_failure(project, detail)
+        db.add(project)
+        db.commit()
+        logger.error(
+            "installation_invoice_tax_rate_unresolved project_id=%s sales_order_id=%s",
+            project.id,
+            sales_order.id,
+        )
+        return
+
     from app.services import crm_api
 
     try:
@@ -769,6 +817,7 @@ def ensure_installation_invoice_for_sales_order(
             description="Installation cost",
             external_ref=f"project:{project.id}",
             currency=sales_order.currency or "NGN",
+            tax_rate_id=tax_rate_id,
             commit=commit,
         )
     except LookupError as exc:
@@ -786,7 +835,7 @@ def ensure_installation_invoice_for_sales_order(
     if not invoice:
         return
 
-    _store_invoice_metadata(db, project, str(invoice.id), amount)
+    _store_invoice_metadata(db, project, str(invoice.id), Decimal(invoice.total))
     db.add(project)
     if commit:
         db.commit()
@@ -964,7 +1013,10 @@ def _build_staged_device_intent(
     from app.models.catalog import AccessCredential, ConnectionType, SubscriptionAddOn
     from app.services.connection_type_provisioning import resolve_connection_type
     from app.services.ipv6_pd import pd_enabled, resolve_pd_pool
-    from app.services.pppoe_credentials import auto_generate_pppoe_credential
+    from app.services.pppoe_credentials import (
+        EnsurePppoeCredentialCommand,
+        ensure_pppoe_credential,
+    )
 
     subscription_id = subscription.id
     subscriber_id = subscription.subscriber_id
@@ -977,18 +1029,18 @@ def _build_staged_device_intent(
         .first()
     )
     if credential is None:
-        credential = auto_generate_pppoe_credential(
+        outcome = ensure_pppoe_credential(
             db,
-            str(subscriber_id),
-            radius_profile_id=(
-                str(subscription.radius_profile_id)
-                if getattr(subscription, "radius_profile_id", None)
-                else None
+            EnsurePppoeCredentialCommand(
+                subscriber_id=subscriber_id,
+                subscription_id=subscription_id,
+                radius_profile_id=subscription.radius_profile_id,
             ),
-            subscription_id=str(subscription_id),
         )
-    if credential is not None and not str(getattr(subscription, "login", "") or ""):
-        subscription.login = credential.username
+        credential = db.get(AccessCredential, outcome.credential_id)
+        if credential is None:
+            raise RuntimeError("Ensured PPPoE credential could not be reloaded.")
+    subscription.login = credential.username
 
     nas = getattr(subscription, "provisioning_nas_device", None)
     connection_type = resolve_connection_type(db, subscription, nas)
@@ -1005,7 +1057,7 @@ def _build_staged_device_intent(
         "wan.mode": wan_mode,
         "wan.ip_protocol": ip_protocol,
     }
-    if connection_type == ConnectionType.pppoe and credential is not None:
+    if connection_type == ConnectionType.pppoe:
         desired_config.update(
             {
                 "wan.pppoe_username": credential.username,
@@ -1050,7 +1102,7 @@ def _build_staged_device_intent(
             "version": 1,
             "subscription_id": str(subscription_id),
             "connection_type": connection_type.value,
-            "radius_username": credential.username if credential is not None else None,
+            "radius_username": credential.username,
             "ipv4": {
                 "source": "ipam",
                 "assignment_scope": "subscription",
@@ -1187,18 +1239,18 @@ def apply_funding_consequences(
     actor_id: str,
     record_order_payment: bool = True,
 ) -> str:
-    """Apply the committed service consequences of a fully funded sale.
+    """Apply the financial consequences of a fully funded sale.
 
-    Consumer side of ``sales_order.funding_satisfied``: one pending
-    Subscription (plus its first invoice,
-    ``external_ref="sales_order:{id}:subscription:{line_id}"``) and one draft
-    ServiceOrder per offer-tagged line, add-on sync, and — when the producer
-    recorded cash against the order itself — the order payment evidence.
-    Line metadata keeps the resolved ids, so replays are exact no-ops.
+    Funding is accounting evidence, not service-readiness evidence. This
+    consumer records the account-level payment when required, but deliberately
+    does *not* create a Subscription, recurring invoice, ServiceOrder,
+    credential, add-on, or IP assignment. Those technical and recurring-
+    billing records remain owned by the explicit staff subscription workflow,
+    after the installation details and IP choices are known.
 
-    A consequence that cannot be applied raises so the event delivery stays
-    failed and retryable; it is never downgraded to a warning log. The
-    self-serve deposit path sets ``record_order_payment=False`` because its
+    Any amount left after the installation invoice is settled therefore stays
+    as customer account credit until staff creates the service subscription.
+    The self-serve deposit path sets ``record_order_payment=False`` because its
     only ledger event is the verified deposit-invoice payment.
     """
     actor = str(actor_id or "").strip()
@@ -1231,74 +1283,6 @@ def apply_funding_consequences(
             kind="invalid",
         )
 
-    from app.services import crm_api
-
-    lines = _active_sales_order_lines(db, sales_order.id)
-    offer_lines = [(line, ref) for line in lines if (ref := _line_offer_ref(line))]
-    staged_subscriptions: list[tuple[SalesOrderLine, Subscription]] = []
-    for line, offer_ref in offer_lines:
-        meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
-        existing_subscription_id = str(
-            meta.get("selfcare_subscription_id") or ""
-        ).strip()
-        subscription = None
-        invoice = None
-        if existing_subscription_id:
-            subscription = db.get(Subscription, coerce_uuid(existing_subscription_id))
-        else:
-            try:
-                result = crm_api.create_subscription(
-                    db,
-                    subscriber_id=str(sales_order.subscriber_id),
-                    offer_ref=offer_ref,
-                    external_ref=f"sales_order:{sales_order.id}:subscription:{line.id}",
-                    unit_price=line.unit_price,
-                    service_address_id=meta.get("service_address_id"),
-                    billing_cycle=_line_billing_cycle(line),
-                    commit=False,
-                )
-            except LookupError as exc:
-                raise SalesOrderLifecycleError(
-                    "funding_consequence_unresolved",
-                    f"Sales-order line {line.id} offer {offer_ref!r} does not "
-                    "resolve to a catalog offer",
-                    kind="invalid",
-                ) from exc
-            subscription = result.get("subscription") if result else None
-            invoice = result.get("invoice") if result else None
-        if subscription is None:
-            raise SalesOrderLifecycleError(
-                "funding_consequence_unresolved",
-                f"Sales-order line {line.id} has no resolvable subscription",
-                kind="invalid",
-            )
-        new_meta = dict(line.metadata_ or {})
-        new_meta["selfcare_subscription_id"] = str(subscription.id)
-        if invoice is not None:
-            new_meta["selfcare_subscription_invoice_id"] = str(invoice.id)
-        line.metadata_ = new_meta
-        db.add(line)
-        logger.info(
-            "sales_order_subscription_created sales_order_id=%s line_id=%s "
-            "subscription_id=%s",
-            sales_order.id,
-            line.id,
-            subscription.id,
-        )
-        staged_subscriptions.append((line, subscription))
-    if staged_subscriptions:
-        _sync_sales_order_add_ons(
-            db,
-            lines=lines,
-            subscriptions=[item[1] for item in staged_subscriptions],
-        )
-        for line, subscription in staged_subscriptions:
-            _ensure_provisioning_order_for_sales_line(
-                db,
-                sales_order=sales_order,
-                line=line,
-                subscription=subscription,
-            )
     if record_order_payment:
         _record_order_payment_evidence(db, sales_order, commit=False)
     db.flush()
@@ -1333,10 +1317,9 @@ def _record_order_payment_evidence(
     if not sales_order_id or not sales_order.subscriber_id:
         return
 
-    # Ensure the installation invoice exists so the payment has something
-    # to settle. On the funded path the subscription's first invoice is
-    # created by the funding consumer before this, so a single payment can
-    # settle both.
+    # Ensure the installation invoice exists so the payment has something to
+    # settle. No recurring invoice exists yet: any remainder stays as account
+    # credit until staff explicitly creates the subscription.
     ensure_installation_invoice_for_sales_order(
         db,
         sales_order_id,
@@ -1372,11 +1355,9 @@ def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
     """Record partial-payment financial evidence directly.
 
     A partial receipt is financial evidence only. It must not create a
-    service contract or provisioning order before the sale is fully funded.
-    The fully funded consequences (subscription, provisioning order, order
-    payment evidence) belong to the ``sales_order.funding_satisfied``
-    consumer, delivered durably by the event dispatcher — never to this
-    in-request best-effort path.
+    service contract or provisioning order. Full funding records the order
+    payment evidence through the durable ``sales_order.funding_satisfied``
+    consumer, but subscription and provisioning remain explicit staff actions.
     """
     if sales_order.payment_status != _PARTIAL:
         return
@@ -1384,8 +1365,8 @@ def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
 
 
 #: Fields whose value asserts that money was received. Writing one of these
-#: declares coverage, and coverage is what ``stage_funding_transition`` turns
-#: into subscriptions and provisioning. They are therefore NOT operator input:
+#: declares coverage, and coverage is what ``stage_funding_transition`` records
+#: as the order's finance gate. They are therefore NOT operator input:
 #: a generic order edit that could set them would let anyone with ordinary
 #: sales-order write permission manufacture funding.
 #:
@@ -1393,6 +1374,13 @@ def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
 #: sales edit, and coverage stays DERIVED from it and from recorded receipts.
 FUNDING_CONTROLLED_FIELDS: frozenset[str] = frozenset(
     {"payment_status", "amount_paid", "paid_at"}
+)
+
+#: Lifecycle states that are consequences of evidence owned outside the generic
+#: sales-order editor. ``paid`` follows successful Finance settlement;
+#: ``fulfilled`` follows accepted Customer Experience handoff evidence.
+EVIDENCE_CONTROLLED_STATUSES: frozenset[str] = frozenset(
+    {SalesOrderStatus.paid.value, SalesOrderStatus.fulfilled.value}
 )
 
 
@@ -1452,6 +1440,27 @@ def assert_funding_authority(
     )
 
 
+def assert_evidence_controlled_status(data: dict[str, Any]) -> None:
+    """Refuse a generic request that asserts an evidence-derived lifecycle state."""
+
+    requested = data.get("status")
+    requested_value = getattr(requested, "value", requested)
+    if requested_value not in EVIDENCE_CONTROLLED_STATUSES:
+        return
+    if requested_value == SalesOrderStatus.paid.value:
+        detail = (
+            "Sales-order status cannot be set to paid through a sales-order edit. "
+            "Record the receipt on the customer account; successful settlement "
+            "derives payment coverage and advances the order automatically."
+        )
+    else:
+        detail = (
+            "Sales-order status cannot be set to fulfilled through a sales-order "
+            "edit. Fulfilment is derived from accepted Customer Experience evidence."
+        )
+    raise HTTPException(status_code=422, detail=detail)
+
+
 #: Fields that change what the customer was sold or what it is worth. While an
 #: order carries an active waiver these are frozen: the waiver recorded an exact
 #: amount as not-pursued, and re-pricing underneath it would silently change
@@ -1462,8 +1471,38 @@ COMMERCIAL_FIELDS: frozenset[str] = frozenset(
 
 #: The same rule at line level.
 COMMERCIAL_LINE_FIELDS: frozenset[str] = frozenset(
-    {"description", "quantity", "unit_price", "amount", "inventory_item_id"}
+    {
+        "description",
+        "quantity",
+        "unit_price",
+        "amount",
+        "inventory_item_id",
+        "is_active",
+    }
 )
+
+
+def assert_unreceipted_commercial_document(
+    sales_order: SalesOrder, data: dict[str, Any], fields: frozenset[str]
+) -> None:
+    """Freeze commercial terms once cash or an approved waiver is recorded."""
+
+    offending = sorted(fields & set(data))
+    if not offending:
+        return
+    if (
+        sales_order.payment_status == _PENDING
+        and sales_order.status not in EVIDENCE_CONTROLLED_STATUSES
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "A receipted or waived sales order is an immutable commercial "
+            f"document: {', '.join(offending)}. Use the Finance refund, credit-note, "
+            "or adjustment workflow instead of rewriting the sale."
+        ),
+    )
 
 
 def assert_no_active_waiver(
@@ -1632,6 +1671,11 @@ class SalesOrders(ListResponseMixin):
         db: Session, payload, *, funding_authority: FundingAuthority | None = None
     ):
         data = payload.model_dump()
+        assert_evidence_controlled_status(
+            {"status": data.get("status")}
+            if "status" in payload.model_fields_set
+            else {}
+        )
         # A create carries every field, so only an EXPLICITLY-SET funding field
         # counts as an assertion — a schema default of pending/0 is not one.
         # ``SalesOrderPaymentStatus`` is a plain Enum, so unwrap before
@@ -1853,8 +1897,10 @@ class SalesOrders(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Sales order not found")
         previous_payment_status = sales_order.payment_status
         data = payload.model_dump(exclude_unset=True)
+        assert_evidence_controlled_status(data)
         assert_funding_authority(data, funding_authority=funding_authority)
         assert_no_active_waiver(db, sales_order_id, data, COMMERCIAL_FIELDS)
+        assert_unreceipted_commercial_document(sales_order, data, COMMERCIAL_FIELDS)
         if "status" in data:
             data["status"] = _enum_str(data["status"], SalesOrderStatus, "status")
         if "payment_status" in data:
@@ -1988,6 +2034,17 @@ class SalesOrders(ListResponseMixin):
         sales_order = db.get(SalesOrder, coerce_uuid(sales_order_id))
         if not sales_order:
             raise HTTPException(status_code=404, detail="Sales order not found")
+        if (
+            sales_order.payment_status != _PENDING
+            or sales_order.status in EVIDENCE_CONTROLLED_STATUSES
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A receipted or waived sales order cannot be deleted. Use the "
+                    "Finance refund, credit-note, or adjustment workflow."
+                ),
+            )
         sales_order.is_active = False
         db.commit()
 
@@ -2003,6 +2060,9 @@ class SalesOrderLines(ListResponseMixin):
         # mutation even though no existing line moves.
         assert_no_active_waiver(
             db, sales_order.id, {"amount": data.get("amount")}, COMMERCIAL_LINE_FIELDS
+        )
+        assert_unreceipted_commercial_document(
+            sales_order, {"amount": data.get("amount")}, COMMERCIAL_LINE_FIELDS
         )
         if not data.get("amount"):
             data["amount"] = Decimal(data.get("quantity") or 0) * Decimal(
@@ -2026,6 +2086,12 @@ class SalesOrderLines(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Sales order line not found")
         data = payload.model_dump(exclude_unset=True)
         assert_no_active_waiver(db, line.sales_order_id, data, COMMERCIAL_LINE_FIELDS)
+        sales_order = db.get(SalesOrder, line.sales_order_id)
+        if sales_order is None:
+            raise HTTPException(status_code=404, detail="Sales order not found")
+        assert_unreceipted_commercial_document(
+            sales_order, data, COMMERCIAL_LINE_FIELDS
+        )
         for key, value in data.items():
             setattr(line, key, value)
         if "quantity" in data or "unit_price" in data:

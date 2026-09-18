@@ -10,10 +10,16 @@ from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
+    LedgerCategory,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentStatus,
     ServiceEntitlement,
+    ServiceEntitlementStatus,
+    TaxRate,
 )
 from app.models.catalog import (
     BillingCycle,
@@ -25,21 +31,27 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.access_resolution import PrepaidFundingDecision
+from app.services.billing.invoices import InvoiceOwnerError, Invoices
 from app.services.customer_financial_ledger import calculate_customer_balance
 from app.services.domain_errors import DomainError
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_service_renewals import (
+    CorrectLegacyRenewalTaxInvoiceCommand,
     ExecuteReviewedPrepaidServiceRenewalCommand,
     FundingChangeRenewalDisposition,
+    LegacyRenewalTaxInvoiceCorrectionDisposition,
+    LegacyRenewalTaxInvoiceCorrectionQuery,
     PrepaidServiceRenewalError,
     PrepaidSettlementPeriodQuery,
     RunDuePrepaidServiceRenewalsCommand,
     apply_due_prepaid_service_after_funding_change,
     confirm_prepaid_service_renewal,
+    correct_legacy_prepaid_renewal_tax_invoice,
     execute_due_prepaid_service_renewals,
     execute_reviewed_prepaid_service_renewal,
+    preview_legacy_prepaid_renewal_tax_invoice_correction,
     preview_prepaid_service_renewal,
     resolve_prepaid_settlement_period,
     run_due_prepaid_service_renewals,
@@ -79,6 +91,296 @@ def test_settlement_period_preserves_declared_month_end_clamp():
     assert period.ends_on.isoformat() == "2026-03-01"
     assert period.starts_at == datetime(2026, 1, 31, 23, tzinfo=UTC)
     assert period.ends_at == datetime(2026, 2, 28, 23, tzinfo=UTC)
+
+
+def _legacy_tax_correction_fixture(db_session, subscriber, subscription):
+    period_start = datetime(2026, 8, 22, 8, 59, tzinfo=UTC)
+    period_end = datetime(2026, 9, 22, 8, 59, tzinfo=UTC)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_end
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("70000.00"))
+    tax_rate = TaxRate(
+        name="Legacy renewal VAT",
+        code="VAT-LEGACY-RENEWAL",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    subscriber.tax_rate_id = tax_rate.id
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=datetime(2026, 8, 19, tzinfo=UTC),
+    )
+    payment = create_test_settled_payment_credit(
+        db_session,
+        subscriber.id,
+        Decimal("75250.50"),
+        paid_at=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+    legacy_ledger = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.adjustment,
+        category=LedgerCategory.internet_service,
+        amount=Decimal("70000.00"),
+        currency="NGN",
+        memo="Legacy prepaid service renewal",
+        effective_date=period_start,
+        created_at=period_start,
+        is_active=True,
+        affects_customer_position=True,
+    )
+    db_session.add(legacy_ledger)
+    db_session.flush()
+    legacy_adjustment = AccountAdjustment(
+        account_id=subscriber.id,
+        category=LedgerCategory.internet_service,
+        amount=Decimal("70000.00"),
+        currency="NGN",
+        memo="Legacy prepaid service renewal",
+        reason="Historical direct renewal",
+        origin="prepaid_service_renewal",
+        origin_ref=(
+            f"{subscription.id}:{period_start.isoformat()}:{period_end.isoformat()}"
+        ),
+        prepaid_funding_before=Decimal("75250.50"),
+        prepaid_funding_after=Decimal("5250.50"),
+        postpaid_receivables=Decimal("0.00"),
+        collection_blocking_balance=Decimal("0.00"),
+        access_consequence="none_adjustment_only",
+        preview_fingerprint="a" * 64,
+        idempotency_key=f"pytest-legacy-renewal:{subscription.id}",
+        ledger_entry_id=legacy_ledger.id,
+        created_at=period_start,
+    )
+    legacy_entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        source_ledger_entry_id=legacy_ledger.id,
+        starts_at=period_start,
+        ends_at=period_end,
+        amount_funded=Decimal("70000.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_={"origin": "prepaid_service_renewal"},
+        created_at=period_start,
+    )
+    db_session.add_all([legacy_adjustment, legacy_entitlement])
+    db_session.commit()
+    return (
+        period_start,
+        period_end,
+        payment,
+        legacy_adjustment,
+        legacy_entitlement,
+    )
+
+
+def test_legacy_base_only_renewal_is_atomically_replaced_by_taxed_paid_invoice(
+    db_session, subscriber, subscription
+):
+    (
+        period_start,
+        period_end,
+        payment,
+        legacy_adjustment,
+        legacy_entitlement,
+    ) = _legacy_tax_correction_fixture(db_session, subscriber, subscription)
+    query = LegacyRenewalTaxInvoiceCorrectionQuery(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        adjustment_id=legacy_adjustment.id,
+        entitlement_id=legacy_entitlement.id,
+        expected_invoice_total=Decimal("75250.00"),
+        expected_remaining_credit=Decimal("0.50"),
+    )
+    preview = preview_legacy_prepaid_renewal_tax_invoice_correction(db_session, query)
+
+    assert (
+        preview.disposition
+        is LegacyRenewalTaxInvoiceCorrectionDisposition.exact_base_only_legacy_renewal
+    )
+    assert preview.original_debit == Decimal("70000.00")
+    assert preview.tax_total == Decimal("5250.00")
+    assert preview.tax_rate_id is not None
+    assert preview.tax_application.value == "exclusive"
+    assert preview.invoice_total == Decimal("75250.00")
+    assert preview.credit_before == Decimal("5250.50")
+    assert preview.credit_after == Decimal("0.50")
+    db_session.rollback()
+    command = CorrectLegacyRenewalTaxInvoiceCommand(
+        context=CommandContext.system(
+            actor=f"user:{query.account_id}",
+            scope="billing:ledger:write",
+            reason="Finance-approved historical renewal invoice correction",
+            idempotency_key=f"pytest-legacy-tax-correction:{query.subscription_id}",
+        ),
+        query=query,
+        expected_preview_fingerprint=preview.fingerprint,
+    )
+    result = correct_legacy_prepaid_renewal_tax_invoice(db_session, command)
+
+    invoice = db_session.get(Invoice, result.invoice_id)
+    db_session.refresh(legacy_adjustment)
+    db_session.refresh(legacy_entitlement)
+    replacement = db_session.get(ServiceEntitlement, result.replacement_entitlement_id)
+    allocations = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.invoice_id == result.invoice_id)
+        .all()
+    )
+    assert invoice is not None
+    assert replacement is not None
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.subtotal == Decimal("70000.00")
+    assert invoice.tax_total == Decimal("5250.00")
+    assert invoice.total == Decimal("75250.00")
+    assert invoice.balance_due == Decimal("0.00")
+    assert legacy_adjustment.reversal_ledger_entry_id == result.reversal_ledger_entry_id
+    assert legacy_adjustment.reversed_at is not None
+    assert legacy_entitlement.status is ServiceEntitlementStatus.reversed
+    assert replacement.status is ServiceEntitlementStatus.active
+    assert replacement.source_invoice_id == invoice.id
+    assert replacement.starts_at.replace(tzinfo=UTC) == period_start
+    assert replacement.ends_at.replace(tzinfo=UTC) == period_end
+    assert sum((row.amount for row in allocations), Decimal("0.00")) == Decimal(
+        "75250.00"
+    )
+    assert {row.payment_id for row in allocations} == {payment.id}
+    assert result.remaining_credit == Decimal("0.50")
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == period_end
+    correction_events = (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type
+            == EventType.prepaid_service_renewal_document_corrected.value
+        )
+        .all()
+    )
+    assert len(correction_events) == 1
+
+    db_session.rollback()
+    replay = correct_legacy_prepaid_renewal_tax_invoice(db_session, command)
+    assert replay.replayed is True
+    assert replay.invoice_id == result.invoice_id
+    assert (
+        db_session.query(Invoice).filter(Invoice.account_id == subscriber.id).count()
+        == 1
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type
+            == EventType.prepaid_service_renewal_document_corrected.value
+        )
+        .count()
+        == 1
+    )
+
+
+def test_legacy_tax_correction_refuses_balance_drift_without_writes(
+    db_session, subscriber, subscription
+):
+    (
+        _period_start,
+        _period_end,
+        _payment,
+        legacy_adjustment,
+        legacy_entitlement,
+    ) = _legacy_tax_correction_fixture(db_session, subscriber, subscription)
+    query = LegacyRenewalTaxInvoiceCorrectionQuery(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        adjustment_id=legacy_adjustment.id,
+        entitlement_id=legacy_entitlement.id,
+        expected_invoice_total=Decimal("75250.00"),
+        expected_remaining_credit=Decimal("1.00"),
+    )
+
+    preview = preview_legacy_prepaid_renewal_tax_invoice_correction(db_session, query)
+
+    assert (
+        preview.disposition
+        is LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review
+    )
+    assert db_session.query(Invoice).count() == 0
+    db_session.refresh(legacy_adjustment)
+    db_session.refresh(legacy_entitlement)
+    assert legacy_adjustment.reversed_at is None
+    assert legacy_entitlement.status is ServiceEntitlementStatus.active
+
+
+def test_legacy_tax_correction_rolls_back_reversal_when_invoice_owner_rejects(
+    db_session, subscriber, subscription, monkeypatch
+):
+    (
+        _period_start,
+        _period_end,
+        _payment,
+        legacy_adjustment,
+        legacy_entitlement,
+    ) = _legacy_tax_correction_fixture(db_session, subscriber, subscription)
+    query = LegacyRenewalTaxInvoiceCorrectionQuery(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        adjustment_id=legacy_adjustment.id,
+        entitlement_id=legacy_entitlement.id,
+        expected_invoice_total=Decimal("75250.00"),
+        expected_remaining_credit=Decimal("0.50"),
+    )
+    preview = preview_legacy_prepaid_renewal_tax_invoice_correction(db_session, query)
+    adjustment_id = legacy_adjustment.id
+    entitlement_id = legacy_entitlement.id
+    db_session.rollback()
+
+    def reject_invoice(*_args, **_kwargs):
+        raise InvoiceOwnerError(
+            code="financial.invoice.pytest_rejection",
+            message="pytest invoice rejection",
+        )
+
+    monkeypatch.setattr(Invoices, "stage_system_invoice_for_owner", reject_invoice)
+    with pytest.raises(PrepaidServiceRenewalError) as exc_info:
+        correct_legacy_prepaid_renewal_tax_invoice(
+            db_session,
+            CorrectLegacyRenewalTaxInvoiceCommand(
+                context=CommandContext.system(
+                    actor=f"user:{query.account_id}",
+                    scope="billing:ledger:write",
+                    reason="Finance-approved historical renewal invoice correction",
+                    idempotency_key=(
+                        f"pytest-legacy-tax-correction-rollback:{query.subscription_id}"
+                    ),
+                ),
+                query=query,
+                expected_preview_fingerprint=preview.fingerprint,
+            ),
+        )
+
+    assert exc_info.value.code.endswith("invoice_rejected")
+    adjustment = db_session.get(AccountAdjustment, adjustment_id)
+    entitlement = db_session.get(ServiceEntitlement, entitlement_id)
+    assert adjustment is not None
+    assert entitlement is not None
+    assert adjustment.reversed_at is None
+    assert adjustment.reversal_ledger_entry_id is None
+    assert entitlement.status is ServiceEntitlementStatus.active
+    assert db_session.query(Invoice).count() == 0
+    assert (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type
+            == EventType.prepaid_service_renewal_document_corrected.value
+        )
+        .count()
+        == 0
+    )
 
 
 def test_funding_event_without_payment_id_remains_retryable(db_session, subscriber):
@@ -351,12 +653,40 @@ def _add_due_account_without_baseline(db_session, subscriber, subscription):
     return account, due_subscription
 
 
+def test_scheduled_owner_requires_an_active_owner_command(
+    db_session, subscriber, subscription
+):
+    """`run_due_prepaid_service_renewals` is an internal function, never the
+    production entry point on its own -- nightly per-account isolation
+    (`execute_owner_savepoint`) requires an active owner command, which only
+    exists via `execute_due_prepaid_service_renewals`. This is a deliberate,
+    tested invariant of the owner-command boundary, not just something the
+    3 fixed fixtures below happen to satisfy.
+    """
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+
+    with pytest.raises(
+        RuntimeError, match="Owner savepoints require an active owner command"
+    ):
+        run_due_prepaid_service_renewals(
+            db_session,
+            run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        )
+
+
 def test_scheduled_owner_funds_current_due_cycle(db_session, subscriber, subscription):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (`execute_due_prepaid_
+    # service_renewals` -> `execute_owner_command`), not the bare function:
+    # nightly per-account isolation depends on an active owner command
+    # (`execute_owner_savepoint` requires one), which only exists here.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-funds-current-due-cycle",
+        ),
     )
     db_session.commit()
 
@@ -476,11 +806,23 @@ def test_funding_event_uses_owner_root_for_renewal_consumption(
     )
     db_session.commit()
 
+    from app.services import event_store as event_store_service
+
     event = Event(
         event_type=EventType.payment_received,
         payload={"payment_id": str(payment.id)},
         account_id=subscriber.id,
     )
+    # A real `EventStore` row (2026-09 round 8): this test calls the
+    # handler directly (not through the real dispatcher), but
+    # `evaluate_prepaid_service_after_settlement`'s fail-closed guard now
+    # requires `event_id` to resolve to a real, durable row -- this test's
+    # payment carries genuine settlement evidence
+    # (`create_test_settled_payment_credit`), so it reaches that guard
+    # rather than failing earlier the way the two deliberately-incomplete
+    # fixtures above do.
+    event_store_service.create_event_record(db_session, event)
+    db_session.flush()
     PrepaidRenewalHandler().handle(db_session, event)
 
     group = (
@@ -521,9 +863,12 @@ def test_scheduled_owner_skips_quarantine_and_funds_verified_account(
         db_session, subscriber, subscription
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-skips-quarantine",
+        ),
     )
     db_session.commit()
 
@@ -574,9 +919,17 @@ def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(
     subscription.unit_price = None
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): `run_due_prepaid_
+    # service_renewals`'s account-level isolation savepoint requires an
+    # active owner command, which only exists via
+    # `execute_due_prepaid_service_renewals`.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-catalog-fallback",
+        ),
     )
 
     assert summary["prepaid_renewals_missing_price"] == 1
@@ -594,9 +947,14 @@ def test_scheduled_owner_refuses_historical_catch_up(
     subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
     db_session.commit()
 
-    summary = run_due_prepaid_service_renewals(
+    # Routed through the real production entry point (2026-09, round 9 --
+    # a second occurrence of the B1 caller-sweep gap): same reason as above.
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 5, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 5, tzinfo=UTC),
+            key="pytest:scheduled-owner-refuses-historical-catch-up",
+        ),
     )
 
     assert summary["prepaid_renewals_stale_anchor"] == 1
@@ -635,9 +993,12 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
         lambda *_args, **_kwargs: None,
     )
 
-    summary = run_due_prepaid_service_renewals(
+    summary = execute_due_prepaid_service_renewals(
         db_session,
-        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        _scheduled_command(
+            datetime(2026, 7, 1, 12, tzinfo=UTC),
+            key="pytest:scheduled-owner-restores-lock",
+        ),
     )
     db_session.commit()
 
@@ -664,8 +1025,30 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     assert event.payload["renewed_through"] == "2026-08-01T00:00:00+00:00"
 
 
+@pytest.mark.parametrize(
+    ("effective_at", "expected_starts_at", "expected_ends_at"),
+    (
+        (
+            datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+            datetime(2026, 7, 19, 23, tzinfo=UTC),
+            datetime(2026, 8, 19, 23, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 7, 20, 23, 30, tzinfo=UTC),
+            datetime(2026, 7, 20, 23, tzinfo=UTC),
+            datetime(2026, 8, 20, 23, tzinfo=UTC),
+        ),
+    ),
+    ids=("within-utc-day", "lagos-next-day"),
+)
 def test_funding_change_renews_suspended_due_service_from_payment_day(
-    db_session, subscriber, subscription, monkeypatch
+    db_session,
+    subscriber,
+    subscription,
+    monkeypatch,
+    effective_at,
+    expected_starts_at,
+    expected_ends_at,
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
@@ -698,7 +1081,7 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     result = apply_due_prepaid_service_after_funding_change(
         db_session,
         account_id=subscriber.id,
-        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        effective_at=effective_at,
         funding_currency="NGN",
         evidence_ref="pytest:account-credit-event",
     )
@@ -714,23 +1097,19 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     assert lock.is_active is False
     assert subscription.status == SubscriptionStatus.active
     assert subscriber.status == SubscriberStatus.active
-    assert entitlement.starts_at.replace(tzinfo=UTC) == datetime(
-        2026, 7, 20, tzinfo=UTC
-    )
-    assert entitlement.ends_at.replace(tzinfo=UTC) == datetime(2026, 8, 20, tzinfo=UTC)
-    assert subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
-        2026, 8, 20, tzinfo=UTC
-    )
+    assert entitlement.starts_at.replace(tzinfo=UTC) == expected_starts_at
+    assert entitlement.ends_at.replace(tzinfo=UTC) == expected_ends_at
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == expected_ends_at
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
     assert len(result.renewals) == 1
-    assert result.renewals[0].renewed_through == datetime(2026, 8, 20, tzinfo=UTC)
+    assert result.renewals[0].renewed_through == expected_ends_at
     assert result.renewals[0].source.value == "account_credit"
     event = (
         db_session.query(EventStore)
         .filter_by(event_type="prepaid_service.renewed")
         .one()
     )
-    assert event.payload["renewed_through"] == "2026-08-20T00:00:00+00:00"
+    assert event.payload["renewed_through"] == expected_ends_at.isoformat()
     assert event.payload["schema_version"] == 2
     assert event.payload["invoice_id"] is not None
     assert str(event.invoice_id) == event.payload["invoice_id"]

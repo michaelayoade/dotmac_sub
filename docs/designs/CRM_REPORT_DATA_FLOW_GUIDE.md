@@ -15,13 +15,13 @@ REPORT: NCC Complaints
 Data source: Native support Tickets, TicketComments, Subscribers, addresses, assignees, and service teams.
 Backend query/service: typed `ncc_complaints_report.query_report`; compatibility adapters use `build_report`; scheduled delivery is owned by `communications.ncc_weekly_delivery`.
 Transformation/calculation: Filters the requested Ticket-created window, excludes cancelled/merged/test records and tickets with approved internal operational provenance, projects supported Nigerian phones into NCC's `234XXXXXXXXXX` format, maps stored category/channel/status into NCC vocabulary, derives SLA status only when authoritative timestamps exist, canonicalizes geography, and validates filing readiness. Incomplete customer complaints remain visible as validation failures.
-Route/API: `/admin/reports/ncc-complaints`; on-demand XLSX at `/admin/reports/ncc-complaints/export`; preserved scheduled XLSX at `/admin/reports/ncc-weekly-runs/{run_id}/download`.
+Route/API: `/admin/reports/ncc-complaints`; on-demand CSV at `/admin/reports/ncc-complaints/export`; preserved scheduled CSV at `/admin/reports/ncc-weekly-runs/{run_id}/download`.
 UI component/template: `templates/admin/reports/ncc_complaints.html`.
-Displayed as: Complaints, Not Yet Filable, and Unclassified cards, filing-readiness table, on-demand workbook, complete Tuesday delivery configuration, and recent run/delivery/artifact evidence.
-Permission: `reports:ncc:read`; on-demand XLSX and scheduled artifact downloads require `reports:ncc:export`; notification-setting writes separately require `notification:write`.
+Displayed as: Complaints, Not Yet Filable, and Unclassified cards, filing-readiness table, on-demand CSV, complete Tuesday delivery configuration, and recent run/delivery/artifact evidence.
+Permission: `reports:ncc:read`; on-demand CSV and scheduled artifact downloads require `reports:ncc:export`; notification-setting writes separately require `notification:write`.
 Ownership: Self-Care-owned.
-Data freshness/synchronization: Live request-time database read. The scheduler polls every five minutes; the owner admits one configured Tuesday occurrence after local delivery time and retries recorded failures.
-Plain-English flow: Self-Care support records are translated into the NCC filing contract without inventing missing classifications. On Tuesday, the delivery owner preserves the exact validated workbook and queues it once to the configured To/CC/BCC recipients.
+Data freshness/synchronization: Live request-time database read. The scheduler polls every five minutes; the owner admits one configured Tuesday occurrence after local delivery time and retries recorded failures. Scheduled delivery covers the completed Monday-Sunday reporting week.
+Plain-English flow: Self-Care support records are translated into the NCC filing contract without inventing missing classifications. On Tuesday, the delivery owner preserves the exact single CSV and queues it once to the configured To/CC/BCC recipients.
 
 ## NCC regulatory pack
 
@@ -199,6 +199,31 @@ Permission: `reports:support:read` plus mandatory personal identity scope.
 Ownership: Self-Care-owned.
 Data freshness/synchronization: Live date-bounded recomputation using the same explicit period as the page and export.
 Plain-English flow: The common agent calculation is narrowed to the authenticated person before it reaches the UI or export.
+
+## Ticket SLA current operations
+
+REPORT: Ticket SLA Current Operations
+Data source: Ticket, SlaClock, SlaBreach, ServiceTeam, and SystemUser.
+Backend query/service: typed `ticket_sla_reports.summary`, `violation_page`, and
+`trend_daily` projections.
+Transformation/calculation: Counts distinct canonical not-closed Tickets as the
+current workload and counts the subset with a current `breached` SLA clock.
+Status, team, region, and assignee buckets use the same
+`currently breaching / currently open` denominator. Optional dates bound Ticket
+creation time before current state is evaluated.
+Route/API: `/admin/reports/ticket-sla`; CSV under `/export`.
+UI component/template: `templates/admin/reports/ticket_sla.html`.
+Displayed as: Currently Open, Currently Breaching, Current Breach Rate, current
+status/team/region breakdowns, plus explicitly labelled breach-record and
+historical clock-start evidence.
+Permission: `reports:support:read`.
+Ownership: `ui.ticket_sla_report` composes Ticket lifecycle, SLA-clock, and
+service-team owner facts without copying them.
+Data freshness/synchronization: Live on-demand recomputation with a generated-at
+timestamp; no result cache is authoritative.
+Plain-English flow: The page first selects the current not-closed Ticket workload,
+then identifies which of those Tickets have an active breached clock, so a region
+card reconciles with the same not-closed Ticket-list drill-down.
 
 ## Operations SLA violations
 

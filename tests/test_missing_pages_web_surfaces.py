@@ -48,6 +48,8 @@ def test_help_center_uses_docs_layout_without_new_article_content() -> None:
     route = _read("app/web/admin/help_center.py")
     template = _read("templates/admin/help/index.html")
 
+    assert "support:ticket:read" not in route
+    assert "require_permission" not in route
     assert 'article: str = Query("")' in route
     assert "selected_article" in route
     assert "grouped_articles" in route
@@ -55,7 +57,8 @@ def test_help_center_uses_docs_layout_without_new_article_content() -> None:
     assert "On this page" in template
     assert "help-current-section" in template
     assert 'data-help-section="Overview"' in template
-    assert 'data-help-section="Steps"' in template
+    assert 'data-help-section="{{ action.title }}"' in template
+    assert 'id="action-{{ action.id }}"' in template
     assert "lg:hidden" in template
     assert "xl:block" in template
 

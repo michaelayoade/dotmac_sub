@@ -1,6 +1,7 @@
 """Admin reporting web routes."""
 
 import csv
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -9,6 +10,7 @@ from io import StringIO
 from typing import Literal, TypedDict, cast
 from urllib.parse import quote, quote_plus, urlencode
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -355,7 +357,7 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
             {
                 "name": "NCC Complaints (Weekly)",
                 "url": "/admin/reports/ncc-complaints",
-                "description": "Complaint records, categories, SLA and the filing workbook",
+                "description": "Complaint records, categories, SLA and the filing CSV",
                 "permission": "reports:ncc:read",
             },
             {
@@ -1103,6 +1105,36 @@ def reports_technician_export(
     )
 
 
+def _ticket_sla_drilldown_url(
+    *,
+    key: str,
+    field: Literal["service_team_id", "region"],
+    date_from: str | None,
+    date_to: str | None,
+) -> str:
+    is_unassigned = key.startswith("unassigned_")
+    conditions: list[tuple[str, str, str, str | None]] = [
+        (
+            "Ticket",
+            field,
+            "is" if is_unassigned else "=",
+            None if is_unassigned else key,
+        )
+    ]
+    if date_from:
+        conditions.append(("Ticket", "created_at", ">=", f"{date_from}T00:00:00+00:00"))
+    if date_to:
+        conditions.append(
+            ("Ticket", "created_at", "<=", f"{date_to}T23:59:59.999999+00:00")
+        )
+    return "/admin/support/tickets?" + urlencode(
+        {
+            "status": "not_closed",
+            "filters": json.dumps({"and": conditions}, separators=(",", ":")),
+        }
+    )
+
+
 @router.get(
     "/ticket-sla",
     response_class=HTMLResponse,
@@ -1120,6 +1152,31 @@ def reports_ticket_sla(
 
     start_at = _parse_date_start(date_from)
     end_at = _parse_date_end(date_to)
+    report_summary = ticket_sla_reports_service.summary(
+        db=db,
+        query=ticket_sla_reports_service.TicketSlaSummaryQuery(
+            start_at=start_at,
+            end_at=end_at,
+        ),
+    )
+    team_drilldown_urls = {
+        item.key: _ticket_sla_drilldown_url(
+            key=item.key,
+            field="service_team_id",
+            date_from=date_from,
+            date_to=date_to,
+        )
+        for item in report_summary.by_service_team
+    }
+    region_drilldown_urls = {
+        item.key: _ticket_sla_drilldown_url(
+            key=item.key,
+            field="region",
+            date_from=date_from,
+            date_to=date_to,
+        )
+        for item in report_summary.by_region
+    }
     violation_page = ticket_sla_reports_service.violation_page(
         db,
         query=ticket_sla_reports_service.TicketSlaViolationPageQuery(
@@ -1139,7 +1196,9 @@ def reports_ticket_sla(
         "date_from": date_from or "",
         "date_to": date_to or "",
         "open_only": open_only,
-        "summary": ticket_sla_reports_service.summary(db, start_at, end_at),
+        "summary": report_summary,
+        "team_drilldown_urls": team_drilldown_urls,
+        "region_drilldown_urls": region_drilldown_urls,
         "trend": ticket_sla_reports_service.trend_daily(db, start_at, end_at),
         "violations": violation_page.rows,
         "violation_page": violation_page,
@@ -1532,6 +1591,10 @@ def reports_inbox_performance(
     include_inactive: bool = False,
     date_from: str | None = None,
     date_to: str | None = None,
+    team_search: str | None = Query(default=None, max_length=100),
+    team_page: int = Query(default=1, ge=1),
+    agent_search: str | None = Query(default=None, max_length=100),
+    agent_page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -1539,23 +1602,72 @@ def reports_inbox_performance(
     effective_from, effective_to, start_at, end_at = _inbox_performance_period(
         date_from, date_to
     )
-    performance_query = team_inbox_metrics_service.InboxPerformanceQuery(
+    summary_query = team_inbox_metrics_service.InboxPerformanceQuery(
         period_start_at=start_at,
         period_end_at=end_at,
         include_inactive_teams=include_inactive,
         limit=None,
     )
-    team_page = team_inbox_metrics_service.team_performance_page(
+    summary_page = team_inbox_metrics_service.team_performance_page(
         db,
-        query=performance_query,
+        query=summary_query,
         response_sla_seconds=response_sla_seconds,
     )
-    agent_page = team_inbox_metrics_service.agent_performance_page(
+    team_table_page = team_inbox_metrics_service.team_performance_page(
         db,
-        query=performance_query,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            period_start_at=start_at,
+            period_end_at=end_at,
+            include_inactive_teams=include_inactive,
+            search=team_search,
+            limit=10,
+            offset=(team_page - 1) * 10,
+        ),
+        response_sla_seconds=response_sla_seconds,
     )
-    team_rows = _inbox_team_rows(team_page.rows)
-    agent_rows = _inbox_agent_rows(agent_page.rows)
+    team_total_pages = max(1, (team_table_page.total_count + 9) // 10)
+    effective_team_page = min(team_page, team_total_pages)
+    if effective_team_page != team_page:
+        team_table_page = team_inbox_metrics_service.team_performance_page(
+            db,
+            query=team_inbox_metrics_service.InboxPerformanceQuery(
+                period_start_at=start_at,
+                period_end_at=end_at,
+                include_inactive_teams=include_inactive,
+                search=team_search,
+                limit=10,
+                offset=(effective_team_page - 1) * 10,
+            ),
+            response_sla_seconds=response_sla_seconds,
+        )
+    agent_table_page = team_inbox_metrics_service.agent_performance_page(
+        db,
+        query=team_inbox_metrics_service.InboxPerformanceQuery(
+            period_start_at=start_at,
+            period_end_at=end_at,
+            include_inactive_teams=include_inactive,
+            search=agent_search,
+            limit=15,
+            offset=(agent_page - 1) * 15,
+        ),
+    )
+    agent_total_pages = max(1, (agent_table_page.total_count + 14) // 15)
+    effective_agent_page = min(agent_page, agent_total_pages)
+    if effective_agent_page != agent_page:
+        agent_table_page = team_inbox_metrics_service.agent_performance_page(
+            db,
+            query=team_inbox_metrics_service.InboxPerformanceQuery(
+                period_start_at=start_at,
+                period_end_at=end_at,
+                include_inactive_teams=include_inactive,
+                search=agent_search,
+                limit=15,
+                offset=(effective_agent_page - 1) * 15,
+            ),
+        )
+    team_rows = _inbox_team_rows(summary_page.rows)
+    team_table_rows = _inbox_team_rows(team_table_page.rows)
+    agent_rows = _inbox_agent_rows(agent_table_page.rows)
     inbound_total = sum(cast(int, row["inbound_message_count"]) for row in team_rows)
     breached_total = sum(
         cast(int, row["response_sla_breached_count"]) for row in team_rows
@@ -1572,7 +1684,15 @@ def reports_inbox_performance(
         "date_from": effective_from,
         "date_to": effective_to,
         "team_rows": team_rows,
+        "team_table_rows": team_table_rows,
+        "team_search": (team_search or "").strip(),
+        "team_page": effective_team_page,
+        "team_total_pages": team_total_pages,
+        "team_total_count": team_table_page.total_count,
         "agent_rows": agent_rows,
+        "agent_search": (agent_search or "").strip(),
+        "agent_page": effective_agent_page,
+        "agent_total_pages": agent_total_pages,
         "team_count": len(team_rows),
         "open_count": sum(cast(int, row["open_count"]) for row in team_rows),
         "unassigned_open_count": sum(
@@ -1654,18 +1774,20 @@ def reports_inbox_escalations(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
     queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
     include_inactive: bool = False,
+    search: str | None = Query(default=None, max_length=100),
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    per_page = 10
     escalation_page = team_inbox_metrics_service.escalation_page(
         db,
         query=team_inbox_metrics_service.InboxEscalationQuery(
             response_sla_seconds=response_sla_seconds,
             queue_sla_seconds=queue_sla_seconds,
             include_inactive_teams=include_inactive,
+            search=search,
             limit=per_page,
             offset=(page - 1) * per_page,
         ),
@@ -1680,6 +1802,7 @@ def reports_inbox_escalations(
         "response_sla_seconds": response_sla_seconds,
         "queue_sla_seconds": queue_sla_seconds,
         "include_inactive": include_inactive,
+        "search": (search or "").strip(),
         "rows": rows,
         "service_team_options": _active_service_team_options(db),
         "candidate_count": escalation_page.total_count,
@@ -2540,16 +2663,70 @@ def reports_ncc_subscribers_export(
 
 
 # ── NCC weekly Complaints return (①) ──────────────────────────────────────
+_NCC_REPORTING_TIMEZONE = "Africa/Lagos"
+
+
+def _completed_ncc_reporting_week(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    tzinfo = ZoneInfo(_NCC_REPORTING_TIMEZONE)
+    local_now = (now or datetime.now(UTC)).astimezone(tzinfo)
+    current_week_start = local_now.date() - timedelta(days=local_now.weekday())
+    reporting_start = current_week_start - timedelta(days=7)
+    reporting_end = current_week_start - timedelta(days=1)
+    return (
+        datetime.combine(reporting_start, time.min, tzinfo=tzinfo).astimezone(UTC),
+        datetime.combine(reporting_end, time.max, tzinfo=tzinfo).astimezone(UTC),
+    )
+
+
+def _ncc_window_form_dates(start: datetime, end: datetime) -> tuple[str, str]:
+    tzinfo = ZoneInfo(_NCC_REPORTING_TIMEZONE)
+    local_start = start.astimezone(tzinfo).date()
+    local_end = end.astimezone(tzinfo).date()
+    return local_start.isoformat(), local_end.isoformat()
+
+
+def _parse_ncc_date_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value).date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(
+        parsed_date,
+        time.min,
+        tzinfo=ZoneInfo(_NCC_REPORTING_TIMEZONE),
+    ).astimezone(UTC)
+
+
+def _parse_ncc_date_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value).date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(
+        parsed_date,
+        time.max,
+        tzinfo=ZoneInfo(_NCC_REPORTING_TIMEZONE),
+    ).astimezone(UTC)
+
+
 def _ncc_complaints_window(
     date_from: str | None, date_to: str | None
 ) -> tuple[datetime, datetime]:
     """Bound the complaints window.
 
-    Defaults to the trailing seven days, matching the weekly complaints report
-    cadence, anchored on ``created_at``.
+    Defaults to the completed Monday-Sunday NCC reporting week, anchored on
+    ``created_at``.
     """
-    end = _parse_date_end(date_to) or datetime.now(UTC)
-    start = _parse_date_start(date_from) or (end - timedelta(days=7))
+    if not date_from and not date_to:
+        return _completed_ncc_reporting_week()
+    end = _parse_ncc_date_end(date_to) or datetime.now(UTC)
+    start = _parse_ncc_date_start(date_from) or (end - timedelta(days=7))
     if end < start:
         start, end = end, start
     return start, end
@@ -2571,6 +2748,7 @@ def reports_ncc_complaints(
     from app.web.admin import get_current_user, get_sidebar_stats
 
     start, end = _ncc_complaints_window(date_from, date_to)
+    effective_date_from, effective_date_to = _ncc_window_form_dates(start, end)
     snapshot = ncc_complaints_service.query_report(
         db=db,
         query=ncc_complaints_service.NccComplaintsReportQuery(start=start, end=end),
@@ -2618,8 +2796,8 @@ def reports_ncc_complaints(
         "columns": report["columns"],
         "rows": rows,
         "not_filable": not_filable,
-        "date_from": date_from or "",
-        "date_to": date_to or "",
+        "date_from": date_from or effective_date_from,
+        "date_to": date_to or effective_date_to,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "weekly_configuration": weekly_configuration,
         "weekly_runs": weekly_runs,
@@ -2643,13 +2821,11 @@ def reports_ncc_complaints_export(
     start, end = _ncc_complaints_window(date_from, date_to)
     report = ncc_complaints_service.build_report(db, start=start, end=end)
     rows = ncc_workbook.template_export_rows(report["records"])
-    content = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
-    filename = ncc_workbook.export_filename(end)
+    content = ncc_workbook.build_csv(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
+    filename = ncc_workbook.export_filename_for_window(start=start, end=end)
     return Response(
         content,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        media_type=ncc_workbook.CSV_CONTENT_TYPE,
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
@@ -3310,14 +3486,20 @@ _REPORT_ADVISORS: dict[str, str] = {
 
 def _fetch_report_for_advisor(
     db: Session, advisor_key: str, date_from: str | None, date_to: str | None
-) -> tuple[dict, str, str | None]:
+) -> tuple[dict[str, object], str, str | None]:
     """Fetch the owned projection an advisor reads. Returns
     (report, entity_type, entity_id)."""
     if advisor_key == "ticket_sla_advisor":
         start_at = _parse_date_start(date_from)
         end_at = _parse_date_end(date_to)
-        report = ticket_sla_reports_service.summary(db, start_at, end_at)
-        return report, "report:ticket_sla", None
+        report = ticket_sla_reports_service.summary(
+            db=db,
+            query=ticket_sla_reports_service.TicketSlaSummaryQuery(
+                start_at=start_at,
+                end_at=end_at,
+            ),
+        )
+        return report.as_serializable(), "report:ticket_sla", None
     raise KeyError(advisor_key)
 
 

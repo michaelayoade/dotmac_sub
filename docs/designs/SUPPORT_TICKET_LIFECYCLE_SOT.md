@@ -63,10 +63,10 @@ cancellation.
 `support.ticket_configuration` owns operator-managed status choices,
 priorities, types, routing inputs, service-team membership configuration, and
 priority/type SLA targets. It may only expose statuses from the ticket
-vocabulary owner. `support.ticket_region_projection` separately resolves the
-current region choices from configured values and canonical Ticket observations.
-This separation prevents lifecycle and configuration from depending on each
-other while preserving the provenance of both inputs.
+vocabulary owner. `support.ticket_region_projection` resolves the current
+selectable region choices from the configured region option values. Configured
+regions are the sole source of truth: Ticket rows are historical observations
+and must not expand the selectable vocabulary.
 
 The operator-selectable subset contains only canonical typed `TicketStatus`
 values. The configuration owner and admin adapters canonicalize legacy
@@ -270,6 +270,35 @@ system descriptions, comments, and their attachments are internal unless a
 staff command explicitly publishes them. Portal adapters consume these stored
 decisions; they never infer publication from subscriber linkage, CRM metadata,
 or the absence of an internal-note checkbox.
+
+Customer-facing comment projections carry the closed `TicketCommentAuthorType`
+vocabulary (`customer`, `staff`, `system`) alongside the stored publication
+decision. Web and mobile adapters may render that provenance as audience-safe
+labels such as **You** and **Support Team**, but never infer authorship from
+layout, identifiers, message text, or transport origin. Manual refresh and any
+future push/WebSocket signals are observation triggers only; clients reconcile
+from the authoritative Support comment query before changing the displayed
+timeline.
+
+The lifecycle owner also owns the customer-visible comment invalidation
+decision. A successfully committed public comment create, edit, or delete emits
+an identifier-only `support_ticket_comment_changed` hint through
+`runtime.realtime_projection`; a public-to-internal or internal-to-public
+transition emits the same class of invalidation. An internal comment that stays
+internal emits nothing. Bulk creation emits at most one hint. The payload is
+limited to Ticket UUID, typed change, and optional comment UUID; it excludes
+body, attachments, author identity, and subscriber identity. The subscriber is
+used only to select the server-assigned principal topic.
+
+The realtime transport is best-effort, at-most-once, and non-authoritative. It
+is registered with `run_after_commit`, so rollback publishes nothing and Redis
+failure cannot affect the Ticket command. Mobile clients never select the
+principal topic and never render the hint. They reconcile only the authoritative
+customer comment query for a matching Ticket. A connection acknowledgement,
+reconnect, or app resume is also a comments catch-up boundary. Manual refresh
+and completed reply/resolution actions continue to reconcile both the Ticket
+header and comments. No periodic Ticket-comment REST poll is part of this
+contract.
 
 CRM ticket import is retired as an authority. Any residual retry or historical
 observation is provenance-only and is forced internal; it cannot publish

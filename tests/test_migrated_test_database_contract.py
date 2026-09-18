@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "585_automation_runtime_ledger",
+            "612_shared_outage_work_orders",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",

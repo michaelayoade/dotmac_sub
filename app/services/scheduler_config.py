@@ -2,6 +2,7 @@ import logging
 import os
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from celery.schedules import crontab
 
@@ -37,6 +38,8 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.ont_commissioning.reconcile_intents",
 }
 
+_WARNED_MULTIDAY_INTERVALS: set[tuple[str, int]] = set()
+
 
 def _scheduler_setting_enabled(db, domain: SettingDomain, key: str) -> bool:
     """Resolve one registered DB-authoritative scheduler setting.
@@ -61,6 +64,7 @@ def _sync_scheduled_task(
     task_name: str,
     enabled: bool,
     interval_seconds: int,
+    initialize_missing_kwargs_json: dict[str, object] | None = None,
 ) -> None:
     # Match by NAME (the stable logical identity), not task_name. Matching by
     # task_name meant a task rename/move (e.g. run_dunning -> run_billing_
@@ -81,6 +85,7 @@ def _sync_scheduled_task(
             task_name=task_name,
             schedule_type=ScheduleType.interval,
             interval_seconds=interval_seconds,
+            kwargs_json=dict(initialize_missing_kwargs_json or {}),
             enabled=True,
         )
         db.add(task)
@@ -103,6 +108,13 @@ def _sync_scheduled_task(
     if task.enabled != enabled:
         task.enabled = enabled
         changed = True
+    if initialize_missing_kwargs_json:
+        kwargs_json = dict(task.kwargs_json or {})
+        for key, value in initialize_missing_kwargs_json.items():
+            if key not in kwargs_json:
+                kwargs_json[key] = value
+                changed = True
+        task.kwargs_json = kwargs_json
     if changed:
         db.commit()
 
@@ -275,7 +287,9 @@ def _entry_expires_seconds(interval_seconds: int) -> int:
     return interval_seconds
 
 
-def _interval_to_beat_schedule(task_id, interval_seconds: int):
+def _interval_to_beat_schedule(
+    task_id: UUID | str, interval_seconds: int
+) -> crontab | timedelta:
     """Beat schedule object for an interval task.
 
     Celery beat measures `timedelta` intervals from its own (non-persisted)
@@ -303,10 +317,13 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
         step_hours = interval_seconds // 3600
         return crontab(minute=anchor % 60, hour=f"*/{step_hours}")
     if interval_seconds >= 2 * 86400:
-        logger.warning(
-            "scheduled_task_multiday_interval_restart_relative",
-            extra={"task_id": str(task_id), "interval_seconds": interval_seconds},
-        )
+        warning_key = (str(task_id), interval_seconds)
+        if warning_key not in _WARNED_MULTIDAY_INTERVALS:
+            _WARNED_MULTIDAY_INTERVALS.add(warning_key)
+            logger.warning(
+                "scheduled_task_multiday_interval_restart_relative",
+                extra={"task_id": str(task_id), "interval_seconds": interval_seconds},
+            )
     return timedelta(seconds=interval_seconds)
 
 
@@ -1177,6 +1194,16 @@ def build_beat_schedule() -> dict:
         )
         _sync_scheduled_task(
             session,
+            name="team_inbox_whatsapp_window_expiry",
+            task_name="app.tasks.team_inbox.expire_whatsapp_service_windows",
+            enabled=True,
+            interval_seconds=60,
+            initialize_missing_kwargs_json={
+                "managed_after": datetime.now(UTC).isoformat(),
+            },
+        )
+        _sync_scheduled_task(
+            session,
             name="team_inbox_fifo_queue_promotion",
             task_name="app.tasks.team_inbox.promote_queued_conversations",
             enabled=True,
@@ -1993,6 +2020,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=event_stale_cleanup_interval,
         )
 
+        # Integration inbox lease reclaim - moves receipts a dead claimant
+        # left stuck in 'processing' to 'retryable' so they surface for
+        # redelivery or manual replay instead of leaking forever.
+        payment_inbox_reclaim_interval = resolve_integer(
+            session,
+            SettingDomain.scheduler,
+            "payment_inbox_reclaim_interval_seconds",
+        )
+        payment_inbox_reclaim_interval = max(
+            payment_inbox_reclaim_interval, 60
+        )  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="payment_inbox_reclaim_runner",
+            task_name="app.tasks.integration_inbox.reclaim_stale_claims",
+            enabled=True,
+            interval_seconds=payment_inbox_reclaim_interval,
+        )
+
         stale_infra_check_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.scheduler,
@@ -2214,6 +2260,19 @@ def build_beat_schedule() -> dict:
             session,
             name="dotmac_erp_purchase_invoice_repair",
             task_name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync",
+            enabled=erp_outbox_enabled,
+            interval_seconds=max(dotmac_erp_outbox_interval, 60),
+        )
+
+        # Purchase-order write-back repair: ERP already accepted the PO (2xx),
+        # but sub's own write of the ERP id onto the installation project may
+        # have been lost. Re-applies from the delivered outbox row's stored
+        # erp_response -- no ERP call, no re-emit. Same gate + interval floor
+        # as the purchase-invoice repair sweep above.
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_order_repair",
+            task_name="app.tasks.dotmac_erp_outbox.repair_purchase_order_writebacks",
             enabled=erp_outbox_enabled,
             interval_seconds=max(dotmac_erp_outbox_interval, 60),
         )

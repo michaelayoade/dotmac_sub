@@ -322,6 +322,15 @@ def _machine_principal(
         "scopes": sorted(principal.scopes),
         "impersonated_by": None,
         "api_key_id": actor_id,
+        # Distinguishes a kernel machine_credentials principal from the
+        # legacy local api_keys row below — both currently surface as
+        # principal_type "api_key" for backward compatibility with every
+        # existing has_permission/require_permission consumer, but a
+        # consumer that must treat the two differently (e.g. offer-version
+        # admission's machine-credential shadow/would-refuse migration)
+        # reads THIS
+        # field rather than guessing from principal_id shape.
+        "credential_kind": "machine",
     }
     if request is not None:
         request.state.actor_id = actor_id
@@ -373,6 +382,9 @@ def _api_key_principal(
         "scopes": list(api_key.scopes or []),
         "impersonated_by": None,
         "api_key_id": actor_id,
+        # See _machine_principal's identical field: this is the LEGACY local
+        # api_keys row, never a kernel machine credential.
+        "credential_kind": "legacy_api_key",
     }
     if request is not None:
         request.state.actor_id = actor_id
@@ -719,9 +731,9 @@ def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
 def can(request, permission_key: str) -> bool:
     """UI gate: may the current principal perform ``permission_key``?
 
-    Pure set logic over the keys ``require_permission`` cached on the request's
-    auth — no DB — so a template can hide actions the principal lacks. Denies
-    when the set is absent (e.g. an ungated page); the route remains the
+    Pure set logic over the keys cached by the route's permission guard on the
+    request auth — no DB — so a template can hide actions the principal lacks.
+    Denies when the set is absent (e.g. an ungated page); the route remains the
     authority that actually enforces access.
     """
     auth = getattr(getattr(request, "state", None), "auth", None)
@@ -1090,6 +1102,11 @@ def require_scoped_permission(permission_key: str, scope_extractor):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
+        # Scoped routes render the same permission-aware UI controls as routes
+        # protected by require_permission. Cache the effective keys here too so
+        # `can` and `action_permitted` see the authorization already established
+        # by this dependency instead of failing closed because the cache is absent.
+        load_permission_keys(auth, db)
         decision = grant_scopes_for_permission(auth, db, permission_key)
         if decision is None:
             raise HTTPException(status_code=403, detail="Forbidden")

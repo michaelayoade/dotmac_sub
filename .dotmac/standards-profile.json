@@ -117,13 +117,13 @@
         "path": "tests/test_email_services.py",
         "symbol": "test_send_email_auth_failure_logs",
         "category": "outbound_transport",
-        "fingerprint": "e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e"
+        "fingerprint": "d04fece5c83bd35cca1931fa0675b17849f4e0d8a0a67fe652d5586269c45b31"
       },
       {
         "path": "tests/test_email_services.py",
         "symbol": "test_smtp_connection_auth_failure_logs",
         "category": "outbound_transport",
-        "fingerprint": "e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e"
+        "fingerprint": "d04fece5c83bd35cca1931fa0675b17849f4e0d8a0a67fe652d5586269c45b31"
       },
       {
         "path": "tests/test_genieacs_services.py",
@@ -135,7 +135,7 @@
         "path": "tests/test_integration_meta_social.py",
         "symbol": "test_typed_facade_returns_sanitized_outcome",
         "category": "outbound_transport",
-        "fingerprint": "fc7bb83c3ed15b6a49fa08d1d7991abaed40008d6704adb24afb268e64d96670"
+        "fingerprint": "358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959"
       },
       {
         "path": "tests/test_meta_oauth.py",
@@ -147,7 +147,7 @@
         "path": "tests/test_nextcloud_talk_staff_notifications.py",
         "symbol": "<module>",
         "category": "delivery_retry",
-        "fingerprint": "2ad03d19e91abbbd467037d4672ba61b4433b2533ead11b04955f1873b6017af"
+        "fingerprint": "e6a540dee1e6ddfb5448aef0a667aef1f3b7bf54e955fbcd9bd7ae86e2dbd315"
       },
       {
         "path": "tests/test_router_management_connection.py",
@@ -165,7 +165,7 @@
         "path": "tests/test_team_inbox_smtp_runtime.py",
         "symbol": "test_readiness_uses_smtp_noop",
         "category": "outbound_transport",
-        "fingerprint": "2df88d6ae0dba969bd2097a5459861379cf68d42b8542974efb0382c0a92e7f7"
+        "fingerprint": "93abe275aa5f06c2edbe1286e2e1918d61e9cc2a4888101c70134c7cc8bc08b9"
       },
       {
         "path": "tests/test_team_inbox_whatsapp_webhook.py",

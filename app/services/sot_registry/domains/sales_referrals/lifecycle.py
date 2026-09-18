@@ -207,6 +207,18 @@ SERVICES: tuple[SOTService, ...] = (
         name="sales.selfserve",
         module="app.services.sales.selfserve",
         owns=("self-serve quote and signup flow",),
+        depends_on=(
+            "communications.intents",
+            "communications.staff_notifications",
+            "events.dispatcher",
+            "sales.quote_payment_review",
+            "sales.service",
+        ),
+        notes=(
+            "A completed map-pinned estimate is created as payment-review pending, "
+            "then queues the authorized staff review alert and customer under-review "
+            "notification. It never exposes payment eligibility itself."
+        ),
     ),
     SOTService(
         name="sales.lead_lifecycle",
@@ -238,7 +250,11 @@ SERVICES: tuple[SOTService, ...] = (
             "sort, and pagination once. Their row and count projections share "
             "one predicate specification; related Party, active contact-point, "
             "and Subscriber matches use correlated EXISTS predicates so JSON-"
-            "bearing Lead and Quote rows are never subjected to full-row DISTINCT."
+            "bearing Lead and Quote rows are never subjected to full-row DISTINCT. "
+            "Lead creation dates are normalized by normalize_lead_date_range; "
+            "the same inclusive UTC scope supplies rows, count, summary, and retry. "
+            "Quote dates likewise use public normalize_quote_date_range for query "
+            "and retry; invalid or unrepresentable bounds become All time."
         ),
     ),
 )

@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxAutomationTrigger,
@@ -34,23 +35,28 @@ from app.schemas.ai_intake import (
     DataCleaningEligibility,
     DataCleaningEligibilityReason,
 )
+from app.schemas.chat import NATIVE_WIDGET_SURFACE_VALUES
 from app.services import (
     ai_conversation_intake,
     ai_intake,
     team_inbox_assignment,
     team_inbox_automation,
+    team_inbox_customer_completion_policy,
     team_inbox_media,
     team_inbox_operations,
     team_inbox_outbound,
     team_inbox_participants,
     team_inbox_realtime,
+    team_inbox_reply_window,
     team_inbox_routing,
     team_inbox_status,
 )
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
     default_country_code,
     normalize_channel_address,
+    normalize_customer_name,
 )
 from app.services.integrations.connectors import whatsapp_runtime
 from app.services.owner_commands import (
@@ -78,7 +84,6 @@ _OPAQUE_CONTACT_CHANNELS = {
     InboxChannelType.instagram_comment.value,
     InboxChannelType.chat_widget.value,
 }
-_NATIVE_WIDGET_AI_SURFACES = frozenset({"customer", "reseller_portal"})
 
 
 def _inbound_attachment_observation(
@@ -174,6 +179,9 @@ class ContactResolution:
     matched_subscriber_ids: list[str]
     suppressed_subscriber_ids: list[str]
     matched_reseller_ids: list[str]
+    participant_party_id: UUID | None = None
+    party_contact_point_id: UUID | None = None
+    matched_lead_ids: tuple[UUID, ...] = ()
 
     def as_metadata(self) -> dict[str, object]:
         return {
@@ -184,6 +192,17 @@ class ContactResolution:
             "matched_subscriber_ids": self.matched_subscriber_ids,
             "suppressed_subscriber_ids": self.suppressed_subscriber_ids,
             "matched_reseller_ids": self.matched_reseller_ids,
+            "participant_party_id": (
+                str(self.participant_party_id)
+                if self.participant_party_id is not None
+                else None
+            ),
+            "party_contact_point_id": (
+                str(self.party_contact_point_id)
+                if self.party_contact_point_id is not None
+                else None
+            ),
+            "matched_lead_ids": [str(item) for item in self.matched_lead_ids],
         }
 
 
@@ -295,6 +314,10 @@ def resolve_contact_context(
     channel_type: str,
     contact_address: str,
     subscriber_id: str | UUID | None = None,
+    contact_name: str | None = None,
+    provider: str | None = None,
+    provider_account_id: str | None = None,
+    external_subject_id: str | None = None,
 ) -> ContactResolution:
     country_code = default_country_code(db)
     normalized = _normalize_contact_with_country(
@@ -316,13 +339,29 @@ def resolve_contact_context(
             matched_reseller_ids=[str(reseller_id)] if reseller_id is not None else [],
         )
 
+    from app.services import team_inbox_contact_links
+
+    identity = team_inbox_contact_links.ObservedInboundIdentity(
+        channel_type=channel_type,
+        normalized_endpoint=normalized or "",
+        provider=(provider or "").strip() or None,
+        provider_account_id=(provider_account_id or "").strip() or None,
+        external_subject_id=(external_subject_id or "").strip()
+        or (
+            normalized
+            if channel_type
+            in {
+                InboxChannelType.facebook_messenger.value,
+                InboxChannelType.instagram_dm.value,
+            }
+            else None
+        ),
+    )
     active_link = None
     if normalized:
         active_link = (
             db.query(InboxContactLink)
-            .filter(InboxContactLink.channel_type == channel_type)
-            .filter(InboxContactLink.normalized_contact == normalized)
-            .filter(InboxContactLink.is_active.is_(True))
+            .filter(*team_inbox_contact_links.scoped_contact_link_clauses(identity))
             .first()
         )
     if active_link is not None:
@@ -385,6 +424,21 @@ def resolve_contact_context(
             else:
                 suppressed_subscribers.append(subscriber)
 
+    observed_name = normalize_customer_name(contact_name)
+    name_conflict = False
+    if observed_name and matched_subscribers:
+        phone_matches = tuple(matched_subscribers)
+        matched_subscribers = [
+            subscriber
+            for subscriber in matched_subscribers
+            if observed_name
+            in {
+                normalize_customer_name(subscriber.display_name),
+                normalize_customer_name(subscriber.full_name),
+            }
+        ]
+        name_conflict = bool(phone_matches) and not matched_subscribers
+
     matched_resellers: list[Reseller] = []
     if normalized:
         for reseller in _candidate_resellers(db, channel_type, normalized):
@@ -409,14 +463,14 @@ def resolve_contact_context(
         status = "linked_subscriber"
     elif selected_reseller_id is not None:
         status = "linked_reseller"
-    elif matched_subscribers or matched_resellers:
+    elif matched_subscribers or matched_resellers or name_conflict:
         status = "ambiguous"
     elif suppressed_subscribers:
         status = "suppressed_inactive"
     else:
         status = "unmatched"
 
-    return ContactResolution(
+    contact_resolution = ContactResolution(
         status=status,
         normalized_contact=normalized,
         subscriber_id=selected_subscriber.id if selected_subscriber else None,
@@ -428,6 +482,102 @@ def resolve_contact_context(
             str(subscriber.id) for subscriber in suppressed_subscribers
         ],
         matched_reseller_ids=[str(reseller.id) for reseller in matched_resellers],
+    )
+    if status != "unmatched" or not normalized:
+        return contact_resolution
+
+    # Canonical Party contact points are authoritative identity evidence for
+    # returning Leads. This intentionally runs only after the existing
+    # Customer/Reseller resolver has produced no match, and never considers
+    # names or discovery suggestions.
+    evidence = team_inbox_contact_links.endpoint_identity_evidence(db, identity)
+    if (
+        evidence.disposition
+        is team_inbox_contact_links.IdentityEvidenceDisposition.ambiguous_match
+    ):
+        return ContactResolution(
+            status="ambiguous",
+            normalized_contact=normalized,
+            subscriber_id=None,
+            reseller_id=None,
+            matched_subscriber_ids=[],
+            suppressed_subscriber_ids=[],
+            matched_reseller_ids=[],
+        )
+    if evidence.exact_party_id is None:
+        return contact_resolution
+    customer_ids = tuple(
+        item.subject_id
+        for item in evidence.subjects
+        if item.kind is team_inbox_contact_links.IdentityEvidenceSubjectKind.customer
+    )
+    reseller_ids = tuple(
+        item.subject_id
+        for item in evidence.subjects
+        if item.kind is team_inbox_contact_links.IdentityEvidenceSubjectKind.reseller
+    )
+    lead_ids = tuple(
+        dict.fromkeys(
+            lead_id for item in evidence.subjects for lead_id in item.lead_ids
+        )
+    )
+    selected_customer_id = customer_ids[0] if len(customer_ids) == 1 else None
+    selected_reseller_id = reseller_ids[0] if len(reseller_ids) == 1 else None
+    return ContactResolution(
+        status=(
+            "linked_subscriber"
+            if selected_customer_id is not None
+            else "linked_reseller"
+            if selected_reseller_id is not None
+            else "linked_party"
+        ),
+        normalized_contact=normalized,
+        subscriber_id=selected_customer_id,
+        reseller_id=selected_reseller_id,
+        matched_subscriber_ids=[str(item) for item in customer_ids],
+        suppressed_subscriber_ids=[],
+        matched_reseller_ids=[str(item) for item in reseller_ids],
+        participant_party_id=evidence.exact_party_id,
+        party_contact_point_id=evidence.exact_party_contact_point_id,
+        matched_lead_ids=lead_ids,
+    )
+
+
+def bind_resolved_party_participant(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    resolution: ContactResolution,
+) -> None:
+    """Project one exact Party endpoint onto the admitted participant row."""
+
+    if resolution.party_contact_point_id is None:
+        return
+    from app.models.party import PartyContactPoint
+    from app.services import team_inbox_contact_links
+
+    point = db.get(PartyContactPoint, resolution.party_contact_point_id)
+    # A WhatsApp number may safely identify the Party through an existing phone
+    # point, but the participant projection remains channel-exact. The Inbox
+    # Lead authoring path will create the WhatsApp point when the Lead context
+    # is explicitly established.
+    if point is None or point.channel_type != conversation.channel_type:
+        return
+    identity = team_inbox_contact_links.observed_inbound_identity(db, conversation)
+    team_inbox_participants.bind_endpoint_to_contact_point(
+        db,
+        team_inbox_participants.BindEndpointContactPointCommand(
+            conversation_id=conversation.id,
+            channel_type=identity.channel_type,
+            normalized_endpoint=identity.normalized_endpoint,
+            provider_account_scope=identity.provider_account_scope,
+            party_contact_point_id=point.id,
+            relationship_type=(
+                team_inbox_participants.InboxParticipantRelationship.contact
+            ),
+            source="communications.team_inbox_contact_resolution",
+            reason="Exact canonical endpoint matched one Party",
+        ),
     )
 
 
@@ -698,7 +848,7 @@ def _start_ai_intake_for_persisted_widget_message(
             metadata.setdefault("provider", "fiber_website")
             metadata.setdefault("provider_account_scope", site_id)
     surface = str((conversation.metadata_ or {}).get("surface") or "").strip()
-    if surface in _NATIVE_WIDGET_AI_SURFACES:
+    if surface in NATIVE_WIDGET_SURFACE_VALUES:
         metadata.setdefault("provider", "native_widget")
         metadata.setdefault("provider_account_scope", surface)
     payload = InboundChannelPayload(
@@ -871,6 +1021,23 @@ def receive_inbound_channel(
         channel_type=channel_type,
         contact_address=payload.contact_address,
         subscriber_id=payload.subscriber_id,
+        contact_name=payload.contact_name,
+        provider=str(metadata.get("provider") or "").strip() or None,
+        provider_account_id=(
+            str(
+                metadata.get("provider_account_scope")
+                or metadata.get("provider_account_id")
+                or metadata.get("page_or_account_id")
+                or metadata.get("page_id")
+                or metadata.get("instagram_account_id")
+                or metadata.get("phone_number_id")
+                or ""
+            ).strip()
+            or None
+        ),
+        external_subject_id=(
+            str(metadata.get("external_subject_id") or "").strip() or None
+        ),
     )
     external_thread_id = payload.external_thread_id or _thread_id(
         channel_type, resolution.normalized_contact, payload.contact_address
@@ -904,6 +1071,26 @@ def receive_inbound_channel(
         external_thread_id=external_thread_id,
     )
     created_conversation = conversation is None
+    if (
+        conversation is not None
+        and channel_type == InboxChannelType.whatsapp.value
+        and team_inbox_reply_window.decide_reply_window(
+            db,
+            conversation=conversation,
+            now=received_at,
+        ).status
+        is team_inbox_reply_window.ReplyWindowStatus.expired
+    ):
+        # The inbound may beat the periodic sweep. Settle the previous routing
+        # generation while the old window is still authoritative, then let the
+        # new customer message follow normal intake and routing.
+        team_inbox_assignment.release_expired_whatsapp_conversation(
+            db,
+            team_inbox_assignment.ReleaseExpiredWhatsAppConversationCommand(
+                conversation_id=conversation.id,
+                occurred_at=received_at,
+            ),
+        )
     if conversation is None:
         conversation_metadata: dict[str, object] = {
             "contact_resolution": resolution.as_metadata()
@@ -912,6 +1099,9 @@ def receive_inbound_channel(
             conversation_metadata["contact_name"] = contact_name[:200]
             conversation_metadata["contact_name_source"] = "provider_observation"
         conversation = InboxConversation(
+            customer_completion_policy_version_id=team_inbox_customer_completion_policy.snapshot_active_policy_id(
+                db
+            ),
             subscriber_id=resolution.subscriber_id,
             channel_type=channel_type,
             status=InboxConversationStatus.open.value,
@@ -924,10 +1114,83 @@ def receive_inbound_channel(
         )
         db.add(conversation)
         db.flush()
+        resolved_customer = (
+            db.get(Subscriber, resolution.subscriber_id)
+            if resolution.subscriber_id is not None
+            else None
+        )
+        stage_audit_event(
+            db,
+            action="inbox_contact_identity_decided",
+            entity_type="inbox_conversation",
+            entity_id=str(conversation.id),
+            actor=AuditActor(
+                actor_type=AuditActorType.service,
+                actor_id="communications.team_inbox_contact_resolution",
+            ),
+            metadata={
+                "decision_source": (
+                    "exact_name_and_phone"
+                    if payload.contact_name
+                    and resolution.subscriber_id is not None
+                    and channel_type != InboxChannelType.email.value
+                    else "exact_contact_route"
+                ),
+                "resolution_status": resolution.status,
+                "selected_customer_id": (
+                    str(resolution.subscriber_id)
+                    if resolution.subscriber_id is not None
+                    else None
+                ),
+                "selected_reseller_id": (
+                    str(resolution.reseller_id)
+                    if resolution.reseller_id is not None
+                    else None
+                ),
+                "selected_party_id": (
+                    str(resolved_customer.party_id)
+                    if resolved_customer is not None
+                    and resolved_customer.party_id is not None
+                    else None
+                ),
+            },
+        )
     else:
         conversation.last_message_at = received_at
         if resolution.subscriber_id and not conversation.subscriber_id:
             conversation.subscriber_id = resolution.subscriber_id
+            resolved_customer = db.get(Subscriber, resolution.subscriber_id)
+            stage_audit_event(
+                db,
+                action="inbox_contact_identity_decided",
+                entity_type="inbox_conversation",
+                entity_id=str(conversation.id),
+                actor=AuditActor(
+                    actor_type=AuditActorType.service,
+                    actor_id="communications.team_inbox_contact_resolution",
+                ),
+                metadata={
+                    "decision_source": (
+                        "exact_name_and_phone"
+                        if payload.contact_name
+                        and channel_type != InboxChannelType.email.value
+                        else "exact_contact_route"
+                    ),
+                    "resolution_status": resolution.status,
+                    "selected_customer_id": str(resolution.subscriber_id),
+                    "selected_reseller_id": (
+                        str(resolution.reseller_id)
+                        if resolution.reseller_id is not None
+                        else None
+                    ),
+                    "selected_party_id": (
+                        str(resolved_customer.party_id)
+                        if resolved_customer is not None
+                        and resolved_customer.party_id is not None
+                        else None
+                    ),
+                },
+            )
         conversation_metadata = dict(conversation.metadata_ or {})
         conversation_metadata["contact_resolution"] = resolution.as_metadata()
         if contact_name := str(payload.contact_name or "").strip():
@@ -1100,6 +1363,11 @@ def receive_inbound_channel(
     # ingested message.
     team_inbox_participants.record_message_participants(
         db, conversation=conversation, message=message
+    )
+    bind_resolved_party_participant(
+        db,
+        conversation=conversation,
+        resolution=resolution,
     )
     team_inbox_media.promote_message_attachments(
         db,

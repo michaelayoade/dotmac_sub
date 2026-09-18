@@ -26,6 +26,7 @@ from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 from starlette.responses import Response
 
 from app.csrf import (
@@ -36,7 +37,9 @@ from app.csrf import (
 )
 from app.errors import register_error_handlers
 from app.logging import configure_logging
+from app.metrics import APPLICATION_READINESS, WORKER_STARTUP_DURATION
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscriber import Subscriber
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.request_meta import client_ip
@@ -113,6 +116,15 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.billing_treatments", "router", "api", "user"),
     ("app.api.files", "router", "api", "admin"),
     ("app.api.catalog", "router", "api", "user"),
+    # Offer-version admission (POST/PATCH /offer-versions) lives on its own
+    # router with NO blanket router-level dependency, deliberately: unlike
+    # "router" above, its ONLY gate is _require_offer_version_admission,
+    # which fully delegates to the owning service's authorization function
+    # (the single decision owner — round 12 finding 2). Mounted with the
+    # same "user" (bare authentication) dependency
+    # mode as "router" — this table entry adds no additional permission or
+    # leave-restriction gate of its own, on purpose.
+    ("app.api.catalog", "admission_router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
     # Pre-authentication continuation, same class as `POST /auth/login`, so the
@@ -652,6 +664,9 @@ async def _run_deferred_startup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _DEFERRED_ROUTER_TASK, _DEFERRED_STARTUP_TASK
+    started_at = monotonic()
+    app.state.routes_ready = False
+    APPLICATION_READINESS.set(0)
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
     # Cap the threadpool that runs sync request handlers so a worker never holds
@@ -671,6 +686,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Failed to set threadpool limit", exc_info=True)
     _startup_preflight()
+    await _load_deferred_api_routers(app)
+    from app.services.web_worker_readiness import (
+        WorkerStartupObservation,
+        evaluate_worker_readiness,
+    )
+
+    readiness = evaluate_worker_readiness(
+        WorkerStartupObservation(
+            route_paths=tuple(getattr(route, "path", "") for route in app.routes),
+            preflight_complete=True,
+        )
+    )
+    if not readiness.ready:
+        raise RuntimeError("subscriber sync route was not registered during startup")
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()
@@ -687,10 +716,24 @@ async def lifespan(app: FastAPI):
     # integration health probes) off the serving path so a restart serves
     # health/traffic in seconds, not minutes.
     _DEFERRED_STARTUP_TASK = asyncio.create_task(_run_deferred_startup())
-    _DEFERRED_ROUTER_TASK = asyncio.create_task(_load_deferred_api_routers(app))
+    startup_duration = monotonic() - started_at
+    app.state.routes_ready = True
+    APPLICATION_READINESS.set(1)
+    WORKER_STARTUP_DURATION.observe(startup_duration)
+    logger.info(
+        "startup_complete",
+        extra={
+            "event": "startup_complete",
+            "route_count": len(app.routes),
+            "duration_ms": round(startup_duration * 1000.0, 2),
+            "routes_ready": True,
+        },
+    )
     try:
         yield
     finally:
+        app.state.routes_ready = False
+        APPLICATION_READINESS.set(0)
         for _task_name in ("_DEFERRED_STARTUP_TASK", "_DEFERRED_ROUTER_TASK"):
             _task = globals().get(_task_name)
             if _task is not None:
@@ -1008,9 +1051,14 @@ def _csrf_safe_return_url(request: Request) -> str | None:
 
 
 async def _terminated_request_response(
-    request: Request, method: str, path: str
+    request: Request,
+    method: str,
+    path: str,
+    *,
+    disconnected: bool | None = None,
 ) -> Response:
-    disconnected = await request.is_disconnected()
+    if disconnected is None:
+        disconnected = await request.is_disconnected()
     logger.info(
         "No response returned from downstream app; request terminated (%s): %s %s",
         "client_disconnected" if disconnected else "reload_or_shutdown",
@@ -1018,6 +1066,69 @@ async def _terminated_request_response(
         path,
     )
     return Response(status_code=204)
+
+
+@app.middleware("http")
+async def customer_service_location_gate_middleware(request: Request, call_next):
+    """Require an exact service pin when the subscriber setting is enabled."""
+    path = request.url.path
+    is_customer_portal = path == "/portal" or path.startswith("/portal/")
+    location_route = path == "/portal/location" or path.startswith("/portal/location/")
+    auth_route = path == "/portal/auth" or path.startswith("/portal/auth/")
+    request.state.service_location_required = False
+    request.state.profile_biodata_required = False
+    if (
+        not is_customer_portal
+        or location_route
+        or auth_route
+        or request.method.upper() == "OPTIONS"
+    ):
+        return await call_next(request)
+
+    db = SessionLocal()
+    try:
+        from app.services import location_capture, web_customer_actions
+        from app.services.customer_context import optional_customer_subscriber_id
+        from app.web.customer.auth import get_current_customer_from_request
+
+        customer = get_current_customer_from_request(request, db)
+        if not customer or customer.get("is_impersonation"):
+            return await call_next(request)
+        subscriber_id = optional_customer_subscriber_id(db, customer)
+        if subscriber_id:
+            try:
+                request.state.service_location_required = (
+                    location_capture.requires_service_location_update(
+                        db, str(subscriber_id)
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "customer service location gate failed for subscriber %s",
+                    subscriber_id,
+                )
+            if (
+                not request.state.service_location_required
+                and not location_route
+                and location_capture.service_location_requirement_enabled(db)
+            ):
+                try:
+                    subscriber = db.get(Subscriber, subscriber_id)
+                    if subscriber is not None:
+                        completion = web_customer_actions.evaluate_individual_biodata(
+                            subscriber
+                        )
+                        request.state.profile_biodata_required = (
+                            completion.applicable and not completion.complete
+                        )
+                except Exception:
+                    logger.exception(
+                        "customer biodata completion gate failed for subscriber %s",
+                        subscriber_id,
+                    )
+    finally:
+        db.close()
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1039,16 +1150,18 @@ async def web_auth_refresh_middleware(request: Request, call_next):
                 from app.services import auth_flow as auth_flow_service
                 from app.services.auth_flow import AuthFlow
 
-                refresh_token = AuthFlow.resolve_refresh_token(request, None, db)
+                refresh_token = AuthFlow.resolve_refresh_token(request, None, None)
                 if refresh_token:
                     result = auth_flow_service.auth_flow.refresh(
-                        db, refresh_token, request
+                        db=db,
+                        refresh_token=refresh_token,
+                        request=request,
                     )
                     session_token = auth_flow_service.issue_web_session_token(
-                        db, str(result.get("access_token", ""))
+                        db, result.access_token
                     )
                     _rewrite_cookie_header(request, "session_token", session_token)
-                    refreshed = (session_token, result.get("refresh_token"))
+                    refreshed = (session_token, result.refresh_token)
         except Exception:
             logger.debug("Web auth pre-route refresh failed", exc_info=True)
         finally:
@@ -1230,7 +1343,15 @@ async def csrf_middleware(request: Request, call_next):
                 or "multipart/form-data" in content_type
             ):
                 # Read body and check token
-                body = await request.body()
+                try:
+                    body = await request.body()
+                except ClientDisconnect:
+                    return await _terminated_request_response(
+                        request,
+                        method,
+                        path,
+                        disconnected=True,
+                    )
 
                 # Parse form data to get CSRF token
                 from urllib.parse import parse_qs
@@ -1365,6 +1486,7 @@ _API_SYNC_FEED_PATHS = frozenset(
         "/api/v1/billing-accounts/sync",
         "/api/v1/credit-notes/sync",
         "/api/v1/invoices/sync",
+        "/api/v1/invoices/accounting-sync/v2",
         "/api/v1/payment-channels/sync",
         "/api/v1/payments/sync",
         "/api/v1/resellers/sync",

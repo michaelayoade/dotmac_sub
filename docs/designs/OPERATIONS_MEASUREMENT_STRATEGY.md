@@ -193,6 +193,11 @@ Measure p95/p99 latency for:
 
 Standardize job result freshness across critical tasks.
 
+Network collection uses independently retryable OLT tasks, per-device
+exponential backoff, LLDP REST fallback, and bounded RouterOS poll concurrency.
+The concurrency bound protects healthy devices and unrelated executor work when
+a site-wide reachability event makes many RouterOS calls time out together.
+
 Add for critical tasks:
 
 - last success age
@@ -231,6 +236,11 @@ Add:
 - tickets suppressed due to known outage
 - SLA breach rate by team/person/region
 - outage ticket deflection rate
+
+The Ticket SLA operations dashboard treats this as a live backlog measure:
+regional, team, assignee, and status rates are distinct currently breached
+Tickets divided by canonical not-closed Tickets. Historical breach records and
+clock-start trends remain separate evidence and must be labelled as historical.
 
 ### Infrastructure Dependency SLO
 

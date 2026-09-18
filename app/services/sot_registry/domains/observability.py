@@ -213,6 +213,45 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="observability.structured_operational_logs",
+            module="app.services.operational_logging",
+            owns=("structured operational task-summary observations",),
+            depends_on=("observability.recording",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="structured operational task-summary observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("typed operational task outcome",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed operational task outcome",
+                        owner="observability.structured_operational_logs",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="closed event name, outcome, component, and bounded counters emitted after task completion",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="The observer writes one structured log event and no domain state.",
+                    locking="No application lock or database transaction is acquired.",
+                    idempotency="Each task completion emits one independent observation.",
+                    retries="The observer never retries task work or alters task outcomes.",
+                ),
+                errors=ErrorContract(domain_codes=(), mapping_owner="task adapters"),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="observability.structured_operational_logs",
+                    verification="Focused structured operational logging tests.",
+                ),
+                steward="platform operations",
+                design_refs=("docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",),
+                test_refs=("tests/test_structured_operational_logging.py",),
+            ),
+        ),
+        SOTService(
             name="observability.database_diagnostics",
             module="app.services.db_error_observability",
             owns=(
@@ -221,9 +260,10 @@ DOMAIN = DomainSOT(
             ),
             depends_on=("observability.recording",),
             notes=(
-                "Records request ID, application caller, SQLSTATE, safe missing "
-                "identifier, and a statement fingerprint. SQL text, parameters, "
-                "and result data are never logged."
+                "Records request or Celery task ownership, transaction age, "
+                "application caller, SQLSTATE, safe missing identifier, and a "
+                "statement fingerprint. SQL text, parameters, and result data "
+                "are never logged."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -258,7 +298,10 @@ DOMAIN = DomainSOT(
                         name="request correlation context",
                         owner="observability.recording",
                         kind=AuthorityKind.OBSERVATION,
-                        source="request ID context and application call stack",
+                        source=(
+                            "request ID context, current Celery task identity, "
+                            "and application call stack"
+                        ),
                     ),
                 ),
                 transaction=TransactionContract(
@@ -307,7 +350,7 @@ DOMAIN = DomainSOT(
             notes=(
                 "Measures from the first SQLAlchemy root-transaction statement "
                 "through completion. Metrics have no request or customer labels; "
-                "structured logs retain only the request correlation ID."
+                "structured logs retain only request and Celery task correlation."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -414,6 +457,61 @@ DOMAIN = DomainSOT(
             module="app.services.task_reliability",
             owns=("task reliability classification", "stale-run alerts"),
             depends_on=("observability.recording",),
+        ),
+        SOTService(
+            name="observability.application_failures",
+            module="app.services.application_exception_observability",
+            owns=(
+                "unhandled HTTP exception observations",
+                "payment verification outcome observations",
+            ),
+            depends_on=("observability.metrics",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="unhandled HTTP exception observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("unhandled HTTP exception",),
+                    ),
+                    ConcernContract(
+                        name="payment verification outcome observations",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("payment verification outcome",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="unhandled HTTP exception",
+                        owner="observability.application_failures",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="safe exception class and bounded request route after failure",
+                    ),
+                    AuthorityInput(
+                        name="payment verification outcome",
+                        owner="observability.application_failures",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="safe adapter outcome category; no provider reference or customer identifier",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="The observer emits process-local Prometheus counters and structured logs only.",
+                    locking="No lock or database transaction is acquired.",
+                    idempotency="Each observed request outcome increments once at its adapter boundary.",
+                    retries="The observer does not retry provider or payment work.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(), mapping_owner="HTTP and payment adapters"
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="observability.application_failures",
+                    verification="Focused exception and payment-outcome metric tests.",
+                ),
+                steward="platform operations",
+                design_refs=("docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",),
+                test_refs=("tests/test_application_exception_observability.py",),
+            ),
         ),
         SOTService(
             name="observability.metrics",

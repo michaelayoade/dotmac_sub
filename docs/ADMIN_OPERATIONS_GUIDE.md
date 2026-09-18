@@ -533,7 +533,12 @@ Check that credentials are synced:
 
 ### Step 5: Customer Self-Service
 
-Customer logs in at `/portal` with PPPoE username + password:
+Customer logs in at `/portal` with their customer number or PPPoE username.
+They may also use their contact email with the portal password when that email
+belongs to only one customer account. If an email is shared, direct the customer
+to use their customer number. Suspended customers may still log in; disabled or
+canceled customers may not.
+
 - Views subscription, speed, billing
 - Pays online via Paystack
 - Changes plan (with proration)
@@ -1149,6 +1154,21 @@ Use in integration installation secret bindings: `bao://secret/<path>#<field>`
 
 Example: Paystack installation binding `gateway_credentials` =
 `bao://secret/paystack#secret_key`.
+
+### Settings Encryption Keyring
+
+Secret-valued admin settings, including SMTP sender passwords, require the
+settings-encryption keyring held at
+`secret/settings/crypto#settings_encryption_keyring`. Run
+`scripts/setup/openbao_init.sh` during environment bootstrap. When the field is
+absent, the initializer creates one strong Fernet keyring directly in OpenBao;
+it does not print the material or copy it into an environment file. If the field
+already exists, initialization preserves it and refuses a conflicting override.
+
+Recreate the API and every Celery process after first provisioning or rotation,
+because each process holds the keyring from boot. The production deployment
+preflight refuses to continue when the keyring is missing, preventing a later
+500 response when an administrator saves a secret setting.
 
 ### Rotating Secrets
 

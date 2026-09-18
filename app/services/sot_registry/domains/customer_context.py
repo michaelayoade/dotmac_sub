@@ -46,6 +46,120 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.canonical_profile_patch",
+            module="app.services.customer_canonical_profile_patch",
+            owns=("typed transaction-neutral canonical Customer profile patches",),
+            depends_on=(
+                "customer.accounts",
+                "events.dispatcher",
+            ),
+            notes=(
+                "Registered coordinators use this participant to update an existing "
+                "Subscriber and its service address. It cannot create a Customer, "
+                "and it flushes without committing or rolling back."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "typed transaction-neutral canonical Customer profile patches"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "typed canonical Customer profile patch",
+                            "locked canonical Customer account",
+                        ),
+                        canonical_writer="customer.canonical_profile_patch",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed canonical Customer profile patch",
+                        owner="customer.canonical_profile_patch",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "explicit submitted field set, typed values, source, "
+                            "and actor identifier from a registered coordinator"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="locked canonical Customer account",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "existing Subscriber and primary service Address selected "
+                            "FOR UPDATE"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Runs inside the calling owner's transaction, updates only "
+                        "explicit fields, stages subscriber.updated, flushes, and "
+                        "never commits or rolls back."
+                    ),
+                    locking=(
+                        "The existing Subscriber and service Address are selected "
+                        "FOR UPDATE before mutation. Canonical uniqueness constraints "
+                        "arbitrate concurrent writes."
+                    ),
+                    idempotency=(
+                        "Reapplying the same explicit values produces the same "
+                        "canonical profile; the coordinator owns command replay."
+                    ),
+                    retries=(
+                        "Retry only through the calling owner with the same command "
+                        "context after a rolled-back transient failure."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "customer.accounts.customer_not_found",
+                        "customer.accounts.invalid_email",
+                        "customer.accounts.invalid_name",
+                        "customer.accounts.verified_nin_locked",
+                    ),
+                    mapping_owner="the registered calling coordinator",
+                    fail_closed_on=(
+                        "missing Customer",
+                        "invalid Customer profile data",
+                        "attempted replacement of a verified NIN",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("subscriber.updated",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "The event contains only Subscriber ID, explicit changed-field "
+                        "names, and decision source; profile values remain canonical."
+                    ),
+                    replay=(
+                        "The calling owner prevents duplicate command replay; an "
+                        "entire rolled-back transaction leaves no outbox event."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.canonical_profile_patch",
+                    verification=(
+                        "Inbox completion tests assert canonical Subscriber and "
+                        "service Address persistence through this participant."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/INBOX_CUSTOMER_COMPLETION_GATE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_inbox_customer_completion.py",
+                    "tests/architecture/test_inbox_customer_completion_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.account_visibility",
             module="app.services.customer_account_visibility",
             owns=("legacy imported Subscriber deletion classification",),
@@ -839,6 +953,10 @@ DOMAIN = DomainSOT(
                 "Paid prepaid subscription invoices are non-AR documents but "
                 "become exact customer-position service debits only when fully "
                 "paid and backed by exact active settlement applications. "
+                "When final paid status crosses a reviewed opening boundary, "
+                "settlement applications recorded through that boundary are "
+                "already absorbed by the opening and are excluded from the "
+                "post-opening consumption debit. "
                 "An exact direct-renewal adjustment and entitlement for the same "
                 "account, subscription, period, amount, and currency takes "
                 "precedence so a later documentary invoice cannot debit twice. "
@@ -939,7 +1057,9 @@ DOMAIN = DomainSOT(
                             "active fully paid positive Invoice with an active exact "
                             "prepaid Subscription line whose total is fully backed by "
                             "active PaymentAllocation and/or CreditNoteApplication "
-                            "evidence, plus paid time, period, total, and currency"
+                            "evidence, application record times relative to any "
+                            "reviewed opening, plus paid time, period, total, and "
+                            "currency"
                         ),
                     ),
                     AuthorityInput(
@@ -1013,7 +1133,8 @@ DOMAIN = DomainSOT(
                         drift_signal=(
                             "scalar and bounded-cohort results differ, or a paid prepaid "
                             "invoice total remains in spendable funding without an exact "
-                            "direct-renewal precedence match"
+                            "direct-renewal precedence match, or a pre-opening settlement "
+                            "application is debited again after the opening"
                         ),
                         rebuild_operation=(
                             "list_customer_financial_events and "
@@ -1245,6 +1366,152 @@ DOMAIN = DomainSOT(
                     "tests/test_account_status_commands.py",
                     "tests/test_web_customer_details.py",
                     "tests/architecture/test_generic_lifecycle_edit_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="customer.reseller_ticket_projection",
+            module="app.services.reseller_ticket_projection",
+            owns=("reseller-scoped native support ticket count and list projection",),
+            depends_on=(
+                "customer.identity_scope",
+                "support.ticket_lifecycle",
+                "ui.status_presentation",
+            ),
+            notes=(
+                "Dashboard and account-ticket reads enforce reseller ownership "
+                "and project native Support records without a retired CRM fallback."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "reseller-scoped native support ticket count and list "
+                            "projection"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical reseller account scope",
+                            "canonical native support ticket facts",
+                            "support-ticket semantic presentation",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical reseller account scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "canonical Reseller ownership of active Subscriber "
+                            "accounts, checked for every requested account"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical native support ticket facts",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "committed native Ticket identity, subscriber scope, "
+                            "lifecycle status, priority, title, and timestamps"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="support-ticket semantic presentation",
+                        owner="ui.status_presentation",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "typed support-ticket status label, semantic tone, "
+                            "and icon projection"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Reseller web and API adapters own the session; this query "
+                        "reads committed ownership and Ticket evidence without writes "
+                        "or transaction completion."
+                    ),
+                    locking=(
+                        "No read locks. Each requested account is admitted only after "
+                        "canonical reseller ownership is resolved."
+                    ),
+                    idempotency=(
+                        "The same reseller scope and committed Ticket evidence produce "
+                        "the same count and ordered summaries."
+                    ),
+                    retries=(
+                        "Transient database reads may be retried; missing or foreign "
+                        "account scope deterministically produces no ticket rows."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="reseller web and API adapters",
+                    fail_closed_on=(
+                        "missing or foreign reseller account ownership",
+                        "unknown support-ticket status presentation",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name=(
+                            "reseller-scoped native support ticket count and list "
+                            "projection"
+                        ),
+                        input_names=(
+                            "canonical reseller account scope",
+                            "canonical native support ticket facts",
+                            "support-ticket semantic presentation",
+                        ),
+                        writer="customer.reseller_ticket_projection",
+                        freshness="rebuilt from committed source evidence on every query",
+                        stale_behavior=(
+                            "foreign scope returns no rows; database failures remain "
+                            "visible and never fall back to retired CRM data"
+                        ),
+                        drift_signal=(
+                            "reseller output contains a Ticket outside canonical "
+                            "account ownership or any reseller path queries "
+                            "crm.ticket_observation.v1"
+                        ),
+                        rebuild_operation=(
+                            "native_open_ticket_count and "
+                            "native_account_ticket_summaries recompute the view"
+                        ),
+                        repair_owner="customer.reseller_ticket_projection",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "retired crm.ticket_observation.v1 reseller dashboard and "
+                        "account-ticket projection"
+                    ),
+                    new_owner="customer.reseller_ticket_projection",
+                    verification=(
+                        "native projection behavior and architecture tests prevent "
+                        "reseller CRM ticket reads from returning"
+                    ),
+                    cutover_gate=(
+                        "All reseller dashboard counts and account ticket lists read "
+                        "canonical native Support records."
+                    ),
+                    fallback_retirement=(
+                        "Reseller web and API adapters contain no CRM ticket imports, "
+                        "capability calls, availability flags, or fallback paths."
+                    ),
+                ),
+                steward="customer support operations",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_reseller_portal_services.py",
+                    "tests/test_api_reseller_self_scoped.py",
+                    "tests/architecture/test_crm_web_retirement.py",
                 ),
             ),
         ),
@@ -2315,6 +2582,181 @@ DOMAIN = DomainSOT(
                 "owner. It enforces the default-off controls before "
                 "delegating adjudication and ledger writes to location "
                 "verification; it never writes Subscriber columns."
+            ),
+        ),
+        SOTService(
+            name="customer.portal_location_commands",
+            module="app.services.customer_portal_location_commands",
+            owns=(
+                "customer portal service-address and pin update coordination",
+                "customer portal location confirmation coordination",
+                "customer portal location-prompt snooze coordination",
+            ),
+            depends_on=(
+                "customer.accounts",
+                "customer.location_capture",
+                "gis.spatial_sync",
+                "events.dispatcher",
+                "observability.audit_log",
+            ),
+            notes=(
+                "Customer portal mutation adapters release their read transaction "
+                "and invoke this typed coordinator. It owns the atomic command "
+                "boundary while canonical address, spatial, capture-ledger, and "
+                "prompt-state facts remain with their declared domain owners."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "customer portal service-address and pin update coordination"
+                        ),
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authenticated customer location command evidence",
+                            "canonical Subscriber account and service address",
+                            "canonical service-address spatial projection",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer portal location confirmation coordination",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authenticated customer location command evidence",
+                            "canonical Subscriber account and service address",
+                            "location capture and verification protocol",
+                        ),
+                    ),
+                    ConcernContract(
+                        name=("customer portal location-prompt snooze coordination"),
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authenticated customer location command evidence",
+                            "canonical Subscriber account and service address",
+                            "location capture and verification protocol",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated customer location command evidence",
+                        owner="customer.portal_location_commands",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "typed command context and customer-scoped location "
+                            "input admitted by the portal adapter"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical Subscriber account and service address",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "the authenticated Subscriber and its canonical service "
+                            "Address"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical service-address spatial projection",
+                        owner="gis.spatial_sync",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Address latitude, longitude, geometry, and GeoLocation "
+                            "projection maintained by the spatial owner"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="location capture and verification protocol",
+                        owner="customer.location_capture",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "default-off capture controls, adjudicated capture ledger, "
+                            "and customer prompt-snooze state"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "Each public command enters execute_owner_command exactly once "
+                        "on a transaction-free portal session and commits address, "
+                        "spatial, capture, audit, and event evidence atomically."
+                    ),
+                    locking=(
+                        "The coordinator locks the target Subscriber before calling "
+                        "transaction-neutral address, capture, or snooze participants."
+                    ),
+                    idempotency=(
+                        "Address updates converge on one service Address; portal "
+                        "confirmation and snooze submissions use one command identity "
+                        "per deliberate customer action and are not transport-retried."
+                    ),
+                    retries=(
+                        "The portal does not automatically retry commands; a customer "
+                        "may explicitly resubmit after a mapped failure."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "customer.portal_location_commands"
+                        ),
+                        "customer.portal_location_commands.invalid_scope",
+                        "customer.portal_location_commands.subscriber_not_found",
+                        "customer.portal_location_commands.capture_disabled",
+                    ),
+                    mapping_owner="customer portal location HTTP adapter",
+                    fail_closed_on=(
+                        "wrong command scope",
+                        "missing Subscriber",
+                        "disabled location-capture control",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "subscriber.service_location_updated.v1",
+                        "subscriber.location_confirmed.v1",
+                        "subscriber.location_prompt_snoozed.v1",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 carries canonical identifiers, bounded location "
+                        "outcomes, and command provenance without customer address text."
+                    ),
+                    replay=(
+                        "Service-address updates converge by target identity; capture "
+                        "and snooze events replay consequences from their durable event "
+                        "identity without repeating the command."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="customer portal route-level transaction completion",
+                    new_owner="customer.portal_location_commands",
+                    verification=(
+                        "Portal location behavior tests and the adapter transaction "
+                        "ownership architecture guard"
+                    ),
+                    cutover_gate=(
+                        "Every customer portal location mutation delegates to a typed "
+                        "coordinator on a transaction-free session"
+                    ),
+                    fallback_retirement=(
+                        "Direct commit and rollback operations were removed from the "
+                        "customer location adapter"
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/CODING_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_location_page.py",
+                    "tests/architecture/test_adapter_transaction_ownership.py",
+                ),
             ),
         ),
         SOTService(

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from app.db import finish_read_transaction
 from app.models.party import Party, PartyContactPoint, PartyType
 from app.models.sales import Lead, Pipeline
-from app.models.subscriber import Reseller
+from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxContactLink,
     InboxConversation,
@@ -18,8 +18,14 @@ from app.services import (
     conversation_lead_relationships,
     inbox_lead_actions,
     team_inbox_contact_context,
+    team_inbox_contact_links,
+    team_inbox_customer_completion,
 )
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 PERMISSIONS = inbox_lead_actions.InboxActionPermissions(
     can_read_profile=True,
@@ -110,6 +116,161 @@ def _bind_existing_party(
     return point
 
 
+def _link_direct_lead(
+    db_session,
+    *,
+    conversation: InboxConversation,
+    party: Party,
+) -> Lead:
+    lead = Lead(
+        party_id=party.id,
+        party_bound_at=datetime.now(UTC),
+        party_binding_source="pytest",
+        party_binding_reason="Fiber prospect fixture",
+        title="Fiber website prospect",
+        status="new",
+        is_active=True,
+    )
+    db_session.add(lead)
+    db_session.commit()
+    context = CommandContext.system(
+        actor="pytest",
+        scope="team-inbox:fiber-widget-session",
+        reason="verify structural Lead projection",
+    )
+    execute_owner_command(
+        db_session,
+        definition=OwnerCommandDefinition(
+            owner="communications.team_inbox_widget",
+            concern="visitor chat session, message, and read-state commands",
+            name="test_link_fiber_conversation_lead",
+        ),
+        context=context,
+        operation=lambda: (
+            conversation_lead_relationships.link_conversation_lead_participant(
+                db_session,
+                conversation_lead_relationships.ConversationLeadLinkCommand(
+                    context=context,
+                    conversation_id=conversation.id,
+                    lead_id=lead.id,
+                    party_id=party.id,
+                    actor_person_id=None,
+                    source=conversation_lead_relationships.ConversationLeadLinkSource.fiber_website_chat,
+                    reason="Prospect created from fiber website live chat",
+                ),
+            )
+        ),
+    )
+    return lead
+
+
+def test_structural_fiber_lead_is_visible_without_contact_point(db_session):
+    conversation = _conversation(
+        db_session,
+        address=f"fiber-{uuid4()}@example.com",
+        channel_type="chat_widget",
+    )
+    party = Party(party_type=PartyType.person.value, display_name="Fiber Prospect")
+    db_session.add(party)
+    db_session.commit()
+    lead = _link_direct_lead(
+        db_session,
+        conversation=conversation,
+        party=party,
+    )
+
+    projection = team_inbox_contact_context.build_contact_context(
+        db_session,
+        conversation_id=conversation.id,
+        permissions=team_inbox_contact_context.InboxContactContextPermissions(
+            can_read_profile=True,
+            can_edit_profile=False,
+            can_read_leads=True,
+            can_write_leads=False,
+            can_read_tickets=True,
+            can_read_projects=True,
+            can_read_project_tasks=True,
+        ),
+    )
+
+    assert projection is not None
+    assert (
+        projection.identity_state
+        is team_inbox_contact_context.InboxIdentityState.linked_party
+    )
+    assert projection.party_id == party.id
+    assert (
+        projection.leads.availability
+        is team_inbox_contact_context.ContextAvailability.available
+    )
+    assert projection.leads.items[0].id == lead.id
+    assert projection.leads.items[0].is_conversation_lead is True
+    assert projection.lead_action.lead_id == lead.id
+    assert (
+        projection.resolution_readiness.classification
+        is team_inbox_customer_completion.InboxIdentityClassification.lead
+    )
+
+
+def test_conflicting_customer_and_structural_lead_require_identity_review(db_session):
+    customer_party = Party(
+        party_type=PartyType.person.value,
+        display_name="Existing Customer",
+    )
+    lead_party = Party(party_type=PartyType.person.value, display_name="Other Prospect")
+    db_session.add_all([customer_party, lead_party])
+    db_session.flush()
+    subscriber = Subscriber(
+        party_id=customer_party.id,
+        party_bound_at=datetime.now(UTC),
+        party_binding_source="pytest",
+        party_binding_reason="Conflicting customer identity fixture",
+        first_name="Existing",
+        last_name="Customer",
+        email=f"customer-{uuid4()}@example.com",
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    conversation = _conversation(
+        db_session,
+        address=f"conflict-{uuid4()}@example.com",
+        subscriber_id=subscriber.id,
+    )
+    lead = _link_direct_lead(
+        db_session,
+        conversation=conversation,
+        party=lead_party,
+    )
+
+    projection = team_inbox_contact_context.build_contact_context(
+        db_session,
+        conversation_id=conversation.id,
+        permissions=team_inbox_contact_context.InboxContactContextPermissions(
+            can_read_profile=True,
+            can_edit_profile=True,
+            can_read_leads=True,
+            can_write_leads=True,
+            can_read_tickets=True,
+            can_read_projects=True,
+            can_read_project_tasks=True,
+        ),
+    )
+
+    assert projection is not None
+    assert (
+        projection.identity_state
+        is team_inbox_contact_context.InboxIdentityState.identity_review_required
+    )
+    assert projection.leads.items[0].id == lead.id
+    assert (
+        projection.resolution_readiness.classification
+        is team_inbox_customer_completion.InboxIdentityClassification.ambiguous
+    )
+    assert projection.resolution_readiness.can_agent_resolve is False
+
+
 def test_drawer_source_contains_no_customer_placeholder_values():
     drawer = Path("templates/admin/inbox/_contact_drawer.html").read_text()
     context = Path("templates/admin/inbox/_authoritative_context.html").read_text()
@@ -134,6 +295,15 @@ def test_drawer_source_contains_no_customer_placeholder_values():
 
 def test_unmatched_conversation_resolves_new_prospect_without_creating(db_session):
     conversation = _conversation(db_session, address=f"new-{uuid4()}@example.com")
+    unrelated = Subscriber(
+        first_name="Recent",
+        last_name="Unrelated",
+        email=f"unrelated-{uuid4()}@example.com",
+        phone="+2348099999999",
+        is_active=True,
+    )
+    db_session.add(unrelated)
+    db_session.commit()
 
     action = inbox_lead_actions.resolve_action(
         db_session,
@@ -146,12 +316,96 @@ def test_unmatched_conversation_resolves_new_prospect_without_creating(db_sessio
         action.action_type
         is inbox_lead_actions.InboxResolvedActionType.create_party_and_lead
     )
+    assert action.label == "Create Lead"
+    assert action.identity_label == conversation.contact_address
     assert action.destination == (
         f"/admin/sales/leads/new?inbox_conversation_id={conversation.id}"
     )
     assert (
         conversation_lead_relationships.active_link(db_session, conversation.id) is None
     )
+
+
+def test_duplicate_exact_email_owners_require_identity_review(db_session):
+    endpoint = f"collision-{uuid4()}@example.com"
+    conversation = _conversation(db_session, address=endpoint)
+    for name in ("Candidate One", "Candidate Two"):
+        party = Party(party_type=PartyType.person.value, display_name=name)
+        db_session.add(party)
+        db_session.flush()
+        db_session.add(
+            PartyContactPoint(
+                party_id=party.id,
+                channel_type="email",
+                normalized_value=endpoint,
+                display_value=endpoint,
+                is_active=True,
+            )
+        )
+    db_session.commit()
+
+    evidence = team_inbox_contact_links.conversation_identity_evidence(
+        db_session, conversation
+    )
+    action = inbox_lead_actions.resolve_action(
+        db_session,
+        conversation_id=conversation.id,
+        intent=inbox_lead_actions.InboxActionIntent.lead,
+        permissions=PERMISSIONS,
+    )
+
+    assert (
+        evidence.disposition
+        is team_inbox_contact_links.IdentityEvidenceDisposition.ambiguous_match
+    )
+    assert len(evidence.authoritative_party_ids) == 2
+    assert (
+        action.action_type
+        is inbox_lead_actions.InboxResolvedActionType.identity_review_required
+    )
+
+
+def test_social_subject_identity_is_scoped_to_provider_account(db_session):
+    subject = f"ig-subject-{uuid4()}"
+    expected_party = None
+    for account_id, name in (("account-a", "Account A"), ("account-b", "Account B")):
+        party = Party(party_type=PartyType.person.value, display_name=name)
+        db_session.add(party)
+        db_session.flush()
+        db_session.add(
+            PartyContactPoint(
+                party_id=party.id,
+                channel_type="instagram_dm",
+                normalized_value=subject,
+                display_value=subject,
+                scope_key=f"meta_social:{account_id}",
+                provider="meta_social",
+                provider_account_id=account_id,
+                external_subject_id=subject,
+                is_active=True,
+            )
+        )
+        if account_id == "account-b":
+            expected_party = party
+    db_session.commit()
+
+    evidence = team_inbox_contact_links.endpoint_identity_evidence(
+        db_session,
+        team_inbox_contact_links.ObservedInboundIdentity(
+            channel_type="instagram_dm",
+            normalized_endpoint=subject,
+            provider="meta_social",
+            provider_account_id="account-b",
+            external_subject_id=subject,
+        ),
+    )
+
+    assert (
+        evidence.disposition
+        is team_inbox_contact_links.IdentityEvidenceDisposition.exact_match
+    )
+    assert expected_party is not None
+    assert evidence.exact_party_id == expected_party.id
 
 
 def test_exact_party_lead_is_reused_and_durably_linked(db_session):

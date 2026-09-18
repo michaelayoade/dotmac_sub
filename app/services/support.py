@@ -84,9 +84,21 @@ from app.services.owner_commands import (
     execute_owner_savepoint,
     owner_command_active,
 )
+from app.services.realtime_platform import (
+    EventType as RealtimeEventType,
+)
+from app.services.realtime_platform import (
+    principal_topic,
+    publish_topic_event,
+)
 from app.services.sales import lifecycle as lead_lifecycle
+from app.services.session_hooks import run_after_commit
 from app.services.staff_notifications import queue_staff_email
-from app.services.support_ticket_contracts import InternalOperationalTicketSource
+from app.services.support_ticket_contracts import (
+    InternalOperationalTicketSource,
+    SupportTicketCommentRealtimeChange,
+    SupportTicketCommentRealtimeHint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +180,34 @@ class TicketCommentAttachmentRepairOutcome:
     missing_storage_key: int
     missing_file_record: int
     ambiguous_file_record: int
+
+
+def _schedule_customer_comment_realtime_hint(
+    db: Session,
+    *,
+    ticket: Ticket,
+    change: SupportTicketCommentRealtimeChange,
+    comment_id: UUID | None,
+) -> None:
+    """Publish a private, identifier-only comment invalidation after commit."""
+    subscriber_id = ticket.subscriber_id
+    if subscriber_id is None:
+        return
+    hint = SupportTicketCommentRealtimeHint(
+        ticket_id=ticket.id,
+        change=change,
+        comment_id=comment_id,
+    )
+    topic = principal_topic(subscriber_id)
+
+    def publish(_callback_session: Session) -> None:
+        publish_topic_event(
+            topic,
+            event_type=RealtimeEventType.SUPPORT_TICKET_COMMENT_CHANGED,
+            payload=hint.model_dump(mode="json"),
+        )
+
+    run_after_commit(db, publish)
 
 
 def _ticket_error(code: str, message: str, **details: object) -> SupportTicketError:
@@ -1180,6 +1220,7 @@ class TicketComments:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
 
+        was_internal = comment.is_internal
         data = payload.model_dump(exclude_unset=True)
         if "body" in data:
             comment.body = str(data["body"]).strip()
@@ -1238,6 +1279,18 @@ class TicketComments:
         )
         db.flush()
         db.refresh(comment)
+        if data and (not was_internal or not comment.is_internal):
+            change = (
+                SupportTicketCommentRealtimeChange.comment_visibility_changed
+                if was_internal != comment.is_internal
+                else SupportTicketCommentRealtimeChange.comment_updated
+            )
+            _schedule_customer_comment_realtime_hint(
+                db,
+                ticket=ticket,
+                change=change,
+                comment_id=comment.id,
+            )
         return comment
 
     @staticmethod
@@ -1245,10 +1298,26 @@ class TicketComments:
     def delete(
         db: Session, *, comment: TicketComment, actor_id: str | None, request=None
     ) -> None:
-        ticket = db.get(Ticket, comment.ticket_id)
+        locked_comment = (
+            db.query(TicketComment)
+            .filter(TicketComment.id == comment.id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if locked_comment is None:
+            raise _ticket_error("comment_not_found", "Ticket comment not found")
+        comment = locked_comment
+        ticket = (
+            db.query(Ticket)
+            .filter(Ticket.id == comment.ticket_id)
+            .with_for_update()
+            .one_or_none()
+        )
         if not ticket:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
+        was_public = not comment.is_internal
+        comment_id = comment.id
         db.delete(comment)
         log_audit_event(
             db=db,
@@ -1260,6 +1329,13 @@ class TicketComments:
             metadata={"comment_id": str(comment.id)},
         )
         db.flush()
+        if was_public:
+            _schedule_customer_comment_realtime_hint(
+                db,
+                ticket=ticket,
+                change=SupportTicketCommentRealtimeChange.comment_deleted,
+                comment_id=comment_id,
+            )
 
 
 class TicketSlaEvents:
@@ -1357,6 +1433,7 @@ class Tickets:
         status: str | None = None,
         ticket_type: str | None = None,
         region: str | None = None,
+        service_team_id: str | None = None,
         assigned_to_person_id: str | None = None,
         assigned_to_audience: TicketAudienceScope | None = None,
         project_manager_person_id: str | None = None,
@@ -1378,6 +1455,7 @@ class Tickets:
             status=status,
             ticket_type=ticket_type,
             region=region,
+            service_team_id=service_team_id,
             assigned_to_person_id=assigned_to_person_id,
             project_manager_person_id=project_manager_person_id,
             site_coordinator_person_id=site_coordinator_person_id,
@@ -3330,6 +3408,7 @@ class Tickets:
         status: str | None = None,
         ticket_type: str | None = None,
         region: str | None = None,
+        service_team_id: str | None = None,
         assigned_to_person_id: str | None = None,
         assigned_to_audience: TicketAudienceScope | None = None,
         project_manager_person_id: str | None = None,
@@ -3381,6 +3460,8 @@ class Tickets:
             query = query.filter(
                 func.lower(func.trim(Ticket.region)) == normalized_region
             )
+        if service_team_id:
+            query = query.filter(Ticket.service_team_id == service_team_id)
         if priority:
             query = query.filter(Ticket.priority == str(priority).strip())
         if channel:
@@ -3451,6 +3532,7 @@ class Tickets:
         status: str | None = None,
         ticket_type: str | None = None,
         region: str | None = None,
+        service_team_id: str | None = None,
         assigned_to_person_id: str | None = None,
         assigned_to_audience: TicketAudienceScope | None = None,
         project_manager_person_id: str | None = None,
@@ -3472,6 +3554,7 @@ class Tickets:
                 status=status,
                 ticket_type=ticket_type,
                 region=region,
+                service_team_id=service_team_id,
                 assigned_to_person_id=assigned_to_person_id,
                 assigned_to_audience=assigned_to_audience,
                 project_manager_person_id=project_manager_person_id,
@@ -3495,6 +3578,7 @@ class Tickets:
         status: str | None = None,
         ticket_type: str | None = None,
         region: str | None = None,
+        service_team_id: str | None = None,
         assigned_to_person_id: str | None = None,
         assigned_to_audience: TicketAudienceScope | None = None,
         project_manager_person_id: str | None = None,
@@ -3517,6 +3601,7 @@ class Tickets:
             status=status,
             ticket_type=ticket_type,
             region=region,
+            service_team_id=service_team_id,
             assigned_to_person_id=assigned_to_person_id,
             assigned_to_audience=assigned_to_audience,
             project_manager_person_id=project_manager_person_id,
@@ -3873,6 +3958,13 @@ class Tickets:
         Tickets._notify_staff_of_customer_comment(db, ticket, comment)
         db.flush()
         db.refresh(comment)
+        if not comment.is_internal:
+            _schedule_customer_comment_realtime_hint(
+                db,
+                ticket=ticket,
+                change=SupportTicketCommentRealtimeChange.comment_created,
+                comment_id=comment.id,
+            )
         return comment
 
     @staticmethod
@@ -3896,6 +3988,13 @@ class Tickets:
         db.flush()
         for comment in comments:
             db.refresh(comment)
+        if any(not comment.is_internal for comment in comments):
+            _schedule_customer_comment_realtime_hint(
+                db,
+                ticket=ticket,
+                change=SupportTicketCommentRealtimeChange.comment_created,
+                comment_id=None,
+            )
         return comments
 
     @staticmethod

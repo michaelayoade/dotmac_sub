@@ -52,10 +52,8 @@ app.services.field.equipment
 app.services.field.equipment_custody
 app.services.field.fiber
 app.services.field.jobs
-app.services.field.location_tracking
 app.services.field.map_assets
 app.services.field.movements
-app.services.field.notes
 app.services.field.vendor_devices
 app.services.field.worklogs
 app.services.file_storage
@@ -136,7 +134,6 @@ app.services.nin_verifications
 app.services.numbering
 app.services.olt_observed_state_adapter
 app.services.operational_escalation_delivery
-app.services.pppoe_credentials
 app.services.provisioning_helpers
 app.services.provisioning_step_executors
 app.services.push

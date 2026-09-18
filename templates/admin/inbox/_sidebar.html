@@ -108,6 +108,12 @@
                    @input.debounce.300ms="searchConversations($el.value)"
                    class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 transition-all focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-amber-500">
         </label>
+        <nav class="mt-2 grid grid-cols-4 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/60" aria-label="Conversation ownership views">
+            <a href="/admin/inbox?view=all" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold {% if view == 'all' %}bg-white text-amber-700 shadow-sm dark:bg-slate-700 dark:text-amber-300{% else %}text-slate-500 dark:text-slate-400{% endif %}">All <span class="tabular-nums">{{ assignment_counts.all }}</span></a>
+            <a href="/admin/inbox?view=ai_intake" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold {% if view == 'ai_intake' %}bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300{% else %}text-slate-500 dark:text-slate-400{% endif %}">AI Intake <span class="tabular-nums">{{ assignment_counts.ai_handling }}</span></a>
+            <a href="/admin/inbox?view=queue" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold {% if view == 'queue' %}bg-white text-violet-700 shadow-sm dark:bg-slate-700 dark:text-violet-300{% else %}text-slate-500 dark:text-slate-400{% endif %}">Queue <span class="tabular-nums">{{ assignment_counts.queued }}</span></a>
+            <a href="/admin/inbox?view=history" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold {% if view == 'history' %}bg-white text-slate-700 shadow-sm dark:bg-slate-700 dark:text-slate-200{% else %}text-slate-500 dark:text-slate-400{% endif %}">History</a>
+        </nav>
     </div>
 
     <div data-inbox-refresh-status
@@ -124,6 +130,8 @@
               :class="inboxRefreshState === 'error' ? 'bg-rose-500' : inboxRefreshState === 'updated' ? 'bg-emerald-500' : 'bg-slate-400'"
               aria-hidden="true"></span>
         <span x-text="inboxRefreshLabel()">Waiting for new activity</span>
+        <button type="button" x-show="inboxRefreshState === 'error'" x-cloak
+                class="ml-auto underline" @click="retryListRequest()">Retry</button>
     </div>
 
     <div class="border-b border-slate-200 p-3 dark:border-slate-800">
@@ -233,7 +241,6 @@
             </details>
             <p x-show="listRequestError" x-cloak class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200" role="alert">
                 <span x-text="listRequestError"></span>
-                <button type="button" class="ml-1 underline" @click="refreshSidebar()">Retry</button>
             </p>
 
             <details name="inbox-filter-section" class="group rounded-lg border border-slate-200/70 bg-slate-50/70 dark:border-slate-700/70 dark:bg-slate-800/40">
@@ -257,11 +264,6 @@
                             class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                             :class="assignmentFilterActive('team') ? 'bg-white text-cyan-700 shadow-sm dark:bg-slate-700 dark:text-cyan-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'">
                         <span>My Team</span><span class="tabular-nums">{{ assignment_counts.my_team }}</span>
-                    </button>
-                    <button type="button" @click="applyAssignmentFilter('ai')"
-                            class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                            :class="assignmentFilterActive('ai') ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'">
-                        <span>AI handling</span><span class="tabular-nums">{{ assignment_counts.ai_handling }}</span>
                     </button>
                     <button type="button" @click="byAgentOpen = !byAgentOpen"
                             class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
@@ -456,7 +458,7 @@
             </div>
         </div>
 
-        <form id="inbox-bulk-form" method="post" action="/admin/inbox/bulk" class="contents">
+        <form id="inbox-bulk-form" method="post" action="/admin/inbox/bulk" class="contents" x-data="{ bulkStatus: 'open' }">
             {% include "components/forms/csrf_input.html" %}
             <div x-show="selectedIds.length" x-cloak class="shrink-0 border-b border-slate-200/60 bg-white/80 px-3 py-2 backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-900/70">
                 <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
@@ -471,9 +473,23 @@
                     </select>
                     <select x-show="bulkAction === 'status'"
                             :disabled="bulkAction !== 'status'"
+                            x-model="bulkStatus"
                             name="status_value"
                             class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
                         {% for option in status_options %}<option value="{{ option }}">{{ option | title }}</option>{% endfor %}
+                    </select>
+                    <select x-show="bulkAction === 'status' && bulkStatus === 'resolved'"
+                            :disabled="bulkAction !== 'status' || bulkStatus !== 'resolved'"
+                            name="resolution_reason"
+                            aria-label="Resolution reason"
+                            class="h-9 max-w-56 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                        <option value="no_further_action_required">No further action required</option>
+                        <option value="customer_stopped_responding">Customer stopped responding</option>
+                        <option value="whatsapp_window_expired">WhatsApp window expired</option>
+                        <option value="issue_completed_before_expiry">Issue completed before expiry</option>
+                        <option value="duplicate_conversation">Duplicate conversation</option>
+                        <option value="spam_irrelevant">Spam/irrelevant</option>
+                        <option value="other">Other</option>
                     </select>
                     <select x-show="bulkAction === 'priority'"
                             :disabled="bulkAction !== 'priority'"

@@ -42,6 +42,134 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="auth.customer_login_identity",
+            module="app.services.customer_login_identity",
+            owns=(
+                "customer local-login identity resolution",
+                "ambiguous customer email login refusal",
+            ),
+            depends_on=(
+                "customer.accounts",
+                "access.subscription_lifecycle",
+                "auth.customer_credential_enrollment",
+            ),
+            notes=(
+                "Credential username remains the canonical login identity. "
+                "A case-insensitive customer contact email is a read-only "
+                "alias only when it identifies one eligible Subscriber and "
+                "one active local portal credential. Shared email and "
+                "multiple-credential evidence fail closed without selecting "
+                "an account. Suspended, blocked, delinquent, and new customer "
+                "states retain their existing login eligibility; disabled, "
+                "canceled, or inactive customers cannot be selected by email."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer local-login identity resolution",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical customer contact and active state",
+                            "canonical customer lifecycle state",
+                            "canonical customer local credential state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ambiguous customer email login refusal",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "canonical customer contact and active state",
+                            "canonical customer lifecycle state",
+                            "canonical customer local credential state",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical customer contact and active state",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="subscribers.email and subscribers.is_active",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="subscribers.status",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer local credential state",
+                        owner="auth.customer_credential_enrollment",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "local user_credentials username, subscriber_id, "
+                            "password presence, and active state"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Authentication adapters supply a Session; the resolver "
+                        "performs no writes or transaction completion."
+                    ),
+                    locking=(
+                        "No locks; one committed snapshot supplies customer and "
+                        "credential eligibility."
+                    ),
+                    idempotency=(
+                        "Repeated resolution over the same snapshot returns the "
+                        "same typed match or refusal."
+                    ),
+                    retries="Callers may retry only with a fresh transaction snapshot.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.customer_login_identity.ambiguous_email",
+                        "auth.customer_login_identity.inactive_credential",
+                    ),
+                    mapping_owner="customer authentication API and web adapters",
+                    fail_closed_on=(
+                        "shared eligible customer email",
+                        "multiple active local credentials",
+                        "inactive local credential",
+                        "disabled, canceled, or inactive customer",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "direct UserCredential and Subscriber lookup in "
+                        "app.services.auth_flow and app.services.web_customer_auth"
+                    ),
+                    new_owner="auth.customer_login_identity",
+                    verification=(
+                        "Focused resolver, API, browser-service, lockout, MFA, "
+                        "session, and established identifier tests."
+                    ),
+                    cutover_gate=(
+                        "Every customer local-login adapter delegates email "
+                        "identity selection to the typed resolver."
+                    ),
+                    fallback_retirement=(
+                        "Direct customer contact-email selection is removed from "
+                        "authentication adapters and guarded by architecture tests."
+                    ),
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/IDENTITY_EMAIL_DECOUPLING.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_login_identity.py",
+                    "tests/test_auth_flow.py",
+                    "tests/test_web_customer_auth.py",
+                    "tests/architecture/test_customer_login_identity_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="auth.subscriber_assignments",
             module="app.services.subscriber_assignments",
             owns=("subscriber role and direct-permission assignments",),
@@ -766,7 +894,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="auth.token_signing",
-            module="app.services.context_signing",
+            module="app.services.auth_token_signing",
             owns=(
                 "configured JWT signing key and algorithm resolution",
                 "cryptographic signing and verification of typed capability envelopes",
@@ -1598,6 +1726,9 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "ERP HR commands enter one verified coordinator transaction. "
+                "Provisioning explicitly supports trusted reconciliation and "
+                "a create-only reject policy that cannot mutate an existing "
+                "identity. "
                 "This owner writes staff identity and credential bootstrap, "
                 "keeps the canonical staff email and the one local credential "
                 "username aligned even while access is inactive, prepares "
@@ -1755,9 +1886,13 @@ DOMAIN = DomainSOT(
                     idempotency=(
                         "Email is the provision natural key; managed roles, active "
                         "state, and the local credential username converge to "
-                        "canonical staff state. Adapters carry a stable intent "
-                        "key, and invite expansion deduplicates on the immutable "
-                        "provisioning event id."
+                        "canonical staff state under the reconcile policy. The "
+                        "create-only policy rejects an existing natural key before "
+                        "mutation. Its stable ERP command reference is retained as "
+                        "Party external-reference provenance so an exact replay "
+                        "returns the created principal without mutating it. Invite "
+                        "expansion deduplicates on the immutable provisioning event "
+                        "id."
                     ),
                     retries=(
                         "Adapters may retry a failed request with the same "
@@ -1852,6 +1987,7 @@ DOMAIN = DomainSOT(
                 steward="platform security",
                 design_refs=(
                     "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/ERP_WORKFORCE_ACCOUNT_PROVISIONING.md",
                     "docs/designs/STAFF_LOGIN_IDENTITY_RECONCILIATION.md",
                     "docs/adr/0002-owner-command-transaction-boundary.md",
                     "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",

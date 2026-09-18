@@ -282,6 +282,182 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="ui.ticket_sla_report",
+            module="app.services.ticket_sla_reports",
+            owns=(
+                "current ticket SLA operational summary",
+                "ticket SLA violation queue and export projection",
+                "ticket SLA historical clock trend projection",
+            ),
+            depends_on=(
+                "auth.permission_gate",
+                "operations.service_team_lifecycle",
+                "support.ticket_lifecycle",
+                "support.ticket_sla_clock",
+            ),
+            notes=(
+                "The live summary counts canonical not-closed Tickets and distinct "
+                "Tickets whose current SLA clock status is breached. Historical "
+                "breach records remain confined to the explicitly labelled queue, "
+                "export, and clock-start trend."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="current ticket SLA operational summary",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed ticket SLA report query",
+                            "authorized support-report scope",
+                            "canonical current Ticket lifecycle state",
+                            "current ticket SLA records",
+                            "canonical service-team identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket SLA violation queue and export projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed ticket SLA report query",
+                            "authorized support-report scope",
+                            "canonical current Ticket lifecycle state",
+                            "current ticket SLA records",
+                            "canonical service-team identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket SLA historical clock trend projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed ticket SLA report query",
+                            "authorized support-report scope",
+                            "canonical current Ticket lifecycle state",
+                            "current ticket SLA records",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed ticket SLA report query",
+                        owner="ui.ticket_sla_report",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed UTC creation-time bounds, breach-record scope, "
+                            "and bounded queue pagination"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authorized support-report scope",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="reports:support:read permission",
+                    ),
+                    AuthorityInput(
+                        name="canonical current Ticket lifecycle state",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "active Ticket identity, status, created_at, region, "
+                            "service-team assignment, and person assignment"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current ticket SLA records",
+                        owner="support.ticket_sla_clock",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="SlaClock and SlaBreach rows for canonical Tickets",
+                    ),
+                    AuthorityInput(
+                        name="canonical service-team identity",
+                        owner="operations.service_team_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="current native ServiceTeam identity and display name",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The web adapter supplies a read session; typed report queries "
+                        "perform grouped reads and never flush or commit."
+                    ),
+                    locking="Committed Ticket and SLA facts require no mutation lock.",
+                    idempotency=(
+                        "The same committed facts and typed query produce the same "
+                        "ticket-level counts."
+                    ),
+                    retries="The on-demand report query and export are safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="app.web.admin.reports ticket SLA adapter",
+                    fail_closed_on=(
+                        "missing reports:support:read permission",
+                        "invalid date or pagination transport input",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "dict-shaped ticket SLA helpers and report-template metric "
+                        "interpretation"
+                    ),
+                    new_owner="ui.ticket_sla_report",
+                    verification=(
+                        "typed summary, current-state cohort, drill-down, template "
+                        "semantics, and registry architecture tests"
+                    ),
+                    cutover_gate=(
+                        "dashboard summaries consume the typed current-state outcome "
+                        "and label historical trend and breach-record scopes"
+                    ),
+                    fallback_retirement=(
+                        "no dashboard bucket uses all historical Tickets or breached_at "
+                        "as a proxy for a current breach"
+                    ),
+                ),
+                steward="Self-Care reporting",
+                design_refs=(
+                    "docs/designs/CRM_REPORT_DATA_FLOW_GUIDE.md",
+                    "docs/designs/OPERATIONS_MEASUREMENT_STRATEGY.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_ticket_sla_reports.py",
+                    "tests/architecture/test_ticket_sla_report_boundary.py",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="live current ticket SLA operational summary",
+                        input_names=(
+                            "typed ticket SLA report query",
+                            "canonical current Ticket lifecycle state",
+                            "current ticket SLA records",
+                            "canonical service-team identity",
+                        ),
+                        writer="ui.ticket_sla_report",
+                        freshness=(
+                            "Calculated on demand from committed Ticket and SlaClock "
+                            "rows and stamped with generated_at."
+                        ),
+                        stale_behavior=(
+                            "No cached result is authoritative; a failed read is "
+                            "unavailable and no prior count is reused."
+                        ),
+                        drift_signal=(
+                            "A bucket total differs from the canonical not-closed "
+                            "Ticket query or its active breached-clock subset."
+                        ),
+                        rebuild_operation=(
+                            "Re-run the idempotent typed summary query for the exact "
+                            "creation-time bounds."
+                        ),
+                        repair_owner="ui.ticket_sla_report",
+                    ),
+                ),
+            ),
+        ),
+        SOTService(
             name="ui.document_discount_report",
             module="app.services.web_document_discount_report",
             owns=(
@@ -580,16 +756,20 @@ DOMAIN = DomainSOT(
                 "customer.accounts",
                 "access.subscription_lifecycle",
                 "financial.billing_profile",
+                "financial.invoices",
+                "financial.payments",
                 "financial.subscription_billing_treatments",
                 "service_intent.catalog_policy",
                 "network.identity",
                 "network.ip_assignment_lifecycle",
+                "support.ticket_lifecycle",
             ),
             notes=(
                 "The admin list and CSV export share one normalized scope and "
                 "stable ordering contract. CSV rows project committed customer, "
-                "subscription, catalog, access identity, IP assignment, NAS, and "
-                "POP facts without mutating or re-owning them. Customer rows "
+                "subscription, catalog, access identity, IP assignment, NAS, POP, "
+                "support-ticket, payment, and invoice facts without mutating or "
+                "re-owning them. Customer rows "
                 "retain the full account name while the list presentation limits "
                 "visible names to four words and exposes the full text when cut. "
                 "Billing cohorts consume the canonical billing profile and "
@@ -612,6 +792,16 @@ DOMAIN = DomainSOT(
                             "canonical catalog offers",
                             "canonical network access identities",
                             "canonical service IP assignments",
+                        )
+                        + (
+                            (
+                                "canonical support ticket lifecycle records",
+                                "canonical customer payment records",
+                                "canonical customer invoice records",
+                            )
+                            if concern
+                            == "admin customer complete CSV scope and analytical projection"
+                            else ()
                         ),
                     )
                     for concern in (
@@ -692,6 +882,33 @@ DOMAIN = DomainSOT(
                         source=(
                             "desired subscription IPv4, active IPAM assignments, "
                             "and active ONT static IP assignments"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical support ticket lifecycle records",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Ticket active flag, lifecycle status, human identifier, "
+                            "and canonical customer links"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical customer payment records",
+                        owner="financial.payments",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Payment active flag, lifecycle status, customer account "
+                            "link, and amount"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical customer invoice records",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Invoice active flag, customer account link, issued_at, "
+                            "and created_at"
                         ),
                     ),
                 ),
@@ -1159,49 +1376,63 @@ DOMAIN = DomainSOT(
             name="ui.field_live_map_projection",
             module="app.services.field_maps",
             owns=(
-                "admin field-map sharing-authorized technician position projection",
-                "admin field-map searchable fields and focus coordinates",
-                "admin field-map stale-position semantics",
+                "dispatch field-map sharing-authorized technician position projection",
+                "dispatch field-map searchable fields and focus coordinates",
+                "dispatch field-map stale-position semantics",
+                "selected technician nearest-address projection",
             ),
             depends_on=(
                 "customer.accounts",
+                "gis.geocoding",
                 "operations.work_orders",
             ),
             notes=(
-                "field_maps owns the typed admin live-map feed and search "
+                "field_maps owns the typed dispatch live-map feed and search "
                 "projection. Technician visibility fails closed when location "
                 "sharing is disabled. Search resolves technician identity and "
                 "native work-order/customer/service-address facts before "
-                "returning only results with focusable coordinates. The admin "
-                "web adapter enforces operations:dispatch:read and the sidebar "
-                "uses the same permission for discoverability."
+                "returning only results with valid, focusable coordinates. The "
+                "selected-technician detail rechecks sharing and delegates its "
+                "on-demand nearest-address lookup to gis.geocoding. The "
+                "admin-web and manager-mobile adapters both enforce "
+                "operations:dispatch:read, and their navigation uses the same "
+                "permission for discoverability."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name=(
-                            "admin field-map sharing-authorized technician "
+                            "dispatch field-map sharing-authorized technician "
                             "position projection"
                         ),
                         role=OwnerRole.RESOLVER,
                         input_names=("native field-technician presence facts",),
                     ),
                     ConcernContract(
-                        name="admin field-map searchable fields and focus coordinates",
+                        name="dispatch field-map searchable fields and focus coordinates",
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "native field-technician presence facts",
                             "canonical work-order map facts",
                             "canonical subscriber service-address facts",
-                            "admin field-map search input",
+                            "dispatch field-map search input",
                         ),
                     ),
                     ConcernContract(
-                        name="admin field-map stale-position semantics",
+                        name="dispatch field-map stale-position semantics",
                         role=OwnerRole.POLICY,
                         input_names=(
                             "native field-technician presence facts",
-                            "admin field-map freshness input",
+                            "dispatch field-map freshness input",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="selected technician nearest-address projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "native field-technician presence facts",
+                            "provider-neutral reverse-geocode result",
+                            "dispatch field-map freshness input",
                         ),
                     ),
                 ),
@@ -1235,23 +1466,33 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
-                        name="admin field-map search input",
+                        name="dispatch field-map search input",
                         owner="ui.field_live_map_projection",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="typed normalized search text and bounded result limit",
                     ),
                     AuthorityInput(
-                        name="admin field-map freshness input",
+                        name="dispatch field-map freshness input",
                         owner="ui.field_live_map_projection",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="typed bounded stale-after duration",
+                    ),
+                    AuthorityInput(
+                        name="provider-neutral reverse-geocode result",
+                        owner="gis.geocoding",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "typed nearest-address lookup for the selected, "
+                            "sharing-authorized technician coordinates"
+                        ),
                     ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
                     boundary=(
-                        "Feed and search queries read one adapter-owned session and "
-                        "perform no ORM mutation or transaction completion."
+                        "Feed, search, and selected-detail queries read one "
+                        "adapter-owned session and perform no ORM mutation or "
+                        "transaction completion."
                     ),
                     locking="No locks; the projection is observational and read-only.",
                     idempotency=(
@@ -1265,11 +1506,12 @@ DOMAIN = DomainSOT(
                         "ui.field_live_map_projection.invalid_search",
                         "ui.field_live_map_projection.unauthorized",
                     ),
-                    mapping_owner="admin field-map web adapter",
+                    mapping_owner="admin-web and manager-mobile field-map adapters",
                     fail_closed_on=(
                         "missing operations:dispatch:read permission",
                         "disabled technician location sharing",
-                        "missing focus coordinates",
+                        "missing or invalid focus coordinates",
+                        "missing selected-technician location detail",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1280,12 +1522,12 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="ui.field_live_map_projection",
                     verification=(
-                        "typed feed/search contracts, sharing/privacy tests, street "
-                        "search tests, route permission tests, and UI focus tests"
+                        "typed feed/search/detail contracts, sharing/privacy tests, "
+                        "street search tests, route permission tests, and UI focus tests"
                     ),
                     cutover_gate=(
-                        "Routes return owner-provided typed outcomes and the template "
-                        "only renders or focuses those outcomes."
+                        "Routes return owner-provided typed outcomes; web and mobile "
+                        "clients only render or focus those outcomes."
                     ),
                     fallback_retirement=(
                         "The feed no longer exposes non-sharing technicians and no "
@@ -1296,9 +1538,11 @@ DOMAIN = DomainSOT(
                 design_refs=(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/designs/FIELD_MANAGER_TEAM_MAP.md",
                 ),
                 test_refs=(
                     "tests/test_admin_maps_web.py",
+                    "field_mobile/test/manager_team_map_test.dart",
                     "tests/architecture/test_field_live_map_boundary.py",
                 ),
             ),
@@ -1546,7 +1790,10 @@ DOMAIN = DomainSOT(
                 "authenticated staff identity, live ERP categories, active vendor "
                 "labels, and only the actor's claims. It supplies action eligibility, "
                 "field errors, category rules, totals input, and honest ERP delivery "
-                "states; the route and template do not infer financial state."
+                "states. Awaiting approval, not applicable, pending, failed, and "
+                "unavailable remain distinct; failed delivery detail comes only from "
+                "typed allowlisted diagnostics. The route and template do not infer "
+                "financial state."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1583,7 +1830,10 @@ DOMAIN = DomainSOT(
                         name="canonical work-order expense scope",
                         owner="operations.work_orders",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Exact active native WorkOrder ID and public identity",
+                        source=(
+                            "Exact active native WorkOrder ID, public identity, and "
+                            "current technician-assignment evidence"
+                        ),
                     ),
                     AuthorityInput(
                         name="authenticated requester scope",
@@ -1591,8 +1841,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "Authenticated active SystemUser identity and exact global, "
-                            "reseller, or region dispatch-read decision for viewing and "
-                            "dispatch-write decision for expense submission"
+                            "reseller, or region dispatch-read decision for both viewing "
+                            "and expense submission"
                         ),
                     ),
                     AuthorityInput(
@@ -1610,7 +1860,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "Actor-owned FieldExpenseRequest state plus durable ERP "
-                            "outbox acceptance, rejection, failure, and reference facts"
+                            "outbox acceptance, rejection, failure, reference facts, "
+                            "and allowlisted request-correlation diagnostics"
                         ),
                     ),
                     AuthorityInput(
@@ -1649,6 +1900,7 @@ DOMAIN = DomainSOT(
                     retryable_codes=(),
                     fail_closed_on=(
                         "missing or inactive work order or requester",
+                        "work order without a current technician assignment",
                         "unavailable ERP category rules",
                         "invalid amount or receipt evidence",
                     ),
@@ -2541,10 +2793,12 @@ DOMAIN = DomainSOT(
                 "communications.notification_service",
                 "observability.audit_log",
                 "sales.quote_delivery",
+                "sales.quote_payment_review",
                 "sales.service",
             ),
             notes=(
                 "The Quote detail builder presents delivery eligibility and the "
+                "staff-owned payment-review state and actions alongside the "
                 "official Quote timeline from authoritative Quote, immutable audit, "
                 "and durable notification records. It does not infer final mailbox "
                 "receipt from SMTP transport acceptance."
@@ -2560,6 +2814,7 @@ DOMAIN = DomainSOT(
                             "canonical Quote detail state",
                             "canonical Quote audit evidence",
                             "canonical Quote delivery outcome",
+                            "canonical Quote payment-review decision",
                         ),
                     ),
                 ),
@@ -2578,6 +2833,15 @@ DOMAIN = DomainSOT(
                         owner="observability.audit_log",
                         kind=AuthorityKind.OBSERVATION,
                         source="immutable Quote-scoped action and actor evidence",
+                    ),
+                    AuthorityInput(
+                        name="canonical Quote payment-review decision",
+                        owner="sales.quote_payment_review",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "review status, revision, reviewer, decision time, "
+                            "reason, and current-snapshot eligibility"
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical Quote delivery outcome",
@@ -2612,6 +2876,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_quote_documents_and_delivery.py",
+                    "tests/test_quote_payment_review.py",
                     "tests/architecture/test_quote_document_delivery_boundary.py",
                 ),
             ),

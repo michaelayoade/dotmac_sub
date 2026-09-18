@@ -266,6 +266,81 @@ class TestEventDispatcher:
         # h2 should still be called
         h2.handle.assert_called_once_with(mock_db, event)
 
+    def test_dispatch_default_failure_stays_retryable_and_unalerted(self, db_session):
+        """An unmarked exception keeps today's behavior: no permanent alert."""
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.transient_failure", message="transient"
+        )
+        handler.__class__.__name__ = "TransientHandler"
+        dispatcher.register_handler(handler)
+
+        event = Event(event_type=EventType.subscriber_created, payload={})
+        mock_db = MagicMock()
+
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            dispatcher.dispatch(mock_db, event)
+
+        alert.assert_not_called()
+
+    def test_dispatch_permanent_failure_is_recorded_and_alerted(self, db_session):
+        """A `.retryable = False` failure is classified permanent and made
+        visible via a durable review item, not just a log line."""
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.permanent_failure",
+            message="permanent",
+            retryable=False,
+        )
+        handler.__class__.__name__ = "PermanentHandler"
+        dispatcher.register_handler(handler)
+
+        event = Event(event_type=EventType.subscriber_created, payload={})
+        mock_db = MagicMock()
+
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            dispatcher.dispatch(mock_db, event)
+
+        alert.assert_called_once()
+        _, kwargs = alert.call_args
+        assert kwargs["handler_name"] == "PermanentHandler"
+        assert kwargs["event"] is event
+
+    def test_record_permanent_handler_failure_queues_a_review_request(self):
+        """The permanent-failure alert reuses the generic durable review-queue
+        primitive, not a one-off logging-only mechanism."""
+        from app.services.events.dispatcher import _record_permanent_handler_failure
+
+        mock_db = MagicMock()
+        event = Event(event_type=EventType.payment_received, payload={})
+
+        with patch(
+            "app.services.staff_notifications.queue_permission_review_request"
+        ) as queue:
+            _record_permanent_handler_failure(
+                mock_db,
+                event=event,
+                handler_name="PrepaidRenewalHandler",
+                exc=RuntimeError("boom"),
+            )
+
+        queue.assert_called_once()
+        _, kwargs = queue.call_args
+        assert kwargs["fingerprint"] == (
+            f"event-handler-permanent-failure:{event.event_id}:PrepaidRenewalHandler"
+        )
+        assert kwargs["category"] == "operations"
+
     def test_dispatch_persists_event_record(self, db_session):
         dispatcher = EventDispatcher()
         event = Event(
@@ -388,6 +463,73 @@ class TestEventDispatcher:
         result = dispatcher.retry_event(mock_db, event_record)
 
         assert result is False
+
+    def test_retry_event_permanent_failure_is_classified_and_alerted(self, db_session):
+        """Michael's original finding #7 (2026-09, round 8): a handler that
+        fails PERMANENTLY during a RETRY attempt must be classified and
+        recorded the same way the initial dispatch path does -- not
+        silently default to retryable, which would make it eligible for
+        redelivery forever.
+        """
+        from app.services.domain_errors import DomainError
+
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        handler.handle.side_effect = DomainError(
+            code="test.permanent_retry_failure",
+            message="permanent on retry",
+            retryable=False,
+        )
+        handler.__class__.__name__ = "PermanentRetryHandler"
+        dispatcher.register_handler(handler)
+
+        event_record = MagicMock()
+        event_record.event_id = uuid.uuid4()
+        event_record.event_type = "subscriber.created"
+        event_record.payload = {}
+        event_record.actor = None
+        event_record.subscriber_id = None
+        event_record.account_id = None
+        event_record.subscription_id = None
+        event_record.invoice_id = None
+        event_record.service_order_id = None
+        event_record.failed_handlers = [
+            {"handler": "PermanentRetryHandler", "error": "boom"}
+        ]
+        event_record.retry_count = 0
+
+        mock_db = MagicMock()
+        with patch(
+            "app.services.events.dispatcher._record_permanent_handler_failure"
+        ) as alert:
+            with patch(
+                "app.services.event_store.record_handler_attempt"
+            ) as record_attempt:
+                with patch(
+                    "app.services.event_store.mark_event_completed"
+                ) as mark_completed:
+                    dispatcher.retry_event(mock_db, event_record)
+
+        alert.assert_called_once()
+        _, alert_kwargs = alert.call_args
+        assert alert_kwargs["handler_name"] == "PermanentRetryHandler"
+
+        # The handler-attempt row is recorded permanent, not merely "failed".
+        record_attempt.assert_called_once()
+        _, attempt_kwargs = record_attempt.call_args
+        assert attempt_kwargs["status"] == "failed_permanent"
+
+        # The failure manifest carries `retryable=False` so the NEXT retry's
+        # own carry-forward filter (`failure.get("retryable", "True")`)
+        # correctly excludes this handler from redelivery instead of
+        # defaulting it back to retryable.
+        mark_completed.assert_called_once()
+        # `mark_event_completed(db, record, failed_handlers)` -- positional.
+        completed_args, _completed_kwargs = mark_completed.call_args
+        failed_handlers_arg = completed_args[2]
+        assert len(failed_handlers_arg) == 1
+        assert failed_handlers_arg[0]["handler"] == "PermanentRetryHandler"
+        assert failed_handlers_arg[0]["retryable"] == "False"
 
 
 # ---------------------------------------------------------------------------
@@ -2246,7 +2388,7 @@ class TestProvisioningHandler:
             subscription_id=sub_id,
         )
         handler.handle(db_session, event)
-        mock_prov_svc.ensure_ip_assignments_for_subscription.assert_called_once_with(
+        mock_prov_svc.ensure_ipv4_assignment_for_subscription.assert_called_once_with(
             db_session, str(sub_id)
         )
 
@@ -2263,7 +2405,7 @@ class TestProvisioningHandler:
             payload={"subscription_id": str(sub_id)},
         )
         handler.handle(db_session, event)
-        mock_prov_svc.ensure_ip_assignments_for_subscription.assert_called_once_with(
+        mock_prov_svc.ensure_ipv4_assignment_for_subscription.assert_called_once_with(
             db_session, str(sub_id)
         )
 
@@ -2272,14 +2414,14 @@ class TestProvisioningHandler:
         handler = ProvisioningHandler()
         event = self._make_event(EventType.subscription_activated)
         handler.handle(db_session, event)
-        mock_prov_svc.ensure_ip_assignments_for_subscription.assert_not_called()
+        mock_prov_svc.ensure_ipv4_assignment_for_subscription.assert_not_called()
 
     @patch("app.services.events.handlers.provisioning.provisioning_service")
     def test_subscription_activated_handles_failure_gracefully(
         self, mock_prov_svc, db_session
     ):
-        mock_prov_svc.ensure_ip_assignments_for_subscription.side_effect = RuntimeError(
-            "IP pool exhausted"
+        mock_prov_svc.ensure_ipv4_assignment_for_subscription.side_effect = (
+            RuntimeError("IP pool exhausted")
         )
         handler = ProvisioningHandler()
         sub_id = uuid.uuid4()

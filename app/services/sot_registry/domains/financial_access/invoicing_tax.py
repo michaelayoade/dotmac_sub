@@ -1188,6 +1188,187 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.historical_invoice_tax_corrections",
+        module="app.services.historical_invoice_tax_corrections",
+        owns=("reviewed historical invoice tax correction coordination",),
+        depends_on=(
+            "financial.account_credit_applications",
+            "financial.customer_tax_policies",
+            "financial.invoices",
+            "financial.payments",
+            "financial.tax_configuration",
+        ),
+        notes=(
+            "This correction-only coordinator never edits issued invoice lines or "
+            "creates a tax-only revenue charge. It binds one paid base-only invoice, "
+            "one pristine subscription draft, one voided Finance-authored VAT draft, "
+            "one succeeded native payment, and one active tax rate. Confirmation "
+            "voids and releases the incorrect invoice through financial.invoices, "
+            "settles the subscription, creates the full VAT-correct replacement, and "
+            "consumes the selected payment exactly in one transaction."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="reviewed historical invoice tax correction coordination",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "reviewed historical tax correction command",
+                        "canonical invoice correction documents",
+                        "canonical selected payment funding",
+                        "canonical customer VAT policy",
+                        "canonical tax-rate evidence",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="reviewed historical tax correction command",
+                    owner="financial.historical_invoice_tax_corrections",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed account, source invoice and line, voided Finance "
+                        "evidence invoice, subscription draft, selected payment, tax "
+                        "rate, issue/due instants, permission, actor, reason, preview "
+                        "fingerprint, command identity, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical invoice correction documents",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked source, void-evidence, subscription, and replacement "
+                        "invoice aggregates, active lines, terminal closure, and typed "
+                        "replacement correction metadata"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical selected payment funding",
+                    owner="financial.account_credit_applications",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one succeeded Payment plus its exact active allocation, "
+                        "payment-backed available amount, release evidence, and final "
+                        "subscription/replacement allocation links"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical customer VAT policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="current typed customer VAT-exemption policy",
+                ),
+                AuthorityInput(
+                    name="canonical tax-rate evidence",
+                    owner="financial.tax_configuration",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active TaxRate identity and the matching immutable snapshot "
+                        "on the voided Finance-authored replacement draft"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "correct_historical_invoice_tax enters execute_owner_command once "
+                    "on a transaction-free session; invoice void/release, subscription "
+                    "issuance and allocation, replacement construction/issuance and "
+                    "allocation, typed lineage, audit, and event commit together."
+                ),
+                locking=(
+                    "Locks the customer account first, then the three reviewed invoices "
+                    "in UUID order, their active lines and source allocation, followed "
+                    "by the selected payment and tax rate before re-previewing."
+                ),
+                idempotency=(
+                    "The bounded correction key reserves one replacement invoice; the "
+                    "preview fingerprints all document, allocation, payment, tax, and "
+                    "issuance evidence, and child owner keys derive from that key."
+                ),
+                retries=(
+                    "Exact replay returns the recorded replacement and linked closure "
+                    "and allocations. Stale, conflicting, partial, refunded, exempt, or "
+                    "otherwise ambiguous evidence fails closed."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.historical_invoice_tax_corrections"
+                    ),
+                    "financial.historical_invoice_tax_corrections.correction_balance_not_closed",
+                    "financial.historical_invoice_tax_corrections.correction_evidence_drift",
+                    "financial.historical_invoice_tax_corrections.correction_evidence_missing",
+                    "financial.historical_invoice_tax_corrections.currency_invalid",
+                    "financial.historical_invoice_tax_corrections.customer_tax_policy_changed",
+                    "financial.historical_invoice_tax_corrections.existing_correction_conflict",
+                    "financial.historical_invoice_tax_corrections.existing_correction_drift",
+                    "financial.historical_invoice_tax_corrections.idempotency_conflict",
+                    "financial.historical_invoice_tax_corrections.idempotency_key_required",
+                    "financial.historical_invoice_tax_corrections.invoice_missing",
+                    "financial.historical_invoice_tax_corrections.not_actionable",
+                    "financial.historical_invoice_tax_corrections.permission_denied",
+                    "financial.historical_invoice_tax_corrections.preview_invalid",
+                    "financial.historical_invoice_tax_corrections.reason_invalid",
+                    "financial.historical_invoice_tax_corrections.replay_conflict",
+                    "financial.historical_invoice_tax_corrections.replacement_document_mismatch",
+                    "financial.historical_invoice_tax_corrections.replacement_settlement_incomplete",
+                    "financial.historical_invoice_tax_corrections.scope_invalid",
+                    "financial.historical_invoice_tax_corrections.stale_preview",
+                    "financial.historical_invoice_tax_corrections.subscription_settlement_incomplete",
+                ),
+                mapping_owner="reviewed billing correction CLI adapter",
+                fail_closed_on=(
+                    "missing or ambiguous document, payment, allocation, or tax evidence",
+                    "customer VAT exemption or changed tax snapshot",
+                    "stale preview, permission failure, or idempotency conflict",
+                    "any non-zero selected-payment or customer-credit remainder",
+                ),
+            ),
+            events=EventContract(
+                event_types=("invoice.tax_correction_completed",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries only bounded invoice, payment, allocation, "
+                    "money, currency, and preview identifiers without customer PII."
+                ),
+                replay=(
+                    "The correction reservation and typed replacement lineage prevent "
+                    "duplicate voids, invoices, allocations, audit rows, or events."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="none; historical tax corrections required manual review",
+                new_owner="financial.historical_invoice_tax_corrections",
+                verification=(
+                    "Focused preview, exact settlement, rollback, replay, drift, "
+                    "permission, registry, and architecture-boundary tests."
+                ),
+                cutover_gate=(
+                    "Only the fingerprinted CLI confirmation may invoke this owner, "
+                    "and it requires one explicitly named customer evidence chain."
+                ),
+                fallback_retirement=(
+                    "No tax-only invoice, paid-invoice mutation, raw SQL, generic "
+                    "adjustment, or multi-commit correction path exists."
+                ),
+            ),
+            steward="finance operations",
+            design_refs=(
+                "docs/designs/HISTORICAL_INVOICE_TAX_CORRECTION.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_historical_invoice_tax_corrections.py",
+                "tests/architecture/test_historical_invoice_tax_correction_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.tax_configuration",
         module="app.services.billing.tax",
         owns=("configurable tax-rate records", "tax-rate activation lifecycle"),
@@ -1198,6 +1379,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "compatibility subscription VAT treatment policy",
             "bounded subscription VAT treatment resolution",
+            "recorded-percent active tax-rate identity resolution",
         ),
         depends_on=(
             "access.subscription_lifecycle",
@@ -1208,13 +1390,16 @@ SERVICES: tuple[SOTService, ...] = (
             "service_intent.catalog_policy",
         ),
         notes=(
-            "This read-only containment owner gives recurring and prepaid billing "
-            "one deterministic legacy VAT precedence while dotmac-tax adoption is "
+            "This read-only containment owner gives recurring, prepaid, and "
+            "explicit subscription first-invoice billing one deterministic legacy "
+            "VAT precedence while dotmac-tax adoption is "
             "in progress. Customer exemption wins before address, account, catalog, "
             "or configured defaults. Rate identity, percentage, and application "
             "come only from owned records and settings; no VAT code or percentage "
             "is built into a caller. It owns neither statutory tax policy nor "
             "custom-tax determination and is retired when dotmac-tax cuts over."
+            " Its recorded-percent adapter returns an identity only when exactly "
+            "one active TaxRate reproduces the supplied commercial percentage."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1239,6 +1424,11 @@ SERVICES: tuple[SOTService, ...] = (
                         "catalog compatibility VAT fields",
                         "configured compatibility VAT defaults",
                     ),
+                ),
+                ConcernContract(
+                    name="recorded-percent active tax-rate identity resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("active legacy tax-rate records",),
                 ),
             ),
             authoritative_inputs=(
@@ -1320,17 +1510,19 @@ SERVICES: tuple[SOTService, ...] = (
             migration=MigrationContract(
                 state=AuthorityMigrationState.COMPLETE,
                 old_owner=(
-                    "duplicated VAT precedence in billing_automation and "
-                    "prepaid_service_renewals"
+                    "duplicated or omitted VAT precedence in billing_automation, "
+                    "prepaid_service_renewals, and the explicit subscription "
+                    "first-invoice adapter"
                 ),
                 new_owner="financial.billing_tax_resolution",
                 verification=(
                     "customer-exemption precedence, bounded query, recurring, "
-                    "prepaid, and architecture boundary tests"
+                    "prepaid, explicit first-invoice, and architecture boundary tests"
                 ),
                 cutover_gate=(
-                    "Both recurring invoice and prepaid renewal paths consume the "
-                    "typed resolver and no longer derive VAT independently."
+                    "Recurring invoice, prepaid renewal, and explicit subscription "
+                    "first-invoice paths consume the typed resolver and no longer "
+                    "derive or omit VAT independently."
                 ),
                 fallback_retirement=(
                     "Caller-local address, account, catalog, and default VAT "
@@ -1347,6 +1539,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_billing_tax_resolution.py",
                 "tests/test_billing_automation_services.py",
                 "tests/test_prepaid_threshold_resolver.py",
+                "tests/test_web_catalog_subscriptions.py",
                 "tests/architecture/test_billing_tax_resolution_boundary.py",
             ),
         ),

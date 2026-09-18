@@ -20,6 +20,10 @@ from app.services.integrations.manifest import (
 
 logger = logging.getLogger(__name__)
 
+# Existing Admin binding for the installed Meta messaging connector.
+META_CONNECTION_ADMIN_PATH = "/admin/crm/meta"
+META_CONNECTION_READ_PERMISSION = "crm:conversation:read"
+
 
 @dataclass(frozen=True, slots=True)
 class ConnectorRegistryEntry:
@@ -40,6 +44,7 @@ def _dotmac_erp_manifest(
     include_workforce_attendance: bool,
     include_material_webhook: bool = False,
     include_staff_access: bool = False,
+    include_expense_form: bool = False,
 ) -> ConnectorManifest:
     capabilities = [
         CapabilityManifest(
@@ -96,6 +101,13 @@ def _dotmac_erp_manifest(
                 ),
             )
         )
+    if include_expense_form:
+        capabilities.append(
+            CapabilityManifest(
+                id="erp.expense.form_context.v1",
+                modes=(CapabilityMode.interactive,),
+            )
+        )
     properties: dict[str, object] = {
         "base_url": {"type": "string"},
         "timeout_seconds": {"type": "integer"},
@@ -131,6 +143,9 @@ def _dotmac_erp_manifest(
     if include_staff_access:
         reads.extend(("staff.leave_restriction_state", "staff.account_status_state"))
         classifications.append("staff_identity")
+    if include_expense_form:
+        reads.extend(("expense.approver_directory", "expense.payment_destination"))
+        classifications.extend(("staff_identity", "financial_sensitive"))
     return ConnectorManifest(
         key="dotmac.erp",
         name="DotMac ERP",
@@ -782,10 +797,11 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         include_lead_ads=True,
     ),
     _dotmac_erp_manifest(
-        version="1.3.0",
+        version="1.4.0",
         include_workforce_attendance=True,
         include_material_webhook=True,
         include_staff_access=True,
+        include_expense_form=True,
     ),
     _paystack_manifest(
         version="1.0.1",
@@ -867,6 +883,12 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
 _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     _dotmac_integrator_manifest(version="1.0.0", include_settlement=False),
     _whatsapp_manifest(version="1.0.0", include_phone_number_id=False),
+    _dotmac_erp_manifest(
+        version="1.3.0",
+        include_workforce_attendance=True,
+        include_material_webhook=True,
+        include_staff_access=True,
+    ),
     _dotmac_erp_manifest(
         version="1.2.0",
         include_workforce_attendance=True,

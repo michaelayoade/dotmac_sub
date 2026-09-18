@@ -41,6 +41,25 @@ def _source(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def test_support_ticket_realtime_publication_is_transport_neutral() -> None:
+    lifecycle = _source("app/services/support.py")
+    service = SERVICES_BY_NAME["support.ticket_lifecycle"]
+    contract = service.contract
+
+    assert "app.websocket" not in lifecycle
+    assert "publish_topic_event" in lifecycle
+    assert "run_after_commit" in lifecycle
+    assert "runtime.realtime_projection" in service.depends_on
+    assert contract is not None
+    realtime_policy = next(
+        concern
+        for concern in contract.concerns
+        if concern.name
+        == "customer-visible ticket comment realtime invalidation policy"
+    )
+    assert "best-effort realtime projection transport" in realtime_policy.input_names
+
+
 def test_support_services_have_complete_registered_contracts() -> None:
     assert CONTRACTED_OWNERS <= SERVICES_BY_NAME.keys()
     for name in CONTRACTED_OWNERS:
@@ -182,11 +201,11 @@ def test_ticket_region_projection_has_one_typed_owner() -> None:
         in configuration
     )
     assert "configured_regions: tuple[str, ...]" in projection
-    assert "func.lower(func.trim(Ticket.region))" in projection
     assert "normalize_region_value" in projection
-    assert ".order_by(region_sources.c.region.asc())" in projection
+    assert "from app.models.support import Ticket" not in projection
+    assert "Ticket.region" not in projection
+    assert "union_all" not in projection
     assert "func.lower(func.trim(Ticket.region)) == normalized_region" in lifecycle
-    assert "db.query(Ticket.region)" not in configuration
 
 
 def test_customer_reply_staff_email_stays_in_ticket_lifecycle_owner() -> None:

@@ -35,6 +35,7 @@ from app.services import (
     team_inbox_status,
 )
 from app.services.list_query import PageMeta
+from app.services.workqueue.permissions import WorkqueuePrincipal
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 
@@ -50,6 +51,32 @@ def _conversation(db_session) -> uuid.UUID:
     conversation_id = conversation.id
     db_session.commit()
     return conversation_id
+
+
+def _eligible_reply_actor(db_session, conversation_id: uuid.UUID) -> uuid.UUID:
+    conversation = db_session.get(InboxConversation, conversation_id)
+    assert conversation is not None
+    team = ServiceTeam(
+        name=f"Reply Team {uuid.uuid4().hex[:10]}",
+        team_type=ServiceTeamType.support.value,
+    )
+    user, person = add_bound_staff_user(db_session)
+    db_session.add(team)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ServiceTeamMember(team_id=team.id, person_id=person.id),
+            InboxAgentPresence(
+                person_id=user.id,
+                status=InboxAgentPresenceStatus.online.value,
+                manual_override_status=InboxAgentPresenceStatus.online.value,
+                last_seen_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    conversation.primary_service_team_id = team.id
+    db_session.flush()
+    return user.id
 
 
 def test_activity_distinguishes_viewing_from_open_status_transition(db_session):
@@ -298,7 +325,7 @@ def test_inbox_pagination_renders_compact_page_numbers_and_preserves_selection()
 
 def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     index = Path("templates/admin/inbox/index.html").read_text()
-    sidebar = Path("templates/admin/inbox/_sidebar.html").read_text()
+    sidebar = Path("templates/admin/inbox/_sidebar.html").read_text(encoding="utf-8")
     conversation = Path("templates/admin/inbox/_conversation.html").read_text()
     javascript = Path("static/js/admin-inbox.js").read_text()
 
@@ -328,6 +355,8 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "\n                        Done\n" not in sidebar
     assert "support:inbox:self_assign" in conversation
     assert "service_team_options | default(())" in conversation
+    assert 'aria-label="Service team for conversation takeover"' in conversation
+    assert "action_eligibility.takeover_team_options" in conversation
     assert "/admin/inbox/{{ timeline.id }}/assign-to-me" in conversation
     assert 'action="/admin/inbox/bulk"' not in conversation
     assert 'aria-label="Team for assignment to me"' in conversation
@@ -344,10 +373,10 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'name="cc"' in conversation
     assert 'name="bcc"' in conversation
     assert (
-        'hx-get="/admin/inbox/{{ row.id }}?view=20260827a"'
+        'hx-get="/admin/inbox/{{ row.id }}?view=20260910b"'
         in Path("templates/admin/inbox/_queue_macros.html").read_text()
     )
-    assert 'const INBOX_FRAGMENT_VERSION = "20260827a"' in javascript
+    assert 'const INBOX_FRAGMENT_VERSION = "20260910b"' in javascript
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage
@@ -386,7 +415,11 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "stale.xhr.abort()" in javascript
     assert "event.detail.shouldSwap = false" in javascript
     assert "if (this.filterLoading) return" in javascript
-    assert 'document.body.addEventListener("htmx:sendAbort", release)' in javascript
+    # Aborted navigation must release loading state as a failure, never success.
+    assert (
+        'document.body.addEventListener("htmx:sendAbort", (event) => '
+        "release(event, true), );"
+    ) in " ".join(javascript.split())
     assert (
         "SAFE_INLINE_VIDEO_CONTENT_TYPES"
         in Path("app/services/team_inbox_projection.py").read_text()
@@ -530,7 +563,10 @@ def test_assignment_agent_options_show_team_and_presence_status(db_session):
         InboxAgentPresenceStatus.online.value
     )
     assert 'name="service_team_id"' in conversation_template
-    assert conversation_template.count('name="service_team_id" required') == 1
+    assert conversation_template.count('name="service_team_id" required') == 2
+    assert (
+        'aria-label="Service team for conversation takeover"' in conversation_template
+    )
     assert "service_team_options" in conversation_template
     assert "selectedTeam" in conversation_template
     assert "data-team-ids" in conversation_template
@@ -1009,6 +1045,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
     monkeypatch,
 ):
     conversation_id = _conversation(db_session)
+    actor_id = _eligible_reply_actor(db_session, conversation_id)
     calls = 0
 
     def fake_send(db, *, conversation, payload, record_failure):
@@ -1026,6 +1063,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
                 **dict(payload.metadata or {}),
                 "body_text": payload.body_text,
                 "delivery_status": "queued",
+                "sent_by_person_id": str(payload.sent_by_person_id),
             },
         )
         db.add(message)
@@ -1048,7 +1086,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="We are checking.",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-1",
         ),
     )
@@ -1057,7 +1095,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="We are checking.",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-1",
         ),
     )
@@ -1072,6 +1110,7 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
 
 def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
     conversation_id = _conversation(db_session)
+    actor_id = _eligible_reply_actor(db_session, conversation_id)
 
     def fake_send(db, *, conversation, payload, record_failure):
         message = InboxMessage(
@@ -1086,6 +1125,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
                 **dict(payload.metadata or {}),
                 "body_text": payload.body_text,
                 "delivery_status": "queued",
+                "sent_by_person_id": str(payload.sent_by_person_id),
             },
         )
         db.add(message)
@@ -1106,7 +1146,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
         command=team_inbox_commands.ReplyCommand(
             conversation_id=conversation_id,
             body_text="Original",
-            actor_person_id=uuid.uuid4(),
+            actor_person_id=actor_id,
             idempotency_key="send-key-2",
         ),
     )
@@ -1120,7 +1160,7 @@ def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):
             command=team_inbox_commands.ReplyCommand(
                 conversation_id=conversation_id,
                 body_text="Changed",
-                actor_person_id=uuid.uuid4(),
+                actor_person_id=actor_id,
                 idempotency_key="send-key-2",
             ),
         )
@@ -1265,13 +1305,21 @@ def test_only_saved_view_owner_can_delete(db_session):
 
 def test_bulk_priority_action_uses_existing_command_owner(db_session):
     conversation_id = _conversation(db_session)
+    actor_id = uuid.uuid4()
 
     outcome = team_inbox_commands.bulk_action(
         db_session,
+        principal=WorkqueuePrincipal(
+            person_id=actor_id,
+            roles=frozenset({"admin"}),
+            scopes=frozenset(),
+            can_view=True,
+            can_act=True,
+        ),
         conversation_ids=[conversation_id],
         action="priority",
         priority=25,
-        actor_person_id=uuid.uuid4(),
+        actor_person_id=actor_id,
     )
 
     conversation = db_session.get(InboxConversation, conversation_id)

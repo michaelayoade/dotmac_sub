@@ -432,6 +432,7 @@ DOMAIN = DomainSOT(
                 "ticket staff/team tag notification consequence",
                 "ticket comments mentions and attachments",
                 "ticket customer publication visibility",
+                "customer-visible ticket comment realtime invalidation policy",
                 "ticket links duplicates and merges",
                 "signed-link and authenticated resolution confirmation/dispute",
                 "ticket audit official timeline and transactional events",
@@ -447,6 +448,7 @@ DOMAIN = DomainSOT(
                 "communications.intents",
                 "communications.notification_service",
                 "communications.nextcloud_talk_staff",
+                "runtime.realtime_projection",
             ),
             contract=ServiceContract(
                 concerns=(
@@ -524,6 +526,17 @@ DOMAIN = DomainSOT(
                             "typed ticket command",
                             "canonical ticket state",
                             "staff notification delivery queue",
+                        ),
+                    ),
+                    ConcernContract(
+                        name=(
+                            "customer-visible ticket comment realtime invalidation policy"
+                        ),
+                        role=OwnerRole.EVENT_POLICY,
+                        input_names=(
+                            "typed ticket command",
+                            "canonical ticket state",
+                            "best-effort realtime projection transport",
                         ),
                     ),
                 ),
@@ -633,6 +646,15 @@ DOMAIN = DomainSOT(
                             "delivery state"
                         ),
                     ),
+                    AuthorityInput(
+                        name="best-effort realtime projection transport",
+                        owner="runtime.realtime_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "versioned identifier-only realtime envelope, server-assigned "
+                            "principal topic, and at-most-once Redis delivery contract"
+                        ),
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
@@ -643,6 +665,9 @@ DOMAIN = DomainSOT(
                         "participants. The unmatched-radio coordinator may request only the "
                         "restricted silent-internal creation/observation participants; those "
                         "participants still allocate identity and stage audit/event evidence."
+                        " Public comment invalidations register only after-commit callbacks; "
+                        "the realtime transport never participates in or rejects the root "
+                        "transaction."
                     ),
                     locking=(
                         "Existing Ticket mutations lock or operate under the root command; "
@@ -751,6 +776,8 @@ DOMAIN = DomainSOT(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
                     "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
+                    "docs/REALTIME_PLATFORM.md",
+                    "mobile/README.md",
                 ),
                 test_refs=(
                     "tests/test_support_services.py",
@@ -759,6 +786,7 @@ DOMAIN = DomainSOT(
                     "tests/test_ticket_assignment_engine.py",
                     "tests/test_ticket_assignment_authorization.py",
                     "tests/test_ticket_assignment_role_grant_migration.py",
+                    "tests/test_support_ticket_comment_realtime.py",
                     "tests/architecture/test_support_ticket_sot_boundary.py",
                 ),
             ),
@@ -930,19 +958,13 @@ DOMAIN = DomainSOT(
             name="support.ticket_region_projection",
             module="app.services.support_ticket_region_projection",
             owns=("canonical support-ticket region projection",),
-            depends_on=(
-                "support.ticket_configuration",
-                "support.ticket_lifecycle",
-            ),
+            depends_on=("support.ticket_configuration",),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name="canonical support-ticket region projection",
                         role=OwnerRole.RESOLVER,
-                        input_names=(
-                            "current ticket configuration",
-                            "canonical ticket regions",
-                        ),
+                        input_names=("current ticket configuration",),
                     ),
                 ),
                 authoritative_inputs=(
@@ -952,21 +974,12 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="configured workflow region option values",
                     ),
-                    AuthorityInput(
-                        name="canonical ticket regions",
-                        owner="support.ticket_lifecycle",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source=(
-                            "distinct normalized non-empty Region values on current "
-                            "active Ticket rows"
-                        ),
-                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
                     boundary=(
-                        "list_canonical_region_options reads configuration and Ticket "
-                        "rows without writes."
+                        "list_canonical_region_options reads configured region option "
+                        "values without writes."
                     ),
                     locking="A transaction-current read requires no row lock.",
                     idempotency=(
@@ -991,7 +1004,8 @@ DOMAIN = DomainSOT(
                     new_owner="support.ticket_region_projection",
                     verification="support settings and SOT relationship tests",
                     cutover_gate=(
-                        "region reads name both configuration and Ticket provenance"
+                        "region reads name configured region options as the sole source "
+                        "of truth"
                     ),
                     fallback_retirement=(
                         "configuration no longer claims lifecycle-derived region authority"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import httpx
@@ -12,7 +12,15 @@ from app.services.dotmac_erp.client import (
     DotMacERPError,
     DotMacERPTransientError,
 )
+from app.services.integrations.backoffice_contracts import (
+    WORKFORCE_ATTENDANCE_READ_CAPABILITY,
+)
 from app.services.integrations.connectors.dotmac_erp import DotmacErpRunner
+from app.services.integrations.runtime import (
+    OperationEnvelope,
+    OperationStatus,
+    OperationTrigger,
+)
 from app.services.workforce_attendance import (
     AttendanceAction,
     AttendanceState,
@@ -85,6 +93,54 @@ def test_workforce_facade_maps_stable_provider_error(monkeypatch):
     assert "technical" not in exc.value.message.lower()
 
 
+def test_shift_eligibility_requires_erp_confirmed_check_in(monkeypatch):
+    client = MagicMock()
+    client.get_attendance_today.return_value = _erp_response("not_checked_in")
+    monkeypatch.setattr(
+        "app.services.workforce_attendance.capability_client", lambda _db: client
+    )
+
+    with pytest.raises(WorkforceAttendanceError) as exc:
+        WorkforceAttendanceService(MagicMock()).require_checked_in_for_shift(
+            SUBJECT,
+            request_id="shift-gate-1",
+        )
+
+    assert exc.value.code == "check_in_required"
+    assert "check in" in exc.value.message.lower()
+
+
+def test_confirmed_punch_resolves_ambiguous_result_from_erp_state(monkeypatch):
+    client = MagicMock()
+    client.punch_attendance.side_effect = DotMacERPTransientError(
+        "attendance_unavailable"
+    )
+    client.get_attendance_today.return_value = _erp_response("checked_in") | {
+        "check_in_at": "2026-09-09T07:30:00+01:00",
+        "status": "PRESENT",
+        "allowed_actions": ["check_out"],
+    }
+    monkeypatch.setattr(
+        "app.services.workforce_attendance.capability_client", lambda _db: client
+    )
+
+    result = WorkforceAttendanceService(MagicMock()).punch_confirmed(
+        AttendanceAction.CHECK_IN,
+        SUBJECT,
+        BrowserLocation(
+            latitude=9.0765,
+            longitude=7.3986,
+            accuracy_m=8.5,
+            observed_at=datetime(2026, 9, 9, 6, 29, 58, tzinfo=UTC),
+        ),
+        idempotency_key="mobile-punch-1",
+        request_id="correlation-1",
+    )
+
+    assert result.attendance.state == AttendanceState.CHECKED_IN
+    assert result.resolution.value == "reconciled"
+
+
 def test_erp_client_sends_trusted_subject_and_same_idempotency_key():
     captured: dict[str, str] = {}
 
@@ -132,24 +188,44 @@ def test_attendance_client_treats_erp_unavailability_as_transient():
 
 
 def test_connector_preserves_stable_erp_error_code():
-    client = MagicMock()
-    client.get_attendance_today.side_effect = DotMacERPError(
-        "rejected",
-        status_code=404,
-        response={
-            "detail": {
-                "code": "employee_not_linked",
-                "message": "Attendance is unavailable.",
-            }
-        },
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "detail": {
+                    "code": "employee_not_linked",
+                    "message": "private employee evidence",
+                }
+            },
+        )
+
+    client = DotMacERPClient("https://erp.test", "secret", retries=0)
+    client._client = httpx.Client(
+        base_url="https://erp.test", transport=httpx.MockTransport(handler)
     )
     runner = DotmacErpRunner(client_override=client)
-
-    with pytest.raises(DotMacERPError):
-        # The runner-level envelope contract is covered elsewhere; this focused
-        # assertion protects the client exception shape consumed by that mapping.
-        client.get_attendance_today(str(SUBJECT), "r-1")
-    assert client.get_attendance_today.side_effect.response["detail"]["code"] == (
-        "employee_not_linked"
+    envelope = OperationEnvelope(
+        operation_id=uuid.uuid4(),
+        correlation_id="attendance-read-1",
+        installation_id=uuid.uuid4(),
+        capability_binding_id=uuid.uuid4(),
+        capability_id=WORKFORCE_ATTENDANCE_READ_CAPABILITY,
+        connector_key="dotmac.erp",
+        connector_version="1.4.0",
+        manifest_digest="a" * 64,
+        config_revision_id=uuid.uuid4(),
+        trigger=OperationTrigger.interactive,
+        idempotency_key="attendance-read-1",
+        deadline_at=datetime.now(UTC) + timedelta(seconds=30),
+        payload={
+            "action": "attendance_today",
+            "params": {"subject": str(SUBJECT), "request_id": "r-1"},
+        },
     )
-    assert runner is not None
+
+    result = runner.execute(envelope, config={}, secret_material={})
+
+    assert result.status is OperationStatus.rejected
+    assert result.error_code == "employee_not_linked"
+    assert "private employee evidence" not in result.model_dump_json()
+    client.close()

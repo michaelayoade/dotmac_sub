@@ -17,10 +17,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -32,6 +33,8 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentSettlement,
@@ -70,6 +73,8 @@ from app.models.service_extension import (
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     AccountAdjustmentPreviewRequest,
+    AccountAdjustmentReversalConfirm,
+    AccountAdjustmentReversalPreviewRequest,
     InvoiceCreate,
     SystemInvoiceLineCreate,
 )
@@ -79,27 +84,43 @@ from app.services.account_lifecycle import (
     stage_subscription_billing_anchor,
 )
 from app.services.audit import AuditEvents
-from app.services.billing._common import lock_account
+from app.services.billing._common import get_account_credit_balance, lock_account
 from app.services.billing.adjustments import (
     AccountAdjustmentError,
     AccountAdjustmentOrigin,
     PreviewAccountAdjustmentQuery,
+    PreviewAccountAdjustmentReversalQuery,
+    ReverseAccountAdjustmentCommand,
     preview_account_adjustment,
+    preview_account_adjustment_reversal,
+    stage_account_adjustment_reversal_for_renewal_owner,
 )
 from app.services.billing.cadence import BillingCadence, service_period
-from app.services.billing.invoices import InvoiceLines, InvoiceOwnerError, Invoices
+from app.services.billing.invoices import (
+    InvoiceIssuanceInput,
+    InvoiceLines,
+    InvoiceOwnerError,
+    Invoices,
+)
 from app.services.billing_tax_resolution import resolve_subscription_taxes
 from app.services.common import coerce_uuid, round_money
 from app.services.domain_errors import DomainError
+from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 from app.services.service_entitlements import prepaid_entitlement_coverage_end
 from app.timezone import APP_TIMEZONE, APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.prepaid_draft_reconciliation import (
+        ProspectiveFundingClassification,
+    )
 
 _ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 _OWNER = "financial.prepaid_service_renewals"
@@ -120,6 +141,17 @@ _EXECUTE_REVIEWED_COMMAND = OwnerCommandDefinition(
     concern=_REVIEWED_RENEWAL_CONCERN,
     name="execute_reviewed_prepaid_service_renewal",
 )
+_LEGACY_TAX_CORRECTION_CONCERN = (
+    "reviewed legacy prepaid renewal tax-invoice correction"
+)
+_LEGACY_TAX_CORRECTION_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LEGACY_TAX_CORRECTION_CONCERN,
+    name="correct_legacy_prepaid_renewal_tax_invoice",
+)
+_LEGACY_TAX_CORRECTION_SCOPE = "prepaid:legacy-renewal-tax-invoice-correction"
+_LEGACY_TAX_CORRECTION_AUTH_SCOPE = "billing:ledger:write"
+_LEGACY_TAX_CORRECTION_METADATA_KEY = "legacy_renewal_tax_invoice_correction"
 PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES = frozenset(
     {
         SubscriptionStatus.active,
@@ -129,9 +161,129 @@ PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES = frozenset(
 )
 _MAX_AUTOMATIC_LAG = timedelta(days=2)
 
+# The scheduled-renewal pass summary carries plain counters plus (round-3
+# nightly-isolation correction) a list of isolated-account entries and an
+# honest overall status string -- never a bare `dict[str, int | str]`, which
+# cannot represent the isolated-accounts list at all.
+PrepaidRenewalSummaryValue = int | str | list[dict[str, str]]
+
+
+def _bump_summary(
+    summary: dict[str, PrepaidRenewalSummaryValue], key: str, by: int = 1
+) -> None:
+    """Increment one integer counter in the scheduled-renewal summary.
+
+    A tiny helper rather than inline ``int(summary[key]) + by`` at every call
+    site: `PrepaidRenewalSummaryValue` is a real union (counters, the status
+    string, and the isolated-accounts list all share one dict), so a bare
+    ``int(...)`` on that union does not type-check at every counter site --
+    this asserts the narrower type once, here.
+    """
+    current = summary[key]
+    assert isinstance(current, int)
+    summary[key] = current + by
+
 
 class PrepaidServiceRenewalError(DomainError):
     """Transport-neutral renewal failure."""
+
+
+class PrepaidRenewalAmbiguousEvidenceError(PrepaidServiceRenewalError):
+    """One due subscription's funding evidence is ambiguous, PRE-mutation.
+
+    Raised only when classification (zero database writes so far) cannot
+    cleanly resolve to settle-an-exact-draft, create-canonical, or the
+    reviewed-opening-funding lane. This is one of exactly three named,
+    isolatable account-scoped types (see also
+    :class:`PrepaidOpeningLaneUnavailableError`,
+    :class:`PrepaidTriggerExecutionConflictError`) that the automatic
+    funding-event path (:func:`apply_due_prepaid_service_after_funding_change`)
+    and the nightly scheduled pass (:func:`run_due_prepaid_service_renewals`)
+    catch by an explicit, closed `isinstance` allowlist — never a bare
+    ``retryable=False`` check or a generic ``DomainError``/``Exception``
+    catch, which would silently isolate an unrelated, genuinely
+    pass-aborting failure (a posting-owner failure, a DB/infrastructure
+    error, a programming error). Each makes no financial/service-state
+    change for the affected subscription, records a durable review item out
+    of band, and lets processing continue for every OTHER due
+    subscription/account in the same batch. Every OTHER caller of
+    :func:`confirm_prepaid_service_renewal` (the operator-reviewed
+    missed-renewal path) does not catch these and sees them propagate as an
+    ordinary :class:`PrepaidServiceRenewalError` — unchanged, fail-closed
+    behavior there. Always ``retryable=False``: none of the three resolve
+    themselves on a bare retry.
+
+    This is DISTINCT from a POST-mutation integrity failure (settlement
+    already moved money and the evidence still doesn't match) — that case
+    raises a plain :class:`PrepaidServiceRenewalError` instead, which is
+    never caught here and always rolls back the whole transaction.
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(
+            code="financial.prepaid_service_renewals.ambiguous_evidence",
+            message=message,
+            details=details,
+            retryable=False,
+        )
+
+
+class PrepaidOpeningLaneUnavailableError(PrepaidServiceRenewalError):
+    """The reviewed-opening-funding lane could not classify, PRE-mutation.
+
+    Raised specifically when a baseline-less account (or any other pure
+    classification failure inside the opening-funding lookup,
+    :func:`app.services.prepaid_draft_reconciliation.classify_prospective_prepaid_funding`)
+    prevents even determining whether the reviewed-opening lane applies.
+    Deliberately its OWN type rather than caught via the generic
+    ``PrepaidDraftReconciliationError`` parent — the isolation allowlist
+    must never accidentally isolate some future, unrelated
+    ``PrepaidDraftReconciliationError`` subtype that is NOT safe to skip
+    past.
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(
+            code="financial.prepaid_service_renewals.opening_lane_unavailable",
+            message=message,
+            details=details,
+            retryable=False,
+        )
+
+
+class PrepaidTriggerExecutionConflictError(PrepaidServiceRenewalError):
+    """The SAME durable event was already processed with different evidence.
+
+    The permanent, non-retryable mismatched-replay conflict
+    (``PrepaidFundingTriggerExecution.request_fingerprint`` disagrees with
+    what this call now computes for the same ``event_store_id``). Its own
+    named type for the identical reason as
+    :class:`PrepaidOpeningLaneUnavailableError`: an isolation allowlist keyed
+    on this exact type can never accidentally widen to catch an unrelated
+    failure that happens to also be a plain, unmarked
+    :class:`PrepaidServiceRenewalError`.
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(
+            code="financial.prepaid_service_renewals.trigger_execution_conflict",
+            message=message,
+            details=details,
+            retryable=False,
+        )
+
+
+# The exact, closed set of account-scoped failures that are safe to isolate
+# (roll back just this account/subscription's work and continue the batch)
+# rather than abort the whole pass. Deliberately a tuple of specific named
+# types, not `retryable=False` or a generic `DomainError`/`Exception` catch
+# -- see each type's own docstring for why. Shared by the funding-event loop
+# and the nightly scheduled pass so both isolate on exactly the same set.
+PREPAID_RENEWAL_ISOLATABLE_ERRORS: tuple[type[PrepaidServiceRenewalError], ...] = (
+    PrepaidRenewalAmbiguousEvidenceError,
+    PrepaidOpeningLaneUnavailableError,
+    PrepaidTriggerExecutionConflictError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +294,27 @@ class EvaluatePrepaidServiceAfterSettlementCommand:
     account_id: UUID
     payment_id: UUID
     evidence_ref: str
+    # The domain event's own id (``Event.event_id`` / ``EventStore.event_id``,
+    # NOT the ``EventStore`` surrogate primary key). The durable dispatch path
+    # always supplies this. A caller with no event identity at all (the
+    # repair CLI -- see ``skip_receipt_for_repair`` below) must say so
+    # explicitly; omitting ``event_id`` without that flag is a hard failure
+    # (2026-09, round 7) rather than a silent unreceipted fallthrough.
+    event_id: UUID | None = None
+    # Narrows the due-subscription scan to exactly one subscription. Real
+    # dispatch never sets this; the repair CLI does, so what actually gets
+    # applied cannot exceed the one subscription/period its fingerprint-bound
+    # preview committed to.
+    only_subscription_id: UUID | None = None
+    # Explicit, named opt-out of the trigger-receipt model for a call that
+    # has no durable event to receipt against -- exactly the repair CLI's
+    # case (``scripts/billing/repair_prepaid_funding_consequences.py``): a
+    # repair is a fresh, current-state evaluation, not a replay of the
+    # original event, and deliberately does not touch that event's
+    # ``PrepaidFundingTriggerExecution`` receipt. Must be set ``True``
+    # together with ``event_id=None``; any other caller omitting
+    # ``event_id`` is refused rather than silently proceeding unreceipted.
+    skip_receipt_for_repair: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +446,87 @@ class PrepaidMonthlyChargeDetail:
     billing_cycle: BillingCycle
     tax_rate_id: UUID | None
     tax_application: TaxApplication
+
+
+class LegacyRenewalTaxInvoiceCorrectionDisposition(enum.StrEnum):
+    """Closed preview outcomes for one historical base-only renewal."""
+
+    exact_base_only_legacy_renewal = "exact_base_only_legacy_renewal"
+    already_corrected = "already_corrected"
+    manual_review = "manual_review"
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyRenewalTaxInvoiceCorrectionQuery:
+    """Expected evidence and Finance-approved amounts for one correction."""
+
+    account_id: UUID
+    subscription_id: UUID
+    adjustment_id: UUID
+    entitlement_id: UUID
+    expected_invoice_total: Decimal
+    expected_remaining_credit: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyRenewalTaxInvoiceCorrectionPreview:
+    """Fingerprint-bound proof of the exact proposed documentary correction."""
+
+    account_id: UUID
+    subscription_id: UUID
+    adjustment_id: UUID
+    entitlement_id: UUID
+    disposition: LegacyRenewalTaxInvoiceCorrectionDisposition
+    period_start: datetime | None
+    period_end: datetime | None
+    currency: str
+    original_debit: Decimal
+    subtotal: Decimal
+    tax_total: Decimal
+    tax_rate_id: UUID | None
+    tax_application: TaxApplication
+    invoice_total: Decimal
+    credit_before: Decimal
+    credit_after: Decimal
+    reversal_preview_fingerprint: str | None
+    reason: str
+    fingerprint: str
+    existing_invoice_id: UUID | None = None
+
+    @property
+    def actionable(self) -> bool:
+        return (
+            self.disposition
+            is LegacyRenewalTaxInvoiceCorrectionDisposition.exact_base_only_legacy_renewal
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectLegacyRenewalTaxInvoiceCommand:
+    """Execute one reviewed correction only while its preview remains exact."""
+
+    context: CommandContext
+    query: LegacyRenewalTaxInvoiceCorrectionQuery
+    expected_preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyRenewalTaxInvoiceCorrectionResult:
+    """Exact financial and entitlement evidence committed by the correction."""
+
+    invoice_id: UUID
+    invoice_number: str
+    invoice_line_id: UUID
+    replacement_entitlement_id: UUID
+    replaced_entitlement_id: UUID
+    adjustment_id: UUID
+    reversal_ledger_entry_id: UUID
+    payment_allocation_ids: tuple[UUID, ...]
+    invoice_total: Decimal
+    tax_total: Decimal
+    remaining_credit: Decimal
+    preview_fingerprint: str
+    replayed: bool
 
 
 def resolve_prepaid_monthly_charge_detail(
@@ -482,6 +736,13 @@ class PrepaidServiceRenewalResult:
     adjustment: AccountAdjustment | None
     ledger_entry: LedgerEntry | None
     replayed: bool
+    # The reviewed-opening-funding lane's own consumption evidence id
+    # (2026-09, round 7). Previously discarded at the call site, which left
+    # the receipt able to declare an `opening_funding` disposition with an
+    # EMPTY evidence list -- the exact gap this closes. `None` for the
+    # payment-only lane and for the pre-invoice-backed-renewal-cutover
+    # adjustment replay path (neither ever consumes opening funding).
+    opening_funding_consumption_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,6 +799,7 @@ class FundingChangeRenewalDisposition(enum.StrEnum):
     draft_invoice_settled = "draft_invoice_settled"
     draft_invoice_pending = "draft_invoice_pending"
     draft_invoice_review_required = "draft_invoice_review_required"
+    renewal_review_required = "renewal_review_required"
     funded = "funded"
     unfunded = "unfunded"
     already_covered = "already_covered"
@@ -545,6 +807,21 @@ class FundingChangeRenewalDisposition(enum.StrEnum):
     currency_mismatch = "currency_mismatch"
     non_cash_granted = "non_cash_granted"
     treatment_blocked = "treatment_blocked"
+
+
+#: A disposition that claims a real settlement happened. A receipt written
+#: with one of these MUST carry at least one subscription decision -- the
+#: exact defect this whole round targets (2026-09, round 7/8). Mirrored in
+#: `scripts/billing/census_prepaid_funding_consequence_gaps.py`'s
+#: `_SUCCESSFUL_TRIGGER_DISPOSITIONS` (a separate, string-keyed constant
+#: there since that script reads the persisted `disposition` column rather
+#: than this enum) -- keep both in sync if this set ever changes.
+SUCCESSFUL_FUNDING_CHANGE_RENEWAL_DISPOSITIONS = frozenset(
+    {
+        FundingChangeRenewalDisposition.draft_invoice_settled,
+        FundingChangeRenewalDisposition.funded,
+    }
+)
 
 
 class FundingChangeEvaluationDisposition(enum.StrEnum):
@@ -580,7 +857,33 @@ class FundingChangeRenewalResult:
     draft_invoices_voided: int = 0
     draft_invoices_pending: int = 0
     draft_review_exceptions: int = 0
+    renewal_review_exceptions: int = 0
     restored_service_count: int = 0
+    subscription_decisions: tuple[PrepaidFundingSubscriptionDecision, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PrepaidFundingSubscriptionDecision:
+    """One subscription's outcome within one funding-consequence execution.
+
+    The in-memory shape ``evaluate_prepaid_service_after_settlement`` persists
+    as one ``PrepaidFundingTriggerSubscriptionOutcome`` child row per
+    receipt. Kept independent of the ORM row so callers that only need the
+    in-transaction result (not a durable read) never touch the model layer.
+    """
+
+    subscription_id: UUID
+    period_start: datetime
+    period_end: datetime
+    disposition: str
+    funding_source: str | None
+    invoice_id: UUID | None
+    invoice_line_id: UUID | None
+    entitlement_id: UUID | None
+    funding_evidence_ids: list[str]
+    amount: Decimal
+    currency: str
+    evidence_fingerprint: str
 
 
 def preview_prepaid_recurring_charge(
@@ -680,12 +983,285 @@ def preview_prepaid_recurring_charge(
     )
 
 
+def _record_review_item_out_of_band(
+    *,
+    account_id: UUID,
+    invoice_id: UUID | None,
+    currency: str,
+    required_amount: Decimal,
+    payment_backed_amount: Decimal,
+    opening_funding_amount: Decimal,
+    preview_fingerprint: str,
+    reason: str,
+    invoice_number: str | None = None,
+    subscription_id: UUID | None = None,
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+    detail: str | None = None,
+) -> None:
+    """Write the review item on a genuinely independent session/connection.
+
+    Every call site that writes this review item does so IMMEDIATELY before
+    raising -- and the caller's own transaction (an owner-command root, or a
+    nightly-batch savepoint) rolls back on that raise. Writing through the
+    caller's own ``db`` would roll the review item back right along with it,
+    destroying the one piece of evidence the failure needs most (this was a
+    confirmed round-2 defect: the mismatched-replay test only appeared to
+    pass because it bypassed ``execute_owner_command`` entirely).
+
+    This opens a brand-new session on a brand-new connection
+    (``db_session_adapter.create_session()`` -- the same primitive
+    ``advisory_lock`` uses to guarantee a in-process-independent backend) so
+    the write commits 100% independently of whatever happens to the
+    transaction that is about to unwind.
+
+    A failure to write the review item is logged AND RE-RAISED (round-3
+    correction, per Michael's decision): a permanent conflict/ambiguity that
+    cannot be durably recorded is not safe to silently skip past. The
+    caller's own specific isolatable-error type (e.g.
+    :class:`PrepaidRenewalAmbiguousEvidenceError`) is never even constructed
+    in that case -- the write failure itself propagates instead, so nightly
+    isolation's closed `isinstance` allowlist does NOT match it and the
+    whole pass aborts, exactly as an unclassified failure should.
+    """
+
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.prepaid_draft_reconciliation import (
+        record_prepaid_draft_reconciliation_exception,
+    )
+
+    out_of_band_db = db_session_adapter.create_session()
+    try:
+        record_prepaid_draft_reconciliation_exception(
+            out_of_band_db,
+            account_id=account_id,
+            invoice_id=invoice_id,
+            invoice_number=invoice_number,
+            currency=currency,
+            required_amount=required_amount,
+            payment_backed_amount=payment_backed_amount,
+            opening_funding_amount=opening_funding_amount,
+            preview_fingerprint=preview_fingerprint,
+            reason=reason,
+            subscription_id=subscription_id,
+            period_start=period_start,
+            period_end=period_end,
+            detail=detail,
+        )
+        out_of_band_db.commit()
+    except Exception:
+        out_of_band_db.rollback()
+        logger.exception(
+            "prepaid_funding_review_item_out_of_band_write_failed",
+            extra={
+                "event": "prepaid_funding_review_item_out_of_band_write_failed",
+                "account_id": str(account_id),
+                "subscription_id": str(subscription_id) if subscription_id else None,
+                "reason": reason,
+            },
+        )
+        raise
+    finally:
+        out_of_band_db.close()
+
+
+def _prepaid_funding_request_fingerprint(
+    *,
+    event_id: UUID | None,
+    account_id: UUID,
+    currency: str,
+    effective_at: datetime,
+    payment_id: UUID,
+) -> str:
+    """Stable hash of the inputs that determine what one execution was asked to do."""
+
+    raw = (
+        f"{event_id}:{account_id}:{currency.upper()}:"
+        f"{_utc(effective_at).isoformat()}:{payment_id}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _prepaid_funding_subscription_decision_evidence_fingerprint(
+    *,
+    subscription_id: UUID,
+    period_start: datetime,
+    period_end: datetime,
+    disposition: str,
+    funding_source: str | None,
+    invoice_id: UUID | None,
+    invoice_line_id: UUID | None,
+    entitlement_id: UUID | None,
+    funding_evidence_ids: list[str],
+    amount: Decimal,
+    currency: str,
+) -> str:
+    """Stable hash of one subscription's full settlement/allocation shape.
+
+    Covers settlement/allocation shape and every resulting invoice/line/
+    entitlement/funding-evidence identity (2026-09, round 7) -- not just
+    disposition/amount/currency, so two outcomes reaching the same
+    disposition through different evidence (e.g. a different invoice, a
+    different set of payment allocations, or opening funding vs. none)
+    hash differently instead of colliding.
+    """
+
+    raw = (
+        f"{subscription_id}:{period_start.isoformat()}:{period_end.isoformat()}:"
+        f"{disposition}:{funding_source or ''}:{invoice_id or ''}:"
+        f"{invoice_line_id or ''}:{entitlement_id or ''}:"
+        f"{','.join(sorted(funding_evidence_ids))}:{amount}:{currency.upper()}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _prepaid_funding_outcome_fingerprint(
+    renewal: FundingChangeRenewalResult,
+) -> str:
+    """Stable hash of what actually happened, for the receipt's audit trail."""
+
+    raw = "|".join(
+        sorted(
+            f"{decision.subscription_id}:{decision.period_start.isoformat()}:"
+            f"{decision.period_end.isoformat()}:{decision.disposition}:"
+            f"{decision.funding_source or ''}:{decision.invoice_id or ''}:"
+            f"{decision.invoice_line_id or ''}:{decision.entitlement_id or ''}:"
+            f"{','.join(sorted(decision.funding_evidence_ids))}:"
+            f"{decision.amount}:{decision.currency}"
+            for decision in renewal.subscription_decisions
+        )
+    )
+    raw = f"{renewal.disposition.value}|{renewal.funded}|{renewal.renewal_review_exceptions}|{raw}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _record_prepaid_funding_trigger_execution(
+    db: Session,
+    *,
+    event_store_id: UUID,
+    event_id: UUID,
+    event_type: str,
+    payment: Payment,
+    account_id: UUID,
+    effective_at: datetime,
+    request_fingerprint: str,
+    renewal: FundingChangeRenewalResult,
+) -> None:
+    """Write the receipt + child decision rows, once, at commit time.
+
+    Called exactly once per real (non-replayed) execution, in the SAME
+    transaction as every consequence it describes -- never a pre-work
+    "started" placeholder.
+    """
+    from app.models.prepaid_funding import (
+        PrepaidFundingTriggerExecution,
+        PrepaidFundingTriggerSubscriptionOutcome,
+    )
+
+    # The inverse of the per-decision `funding_evidence_missing` invariant
+    # above, and the actual defect class this whole round targets (2026-09,
+    # round 8): a receipt claiming a real settlement (`draft_invoice_settled`/
+    # `funded`) must never commit with zero children. This is the write-site
+    # gate `find_successful_receipts_missing_child_evidence` exists to make
+    # unnecessary in the first place -- the census check is a detective
+    # control for anything that slips past THIS gate, not a substitute for it.
+    if (
+        renewal.disposition in SUCCESSFUL_FUNDING_CHANGE_RENEWAL_DISPOSITIONS
+        and not renewal.subscription_decisions
+    ):
+        _error(
+            "successful_receipt_missing_child_evidence",
+            "A receipt claiming a real settlement cannot commit with zero "
+            "subscription-level child outcomes.",
+            account_id=str(account_id),
+            disposition=renewal.disposition.value,
+        )
+
+    receipt = PrepaidFundingTriggerExecution(
+        event_store_id=event_store_id,
+        event_id=event_id,
+        event_type=event_type,
+        payment_id=payment.id,
+        settlement_reference=str(payment.id),
+        account_id=account_id,
+        currency=(payment.currency or "NGN").upper(),
+        effective_at=_utc(effective_at),
+        request_fingerprint=request_fingerprint,
+        outcome_fingerprint=_prepaid_funding_outcome_fingerprint(renewal),
+        disposition=renewal.disposition.value,
+    )
+    db.add(receipt)
+    db.flush()
+    for decision in renewal.subscription_decisions:
+        db.add(
+            PrepaidFundingTriggerSubscriptionOutcome(
+                trigger_execution_id=receipt.id,
+                subscription_id=decision.subscription_id,
+                period_start=decision.period_start,
+                period_end=decision.period_end,
+                disposition=decision.disposition,
+                funding_source=decision.funding_source,
+                invoice_id=decision.invoice_id,
+                invoice_line_id=decision.invoice_line_id,
+                entitlement_id=decision.entitlement_id,
+                funding_evidence_ids=decision.funding_evidence_ids,
+                amount=decision.amount,
+                currency=decision.currency,
+                evidence_fingerprint=decision.evidence_fingerprint,
+            )
+        )
+    db.flush()
+
+
+def _replay_prepaid_funding_trigger_execution(
+    receipt: object,
+    *,
+    payment_id: UUID,
+) -> FundingChangeEvaluation:
+    """Reconstruct the durable-handler result from an existing exact-match receipt.
+
+    No work is redone -- the receipt's own recorded disposition IS the
+    answer. Aggregate counters beyond ``disposition``/``scanned`` are not
+    reconstructed field-by-field from the child rows here; a caller that
+    needs the exact original per-subscription breakdown can read
+    ``PrepaidFundingTriggerSubscriptionOutcome`` rows directly by
+    ``trigger_execution_id``.
+    """
+    from app.models.prepaid_funding import PrepaidFundingTriggerExecution
+
+    assert isinstance(receipt, PrepaidFundingTriggerExecution)
+    renewal = FundingChangeRenewalResult(
+        account_id=receipt.account_id,
+        scanned=len(receipt.subscription_outcomes),
+        funded=sum(
+            1
+            for outcome in receipt.subscription_outcomes
+            if outcome.disposition == "created_canonical_renewal"
+        ),
+        unfunded=0,
+        already_covered=0,
+        missing_price=0,
+        currency_mismatch=0,
+        disposition=FundingChangeRenewalDisposition(receipt.disposition)
+        if receipt.disposition in FundingChangeRenewalDisposition._value2member_map_
+        else FundingChangeRenewalDisposition.funded,
+    )
+    return FundingChangeEvaluation(
+        payment_id=payment_id,
+        disposition=FundingChangeEvaluationDisposition.evaluated,
+        renewal=renewal,
+    )
+
+
 def evaluate_prepaid_service_after_settlement(
     db: Session,
     *,
     account_id: UUID,
     payment_id: UUID,
     evidence_ref: str,
+    event_id: UUID | None = None,
+    only_subscription_id: UUID | None = None,
+    skip_receipt_for_repair: bool = False,
 ) -> FundingChangeEvaluation:
     """Validate settlement evidence and request its prepaid consequence.
 
@@ -693,6 +1269,14 @@ def evaluate_prepaid_service_after_settlement(
     failure raised here leaves the durable event handler attempt retryable. A
     consolidated payment is a terminal non-prepaid outcome because its money
     belongs to invoice allocations rather than one customer funding position.
+
+    ``event_id`` (the domain event's own id) is how this owner answers "have
+    we already processed this EXACT durable event" via the
+    ``PrepaidFundingTriggerExecution`` receipt, unique on ``event_store_id``
+    -- a DIFFERENT question from the period-level protection
+    (``billing_line_key``/``_invoice_backed_renewal_evidence``), which
+    answers "is this exact subscription+period already funded, regardless
+    of which trigger did it." Both continue to exist.
     """
 
     payment = db.get(Payment, payment_id)
@@ -743,6 +1327,98 @@ def evaluate_prepaid_service_after_settlement(
             "Funding-change payment has no effective settlement time.",
             payment_id=str(payment.id),
         )
+
+    # Receipt replay check: "have we already processed this EXACT durable
+    # event." A receipt-eligible call must actually be able to write a
+    # receipt (2026-09, round 7): a fail-open here would leave a real
+    # settlement consequence permanently un-receipted with no trace of why.
+    if event_id is None and not skip_receipt_for_repair:
+        _error(
+            "receipt_required",
+            "This call has no event identity and did not explicitly opt "
+            "out of receipting. Supply `event_id` (the durable dispatch "
+            "path always does), or pass `skip_receipt_for_repair=True` if "
+            "this is genuinely a repair re-evaluation with no original "
+            "event to receipt against.",
+            account_id=str(account_id),
+            payment_id=str(payment_id),
+        )
+    event_store_id: UUID | None = None
+    request_fingerprint: str | None = None
+    if event_id is not None:
+        from app.models.event_store import EventStore
+        from app.models.prepaid_funding import PrepaidFundingTriggerExecution
+
+        event_store_row = db.scalar(
+            select(EventStore).where(EventStore.event_id == event_id)
+        )
+        if event_store_row is None:
+            # Should never happen on the real dispatch path (`dispatch()`
+            # persists the `EventStore` row before any handler runs, in the
+            # same transaction) -- if it ever does, a receipt-eligible call
+            # with no way to write a receipt is not safe to let proceed
+            # unreceipted, so this is now a hard failure (2026-09, round 7)
+            # rather than a warn-and-continue.
+            _error(
+                "event_store_row_missing",
+                "Funding-change event has an event_id with no matching "
+                "EventStore row; refusing to proceed unreceipted.",
+                event_id=str(event_id),
+                account_id=str(account_id),
+            )
+        if event_store_row is not None:
+            event_store_id = event_store_row.id
+            request_fingerprint = _prepaid_funding_request_fingerprint(
+                event_id=event_id,
+                account_id=account_id,
+                currency=payment.currency,
+                effective_at=effective_at,
+                payment_id=payment.id,
+            )
+            existing_receipt = db.scalar(
+                select(PrepaidFundingTriggerExecution).where(
+                    PrepaidFundingTriggerExecution.event_store_id == event_store_id
+                )
+            )
+            if existing_receipt is not None:
+                if existing_receipt.request_fingerprint == request_fingerprint:
+                    # Exact replay: return the stored result, redo nothing.
+                    return _replay_prepaid_funding_trigger_execution(
+                        existing_receipt, payment_id=payment.id
+                    )
+                # Same durable event, different computed inputs than last
+                # time -- a genuine data/logic inconsistency, not a routine
+                # case. Permanent, non-retryable, and surfaced as a durable
+                # review item rather than silently reprocessed. Written
+                # OUT OF BAND: `db` belongs to `execute_owner_command`'s
+                # transaction, which rolls back the instant the exception
+                # below propagates -- writing through `db` would destroy
+                # this evidence at the exact moment it's needed most.
+                _record_review_item_out_of_band(
+                    account_id=account_id,
+                    invoice_id=None,
+                    currency=(payment.currency or "NGN").upper(),
+                    required_amount=Decimal("0.01"),
+                    payment_backed_amount=Decimal("0.00"),
+                    opening_funding_amount=Decimal("0.00"),
+                    preview_fingerprint=hashlib.sha256(
+                        f"{existing_receipt.request_fingerprint}:"
+                        f"{request_fingerprint}".encode()
+                    ).hexdigest(),
+                    reason="trigger_execution_fingerprint_mismatch",
+                    detail=(
+                        f"event_store_id={event_store_id} previously recorded "
+                        f"fingerprint {existing_receipt.request_fingerprint}, "
+                        f"now computed {request_fingerprint}"
+                    ),
+                )
+                raise PrepaidTriggerExecutionConflictError(
+                    "This durable event was already processed with "
+                    "different evidence than it presents now.",
+                    event_store_id=str(event_store_id),
+                    event_id=str(event_id),
+                )
+
     # Project the anchor from the entitlement evidence this payment already
     # committed, before deciding whether any further period is due. Doing it
     # here rather than inside the renewal branch keeps the anchor exact even
@@ -764,7 +1440,20 @@ def evaluate_prepaid_service_after_settlement(
         funding_currency=payment.currency,
         evidence_ref=evidence_ref,
         trigger_payment_id=payment.id,
+        only_subscription_id=only_subscription_id,
     )
+    if event_store_id is not None and event_id is not None and request_fingerprint:
+        _record_prepaid_funding_trigger_execution(
+            db,
+            event_store_id=event_store_id,
+            event_id=event_id,
+            event_type=event_store_row.event_type if event_store_row else "",
+            payment=payment,
+            account_id=account_id,
+            effective_at=effective_at,
+            request_fingerprint=request_fingerprint,
+            renewal=renewal,
+        )
     return FundingChangeEvaluation(
         payment_id=payment.id,
         disposition=FundingChangeEvaluationDisposition.evaluated,
@@ -792,6 +1481,9 @@ def execute_prepaid_service_after_settlement(
             account_id=command.account_id,
             payment_id=command.payment_id,
             evidence_ref=command.evidence_ref,
+            event_id=command.event_id,
+            only_subscription_id=command.only_subscription_id,
+            skip_receipt_for_repair=command.skip_receipt_for_repair,
         ),
     )
 
@@ -1147,6 +1839,19 @@ def confirm_prepaid_service_renewal(
             adjustment=None,
             ledger_entry=None,
             replayed=True,
+            # Re-derived, not just discarded on replay (2026-09, round 7):
+            # without this, the SAME renewal would report real opening-funding
+            # evidence on its first execution and none on a replay, which
+            # would make the receipt's evidence fingerprint disagree with
+            # itself across an exact replay of the same durable event.
+            opening_funding_consumption_id=db.scalar(
+                select(PrepaidOpeningFundingConsumption.id)
+                .where(
+                    PrepaidOpeningFundingConsumption.invoice_id
+                    == invoice_evidence.invoice.id
+                )
+                .limit(1)
+            ),
         )
 
     # Preserve replay compatibility for periods funded before invoice-backed
@@ -1227,6 +1932,86 @@ def confirm_prepaid_service_renewal(
             "stale_preview",
             "Prepaid renewal charge details changed after preview.",
         )
+
+    # Classify FIRST, with ZERO writes. This is the single-owner
+    # funding-consequence design (2026-09, round 2): the ORIGINAL production
+    # defect was a re-entrant call into `stage_prepaid_draft_after_funding_change`
+    # for a document this owner had already created — round 1 removed that
+    # re-entrant call but still created the Invoice/InvoiceLine BEFORE
+    # classifying, so an ambiguous outcome left an orphaned draft committed by
+    # the caller. Nothing is written to the database above this point in this
+    # branch; `classify_prospective_prepaid_funding` runs against an
+    # ephemeral, never-persisted invoice shell.
+    from app.services.prepaid_draft_reconciliation import (
+        PrepaidDraftAction,
+        PrepaidDraftDisposition,
+        PrepaidDraftReconciliationError,
+        classify_prospective_prepaid_funding,
+    )
+
+    try:
+        classification = classify_prospective_prepaid_funding(
+            db,
+            account_id=current.account_id,
+            currency=current.currency,
+            amount=current.amount,
+        )
+    except PrepaidDraftReconciliationError as exc:
+        # A baseline-less account (`opening_funding_unavailable`) or any
+        # other pure-classification failure is exactly as ambiguous as a
+        # disposition the classifier returns normally -- it must not abort
+        # the whole funding event for every OTHER subscription on this
+        # account. Zero mutations have happened above this point either way.
+        _record_review_item_out_of_band(
+            account_id=current.account_id,
+            invoice_id=None,
+            currency=current.currency,
+            required_amount=current.amount,
+            payment_backed_amount=Decimal("0.00"),
+            opening_funding_amount=Decimal("0.00"),
+            preview_fingerprint=current.fingerprint,
+            reason=f"renewal_classification_failed_{exc.code.rsplit('.', 1)[-1]}",
+            subscription_id=subscription.id,
+            period_start=current.starts_at,
+            period_end=current.ends_at,
+            detail=exc.message,
+        )
+        raise PrepaidOpeningLaneUnavailableError(
+            "Due prepaid renewal funding could not be classified.",
+            subscription_id=str(subscription.id),
+            reason=exc.message,
+        ) from exc
+    if classification.recommended_action is not PrepaidDraftAction.settle_paid:
+        # Case (c): ambiguous or insufficient evidence, decided BEFORE any
+        # mutation — there is no invoice yet, so the review item is keyed on
+        # (account, subscription, period) instead. Written OUT OF BAND: this
+        # raise unwinds either `execute_owner_command`'s whole transaction
+        # (nightly cron, wrapped in its own savepoint) or is caught by the
+        # funding-event loop without a savepoint -- writing through `db`
+        # would lose the evidence in the first case and is inconsistent
+        # with the second, so both call sites use the same mechanism.
+        _record_review_item_out_of_band(
+            account_id=current.account_id,
+            invoice_id=None,
+            currency=current.currency,
+            required_amount=current.amount,
+            payment_backed_amount=classification.funding.payment_backed_credit,
+            opening_funding_amount=classification.opening.available_amount,
+            preview_fingerprint=current.fingerprint,
+            reason=f"renewal_{classification.disposition.value}",
+            subscription_id=subscription.id,
+            period_start=current.starts_at,
+            period_end=current.ends_at,
+            detail=classification.reason,
+        )
+        raise PrepaidRenewalAmbiguousEvidenceError(
+            "Due prepaid renewal does not have clean, exact settlement evidence.",
+            subscription_id=str(subscription.id),
+            disposition=classification.disposition.value,
+            reason=classification.reason,
+        )
+
+    # Decision made. Mutate now, and only now.
     local_start = current.starts_at.astimezone(APP_TIMEZONE).date()
     local_end = current.ends_at.astimezone(APP_TIMEZONE).date()
     line_key = _renewal_billing_line_key(current.origin_ref)
@@ -1273,6 +2058,10 @@ def confirm_prepaid_service_renewal(
                     "renewal_evidence_ref": evidence,
                     "renewal_funding_before": str(current.funding_before),
                     "renewal_funding_after": str(current.funding_after),
+                    "renewal_account_id": str(current.account_id),
+                    "renewal_subscription_id": str(subscription.id),
+                    "renewal_amount": str(current.amount),
+                    "renewal_currency": current.currency,
                 },
                 billing_line_key=line_key,
             ),
@@ -1284,40 +2073,51 @@ def confirm_prepaid_service_renewal(
             "Invoice owner rejected the funded prepaid renewal document.",
             participant_error=exc.code,
         )
-
-    from app.services.prepaid_draft_reconciliation import (
-        FundingChangeDraftCommand,
-        preview_prepaid_draft_reconciliation,
-        stage_prepaid_draft_after_funding_change,
-    )
-
+    # Fix-by-construction for the double-computation defect (not a numeric
+    # coincidence): this owner has already computed this invoice's exact
+    # period AND totals. Marking both authoritative makes the shared
+    # payment-finalization pipeline (`_reanchor_paid_prepaid_invoice_if_lapsed`
+    # for the period; `_recalculate_invoice_totals` for
+    # subtotal/tax_total/total) skip its own independent re-derivation of
+    # either fact rather than risk disagreeing with what this owner already
+    # computed from the exact same `charge` this invoice was built from.
+    invoice.metadata_ = {
+        **(invoice.metadata_ or {}),
+        "renewal_period_authoritative": True,
+        "renewal_totals_authoritative": True,
+    }
     db.flush()
-    settlement = stage_prepaid_draft_after_funding_change(
-        db,
-        FundingChangeDraftCommand(
-            account_id=current.account_id,
-            currency=current.currency,
-            effective_at=decision_at,
-            evidence_ref=evidence,
-        ),
-    )
-    if (
-        settlement.drafts_found != 1
-        or settlement.drafts_settled != 1
-        or settlement.invoice_ids != (invoice.id,)
-    ):
-        blocked_preview = preview_prepaid_draft_reconciliation(db, invoice.id)
-        _error(
-            "invoice_settlement_rejected",
-            "Verified funding did not produce one exactly paid renewal invoice.",
-            invoice_id=str(invoice.id),
-            drafts_found=settlement.drafts_found,
-            drafts_settled=settlement.drafts_settled,
-            drafts_blocked=settlement.drafts_blocked,
-            draft_disposition=blocked_preview.disposition.value,
-            draft_action=blocked_preview.recommended_action.value,
-            draft_reason=blocked_preview.reason,
+
+    opening_funding_consumption_id: UUID | None = None
+    if classification.disposition is PrepaidDraftDisposition.exact_payment_fundable:
+        _settle_exact_payment_fundable_renewal(
+            db,
+            invoice=invoice,
+            decision_at=decision_at,
         )
+    else:
+        opening_funding_consumption_id = _settle_reviewed_opening_fundable_renewal(
+            db,
+            invoice=invoice,
+            classification=classification,
+            current=current,
+            decision_at=decision_at,
+            idempotency_key=current.idempotency_key,
+        )
+
+    project_prepaid_billing_anchor_for_invoice(
+        db,
+        invoice,
+        evidence_ref=f"prepaid_service_renewals:{invoice.id}",
+        authority=BillingAnchorAuthority.funding_observation,
+    )
+
+    # Post-mutation integrity check. Money has already moved by this point
+    # (the invoice is settled), so a mismatch here is a genuine, permanent
+    # integrity failure — NOT ambiguous evidence — and per the corrected
+    # design must roll back everything this transaction did, exactly like
+    # `main` did before round 1 (fail closed, `retryable=False`, propagates
+    # rather than being caught as a review-item-and-continue case).
     evidence_result = _invoice_backed_renewal_evidence(
         db,
         subscription=subscription,
@@ -1328,9 +2128,14 @@ def confirm_prepaid_service_renewal(
         origin_ref=current.origin_ref,
     )
     if evidence_result is None or evidence_result.line.id != invoice_line.id:
-        _error(
-            "incomplete_entitlement",
-            "Paid prepaid renewal invoice did not produce exact entitlement evidence.",
+        raise PrepaidServiceRenewalError(
+            code="financial.prepaid_service_renewals.incomplete_entitlement",
+            message=(
+                "Paid prepaid renewal invoice did not produce exact "
+                "entitlement evidence."
+            ),
+            details={"invoice_id": str(invoice.id)},
+            retryable=False,
         )
     return PrepaidServiceRenewalResult(
         preview=current,
@@ -1341,7 +2146,208 @@ def confirm_prepaid_service_renewal(
         adjustment=None,
         ledger_entry=None,
         replayed=False,
+        opening_funding_consumption_id=opening_funding_consumption_id,
     )
+
+
+def _settle_exact_payment_fundable_renewal(
+    db: Session,
+    *,
+    invoice: Invoice,
+    decision_at: datetime,
+) -> None:
+    """Settle a canonical renewal invoice this owner just created, directly.
+
+    A faithful, inlined port of ``_stage_action``'s ``exact_payment_fundable``
+    branch (``app/services/prepaid_draft_reconciliation.py``) — verified
+    correct in round 1's review — but this owner never re-enters that
+    function's generic write path for a document it constructs itself.
+    """
+    from app.services.billing.account_credit import (
+        AccountCreditApplicationError,
+        AccountCreditApplications,
+    )
+    from app.services.prepaid_draft_reconciliation import (
+        preview_payment_funding_for_owner,
+    )
+
+    decision_at = _utc(decision_at)
+    try:
+        Invoices.issue_draft_for_owner(
+            db,
+            str(invoice.id),
+            issuance=InvoiceIssuanceInput(
+                issued_at=decision_at,
+                due_at=decision_at,
+                due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
+                due_date_basis_ref=f"prepaid_service_renewals:{invoice.id}",
+                due_date_policy_version="prepaid-service-renewals-v1",
+                reason="funded_prepaid_service_renewal",
+            ),
+            apply_available_credit=False,
+        )
+        # Re-preview AFTER issuing, not before: issuing changes
+        # `invoice.status` (draft -> issued), which the funding preview's own
+        # fingerprint covers — previewing before issuing would bind a
+        # fingerprint to a status the invoice no longer has by the time
+        # `apply_invoice_fully` re-derives and checks it.
+        funding_preview = preview_payment_funding_for_owner(
+            db,
+            invoice=invoice,
+        )
+        AccountCreditApplications.apply_invoice_fully(
+            db,
+            invoice,
+            preview_fingerprint=funding_preview.fingerprint,
+            funding_position_at=funding_preview.funding_position_at,
+        )
+    except (InvoiceOwnerError, AccountCreditApplicationError) as exc:
+        # Money may already have partially moved inside this try block (e.g.
+        # `issue_draft_for_owner` succeeded, `apply_invoice_fully` then
+        # failed) -- this is a genuine post-mutation integrity failure, not
+        # ambiguous evidence, so it rolls back the whole transaction.
+        raise PrepaidServiceRenewalError(
+            code="financial.prepaid_service_renewals.invoice_settlement_rejected",
+            message=(
+                "Verified funding did not produce one exactly paid renewal invoice."
+            ),
+            details={
+                "invoice_id": str(invoice.id),
+                "participant_error": getattr(exc, "code", type(exc).__name__),
+            },
+            retryable=False,
+        ) from exc
+    db.refresh(invoice)
+
+
+def _settle_reviewed_opening_fundable_renewal(
+    db: Session,
+    *,
+    invoice: Invoice,
+    classification: ProspectiveFundingClassification,
+    current: PrepaidServiceRenewalPreview,
+    decision_at: datetime,
+    idempotency_key: str,
+) -> UUID | None:
+    """Full 8-step reviewed-opening-funding lane, atomically, for one invoice.
+
+    Returns the consumption row's id when opening funding was actually
+    consumed (``opening_amount > 0``), so the caller can carry it as this
+    renewal's funding evidence -- never silently discarded (2026-09, round 7).
+
+    1. Lock — delegated to the already-locked account
+       (:func:`confirm_prepaid_service_renewal` locks it at entry) plus
+       ``_stage_opening_funding_consumption``'s own row lock on the
+       baseline/opening-position it consumes.
+    2. Validate — re-derive funding against the REAL now-created invoice
+       (not the ephemeral classification shell) and require it still
+       matches exactly; anything else is a permanent integrity failure
+       (money has not moved yet at this point, but the decision to use this
+       lane already has — treat drift here the same as any other
+       post-classification mismatch: fail closed, not silently ambiguous).
+    3. Consume the opening funding.
+    4. Settle/finalize the invoice.
+    5. Create the entitlement — inside step 4's finalize.
+    6. Project the anchor — by the caller, immediately after this function
+       returns (shared with the exact-payment-fundable branch).
+    7. Record the trigger receipt/child outcome — by the caller
+       (:func:`evaluate_prepaid_service_after_settlement`), after this
+       function returns, in the same transaction.
+    8. Emit the renewal event — by the caller
+       (:func:`stage_prepaid_service_renewed_outcome`).
+
+    Never calls ``stage_prepaid_draft_after_funding_change``/``_stage_action``.
+    """
+    from app.services.billing.account_credit import (
+        AccountCreditApplicationError,
+        AccountCreditApplications,
+    )
+    from app.services.billing.payments import finalize_invoice_application_for_owner
+    from app.services.prepaid_draft_reconciliation import (
+        preview_payment_funding_for_owner,
+        preview_reviewed_opening_funding_for_owner,
+        stage_reviewed_opening_funding_consumption_for_owner,
+    )
+
+    try:
+        Invoices.issue_draft_for_owner(
+            db,
+            str(invoice.id),
+            issuance=InvoiceIssuanceInput(
+                issued_at=decision_at,
+                due_at=decision_at,
+                due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
+                due_date_basis_ref=f"prepaid_service_renewals:{invoice.id}",
+                due_date_policy_version="prepaid-service-renewals-v1",
+                reason="funded_prepaid_service_renewal",
+            ),
+            apply_available_credit=False,
+        )
+        funding = preview_payment_funding_for_owner(db, invoice=invoice)
+        opening = preview_reviewed_opening_funding_for_owner(
+            db, invoice=invoice, payment_funding=funding
+        )
+        if (
+            opening.baseline_id is None
+            and opening.opening_position_id is None
+            or opening.available_amount < funding.shortfall
+            or opening.authoritative_funding < funding.invoice_remaining
+            or funding.unbacked_credit != Decimal("0.00")
+        ):
+            # Step 2 failed: the reviewed-opening evidence no longer lines up
+            # exactly against the real invoice. No settlement has happened
+            # yet (issuing a draft moves no money) -- fail closed as a
+            # permanent integrity failure rather than silently downgrading
+            # to ambiguous, since the classification decision itself is now
+            # provably wrong, not merely unclear.
+            raise PrepaidServiceRenewalError(
+                code=(
+                    "financial.prepaid_service_renewals"
+                    ".reviewed_opening_lane_evidence_changed"
+                ),
+                message=(
+                    "Reviewed opening funding no longer matches this exact "
+                    "invoice; the funding-consequence owner will not guess."
+                ),
+                details={"invoice_id": str(invoice.id)},
+                retryable=False,
+            )
+        result = AccountCreditApplications.apply_invoice_available(
+            db,
+            invoice,
+            preview_fingerprint=funding.fingerprint,
+            funding_position_at=funding.funding_position_at,
+        )
+        opening_amount = result.invoice_remaining
+        consumption_id: UUID | None = None
+        if opening_amount > Decimal("0.00"):
+            consumption = stage_reviewed_opening_funding_consumption_for_owner(
+                db,
+                invoice=invoice,
+                opening=opening,
+                fingerprint=current.fingerprint,
+                currency=current.currency,
+                amount=opening_amount,
+                effective_at=decision_at,
+                idempotency_key=f"funding-consequence:{invoice.id}:{idempotency_key}",
+            )
+            consumption_id = consumption.id
+        finalize_invoice_application_for_owner(db, invoice, effective_at=decision_at)
+    except (InvoiceOwnerError, AccountCreditApplicationError) as exc:
+        raise PrepaidServiceRenewalError(
+            code="financial.prepaid_service_renewals.invoice_settlement_rejected",
+            message=(
+                "Reviewed opening funding did not produce one exactly paid "
+                "renewal invoice."
+            ),
+            details={
+                "invoice_id": str(invoice.id),
+                "participant_error": getattr(exc, "code", type(exc).__name__),
+            },
+            retryable=False,
+        ) from exc
+    db.refresh(invoice)
+    return consumption_id
 
 
 def execute_reviewed_prepaid_service_renewal(
@@ -1434,6 +2440,871 @@ def _execute_reviewed_prepaid_service_renewal(
         outcome=outcome,
         restored_service_count=restored,
     )
+
+
+def _legacy_tax_correction_fingerprint(
+    *,
+    query: LegacyRenewalTaxInvoiceCorrectionQuery,
+    disposition: LegacyRenewalTaxInvoiceCorrectionDisposition,
+    period_start: datetime | None,
+    period_end: datetime | None,
+    currency: str,
+    original_debit: Decimal,
+    subtotal: Decimal,
+    tax_total: Decimal,
+    tax_rate_id: UUID | None,
+    tax_application: TaxApplication,
+    invoice_total: Decimal,
+    credit_before: Decimal,
+    credit_after: Decimal,
+    reversal_preview_fingerprint: str | None,
+    existing_invoice_id: UUID | None,
+    reason: str,
+) -> str:
+    values = (
+        str(query.account_id),
+        str(query.subscription_id),
+        str(query.adjustment_id),
+        str(query.entitlement_id),
+        str(round_money(query.expected_invoice_total)),
+        str(round_money(query.expected_remaining_credit)),
+        disposition.value,
+        period_start.isoformat() if period_start else "",
+        period_end.isoformat() if period_end else "",
+        currency,
+        str(round_money(original_debit)),
+        str(round_money(subtotal)),
+        str(round_money(tax_total)),
+        str(tax_rate_id or ""),
+        tax_application.value,
+        str(round_money(invoice_total)),
+        str(round_money(credit_before)),
+        str(round_money(credit_after)),
+        reversal_preview_fingerprint or "",
+        str(existing_invoice_id or ""),
+        reason,
+    )
+    return hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()
+
+
+def _legacy_tax_correction_actor(
+    context: CommandContext,
+) -> tuple[AuditActorType, str]:
+    """Require attributable Finance-operator evidence, including on replay."""
+
+    if context.scope != _LEGACY_TAX_CORRECTION_AUTH_SCOPE:
+        _error(
+            "invalid_command_context",
+            "Legacy renewal tax correction requires ledger-write authorization.",
+            field="scope",
+        )
+    actor_type_value, separator, actor_id_value = context.actor.partition(":")
+    try:
+        actor_type = AuditActorType(actor_type_value)
+        actor_id = UUID(actor_id_value.strip())
+    except (ValueError, AttributeError) as exc:
+        raise PrepaidServiceRenewalError(
+            code="financial.prepaid_service_renewals.invalid_command_context",
+            message=(
+                "Legacy renewal tax correction requires a user:<uuid> actor identity."
+            ),
+            details={"field": "actor"},
+        ) from exc
+    if not separator or actor_type is not AuditActorType.user:
+        _error(
+            "invalid_command_context",
+            "Legacy renewal tax correction requires a user:<uuid> actor identity.",
+            field="actor",
+        )
+    return actor_type, str(actor_id)
+
+
+def _legacy_tax_correction_preview(
+    *,
+    query: LegacyRenewalTaxInvoiceCorrectionQuery,
+    disposition: LegacyRenewalTaxInvoiceCorrectionDisposition,
+    reason: str,
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+    currency: str = "NGN",
+    original_debit: Decimal = Decimal("0.00"),
+    subtotal: Decimal = Decimal("0.00"),
+    tax_total: Decimal = Decimal("0.00"),
+    tax_rate_id: UUID | None = None,
+    tax_application: TaxApplication = TaxApplication.exempt,
+    invoice_total: Decimal = Decimal("0.00"),
+    credit_before: Decimal = Decimal("0.00"),
+    credit_after: Decimal = Decimal("0.00"),
+    reversal_preview_fingerprint: str | None = None,
+    existing_invoice_id: UUID | None = None,
+    fingerprint_override: str | None = None,
+) -> LegacyRenewalTaxInvoiceCorrectionPreview:
+    fingerprint = fingerprint_override or _legacy_tax_correction_fingerprint(
+        query=query,
+        disposition=disposition,
+        period_start=period_start,
+        period_end=period_end,
+        currency=currency,
+        original_debit=original_debit,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        tax_rate_id=tax_rate_id,
+        tax_application=tax_application,
+        invoice_total=invoice_total,
+        credit_before=credit_before,
+        credit_after=credit_after,
+        reversal_preview_fingerprint=reversal_preview_fingerprint,
+        existing_invoice_id=existing_invoice_id,
+        reason=reason,
+    )
+    return LegacyRenewalTaxInvoiceCorrectionPreview(
+        account_id=query.account_id,
+        subscription_id=query.subscription_id,
+        adjustment_id=query.adjustment_id,
+        entitlement_id=query.entitlement_id,
+        disposition=disposition,
+        period_start=period_start,
+        period_end=period_end,
+        currency=currency,
+        original_debit=round_money(original_debit),
+        subtotal=round_money(subtotal),
+        tax_total=round_money(tax_total),
+        tax_rate_id=tax_rate_id,
+        tax_application=tax_application,
+        invoice_total=round_money(invoice_total),
+        credit_before=round_money(credit_before),
+        credit_after=round_money(credit_after),
+        reversal_preview_fingerprint=reversal_preview_fingerprint,
+        reason=reason,
+        fingerprint=fingerprint,
+        existing_invoice_id=existing_invoice_id,
+    )
+
+
+def _existing_legacy_tax_correction_invoice(
+    db: Session,
+    query: LegacyRenewalTaxInvoiceCorrectionQuery,
+) -> tuple[Invoice, InvoiceLine, ServiceEntitlement, dict[str, object]] | None:
+    rows = db.execute(
+        select(Invoice, InvoiceLine)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .where(
+            Invoice.account_id == query.account_id,
+            InvoiceLine.subscription_id == query.subscription_id,
+            InvoiceLine.is_active.is_(True),
+        )
+        .order_by(Invoice.created_at, Invoice.id)
+    ).all()
+    for invoice, line in rows:
+        metadata = dict(invoice.metadata_ or {}).get(
+            _LEGACY_TAX_CORRECTION_METADATA_KEY
+        )
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("adjustment_id") != str(query.adjustment_id) or metadata.get(
+            "replaced_entitlement_id"
+        ) != str(query.entitlement_id):
+            continue
+        entitlement = db.scalar(
+            select(ServiceEntitlement).where(
+                ServiceEntitlement.source_invoice_line_id == line.id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            )
+        )
+        if entitlement is None:
+            _error(
+                "legacy_tax_correction_drift",
+                "Corrected invoice has no active replacement entitlement.",
+                invoice_id=str(invoice.id),
+            )
+        return invoice, line, entitlement, metadata
+    return None
+
+
+def preview_legacy_prepaid_renewal_tax_invoice_correction(
+    db: Session,
+    query: LegacyRenewalTaxInvoiceCorrectionQuery,
+) -> LegacyRenewalTaxInvoiceCorrectionPreview:
+    """Prove one base-only legacy renewal can become a taxed paid invoice."""
+
+    existing = _existing_legacy_tax_correction_invoice(db, query)
+    if existing is not None:
+        invoice, line, _entitlement, metadata = existing
+        fingerprint = str(metadata.get("preview_fingerprint") or "")
+        if (
+            invoice.status is not InvoiceStatus.paid
+            or round_money(invoice.balance_due) != Decimal("0.00")
+            or round_money(invoice.total) != round_money(query.expected_invoice_total)
+            or len(fingerprint) != 64
+        ):
+            _error(
+                "legacy_tax_correction_drift",
+                "Corrected historical renewal invoice evidence has drifted.",
+                invoice_id=str(invoice.id),
+            )
+        currency = (invoice.currency or "NGN").upper()
+        return _legacy_tax_correction_preview(
+            query=query,
+            disposition=LegacyRenewalTaxInvoiceCorrectionDisposition.already_corrected,
+            reason="invoice carries exact legacy renewal tax-correction evidence",
+            period_start=(
+                _utc(invoice.billing_period_start)
+                if invoice.billing_period_start is not None
+                else None
+            ),
+            period_end=(
+                _utc(invoice.billing_period_end)
+                if invoice.billing_period_end is not None
+                else None
+            ),
+            currency=currency,
+            subtotal=invoice.subtotal,
+            tax_total=invoice.tax_total,
+            tax_rate_id=line.tax_rate_id,
+            tax_application=line.tax_application,
+            invoice_total=invoice.total,
+            credit_after=get_account_credit_balance(
+                db, str(query.account_id), currency=currency
+            ),
+            existing_invoice_id=invoice.id,
+            fingerprint_override=fingerprint,
+        )
+
+    subscription = db.get(Subscription, query.subscription_id)
+    adjustment = db.get(AccountAdjustment, query.adjustment_id)
+    entitlement = db.get(ServiceEntitlement, query.entitlement_id)
+    ledger_entry = (
+        db.get(LedgerEntry, adjustment.ledger_entry_id)
+        if adjustment is not None
+        else None
+    )
+    if (
+        subscription is None
+        or adjustment is None
+        or entitlement is None
+        or ledger_entry is None
+        or subscription.subscriber_id != query.account_id
+        or subscription.billing_mode is not BillingMode.prepaid
+        or subscription.status not in PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES
+        or adjustment.account_id != query.account_id
+        or adjustment.category is not LedgerCategory.internet_service
+        or adjustment.origin != _ORIGIN.value
+        or adjustment.reversed_at is not None
+        or adjustment.reversal_ledger_entry_id is not None
+        or ledger_entry.account_id != query.account_id
+        or ledger_entry.id != adjustment.ledger_entry_id
+        or ledger_entry.entry_type is not LedgerEntryType.debit
+        or ledger_entry.source is not LedgerSource.adjustment
+        or ledger_entry.category is not LedgerCategory.internet_service
+        or not ledger_entry.is_active
+        or not ledger_entry.affects_customer_position
+        or ledger_entry.reversal_of_entry_id is not None
+        or ledger_entry.invoice_id is not None
+        or ledger_entry.payment_id is not None
+        or entitlement.account_id != query.account_id
+        or entitlement.subscription_id != query.subscription_id
+        or entitlement.status is not ServiceEntitlementStatus.active
+        or entitlement.source_ledger_entry_id != ledger_entry.id
+        or entitlement.source_invoice_id is not None
+        or entitlement.source_invoice_line_id is not None
+        or entitlement.source_billing_grant_id is not None
+        or _utc(entitlement.ends_at) <= _utc(entitlement.starts_at)
+        or subscription.next_billing_at is None
+        or _utc(subscription.next_billing_at) != _utc(entitlement.ends_at)
+        or adjustment.origin_ref
+        != _origin_ref(
+            subscription.id,
+            _utc(entitlement.starts_at),
+            _utc(entitlement.ends_at),
+        )
+        or round_money(entitlement.amount_funded) != round_money(adjustment.amount)
+        or round_money(ledger_entry.amount) != round_money(adjustment.amount)
+        or round_money(adjustment.prepaid_funding_before)
+        - round_money(adjustment.prepaid_funding_after)
+        != round_money(adjustment.amount)
+        or round_money(adjustment.prepaid_funding_after) < Decimal("0.00")
+        or entitlement.currency.upper() != adjustment.currency.upper()
+        or (ledger_entry.currency or "NGN").upper() != adjustment.currency.upper()
+    ):
+        return _legacy_tax_correction_preview(
+            query=query,
+            disposition=LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review,
+            reason="selected records are not one exact active legacy renewal chain",
+        )
+
+    period_start = _utc(entitlement.starts_at)
+    period_end = _utc(entitlement.ends_at)
+    charge = resolve_prepaid_monthly_charge_detail(db, subscription, period_start)
+    credit_before = round_money(
+        get_account_credit_balance(
+            db,
+            str(query.account_id),
+            currency=adjustment.currency.upper(),
+        )
+    )
+    expected_total = round_money(query.expected_invoice_total)
+    expected_remaining = round_money(query.expected_remaining_credit)
+    if (
+        charge is None
+        or charge.currency != adjustment.currency.upper()
+        or charge.tax_application is not TaxApplication.exclusive
+        or charge.tax_rate_id is None
+        or charge.tax_total <= Decimal("0.00")
+        or round_money(charge.unit_price) != round_money(adjustment.amount)
+        or round_money(charge.subtotal) != round_money(adjustment.amount)
+        or charge.total != expected_total
+        or expected_remaining < Decimal("0.00")
+        or round_money(adjustment.prepaid_funding_after) != credit_before
+        or credit_before != round_money(charge.tax_total + expected_remaining)
+    ):
+        return _legacy_tax_correction_preview(
+            query=query,
+            disposition=LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review,
+            reason=(
+                "current contract tax or approved balance does not exactly match "
+                "the base-only legacy renewal"
+            ),
+            period_start=period_start,
+            period_end=period_end,
+            currency=adjustment.currency.upper(),
+            original_debit=adjustment.amount,
+            subtotal=charge.subtotal if charge is not None else Decimal("0.00"),
+            tax_total=charge.tax_total if charge is not None else Decimal("0.00"),
+            tax_rate_id=charge.tax_rate_id if charge is not None else None,
+            tax_application=(
+                charge.tax_application if charge is not None else TaxApplication.exempt
+            ),
+            invoice_total=charge.total if charge is not None else Decimal("0.00"),
+            credit_before=credit_before,
+            credit_after=expected_remaining,
+        )
+
+    competing_invoice_id = db.scalar(
+        select(Invoice.id)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .where(
+            Invoice.account_id == query.account_id,
+            Invoice.is_active.is_(True),
+            Invoice.status.notin_({InvoiceStatus.void, InvoiceStatus.written_off}),
+            InvoiceLine.subscription_id == query.subscription_id,
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.amount > Decimal("0.00"),
+            or_(
+                Invoice.billing_period_start.is_(None),
+                Invoice.billing_period_end.is_(None),
+                (
+                    (Invoice.billing_period_start < period_end)
+                    & (Invoice.billing_period_end > period_start)
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    if competing_invoice_id is not None:
+        return _legacy_tax_correction_preview(
+            query=query,
+            disposition=LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review,
+            reason="a competing invoice already overlaps the legacy renewal period",
+            period_start=period_start,
+            period_end=period_end,
+            currency=charge.currency,
+            original_debit=adjustment.amount,
+            subtotal=charge.subtotal,
+            tax_total=charge.tax_total,
+            tax_rate_id=charge.tax_rate_id,
+            tax_application=charge.tax_application,
+            invoice_total=charge.total,
+            credit_before=credit_before,
+            credit_after=expected_remaining,
+            existing_invoice_id=competing_invoice_id,
+        )
+
+    reversal = preview_account_adjustment_reversal(
+        db,
+        PreviewAccountAdjustmentReversalQuery(
+            adjustment_id=adjustment.id,
+            request=AccountAdjustmentReversalPreviewRequest(
+                reason=(
+                    "Replace base-only legacy prepaid renewal with the approved "
+                    "tax-inclusive paid invoice"
+                )
+            ),
+        ),
+    )
+    if (
+        reversal.prepaid_funding_before != credit_before
+        or reversal.prepaid_funding_after
+        != round_money(expected_total + expected_remaining)
+    ):
+        return _legacy_tax_correction_preview(
+            query=query,
+            disposition=LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review,
+            reason="adjustment reversal does not restore the exact invoice funding",
+            period_start=period_start,
+            period_end=period_end,
+            currency=charge.currency,
+            original_debit=adjustment.amount,
+            subtotal=charge.subtotal,
+            tax_total=charge.tax_total,
+            tax_rate_id=charge.tax_rate_id,
+            tax_application=charge.tax_application,
+            invoice_total=charge.total,
+            credit_before=credit_before,
+            credit_after=expected_remaining,
+            reversal_preview_fingerprint=reversal.fingerprint,
+        )
+
+    return _legacy_tax_correction_preview(
+        query=query,
+        disposition=(
+            LegacyRenewalTaxInvoiceCorrectionDisposition.exact_base_only_legacy_renewal
+        ),
+        reason=(
+            "one atomic correction can reverse the base-only debit and settle "
+            "the exact tax-inclusive renewal invoice"
+        ),
+        period_start=period_start,
+        period_end=period_end,
+        currency=charge.currency,
+        original_debit=adjustment.amount,
+        subtotal=charge.subtotal,
+        tax_total=charge.tax_total,
+        tax_rate_id=charge.tax_rate_id,
+        tax_application=charge.tax_application,
+        invoice_total=charge.total,
+        credit_before=credit_before,
+        credit_after=expected_remaining,
+        reversal_preview_fingerprint=reversal.fingerprint,
+    )
+
+
+def _legacy_tax_correction_result(
+    db: Session,
+    *,
+    invoice: Invoice,
+    query: LegacyRenewalTaxInvoiceCorrectionQuery,
+    preview_fingerprint: str,
+    replayed: bool,
+) -> LegacyRenewalTaxInvoiceCorrectionResult:
+    line = db.scalar(
+        select(InvoiceLine).where(
+            InvoiceLine.invoice_id == invoice.id,
+            InvoiceLine.subscription_id == query.subscription_id,
+            InvoiceLine.is_active.is_(True),
+        )
+    )
+    replacement = (
+        db.scalar(
+            select(ServiceEntitlement).where(
+                ServiceEntitlement.source_invoice_line_id == line.id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            )
+        )
+        if line is not None
+        else None
+    )
+    replaced = db.get(ServiceEntitlement, query.entitlement_id)
+    adjustment = db.get(AccountAdjustment, query.adjustment_id)
+    allocations = tuple(
+        db.scalars(
+            select(PaymentAllocation)
+            .where(
+                PaymentAllocation.invoice_id == invoice.id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .order_by(PaymentAllocation.id)
+        ).all()
+    )
+    remaining = round_money(
+        get_account_credit_balance(
+            db, str(query.account_id), currency=(invoice.currency or "NGN").upper()
+        )
+    )
+    invoice_number = (invoice.invoice_number or "").strip()
+    reversal_ledger_entry_id = (
+        adjustment.reversal_ledger_entry_id if adjustment is not None else None
+    )
+    if (
+        line is None
+        or replacement is None
+        or replaced is None
+        or replaced.status is not ServiceEntitlementStatus.reversed
+        or adjustment is None
+        or adjustment.reversed_at is None
+        or reversal_ledger_entry_id is None
+        or not invoice_number
+        or invoice.status is not InvoiceStatus.paid
+        or round_money(invoice.balance_due) != Decimal("0.00")
+        or round_money(invoice.total) != round_money(query.expected_invoice_total)
+        or remaining != round_money(query.expected_remaining_credit)
+        or round_money(
+            sum((allocation.amount for allocation in allocations), Decimal("0.00"))
+        )
+        != round_money(invoice.total)
+    ):
+        _error(
+            "legacy_tax_correction_incomplete",
+            "Legacy renewal tax-invoice correction did not close exactly.",
+            invoice_id=str(invoice.id),
+        )
+    return LegacyRenewalTaxInvoiceCorrectionResult(
+        invoice_id=invoice.id,
+        invoice_number=invoice_number,
+        invoice_line_id=line.id,
+        replacement_entitlement_id=replacement.id,
+        replaced_entitlement_id=replaced.id,
+        adjustment_id=adjustment.id,
+        reversal_ledger_entry_id=reversal_ledger_entry_id,
+        payment_allocation_ids=tuple(allocation.id for allocation in allocations),
+        invoice_total=round_money(invoice.total),
+        tax_total=round_money(invoice.tax_total),
+        remaining_credit=remaining,
+        preview_fingerprint=preview_fingerprint,
+        replayed=replayed,
+    )
+
+
+def correct_legacy_prepaid_renewal_tax_invoice(
+    db: Session,
+    command: CorrectLegacyRenewalTaxInvoiceCommand,
+) -> LegacyRenewalTaxInvoiceCorrectionResult:
+    """Atomically replace one base-only legacy renewal with its taxed invoice."""
+
+    def operation() -> LegacyRenewalTaxInvoiceCorrectionResult:
+        key = (command.context.idempotency_key or "").strip()
+        if not key or len(key) > 120:
+            _error(
+                "missing_idempotency_key",
+                "Legacy renewal tax correction requires a bounded idempotency key.",
+            )
+        expected = command.expected_preview_fingerprint.strip().lower()
+        if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+            _error(
+                "invalid_preview_fingerprint",
+                "Legacy renewal tax correction requires a SHA-256 preview.",
+            )
+        actor_type, actor_id = _legacy_tax_correction_actor(command.context)
+
+        lock_account(db, str(command.query.account_id))
+        reservation = db.scalar(
+            select(IdempotencyKey)
+            .where(
+                IdempotencyKey.scope == _LEGACY_TAX_CORRECTION_SCOPE,
+                IdempotencyKey.key == key,
+            )
+            .with_for_update()
+        )
+        if reservation is not None:
+            if (
+                reservation.account_id != command.query.account_id
+                or not reservation.ref_id
+            ):
+                _error(
+                    "idempotency_conflict",
+                    "Legacy renewal tax-correction key belongs to other evidence.",
+                )
+            try:
+                invoice_id = UUID(reservation.ref_id)
+            except ValueError:
+                _error(
+                    "legacy_tax_correction_incomplete",
+                    "Correction reservation contains an invalid invoice identity.",
+                )
+            invoice = db.get(Invoice, invoice_id)
+            if invoice is None:
+                _error(
+                    "legacy_tax_correction_incomplete",
+                    "Correction reservation points to a missing invoice.",
+                )
+            metadata = dict(invoice.metadata_ or {}).get(
+                _LEGACY_TAX_CORRECTION_METADATA_KEY
+            )
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("preview_fingerprint") != expected
+            ):
+                _error(
+                    "idempotency_conflict",
+                    "Legacy renewal tax-correction key was reused with other evidence.",
+                )
+            return _legacy_tax_correction_result(
+                db,
+                invoice=invoice,
+                query=command.query,
+                preview_fingerprint=expected,
+                replayed=True,
+            )
+
+        subscription = lock_for_update(db, Subscription, command.query.subscription_id)
+        adjustment = lock_for_update(db, AccountAdjustment, command.query.adjustment_id)
+        entitlement = lock_for_update(
+            db, ServiceEntitlement, command.query.entitlement_id
+        )
+        if subscription is None or adjustment is None or entitlement is None:
+            _error(
+                "legacy_tax_correction_not_found",
+                "Selected subscription or legacy renewal evidence was not found.",
+            )
+
+        current = preview_legacy_prepaid_renewal_tax_invoice_correction(
+            db, command.query
+        )
+        if current.fingerprint != expected:
+            _error(
+                "stale_preview",
+                "Legacy renewal tax-correction evidence changed; preview again.",
+            )
+        if (
+            not current.actionable
+            or current.period_start is None
+            or current.period_end is None
+            or current.reversal_preview_fingerprint is None
+        ):
+            _error(
+                "legacy_tax_correction_not_actionable",
+                "Legacy renewal requires additional review.",
+                disposition=current.disposition.value,
+                reason=current.reason,
+            )
+
+        reservation = IdempotencyKey(
+            scope=_LEGACY_TAX_CORRECTION_SCOPE,
+            key=key,
+            account_id=current.account_id,
+        )
+        db.add(reservation)
+        db.flush()
+
+        reversal = stage_account_adjustment_reversal_for_renewal_owner(
+            db,
+            ReverseAccountAdjustmentCommand(
+                context=command.context,
+                adjustment_id=adjustment.id,
+                confirmation=AccountAdjustmentReversalConfirm(
+                    reason=(
+                        "Replace base-only legacy prepaid renewal with the approved "
+                        "tax-inclusive paid invoice"
+                    ),
+                    preview_fingerprint=current.reversal_preview_fingerprint,
+                    idempotency_key=key,
+                ),
+            ),
+        )
+
+        entitlement.status = ServiceEntitlementStatus.reversed
+        entitlement.metadata_ = {
+            **(entitlement.metadata_ or {}),
+            "revoked_reason": "replaced_by_tax_inclusive_paid_invoice",
+            "tax_correction_preview_fingerprint": current.fingerprint,
+        }
+        db.flush()
+
+        charge = resolve_prepaid_monthly_charge_detail(
+            db, subscription, current.period_start
+        )
+        if (
+            charge is None
+            or charge.unit_price != current.subtotal
+            or charge.subtotal != current.subtotal
+            or charge.tax_total != current.tax_total
+            or charge.tax_rate_id != current.tax_rate_id
+            or charge.tax_application is not current.tax_application
+            or charge.total != current.invoice_total
+        ):
+            _error(
+                "stale_preview",
+                "Contract tax changed after the correction preview.",
+            )
+        origin_ref = _origin_ref(
+            subscription.id, current.period_start, current.period_end
+        )
+        local_start = current.period_start.astimezone(APP_TIMEZONE).date()
+        local_end = current.period_end.astimezone(APP_TIMEZONE).date()
+        try:
+            invoice = Invoices.stage_system_invoice_for_owner(
+                db,
+                InvoiceCreate(
+                    account_id=current.account_id,
+                    status=InvoiceStatus.draft,
+                    currency=current.currency,
+                    subtotal=current.subtotal,
+                    tax_total=current.tax_total,
+                    total=current.invoice_total,
+                    balance_due=current.invoice_total,
+                    billing_period_start=current.period_start,
+                    billing_period_end=current.period_end,
+                    memo=(
+                        "Reviewed correction of legacy prepaid renewal "
+                        f"{local_start.isoformat()} - {local_end.isoformat()}"
+                    ),
+                ),
+                reason="legacy_prepaid_renewal_tax_invoice_correction",
+            )
+            line = InvoiceLines.stage_system_line_for_owner(
+                db,
+                SystemInvoiceLineCreate(
+                    invoice_id=invoice.id,
+                    subscription_id=subscription.id,
+                    description=(
+                        f"{subscription.offer.name if subscription.offer else 'Service'} "
+                        f"({local_start.isoformat()} - {local_end.isoformat()})"
+                    ),
+                    quantity=Decimal("1.000"),
+                    unit_price=charge.unit_price,
+                    amount=charge.unit_price,
+                    tax_rate_id=charge.tax_rate_id,
+                    tax_application=charge.tax_application,
+                    metadata_={
+                        "kind": "base_subscription",
+                        "billing_period_start": current.period_start.isoformat(),
+                        "billing_period_end": current.period_end.isoformat(),
+                        "renewal_preview_fingerprint": current.fingerprint,
+                        "renewal_idempotency_key": _idempotency_key(origin_ref),
+                        "renewal_evidence_ref": command.context.reason,
+                        "renewal_funding_before": str(
+                            reversal.preview.prepaid_funding_after
+                        ),
+                        "renewal_funding_after": str(current.credit_after),
+                        "renewal_account_id": str(current.account_id),
+                        "renewal_subscription_id": str(subscription.id),
+                        "renewal_amount": str(current.invoice_total),
+                        "renewal_currency": current.currency,
+                        "legacy_adjustment_id": str(adjustment.id),
+                        "replaced_entitlement_id": str(entitlement.id),
+                    },
+                    billing_line_key=_renewal_billing_line_key(origin_ref),
+                ),
+                reason="legacy_prepaid_renewal_tax_invoice_correction",
+            )
+        except InvoiceOwnerError as exc:
+            _error(
+                "invoice_rejected",
+                "Invoice owner rejected the legacy renewal tax correction.",
+                participant_error=exc.code,
+            )
+
+        invoice.metadata_ = {
+            **(invoice.metadata_ or {}),
+            "renewal_period_authoritative": True,
+            "renewal_totals_authoritative": True,
+            _LEGACY_TAX_CORRECTION_METADATA_KEY: {
+                "adjustment_id": str(adjustment.id),
+                "replaced_entitlement_id": str(entitlement.id),
+                "reversal_ledger_entry_id": str(reversal.ledger_entry.id),
+                "preview_fingerprint": current.fingerprint,
+                "actor": command.context.actor,
+                "reason": command.context.reason,
+            },
+        }
+        db.flush()
+        _settle_exact_payment_fundable_renewal(
+            db,
+            invoice=invoice,
+            decision_at=adjustment.created_at,
+        )
+        project_prepaid_billing_anchor_for_invoice(
+            db,
+            invoice,
+            evidence_ref=f"legacy-renewal-tax-correction:{invoice.id}",
+            authority=BillingAnchorAuthority.reviewed_reconciliation,
+        )
+        evidence = _invoice_backed_renewal_evidence(
+            db,
+            subscription=subscription,
+            starts_at=current.period_start,
+            ends_at=current.period_end,
+            amount=current.invoice_total,
+            currency=current.currency,
+            origin_ref=origin_ref,
+        )
+        if evidence is None or evidence.line.id != line.id:
+            _error(
+                "legacy_tax_correction_incomplete",
+                "Corrected paid invoice did not produce exact renewal evidence.",
+            )
+        reservation.ref_id = str(invoice.id)
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="correct_legacy_prepaid_renewal_tax_invoice",
+                entity_type="invoice",
+                entity_id=str(invoice.id),
+                request_id=str(command.context.correlation_id),
+                metadata_={
+                    "owner": _OWNER,
+                    "account_id": str(current.account_id),
+                    "subscription_id": str(subscription.id),
+                    "adjustment_id": str(adjustment.id),
+                    "replaced_entitlement_id": str(entitlement.id),
+                    "replacement_entitlement_id": str(evidence.entitlement.id),
+                    "reversal_ledger_entry_id": str(reversal.ledger_entry.id),
+                    "payment_allocation_ids": [
+                        str(allocation_id)
+                        for allocation_id in evidence.payment_allocation_ids
+                    ],
+                    "subtotal": str(current.subtotal),
+                    "tax_total": str(current.tax_total),
+                    "invoice_total": str(current.invoice_total),
+                    "credit_before": str(current.credit_before),
+                    "credit_after": str(current.credit_after),
+                    "preview_fingerprint": current.fingerprint,
+                    "scope": command.context.scope,
+                    "reason": command.context.reason,
+                },
+            ),
+        )
+        from app.services.events.dispatcher import emit_event
+        from app.services.events.types import EventType
+
+        emit_event(
+            db,
+            EventType.prepaid_service_renewal_document_corrected,
+            {
+                "schema_version": 2,
+                "account_id": str(current.account_id),
+                "subscription_id": str(subscription.id),
+                "invoice_id": str(invoice.id),
+                "adjustment_id": str(adjustment.id),
+                "replaced_entitlement_id": str(entitlement.id),
+                "replacement_entitlement_id": str(evidence.entitlement.id),
+                "reversal_ledger_entry_id": str(reversal.ledger_entry.id),
+                "period_start": current.period_start.isoformat(),
+                "period_end": current.period_end.isoformat(),
+                "invoice_total": str(current.invoice_total),
+                "tax_total": str(current.tax_total),
+                "remaining_credit": str(current.credit_after),
+                "preview_fingerprint": current.fingerprint,
+            },
+            actor=command.context.actor,
+            account_id=current.account_id,
+            subscription_id=subscription.id,
+            invoice_id=invoice.id,
+        )
+        db.flush()
+        return _legacy_tax_correction_result(
+            db,
+            invoice=invoice,
+            query=command.query,
+            preview_fingerprint=current.fingerprint,
+            replayed=False,
+        )
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_LEGACY_TAX_CORRECTION_COMMAND,
+            context=command.context,
+            operation=operation,
+        )
+    except IntegrityError as exc:
+        raise PrepaidServiceRenewalError(
+            code="financial.prepaid_service_renewals.legacy_tax_correction_write_conflict",
+            message="Legacy renewal correction conflicted with another command; retry.",
+            details={"account_id": str(command.query.account_id)},
+            retryable=True,
+        ) from exc
 
 
 def _stage_prepaid_consumption_posting(
@@ -2381,6 +4252,7 @@ def apply_due_prepaid_service_after_funding_change(
     funding_currency: str,
     evidence_ref: str,
     trigger_payment_id: UUID | None = None,
+    only_subscription_id: UUID | None = None,
 ) -> FundingChangeRenewalResult:
     """Consume newly available funding for currently due prepaid service.
 
@@ -2389,6 +4261,15 @@ def apply_due_prepaid_service_after_funding_change(
     only after ordinary payable invoices have had first claim on the credit. A
     lapsed service starts a new period on the payment day; missed inactive
     periods are never back-billed.
+
+    ``only_subscription_id``, when set, narrows the due-subscription scan to
+    exactly that one subscription. Every real-time caller leaves this unset
+    (an account's funding event legitimately funds every due subscription on
+    it) -- it exists for the repair CLI
+    (`scripts/billing/repair_prepaid_funding_consequences.py`), whose
+    fingerprint-bound preview commits to one exact subscription/period and
+    must not silently apply a broader scope than what was previewed and
+    gated.
     """
     evaluated_at = _utc(effective_at)
     currency = str(funding_currency or "").strip().upper()
@@ -2421,6 +4302,45 @@ def apply_due_prepaid_service_after_funding_change(
     if draft_result.drafts_found and not duplicate_drafts_voided:
         settled = draft_result.drafts_settled
         pending = draft_result.drafts_blocked
+        # A real settlement must never produce a receipt with zero
+        # subscription-level children (2026-09, round 7): the existing-draft
+        # reconciliation owner (`prepaid_draft_reconciliation`) returns typed
+        # per-subscription evidence for its own settle/void outcomes, which
+        # this owner converts into the same receipt-child shape the
+        # new-renewal lanes populate, so `execute_prepaid_service_after_settlement`
+        # writes a non-empty `PrepaidFundingTriggerSubscriptionOutcome` row
+        # whenever a real financial consequence occurred here.
+        subscription_decisions = tuple(
+            PrepaidFundingSubscriptionDecision(
+                subscription_id=outcome.subscription_id,
+                period_start=outcome.period_start,
+                period_end=outcome.period_end,
+                disposition=outcome.disposition,
+                funding_source=outcome.funding_source,
+                invoice_id=outcome.invoice_id,
+                invoice_line_id=outcome.invoice_line_id,
+                entitlement_id=None,
+                funding_evidence_ids=outcome.funding_evidence_ids,
+                amount=outcome.amount,
+                currency=outcome.currency,
+                evidence_fingerprint=(
+                    _prepaid_funding_subscription_decision_evidence_fingerprint(
+                        subscription_id=outcome.subscription_id,
+                        period_start=outcome.period_start,
+                        period_end=outcome.period_end,
+                        disposition=outcome.disposition,
+                        funding_source=outcome.funding_source,
+                        invoice_id=outcome.invoice_id,
+                        invoice_line_id=outcome.invoice_line_id,
+                        entitlement_id=None,
+                        funding_evidence_ids=outcome.funding_evidence_ids,
+                        amount=outcome.amount,
+                        currency=outcome.currency,
+                    )
+                ),
+            )
+            for outcome in draft_result.subscription_outcomes
+        )
         return FundingChangeRenewalResult(
             account_id=account_id,
             scanned=draft_result.drafts_found,
@@ -2442,24 +4362,28 @@ def apply_due_prepaid_service_after_funding_change(
             draft_invoices_voided=0,
             draft_invoices_pending=pending,
             draft_review_exceptions=draft_result.review_exceptions,
+            subscription_decisions=subscription_decisions,
         )
 
-    due_subscriptions = list(
-        db.scalars(
-            select(Subscription)
-            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
-            .where(
-                Subscription.subscriber_id == account_id,
-                Subscription.billing_mode == BillingMode.prepaid,
-                Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES),
-                Subscription.next_billing_at.isnot(None),
-                Subscription.next_billing_at <= evaluated_at,
-                CatalogOffer.billing_cycle == BillingCycle.monthly,
-                CatalogOffer.is_active.is_(True),
-            )
-            .order_by(Subscription.next_billing_at, Subscription.id)
-        ).all()
+    due_subscriptions_query = (
+        select(Subscription)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .where(
+            Subscription.subscriber_id == account_id,
+            Subscription.billing_mode == BillingMode.prepaid,
+            Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES),
+            Subscription.next_billing_at.isnot(None),
+            Subscription.next_billing_at <= evaluated_at,
+            CatalogOffer.billing_cycle == BillingCycle.monthly,
+            CatalogOffer.is_active.is_(True),
+        )
+        .order_by(Subscription.next_billing_at, Subscription.id)
     )
+    if only_subscription_id is not None:
+        due_subscriptions_query = due_subscriptions_query.where(
+            Subscription.id == only_subscription_id
+        )
+    due_subscriptions = list(db.scalars(due_subscriptions_query).all())
     if not due_subscriptions:
         return FundingChangeRenewalResult(
             account_id=account_id,
@@ -2501,10 +4425,18 @@ def apply_due_prepaid_service_after_funding_change(
     already_covered = 0
     missing_price = 0
     currency_mismatch = 0
+    review_exceptions = 0
     renewals: list[PrepaidServiceRenewedOutcome] = []
+    subscription_outcomes: list[PrepaidFundingSubscriptionDecision] = []
     non_cash_granted = 0
     treatment_blocked = 0
-    paid_day = evaluated_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    settlement_period = resolve_prepaid_settlement_period(
+        PrepaidSettlementPeriodQuery(
+            effective_at=evaluated_at,
+            billing_cycle=BillingCycle.monthly,
+        )
+    )
+    paid_day = settlement_period.starts_at
     treatment_decisions = resolve_subscription_billing_treatments(
         db, due_subscriptions, as_of=evaluated_at
     )
@@ -2525,7 +4457,11 @@ def apply_due_prepaid_service_after_funding_change(
                 continue
             anchor = _utc(subscription.next_billing_at or paid_day)
             period_start = max(anchor, paid_day, _utc(treatment.starts_at or paid_day))
-            period_end = _period_end(period_start, BillingCycle.monthly)
+            period_end = (
+                settlement_period.ends_at
+                if period_start == paid_day
+                else _period_end(period_start, BillingCycle.monthly)
+            )
             try:
                 stage_subscription_billing_grant(
                     db,
@@ -2554,7 +4490,11 @@ def apply_due_prepaid_service_after_funding_change(
             continue
         anchor = _utc(subscription.next_billing_at or paid_day)
         period_start = max(anchor, paid_day)
-        period_end = _period_end(period_start, cycle)
+        period_end = (
+            settlement_period.ends_at
+            if period_start == paid_day
+            else _period_end(period_start, cycle)
+        )
         paid_through = prepaid_entitlement_coverage_end(
             db,
             subscription_id=subscription.id,
@@ -2588,35 +4528,131 @@ def apply_due_prepaid_service_after_funding_change(
         if not preview.allowed:
             unfunded += 1
             continue
-        renewal = confirm_prepaid_service_renewal(
-            db,
-            preview,
-            effective_at=evaluated_at,
-            evidence_ref=evidence,
-        )
+        try:
+            renewal = confirm_prepaid_service_renewal(
+                db,
+                preview,
+                effective_at=evaluated_at,
+                evidence_ref=evidence,
+            )
+        except PREPAID_RENEWAL_ISOLATABLE_ERRORS:
+            # Same closed, named-type allowlist the nightly pass uses (see
+            # `PREPAID_RENEWAL_ISOLATABLE_ERRORS`): ambiguous or
+            # insufficient evidence for THIS subscription, decided with zero
+            # mutation. `confirm_prepaid_service_renewal` already made no
+            # financial/service-state change and wrote the durable review
+            # item out of band -- continue to the next due subscription in
+            # the same batch (a different subscription on the same account
+            # may still be cleanly fundable) rather than failing the whole
+            # funding event. Anything NOT in this allowlist (a posting-owner
+            # failure, a post-mutation integrity failure, an unexpected
+            # error) is not caught here and rolls back this event's whole
+            # transaction, per the corrected design.
+            review_exceptions += 1
+            continue
         if not renewal.replayed:
-            renewals.append(
-                stage_prepaid_service_renewed_outcome(
-                    db,
-                    account_id=renewal.preview.account_id,
-                    subscription_id=renewal.preview.subscription_id,
-                    entitlement_id=renewal.entitlement.id,
-                    invoice_id=(
-                        renewal.invoice.id if renewal.invoice is not None else None
-                    ),
-                    ledger_entry_id=(
-                        renewal.ledger_entry.id
-                        if renewal.ledger_entry is not None
-                        else None
-                    ),
+            outcome = stage_prepaid_service_renewed_outcome(
+                db,
+                account_id=renewal.preview.account_id,
+                subscription_id=renewal.preview.subscription_id,
+                entitlement_id=renewal.entitlement.id,
+                invoice_id=(
+                    renewal.invoice.id if renewal.invoice is not None else None
+                ),
+                ledger_entry_id=(
+                    renewal.ledger_entry.id
+                    if renewal.ledger_entry is not None
+                    else None
+                ),
+                period_start=renewal.preview.starts_at,
+                renewed_through=renewal.preview.ends_at,
+                amount=renewal.preview.amount,
+                currency=renewal.preview.currency,
+                source=PrepaidServiceRenewalSource.account_credit,
+                trigger_payment_id=trigger_payment_id,
+            )
+            renewals.append(outcome)
+        # Receipt-child evidence is built for BOTH the fresh and the
+        # period-level-replayed case (2026-09, round 8) -- `renewal.replayed`
+        # means THIS subscription/period was already fully settled by
+        # earlier evidence (`_invoice_backed_renewal_evidence`/
+        # `existing_adjustment`), a period-level idempotency concept
+        # completely independent of whether the DURABLE EVENT itself is
+        # being replayed (that's guarded much earlier, in
+        # `evaluate_prepaid_service_after_settlement`, before this loop ever
+        # runs). `confirm_prepaid_service_renewal`'s replay branches return
+        # the exact same invoice/line/entitlement/payment-allocation
+        # evidence shape as a fresh settlement, so this receipt still gets
+        # real, non-empty children -- only `stage_prepaid_service_renewed_
+        # outcome` (which would emit a duplicate "renewed" event/outcome
+        # record) stays guarded above. Previously `funded += 1` below ran
+        # unconditionally while this whole block was skipped on replay,
+        # so a purely-replayed renewal could produce a `funded`-disposition
+        # receipt with ZERO children -- invisible to
+        # `find_successful_receipts_missing_child_evidence`.
+        #
+        # The reviewed-opening-funding lane applies payment-backed credit
+        # fully before falling back to opening funding for the remainder
+        # (`AccountCreditApplications.apply_invoice_available`), so a
+        # single renewal can legitimately carry BOTH kinds of evidence at
+        # once -- this is no longer treated as one-or-the-other
+        # (2026-09, round 7); previously the opening-funding lane could
+        # declare `opening_funding` while recording an empty evidence
+        # list, because the consumption id was computed and discarded.
+        funding_sources = []
+        funding_evidence_ids = [str(value) for value in renewal.payment_allocation_ids]
+        if renewal.payment_allocation_ids:
+            funding_sources.append("payment")
+        if renewal.opening_funding_consumption_id is not None:
+            funding_sources.append("opening_funding")
+            funding_evidence_ids.append(str(renewal.opening_funding_consumption_id))
+        # Hard invariant, not just a natural consequence of the fix above
+        # (2026-09, round 7): a disposition naming a funding source with
+        # no matching evidence id is not a successful disposition -- this
+        # must never regress silently if a future lane forgets to thread
+        # its own evidence id through.
+        if funding_sources and not funding_evidence_ids:
+            _error(
+                "funding_evidence_missing",
+                "A funded renewal declared a funding source with no evidence id.",
+                subscription_id=str(subscription.id),
+                funding_sources=funding_sources,
+            )
+        decision_invoice_id = (
+            renewal.invoice.id if renewal.invoice is not None else None
+        )
+        decision_invoice_line_id = (
+            renewal.invoice_line.id if renewal.invoice_line is not None else None
+        )
+        decision_funding_source = "+".join(funding_sources) or None
+        subscription_outcomes.append(
+            PrepaidFundingSubscriptionDecision(
+                subscription_id=subscription.id,
+                period_start=renewal.preview.starts_at,
+                period_end=renewal.preview.ends_at,
+                disposition="created_canonical_renewal",
+                funding_source=decision_funding_source,
+                invoice_id=decision_invoice_id,
+                invoice_line_id=decision_invoice_line_id,
+                entitlement_id=renewal.entitlement.id,
+                funding_evidence_ids=funding_evidence_ids,
+                amount=renewal.preview.amount,
+                currency=renewal.preview.currency,
+                evidence_fingerprint=_prepaid_funding_subscription_decision_evidence_fingerprint(
+                    subscription_id=subscription.id,
                     period_start=renewal.preview.starts_at,
-                    renewed_through=renewal.preview.ends_at,
+                    period_end=renewal.preview.ends_at,
+                    disposition="created_canonical_renewal",
+                    funding_source=decision_funding_source,
+                    invoice_id=decision_invoice_id,
+                    invoice_line_id=decision_invoice_line_id,
+                    entitlement_id=renewal.entitlement.id,
+                    funding_evidence_ids=funding_evidence_ids,
                     amount=renewal.preview.amount,
                     currency=renewal.preview.currency,
-                    source=PrepaidServiceRenewalSource.account_credit,
-                    trigger_payment_id=trigger_payment_id,
-                )
+                ),
             )
+        )
         funded += 1
 
     db.flush()
@@ -2643,6 +4679,8 @@ def apply_due_prepaid_service_after_funding_change(
         if funded
         else FundingChangeRenewalDisposition.already_covered
         if already_covered
+        else FundingChangeRenewalDisposition.renewal_review_required
+        if review_exceptions
         else FundingChangeRenewalDisposition.unfunded
         if unfunded
         else FundingChangeRenewalDisposition.missing_price
@@ -2662,8 +4700,49 @@ def apply_due_prepaid_service_after_funding_change(
         non_cash_granted=non_cash_granted,
         treatment_blocked=treatment_blocked,
         draft_invoices_voided=duplicate_drafts_voided,
+        renewal_review_exceptions=review_exceptions,
         restored_service_count=restored_service_count,
+        subscription_decisions=tuple(subscription_outcomes),
     )
+
+
+def _confirm_and_stage_scheduled_renewal(
+    db: Session,
+    *,
+    preview: PrepaidServiceRenewalPreview,
+    effective_at: datetime,
+) -> None:
+    """One subscription's scheduled-renewal confirm+stage, as one savepoint body.
+
+    Factored out so `run_due_prepaid_service_renewals` can pass it to
+    `execute_owner_savepoint` as a single callable -- the savepoint helper
+    itself owns the begin/commit/rollback around whatever this raises.
+    """
+
+    renewal = confirm_prepaid_service_renewal(
+        db,
+        preview,
+        effective_at=effective_at,
+        evidence_ref=(
+            f"scheduled-billing-run:{effective_at.isoformat().replace('+00:00', 'Z')}"
+        ),
+    )
+    if not renewal.replayed:
+        stage_prepaid_service_renewed_outcome(
+            db,
+            account_id=renewal.preview.account_id,
+            subscription_id=renewal.preview.subscription_id,
+            entitlement_id=renewal.entitlement.id,
+            invoice_id=(renewal.invoice.id if renewal.invoice is not None else None),
+            ledger_entry_id=(
+                renewal.ledger_entry.id if renewal.ledger_entry is not None else None
+            ),
+            period_start=renewal.preview.starts_at,
+            renewed_through=renewal.preview.ends_at,
+            amount=renewal.preview.amount,
+            currency=renewal.preview.currency,
+            source=PrepaidServiceRenewalSource.scheduled,
+        )
 
 
 def run_due_prepaid_service_renewals(
@@ -2671,7 +4750,7 @@ def run_due_prepaid_service_renewals(
     *,
     run_at: datetime | None = None,
     dry_run: bool = False,
-) -> dict[str, int | str]:
+) -> dict[str, PrepaidRenewalSummaryValue]:
     """Fund currently due monthly periods without historical catch-up.
 
     The daily billing runner calls this only behind the canonical control. A
@@ -2683,7 +4762,6 @@ def run_due_prepaid_service_renewals(
     """
     from app.services.billing_automation import _period_end
     from app.services.prepaid_funding_reconstruction import (
-        PrepaidFundingBaselineMissingError,
         authority_cutover_batch,
         prepaid_funding_incomplete_source_account_ids,
     )
@@ -2716,7 +4794,7 @@ def run_due_prepaid_service_renewals(
     treatment_decisions = resolve_subscription_billing_treatments(
         db, subscriptions, as_of=effective_at
     )
-    summary: dict[str, int | str] = {
+    summary: dict[str, PrepaidRenewalSummaryValue] = {
         "prepaid_renewals_scanned": len(subscriptions),
         "prepaid_renewals_funded": 0,
         "prepaid_renewals_unfunded": 0,
@@ -2728,6 +4806,13 @@ def run_due_prepaid_service_renewals(
         "prepaid_renewals_restored": 0,
         "prepaid_renewals_non_cash_granted": 0,
         "prepaid_renewals_treatment_blocked": 0,
+        # Always present, even on a fully clean pass, so a caller never has
+        # to guess whether the key's absence means "isolated nothing" or
+        # "this summary predates the isolation feature."
+        "prepaid_renewals_isolated": [],
+        # Never "ok" when `prepaid_renewals_isolated` is non-empty -- set at
+        # the very end, after every subscription has been processed.
+        "prepaid_renewals_status": "ok",
     }
     chargeable_subscriptions: list[Subscription] = []
     for subscription in subscriptions:
@@ -2739,18 +4824,14 @@ def run_due_prepaid_service_renewals(
             chargeable_subscriptions.append(subscription)
             continue
         if not treatment.grantable:
-            summary["prepaid_renewals_treatment_blocked"] = (
-                int(summary["prepaid_renewals_treatment_blocked"]) + 1
-            )
+            _bump_summary(summary, "prepaid_renewals_treatment_blocked", 1)
             continue
         period_start = max(
             _utc(next_billing_at), _utc(treatment.starts_at or next_billing_at)
         )
         period_end = _period_end(period_start, BillingCycle.monthly)
         if dry_run:
-            summary["prepaid_renewals_non_cash_granted"] = (
-                int(summary["prepaid_renewals_non_cash_granted"]) + 1
-            )
+            _bump_summary(summary, "prepaid_renewals_non_cash_granted", 1)
             continue
         try:
             stage_subscription_billing_grant(
@@ -2765,13 +4846,9 @@ def run_due_prepaid_service_renewals(
             SubscriptionBillingGrantError,
             SubscriptionBillingTreatmentError,
         ):
-            summary["prepaid_renewals_treatment_blocked"] = (
-                int(summary["prepaid_renewals_treatment_blocked"]) + 1
-            )
+            _bump_summary(summary, "prepaid_renewals_treatment_blocked", 1)
             continue
-        summary["prepaid_renewals_non_cash_granted"] = (
-            int(summary["prepaid_renewals_non_cash_granted"]) + 1
-        )
+        _bump_summary(summary, "prepaid_renewals_non_cash_granted", 1)
 
     authority = authority_cutover_batch(db)
     if authority is None:
@@ -2789,133 +4866,370 @@ def run_due_prepaid_service_renewals(
         chargeable_subscriptions,
         effective_at,
     )
+    # Grouped by account, preserving each account's first-due-subscription
+    # position in the original `next_billing_at, id` order (2026-09,
+    # round 7: the isolation boundary moved UP from one subscription to one
+    # ACCOUNT -- see `_process_one_due_prepaid_subscription` and the
+    # per-account savepoint below for why).
+    subscriptions_by_account: dict[UUID, list[Subscription]] = {}
+    account_order: list[UUID] = []
     for subscription in chargeable_subscriptions:
-        if subscription.subscriber_id in incomplete_source_account_ids:
-            summary["prepaid_renewals_quarantined"] = (
-                int(summary["prepaid_renewals_quarantined"]) + 1
+        account_id = subscription.subscriber_id
+        if account_id not in subscriptions_by_account:
+            subscriptions_by_account[account_id] = []
+            account_order.append(account_id)
+        subscriptions_by_account[account_id].append(subscription)
+
+    for account_id in account_order:
+        account_subscriptions = subscriptions_by_account[account_id]
+        if account_id in incomplete_source_account_ids:
+            _bump_summary(
+                summary, "prepaid_renewals_quarantined", len(account_subscriptions)
             )
             continue
-        next_billing_at = subscription.next_billing_at
-        if next_billing_at is None:
-            continue
-        period_start = _utc(next_billing_at)
-        lag = effective_at - period_start
-        if period_start <= authority_at or lag > _MAX_AUTOMATIC_LAG:
-            summary["prepaid_renewals_stale_anchor"] = (
-                int(summary["prepaid_renewals_stale_anchor"]) + 1
-            )
-            continue
-        charge = charges[subscription.id]
-        if charge is None:
-            summary["prepaid_renewals_missing_price"] = (
-                int(summary["prepaid_renewals_missing_price"]) + 1
-            )
-            continue
-        amount, currency, cycle = charge
-        period_end = _period_end(period_start, cycle)
-        paid_through = prepaid_entitlement_coverage_end(
-            db,
-            subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-        if paid_through is not None and _utc(paid_through) > period_start:
-            if not dry_run and period_start < _utc(paid_through):
-                stage_subscription_billing_anchor(
+        if dry_run:
+            # Nothing mutates in a dry run, so nothing to isolate: no
+            # savepoint needed, write straight to the real summary.
+            for subscription in account_subscriptions:
+                _process_one_due_prepaid_subscription(
                     db,
                     subscription,
-                    BillingAnchorProjectionCommand(
-                        subscription_id=subscription.id,
-                        expected_previous=subscription.next_billing_at,
-                        target=_utc(paid_through),
-                        source=BillingAnchorProjectionSource.prepaid_coverage,
-                        evidence_ref=(
-                            f"scheduled-coverage:{subscription.id}:"
-                            f"{_utc(paid_through).isoformat()}"
-                        ),
-                    ),
+                    effective_at=effective_at,
+                    authority_at=authority_at,
+                    charges=charges,
+                    dry_run=True,
+                    summary=summary,
                 )
-            summary["prepaid_renewals_already_covered"] = (
-                int(summary["prepaid_renewals_already_covered"]) + 1
-            )
             continue
-        try:
-            preview = preview_prepaid_service_renewal(
-                db,
-                subscription_id=subscription.id,
-                starts_at=period_start,
-                ends_at=period_end,
-                amount=amount,
-                currency=currency,
-            )
-        except PrepaidFundingBaselineMissingError:
-            # A baseline may become unavailable after the quarantine snapshot
-            # above. Preview is read-only, so isolating this account cannot
-            # retain a partial renewal write.
-            summary["prepaid_renewals_missing_baseline"] = (
-                int(summary["prepaid_renewals_missing_baseline"]) + 1
-            )
-            continue
-        if not preview.allowed:
-            summary["prepaid_renewals_unfunded"] = (
-                int(summary["prepaid_renewals_unfunded"]) + 1
-            )
-            continue
-        if not dry_run:
-            renewal = confirm_prepaid_service_renewal(
-                db,
-                preview,
-                effective_at=effective_at,
-                evidence_ref=(
-                    "scheduled-billing-run:"
-                    f"{effective_at.isoformat().replace('+00:00', 'Z')}"
-                ),
-            )
-            if not renewal.replayed:
-                stage_prepaid_service_renewed_outcome(
-                    db,
-                    account_id=renewal.preview.account_id,
-                    subscription_id=renewal.preview.subscription_id,
-                    entitlement_id=renewal.entitlement.id,
-                    invoice_id=(
-                        renewal.invoice.id if renewal.invoice is not None else None
-                    ),
-                    ledger_entry_id=(
-                        renewal.ledger_entry.id
-                        if renewal.ledger_entry is not None
-                        else None
-                    ),
-                    period_start=renewal.preview.starts_at,
-                    renewed_through=renewal.preview.ends_at,
-                    amount=renewal.preview.amount,
-                    currency=renewal.preview.currency,
-                    source=PrepaidServiceRenewalSource.scheduled,
-                )
-            from app.models.collections import FinancialAccessOrigin
-            from app.services.collections._core import restore_account_services
 
-            restored = restore_account_services(
+        # Nightly isolation (Michael's exact decided shape, extended
+        # 2026-09 round 7 to account granularity): isolate and continue
+        # ONLY for the three named, typed, account-scoped failures in
+        # `PREPAID_RENEWAL_ISOLATABLE_ERRORS` -- checked by an explicit
+        # closed `isinstance` allowlist, never `retryable=False`, never a
+        # generic `DomainError`, never a bare `except Exception`. A
+        # posting-owner failure, a DB/infrastructure failure, an unexpected
+        # integrity/atomicity violation, or a programming error is NOT in
+        # that allowlist and propagates naturally, aborting the whole pass
+        # -- there is no catch-all here.
+        #
+        # The savepoint now wraps this WHOLE account's due subscriptions,
+        # not one subscription: an ambiguous/isolatable conflict on ANY
+        # subscription in this account rolls back every sibling
+        # subscription this same pass had already funded on this account,
+        # so a partial, inconsistent account-level consequence can never
+        # survive this run. Counters are staged in a local scratch summary
+        # for the same reason -- a Python-level counter bump is not part of
+        # the DB transaction the savepoint rolls back, so it must not be
+        # applied to the real summary until the whole account's savepoint
+        # body has actually succeeded.
+        #
+        # Rollback uses `execute_owner_savepoint` (the established
+        # repository helper), never a raw `db.begin_nested()` -- see
+        # `tests/test_owner_commands.py:185`, which proves a raw nested
+        # transaction is the wrong primitive inside an active owner command.
+        account_scratch_summary = _new_scheduled_renewal_scratch_summary()
+
+        def _run_this_account(
+            _subscriptions: list[Subscription] = account_subscriptions,
+            _scratch: dict[str, PrepaidRenewalSummaryValue] = account_scratch_summary,
+        ) -> None:
+            for subscription in _subscriptions:
+                _process_one_due_prepaid_subscription(
+                    db,
+                    subscription,
+                    effective_at=effective_at,
+                    authority_at=authority_at,
+                    charges=charges,
+                    dry_run=False,
+                    summary=_scratch,
+                )
+
+        try:
+            execute_owner_savepoint(db, _run_this_account)
+        except PREPAID_RENEWAL_ISOLATABLE_ERRORS as exc:
+            # The savepoint above has already rolled back every mutation
+            # this account's subscriptions made in this pass, including any
+            # sibling subscription this SAME call had already funded before
+            # the isolating subscription was reached. The finance work item
+            # for the specific subscription that raised was already
+            # persisted OUT OF BAND (a separate connection/transaction,
+            # `_record_review_item_out_of_band`) by the code that raised
+            # this -- and if THAT persistence itself had failed, it would
+            # have raised a DIFFERENT (non-allowlisted) exception, which is
+            # deliberately NOT caught here and aborts the whole pass instead
+            # of silently isolating past an unrecorded permanent conflict.
+            isolated_entry = {
+                "account_id": str(account_id),
+                "subscription_ids": ",".join(
+                    str(subscription.id) for subscription in account_subscriptions
+                ),
+                "error_type": type(exc).__name__,
+                "reason": exc.message,
+            }
+            isolated_accounts = summary.setdefault("prepaid_renewals_isolated", [])
+            assert isinstance(isolated_accounts, list)
+            isolated_accounts.append(isolated_entry)
+            logger.warning(
+                "prepaid_scheduled_renewal_account_isolated",
+                extra={
+                    "event": "prepaid_scheduled_renewal_account_isolated",
+                    **isolated_entry,
+                },
+            )
+            continue
+        for key, value in account_scratch_summary.items():
+            assert isinstance(value, int)
+            _bump_summary(summary, key, value)
+    db.flush()
+    _finalize_scheduled_renewal_summary(db, summary)
+    return summary
+
+
+_SCHEDULED_RENEWAL_SCRATCH_SUMMARY_KEYS = (
+    "prepaid_renewals_already_covered",
+    "prepaid_renewals_stale_anchor",
+    "prepaid_renewals_missing_price",
+    "prepaid_renewals_missing_baseline",
+    "prepaid_renewals_unfunded",
+    "prepaid_renewals_funded",
+    "prepaid_renewals_restored",
+)
+
+
+def _new_scheduled_renewal_scratch_summary() -> dict[str, PrepaidRenewalSummaryValue]:
+    """One account's provisional counters, merged into the real summary only
+    after that account's savepoint has actually succeeded (see the
+    per-account loop above)."""
+
+    return dict.fromkeys(_SCHEDULED_RENEWAL_SCRATCH_SUMMARY_KEYS, 0)
+
+
+def _process_one_due_prepaid_subscription(
+    db: Session,
+    subscription: Subscription,
+    *,
+    effective_at: datetime,
+    authority_at: datetime,
+    charges: dict[UUID, tuple[Decimal, str, BillingCycle] | None],
+    dry_run: bool,
+    summary: dict[str, PrepaidRenewalSummaryValue],
+) -> None:
+    """One subscription's scheduled-renewal decision, and its mutation if due.
+
+    Raises one of `PREPAID_RENEWAL_ISOLATABLE_ERRORS` for ambiguous or
+    insufficient evidence when `dry_run` is false. The caller wraps a whole
+    ACCOUNT's due subscriptions in one savepoint (2026-09, round 7) -- this
+    function itself carries no savepoint, so that one raise unwinds every
+    sibling subscription call this same account's loop already made in this
+    pass, not just this one.
+    """
+    from app.services.billing_automation import _period_end
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    next_billing_at = subscription.next_billing_at
+    if next_billing_at is None:
+        return
+    period_start = _utc(next_billing_at)
+    lag = effective_at - period_start
+    if period_start <= authority_at or lag > _MAX_AUTOMATIC_LAG:
+        _bump_summary(summary, "prepaid_renewals_stale_anchor", 1)
+        return
+    charge = charges[subscription.id]
+    if charge is None:
+        _bump_summary(summary, "prepaid_renewals_missing_price", 1)
+        return
+    amount, currency, cycle = charge
+    period_end = _period_end(period_start, cycle)
+    paid_through = prepaid_entitlement_coverage_end(
+        db,
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    if paid_through is not None and _utc(paid_through) > period_start:
+        if not dry_run and period_start < _utc(paid_through):
+            stage_subscription_billing_anchor(
                 db,
-                str(subscription.subscriber_id),
-                origin=FinancialAccessOrigin.prepaid_enforcement,
-                resolved_by=(
-                    "prepaid_service_renewal:"
-                    f"{subscription.id}:{period_start.isoformat()}"
+                subscription,
+                BillingAnchorProjectionCommand(
+                    subscription_id=subscription.id,
+                    expected_previous=subscription.next_billing_at,
+                    target=_utc(paid_through),
+                    source=BillingAnchorProjectionSource.prepaid_coverage,
+                    evidence_ref=(
+                        f"scheduled-coverage:{subscription.id}:"
+                        f"{_utc(paid_through).isoformat()}"
+                    ),
                 ),
             )
-            summary["prepaid_renewals_restored"] = (
-                int(summary["prepaid_renewals_restored"]) + restored
+        _bump_summary(summary, "prepaid_renewals_already_covered", 1)
+        return
+    try:
+        preview = preview_prepaid_service_renewal(
+            db,
+            subscription_id=subscription.id,
+            starts_at=period_start,
+            ends_at=period_end,
+            amount=amount,
+            currency=currency,
+        )
+    except PrepaidFundingBaselineMissingError:
+        # A baseline may become unavailable after the quarantine snapshot
+        # taken before this account's loop started. Preview is read-only, so
+        # isolating this account cannot retain a partial renewal write.
+        _bump_summary(summary, "prepaid_renewals_missing_baseline", 1)
+        return
+    if not preview.allowed:
+        _bump_summary(summary, "prepaid_renewals_unfunded", 1)
+        return
+    if not dry_run:
+        _confirm_and_stage_scheduled_renewal(
+            db,
+            preview=preview,
+            effective_at=effective_at,
+        )
+        from app.models.collections import FinancialAccessOrigin
+        from app.services.collections._core import restore_account_services
+
+        restored = restore_account_services(
+            db,
+            str(subscription.subscriber_id),
+            origin=FinancialAccessOrigin.prepaid_enforcement,
+            resolved_by=(
+                f"prepaid_service_renewal:{subscription.id}:{period_start.isoformat()}"
+            ),
+        )
+        _bump_summary(summary, "prepaid_renewals_restored", restored)
+    _bump_summary(summary, "prepaid_renewals_funded", 1)
+
+
+def _finalize_scheduled_renewal_summary(
+    db: Session, summary: dict[str, PrepaidRenewalSummaryValue]
+) -> None:
+    """Mark partial failure honestly and raise operational visibility.
+
+    Never let the summary's status read "ok" when any account was isolated
+    -- and never let a partial-failure pass go unnoticed the way the
+    original silent-swallow defect did.
+    """
+    isolated = summary.get("prepaid_renewals_isolated")
+    if not isolated:
+        return
+    assert isinstance(isolated, list)
+    summary["prepaid_renewals_status"] = "partial_failure"
+    from app.services import staff_notifications
+    from app.services.db_session_adapter import db_session_adapter
+
+    fingerprint = (
+        "prepaid-scheduled-renewal-partial-failure:"
+        + hashlib.sha256(
+            ",".join(
+                # Account-level grouping (2026-09, round 7) renamed this
+                # entry's key from `subscription_id` to `subscription_ids`
+                # (one account can isolate more than one due subscription
+                # at once); this lookup must track that key or every batch
+                # would hash to the same fingerprint regardless of which
+                # accounts were actually isolated.
+                sorted(str(entry.get("subscription_ids")) for entry in isolated)
+            ).encode("utf-8")
+        ).hexdigest()[:32]
+    )
+    # Guaranteed, not best-effort (2026-09, round 6/7): queued on a genuinely
+    # independent connection, the same technique `_record_review_item_out_of_
+    # band` uses, so this alert's fate never depends on the main pass's own
+    # session/transaction state. The durable evidence for each isolated case
+    # already lives in `prepaid_draft_reconciliation_exceptions` regardless
+    # of whether this alert is ever delivered, so a failure here logs loudly
+    # but does not abort the pass (unlike a lost review item, a lost or
+    # delayed staff PAGE is not itself a loss of financial evidence) -- one
+    # retry on a fresh connection before giving up, so a single transient
+    # connection blip cannot silently drop the only attempt.
+    out_of_band_db = db_session_adapter.create_session()
+    try:
+        staff_notifications.queue_permission_review_request(
+            out_of_band_db,
+            permission_key="billing:write",
+            fingerprint=fingerprint,
+            event_type="prepaid_scheduled_renewal_partial_failure",
+            title=(
+                f"Nightly prepaid renewal isolated {len(isolated)} "
+                "subscription(s) -- review required"
+            ),
+            body=(
+                "The scheduled prepaid renewal pass completed but isolated "
+                f"{len(isolated)} subscription(s) rather than aborting the "
+                "whole run. Each isolated case has its own durable review "
+                "item; see prepaid_draft_reconciliation_exceptions."
+            ),
+            target_url="/admin/billing/prepaid-review",
+            category="billing",
+            source="prepaid_service_renewals.run_due_prepaid_service_renewals",
+        )
+        out_of_band_db.commit()
+    except Exception:
+        out_of_band_db.rollback()
+        logger.exception(
+            "prepaid_scheduled_renewal_partial_failure_alert_failed",
+            extra={
+                "event": "prepaid_scheduled_renewal_partial_failure_alert_failed",
+                "isolated_count": len(isolated),
+                "attempt": "first",
+            },
+        )
+        retry_db = db_session_adapter.create_session()
+        try:
+            staff_notifications.queue_permission_review_request(
+                retry_db,
+                permission_key="billing:write",
+                fingerprint=fingerprint,
+                event_type="prepaid_scheduled_renewal_partial_failure",
+                title=(
+                    f"Nightly prepaid renewal isolated {len(isolated)} "
+                    "subscription(s) -- review required"
+                ),
+                body=(
+                    "The scheduled prepaid renewal pass completed but "
+                    f"isolated {len(isolated)} subscription(s) rather than "
+                    "aborting the whole run. Each isolated case has its own "
+                    "durable review item; see "
+                    "prepaid_draft_reconciliation_exceptions."
+                ),
+                target_url="/admin/billing/prepaid-review",
+                category="billing",
+                source="prepaid_service_renewals.run_due_prepaid_service_renewals",
             )
-        summary["prepaid_renewals_funded"] = int(summary["prepaid_renewals_funded"]) + 1
-    db.flush()
-    return summary
+            retry_db.commit()
+        except Exception:
+            # The isolated-accounts list and "partial_failure" status are
+            # already set on `summary` above regardless -- an alert-delivery
+            # failure must not hide the honest status from whatever already
+            # consumes this return value (logs, the caller's own reporting).
+            # The financial evidence itself is durable independently of this
+            # alert (see the module docstring above), so the pass is not
+            # aborted for a second failed delivery attempt.
+            retry_db.rollback()
+            logger.exception(
+                "prepaid_scheduled_renewal_partial_failure_alert_failed",
+                extra={
+                    "event": "prepaid_scheduled_renewal_partial_failure_alert_failed",
+                    "isolated_count": len(isolated),
+                    "attempt": "retry",
+                },
+            )
+        finally:
+            retry_db.close()
+    finally:
+        out_of_band_db.close()
 
 
 def execute_due_prepaid_service_renewals(
     db: Session,
     command: RunDuePrepaidServiceRenewalsCommand,
-) -> dict[str, int | str]:
+) -> dict[str, PrepaidRenewalSummaryValue]:
     """Execute the scheduled renewal pass under its named owner command."""
 
     return execute_owner_command(
@@ -2934,15 +5248,25 @@ __all__ = [
     "STALE_BILLING_ANCHOR_REPAIR_SCOPE",
     "BillingAnchorAuthority",
     "BillingAnchorProjection",
+    "CorrectLegacyRenewalTaxInvoiceCommand",
     "EvaluatePrepaidServiceAfterSettlementCommand",
     "ExecuteReviewedPrepaidServiceRenewalCommand",
     "FundingChangeEvaluation",
     "FundingChangeEvaluationDisposition",
     "FundingChangeRenewalDisposition",
     "FundingChangeRenewalResult",
+    "LegacyRenewalTaxInvoiceCorrectionDisposition",
+    "LegacyRenewalTaxInvoiceCorrectionPreview",
+    "LegacyRenewalTaxInvoiceCorrectionQuery",
+    "LegacyRenewalTaxInvoiceCorrectionResult",
     "PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES",
+    "PREPAID_RENEWAL_ISOLATABLE_ERRORS",
+    "PrepaidFundingSubscriptionDecision",
     "PrepaidMonthlyChargeDetail",
+    "PrepaidOpeningLaneUnavailableError",
     "PrepaidRecurringChargePreview",
+    "PrepaidRenewalAmbiguousEvidenceError",
+    "PrepaidTriggerExecutionConflictError",
     "PrepaidSettlementPeriod",
     "PrepaidSettlementPeriodQuery",
     "PrepaidServiceRenewalPreview",
@@ -2958,11 +5282,13 @@ __all__ = [
     "apply_due_prepaid_service_after_funding_change",
     "apply_stale_prepaid_billing_anchor_repair",
     "confirm_prepaid_service_renewal",
+    "correct_legacy_prepaid_renewal_tax_invoice",
     "evaluate_prepaid_service_after_settlement",
     "execute_due_prepaid_service_renewals",
     "execute_reviewed_prepaid_service_renewal",
     "execute_prepaid_service_after_settlement",
     "preview_prepaid_service_renewal",
+    "preview_legacy_prepaid_renewal_tax_invoice_correction",
     "preview_prepaid_recurring_charge",
     "preview_stale_prepaid_billing_anchor_repair",
     "project_prepaid_billing_anchor_for_invoice",
