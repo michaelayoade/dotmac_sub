@@ -43,6 +43,7 @@ def test_default_preview_variables_uses_supported_keys():
     values = default_preview_variables()
     assert "subscriber_name" in values
     assert "amount" in values
+    assert values["invoice_url"].startswith("/portal/billing/invoices/")
     # old, unsupported keys must be gone
     assert "customer_name" not in values
     assert "amount_due" not in values
