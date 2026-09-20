@@ -939,7 +939,7 @@ def test_reset_password_uses_configured_min_length(db_session, person, monkeypat
     assert exc.value.status_code == 400
     assert exc.value.detail == "Password must be at least 12 characters"
 
-    reset_at = reset_password(db_session, result["token"], "123456789012")
+    reset_at = reset_password(db_session, result["token"], "Abcdefgh123!")
     assert reset_at.tzinfo is not None
 
 
