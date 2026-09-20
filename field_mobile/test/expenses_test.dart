@@ -1196,7 +1196,7 @@ void main() {
     expect(find.byKey(const Key('expense-category')), findsNothing);
     expect(
       find.textContaining(
-        'Expense categories could not be loaded. Please try again.',
+        'No expense categories are available. Ask an administrator to check the ERP category list.',
       ),
       findsOneWidget,
     );
