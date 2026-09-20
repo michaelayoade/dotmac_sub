@@ -219,7 +219,7 @@ def test_reset_password_page_uses_configured_min_length(db_session):
     body = response.body.decode()
 
     assert 'minlength="12"' in body
-    assert "Must be at least 12 characters" in body
+    assert "At least 12 characters" in body
     assert "password.length >= this.passwordMinLength" in body
 
 
