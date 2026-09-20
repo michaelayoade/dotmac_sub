@@ -1238,7 +1238,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Could not load expense categories.'), findsOneWidget);
+    expect(
+      find.text('Expense categories could not be loaded. Please try again.'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('expense-category')), findsNothing);
 
     await tester.tap(find.byKey(const Key('expense-category-retry')));
@@ -1246,7 +1249,10 @@ void main() {
 
     expect(categoryLoads, 2);
     expect(find.byKey(const Key('expense-category')), findsOneWidget);
-    expect(find.text('Could not load expense categories.'), findsNothing);
+    expect(
+      find.text('Expense categories could not be loaded. Please try again.'),
+      findsNothing,
+    );
   });
 
   testWidgets('new expense request retries unavailable approver context', (
