@@ -697,6 +697,7 @@ def test_refresh_expired_token_marks_session(db_session, person):
 
 
 def test_request_and_reset_password(db_session, person, monkeypatch):
+    # Use a password that satisfies the complete local policy.
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
         person_id=person.id,
