@@ -22,9 +22,11 @@ from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
     REPAIR_SCOPE,
     AdoptFundedPrepaidProformaCommand,
+    CorrectPaidPrepaidCoverageCommand,
     CreateReviewedPaidPrepaidInvoiceCommand,
     MissingPaidPrepaidInvoiceRepairQuery,
     OpeningSettlementCorrectionQuery,
+    PaidPrepaidCoverageCorrectionQuery,
     PaidPrepaidInvoiceRepairCohortQuery,
     PaidPrepaidInvoiceRepairQuery,
     PrepaidDraftReconciliationPreview,
@@ -32,22 +34,20 @@ from app.services.prepaid_draft_reconciliation import (
     ReconcileOpeningSettlementCorrectionCommand,
     ReconcilePrepaidDraftCommand,
     RepairHistoricalPaidPrepaidInvoiceCommand,
-    CorrectPaidPrepaidCoverageCommand,
-    PaidPrepaidCoverageCorrectionQuery,
     adopt_funded_prepaid_proforma,
+    correct_paid_prepaid_coverage,
     create_reviewed_paid_prepaid_invoice,
     preview_funded_prepaid_proforma_adoption,
     preview_historical_paid_prepaid_invoice_repair,
     preview_historical_paid_prepaid_invoice_repair_cohort,
     preview_missing_paid_prepaid_invoice_repair,
     preview_opening_settlement_correction,
+    preview_paid_prepaid_coverage_correction,
     preview_prepaid_draft_cohort,
     preview_prepaid_draft_reconciliation,
     reconcile_opening_settlement_correction,
     reconcile_prepaid_draft_invoice,
     repair_historical_paid_prepaid_invoice,
-    correct_paid_prepaid_coverage,
-    preview_paid_prepaid_coverage_correction,
 )
 from app.services.system_user_assignments import system_user_role_names
 
@@ -564,7 +564,9 @@ def main() -> int:
                 )
             elif args.correct_paid_invoice_coverage:
                 if args.target_end is None:
-                    parser.error("--correct-paid-invoice-coverage requires --target-end")
+                    parser.error(
+                        "--correct-paid-invoice-coverage requires --target-end"
+                    )
                 correction = correct_paid_prepaid_coverage(
                     db,
                     CorrectPaidPrepaidCoverageCommand(
@@ -702,19 +704,27 @@ def main() -> int:
             )
             return 0
         if args.correct_paid_invoice_coverage:
-            print(json.dumps({
-                "invoice_id": str(correction.invoice_id),
-                "subscription_id": str(correction.subscription_id),
-                "entitlement_id": str(correction.entitlement_id),
-                "previous_period_end": correction.previous_period_end.isoformat(),
-                "target_period_end": correction.target_period_end.isoformat(),
-                "retained_entitlement_ids": [str(value) for value in correction.retained_entitlement_ids],
-                "invoice_total": str(correction.invoice_total),
-                "balance_due": str(correction.balance_due),
-                "allocated_amount": str(correction.allocated_amount),
-                "preview_fingerprint": correction.preview_fingerprint,
-                "replayed": correction.replayed,
-            }, indent=2, sort_keys=True))
+            print(
+                json.dumps(
+                    {
+                        "invoice_id": str(correction.invoice_id),
+                        "subscription_id": str(correction.subscription_id),
+                        "entitlement_id": str(correction.entitlement_id),
+                        "previous_period_end": correction.previous_period_end.isoformat(),
+                        "target_period_end": correction.target_period_end.isoformat(),
+                        "retained_entitlement_ids": [
+                            str(value) for value in correction.retained_entitlement_ids
+                        ],
+                        "invoice_total": str(correction.invoice_total),
+                        "balance_due": str(correction.balance_due),
+                        "allocated_amount": str(correction.allocated_amount),
+                        "preview_fingerprint": correction.preview_fingerprint,
+                        "replayed": correction.replayed,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return 0
         print(
             json.dumps(
@@ -767,9 +777,7 @@ def main() -> int:
     if args.correct_paid_invoice_coverage and (
         args.account_id is not None or args.limit is not None
     ):
-        parser.error(
-            "--account-id and --limit cannot be used with coverage correction"
-        )
+        parser.error("--account-id and --limit cannot be used with coverage correction")
     if args.subscription_id is not None and not (
         args.adopt_proforma
         or args.repair_paid_invoice
@@ -846,7 +854,10 @@ def main() -> int:
                     "current_period_end": correction_preview.current_period_end.isoformat(),
                     "target_period_end": correction_preview.target_period_end.isoformat(),
                     "next_billing_at": correction_preview.target_period_end.isoformat(),
-                    "retained_entitlement_ids": [str(value) for value in correction_preview.retained_entitlement_ids],
+                    "retained_entitlement_ids": [
+                        str(value)
+                        for value in correction_preview.retained_entitlement_ids
+                    ],
                     "invoice_total": str(correction_preview.invoice_total),
                     "allocated_amount": str(correction_preview.allocated_amount),
                     "balance_due": str(correction_preview.balance_due),
