@@ -595,7 +595,10 @@ class PaidPrepaidCoverageCorrectionPreview:
 
     @property
     def actionable(self) -> bool:
-        return self.disposition is PaidPrepaidCoverageCorrectionDisposition.reviewed_prior_coverage_overlap
+        return (
+            self.disposition
+            is PaidPrepaidCoverageCorrectionDisposition.reviewed_prior_coverage_overlap
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -5887,7 +5890,28 @@ def preview_paid_prepaid_coverage_correction(
         subscription_id=query.subscription_id,
         line_id=query.line_id,
     )
-    empty = dict(
+    empty_payload: dict[str, object] = {
+        "invoice_id": invoice.id,
+        "account_id": invoice.account_id,
+        "invoice_number": invoice.invoice_number,
+        "subscription_id": query.subscription_id,
+        "line_id": evidence.line.id if evidence else (query.line_id or UUID(int=0)),
+        "entitlement_id": evidence.entitlement.id if evidence else UUID(int=0),
+        "allocation_id": evidence.allocation.id if evidence else UUID(int=0),
+        "payment_id": evidence.payment.id if evidence else UUID(int=0),
+        "settlement_id": evidence.settlement.id if evidence else UUID(int=0),
+        "current_period_start": _utc(invoice.billing_period_start or target_end),
+        "current_period_end": _utc(invoice.billing_period_end or target_end),
+        "target_period_end": target_end,
+        "retained_entitlement_ids": (),
+        "invoice_total": round_money(to_decimal(invoice.total)),
+        "allocated_amount": Decimal("0.00"),
+        "balance_due": round_money(to_decimal(invoice.balance_due)),
+        "currency": (invoice.currency or "NGN").upper(),
+        "disposition": PaidPrepaidCoverageCorrectionDisposition.manual_review,
+        "reason": "exact paid prepaid repair evidence is required",
+    }
+    empty = PaidPrepaidCoverageCorrectionPreview(
         invoice_id=invoice.id,
         account_id=invoice.account_id,
         invoice_number=invoice.invoice_number,
@@ -5910,7 +5934,7 @@ def preview_paid_prepaid_coverage_correction(
         fingerprint="",
     )
     if evidence is None:
-        return replace(empty, fingerprint=_hash({**empty, "disposition": empty["disposition"].value}))
+        return replace(empty, fingerprint=_hash(empty_payload))
     current_start = _utc(evidence.entitlement.starts_at)
     current_end = _utc(evidence.entitlement.ends_at)
     retained = tuple(
@@ -5924,35 +5948,44 @@ def preview_paid_prepaid_coverage_correction(
                 ServiceEntitlement.ends_at <= current_start,
             )
             .order_by(ServiceEntitlement.starts_at, ServiceEntitlement.id)
-        ).all())
+        ).all()
+    )
     later = db.scalar(
-        select(ServiceEntitlement.id).where(
+        select(ServiceEntitlement.id)
+        .where(
             ServiceEntitlement.subscription_id == subscription.id,
             ServiceEntitlement.status == ServiceEntitlementStatus.active,
             ServiceEntitlement.id != evidence.entitlement.id,
             ServiceEntitlement.starts_at < target_end,
             ServiceEntitlement.ends_at > target_end,
-        ).limit(1)
+        )
+        .limit(1)
     )
     if target_end == current_end:
         reason = "coverage already ends at the requested target"
         disposition = PaidPrepaidCoverageCorrectionDisposition.already_correct
     elif target_end <= current_start or target_end > current_end or later is not None:
-        reason = "target end is not a safe reviewed shortening of the current entitlement"
+        reason = (
+            "target end is not a safe reviewed shortening of the current entitlement"
+        )
         disposition = PaidPrepaidCoverageCorrectionDisposition.manual_review
-    elif target_end <= max((
-        _utc(row.ends_at) for row in db.scalars(
-            select(ServiceEntitlement).where(
-                ServiceEntitlement.id.in_(retained)
-            )
-        ).all()
-    ), default=current_start):
+    elif target_end <= max(
+        (
+            _utc(row.ends_at)
+            for row in db.scalars(
+                select(ServiceEntitlement).where(ServiceEntitlement.id.in_(retained))
+            ).all()
+        ),
+        default=current_start,
+    ):
         reason = "target end would remove existing prior entitlement coverage"
         disposition = PaidPrepaidCoverageCorrectionDisposition.manual_review
     else:
         reason = "reviewed prior-coverage overlap; only coverage end and billing anchor change"
-        disposition = PaidPrepaidCoverageCorrectionDisposition.reviewed_prior_coverage_overlap
-    payload = {
+        disposition = (
+            PaidPrepaidCoverageCorrectionDisposition.reviewed_prior_coverage_overlap
+        )
+    payload: dict[str, object] = {
         "invoice_id": invoice.id,
         "subscription_id": subscription.id,
         "line_id": evidence.line.id,
@@ -5972,7 +6005,26 @@ def preview_paid_prepaid_coverage_correction(
         "reason": reason,
     }
     return PaidPrepaidCoverageCorrectionPreview(
-        **payload, fingerprint=_hash(payload)
+        invoice_id=invoice.id,
+        account_id=invoice.account_id,
+        invoice_number=invoice.invoice_number,
+        subscription_id=subscription.id,
+        line_id=evidence.line.id,
+        entitlement_id=evidence.entitlement.id,
+        allocation_id=evidence.allocation.id,
+        payment_id=evidence.payment.id,
+        settlement_id=evidence.settlement.id,
+        current_period_start=current_start,
+        current_period_end=current_end,
+        target_period_end=target_end,
+        retained_entitlement_ids=retained,
+        invoice_total=round_money(to_decimal(invoice.total)),
+        allocated_amount=round_money(to_decimal(evidence.allocation.amount)),
+        balance_due=round_money(to_decimal(invoice.balance_due)),
+        currency=(invoice.currency or "NGN").upper(),
+        disposition=disposition,
+        reason=reason,
+        fingerprint=_hash(payload),
     )
 
 
@@ -5981,6 +6033,7 @@ def correct_paid_prepaid_coverage(
     command: CorrectPaidPrepaidCoverageCommand,
 ) -> PaidPrepaidCoverageCorrectionResult:
     """Apply one reviewed coverage correction without changing financial values."""
+
     def operation() -> PaidPrepaidCoverageCorrectionResult:
         if command.context.scope != REPAIR_SCOPE or not command.permission_granted:
             _error("permission_denied", f"Coverage correction requires {REPAIR_SCOPE}.")
@@ -5992,7 +6045,9 @@ def correct_paid_prepaid_coverage(
             _error("invoice_not_found", "Invoice was not found.")
         lock_account(db, str(invoice.account_id))
         locked_invoice = lock_for_update(db, Invoice, str(command.query.invoice_id))
-        locked_subscription = lock_for_update(db, Subscription, str(command.query.subscription_id))
+        locked_subscription = lock_for_update(
+            db, Subscription, str(command.query.subscription_id)
+        )
         if locked_invoice is None or locked_subscription is None:
             _error("not_found", "Invoice or subscription was not found.")
         current = preview_paid_prepaid_coverage_correction(db, command.query)
@@ -6001,23 +6056,41 @@ def correct_paid_prepaid_coverage(
         if not current.actionable:
             _error("not_actionable", current.reason)
         reservation = db.scalar(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _PAID_INVOICE_COVERAGE_CORRECTION_IDEMPOTENCY_SCOPE,
+            select(IdempotencyKey)
+            .where(
+                IdempotencyKey.scope
+                == _PAID_INVOICE_COVERAGE_CORRECTION_IDEMPOTENCY_SCOPE,
                 IdempotencyKey.key == key,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
         if reservation is not None:
             if reservation.ref_id != str(current.invoice_id):
-                _error("idempotency_conflict", "Idempotency key belongs to another invoice.")
+                _error(
+                    "idempotency_conflict",
+                    "Idempotency key belongs to another invoice.",
+                )
             return PaidPrepaidCoverageCorrectionResult(
-                invoice_id=current.invoice_id, subscription_id=current.subscription_id,
-                entitlement_id=current.entitlement_id, previous_period_end=current.current_period_end,
-                target_period_end=current.target_period_end, retained_entitlement_ids=current.retained_entitlement_ids,
-                invoice_total=current.invoice_total, balance_due=current.balance_due,
-                allocated_amount=current.allocated_amount, preview_fingerprint=current.fingerprint, replayed=True,
+                invoice_id=current.invoice_id,
+                subscription_id=current.subscription_id,
+                entitlement_id=current.entitlement_id,
+                previous_period_end=current.current_period_end,
+                target_period_end=current.target_period_end,
+                retained_entitlement_ids=current.retained_entitlement_ids,
+                invoice_total=current.invoice_total,
+                balance_due=current.balance_due,
+                allocated_amount=current.allocated_amount,
+                preview_fingerprint=current.fingerprint,
+                replayed=True,
             )
-        db.add(IdempotencyKey(scope=_PAID_INVOICE_COVERAGE_CORRECTION_IDEMPOTENCY_SCOPE, key=key,
-                              account_id=current.account_id, ref_id=str(current.invoice_id)))
+        db.add(
+            IdempotencyKey(
+                scope=_PAID_INVOICE_COVERAGE_CORRECTION_IDEMPOTENCY_SCOPE,
+                key=key,
+                account_id=current.account_id,
+                ref_id=str(current.invoice_id),
+            )
+        )
         entitlement = db.get(ServiceEntitlement, current.entitlement_id)
         if entitlement is None:
             _error("not_found", "Entitlement was not found.")
@@ -6028,8 +6101,10 @@ def correct_paid_prepaid_coverage(
             BillingAnchorProjectionSource,
             stage_subscription_billing_anchor,
         )
+
         stage_subscription_billing_anchor(
-            db, locked_subscription,
+            db,
+            locked_subscription,
             BillingAnchorProjectionCommand(
                 subscription_id=locked_subscription.id,
                 expected_previous=locked_subscription.next_billing_at,
@@ -6043,33 +6118,70 @@ def correct_paid_prepaid_coverage(
             "preview_fingerprint": current.fingerprint,
             "previous_period_end": current.current_period_end.isoformat(),
             "target_period_end": current.target_period_end.isoformat(),
-            "retained_entitlement_ids": [str(value) for value in current.retained_entitlement_ids],
-            "economic_delta": "0.00", "actor": command.context.actor, "idempotency_key": key,
-            "actor_system_user_id": str(command.actor_system_user_id) if command.actor_system_user_id else None,
+            "retained_entitlement_ids": [
+                str(value) for value in current.retained_entitlement_ids
+            ],
+            "economic_delta": "0.00",
+            "actor": command.context.actor,
+            "idempotency_key": key,
+            "actor_system_user_id": str(command.actor_system_user_id)
+            if command.actor_system_user_id
+            else None,
         }
         locked_invoice.metadata_ = metadata
-        AuditEvents.stage(db, AuditEventCreate(
-            action="correct_paid_prepaid_invoice_coverage", entity_type="invoice", entity_id=str(locked_invoice.id),
-            metadata_={"preview_fingerprint": current.fingerprint, "previous_period_end": current.current_period_end.isoformat(),
-                       "target_period_end": current.target_period_end.isoformat(), "economic_delta": "0.00",
-                       "retained_entitlement_ids": [str(value) for value in current.retained_entitlement_ids]},
-        ))
-        emit_event(db, EventType.prepaid_paid_invoice_coverage_corrected, {
-            "invoice_id": str(locked_invoice.id), "subscription_id": str(current.subscription_id),
-            "entitlement_id": str(current.entitlement_id), "previous_period_end": current.current_period_end.isoformat(),
-            "target_period_end": current.target_period_end.isoformat(), "economic_delta": "0.00",
-            "preview_fingerprint": current.fingerprint,
-        }, account_id=current.account_id, invoice_id=current.invoice_id)
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                action="correct_paid_prepaid_invoice_coverage",
+                entity_type="invoice",
+                entity_id=str(locked_invoice.id),
+                metadata_={
+                    "preview_fingerprint": current.fingerprint,
+                    "previous_period_end": current.current_period_end.isoformat(),
+                    "target_period_end": current.target_period_end.isoformat(),
+                    "economic_delta": "0.00",
+                    "retained_entitlement_ids": [
+                        str(value) for value in current.retained_entitlement_ids
+                    ],
+                },
+            ),
+        )
+        emit_event(
+            db,
+            EventType.prepaid_paid_invoice_coverage_corrected,
+            {
+                "invoice_id": str(locked_invoice.id),
+                "subscription_id": str(current.subscription_id),
+                "entitlement_id": str(current.entitlement_id),
+                "previous_period_end": current.current_period_end.isoformat(),
+                "target_period_end": current.target_period_end.isoformat(),
+                "economic_delta": "0.00",
+                "preview_fingerprint": current.fingerprint,
+            },
+            account_id=current.account_id,
+            invoice_id=current.invoice_id,
+        )
         db.flush()
         return PaidPrepaidCoverageCorrectionResult(
-            invoice_id=current.invoice_id, subscription_id=current.subscription_id, entitlement_id=current.entitlement_id,
-            previous_period_end=current.current_period_end, target_period_end=current.target_period_end,
-            retained_entitlement_ids=current.retained_entitlement_ids, invoice_total=current.invoice_total,
-            balance_due=current.balance_due, allocated_amount=current.allocated_amount,
-            preview_fingerprint=current.fingerprint, replayed=False,
+            invoice_id=current.invoice_id,
+            subscription_id=current.subscription_id,
+            entitlement_id=current.entitlement_id,
+            previous_period_end=current.current_period_end,
+            target_period_end=current.target_period_end,
+            retained_entitlement_ids=current.retained_entitlement_ids,
+            invoice_total=current.invoice_total,
+            balance_due=current.balance_due,
+            allocated_amount=current.allocated_amount,
+            preview_fingerprint=current.fingerprint,
+            replayed=False,
         )
-    return execute_owner_command(db, definition=_PAID_INVOICE_COVERAGE_CORRECTION_COMMAND,
-                                 context=command.context, operation=operation)
+
+    return execute_owner_command(
+        db,
+        definition=_PAID_INVOICE_COVERAGE_CORRECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def _opening_settlement_preview_payload(
