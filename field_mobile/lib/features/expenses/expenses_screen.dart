@@ -1143,8 +1143,8 @@ class _NewExpenseRequestScreenState
     }
     if (formContext.approvers.isEmpty) {
       setState(
-        () => _submitError =
-            'No expense approver is available for your account.',
+        () =>
+            _submitError = 'No expense approver is available for your account.',
       );
       return;
     }
