@@ -623,7 +623,6 @@ def _enable_langgraph(config: AiIntakeConfig) -> None:
     }
 
 
-
 def test_ai_intake_database_failure_escapes_owner_for_rollback_and_retry(
     db_session, monkeypatch
 ):
