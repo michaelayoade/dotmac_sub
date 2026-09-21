@@ -69,7 +69,7 @@ def upgrade() -> None:
                     SELECT 1
                       FROM catalog_offers AS offer
                      WHERE offer.usage_allowance_id = allowance.id
-                       AND offer.plan_category = 'high_speed_data'
+                       AND offer.plan_family = 'high_speed_data'
                )
             """
         )
