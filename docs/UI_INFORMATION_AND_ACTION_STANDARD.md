@@ -736,6 +736,12 @@ implementation.
   acceptance, accepted, approved, rejected with reason, paid, and sync
   unavailable/failed remain distinct. A sent outbox event is never labelled
   accepted by ERP.
+- Approval actions: a selected approver with expense-write permission sees a
+  separate approval section for submitted claims on the exact work order.
+  **Approve** accepts every requested line amount unchanged and requires no
+  reason. **Adjust amount** opens positive line-level approved amounts and ends
+  with **Approve adjusted amount**; a reason is required only when a value
+  differs. Requested values remain visible and immutable.
 - Responsive behavior: line items are stacked cards at every width, controls
   retain labels and text errors, totals name their currency, and add/remove and
   submit actions remain accessible without relying on colour.
@@ -773,6 +779,11 @@ implementation.
   is unresolved or unavailable, navigation also omits Materials, and a manager
   restored onto that branch receives manager content rather than the material
   list.
+- Manager approval actions: **Approve** remains the primary one-tap action for
+  an unchanged request. **Adjust amount** is secondary and prepopulates every
+  line with its requested value. Adjusted approvals show requested total,
+  approved total, and reason in manager and requester history. Approval is
+  online-only and a stale revision fails closed with refresh guidance.
 
 ## Field Work-Order Note Contract
 

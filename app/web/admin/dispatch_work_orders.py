@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Callable
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
 
@@ -29,6 +30,8 @@ from app.services.auth_dependencies import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field.expense_requests import (
+    ApproveFieldExpenseRequest,
+    ExpenseApprovalLineInput,
     ExpenseReceiptUploadInput,
     ExpenseRequestAccessMode,
     ExpenseRequestLineInput,
@@ -38,6 +41,7 @@ from app.services.field.expense_requests import (
     StaffWorkOrderAccess,
     SubmitFieldExpenseRequest,
     VerifyFieldExpenseDestination,
+    approve_field_expense_request_command,
     submit_field_expense_request_command,
     verify_field_expense_destination,
 )
@@ -228,6 +232,7 @@ def _expense_detail_response(
         actor_system_user_id=actor_id,
         form=expense_form,
         errors=expense_errors,
+        can_review_expenses=can(request, "operations:expense_request:write"),
     )
     context = _ctx(request, db)
     context.update(state)
@@ -451,6 +456,77 @@ def create_work_order_expense(
     return _detail_redirect(
         work_order_id,
         notice=f"Expense claim {outcome.id} submitted",
+    )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/expenses/{expense_request_id}/approve",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(_require_expense_csrf),
+        Depends(require_permission("operations:expense_request:write")),
+    ],
+)
+def approve_work_order_expense(
+    request: Request,
+    work_order_id: str,
+    expense_request_id: UUID,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_work_order_read_access),
+):
+    actor_id = _actor_id(auth)
+    raw_form = parse_form_data_sync(request)
+    lines: list[ExpenseApprovalLineInput] = []
+    try:
+        for key, raw_value in raw_form.multi_items():
+            if not isinstance(key, str) or not key.startswith("approved_amount_"):
+                continue
+            item_id = UUID(key.removeprefix("approved_amount_"))
+            lines.append(
+                ExpenseApprovalLineInput(
+                    expense_item_id=item_id,
+                    approved_amount=Decimal(str(raw_value)),
+                )
+            )
+        expected_revision_raw = _form_text(raw_form, "expected_revision").strip()
+        expected_revision = (
+            int(expected_revision_raw) if expected_revision_raw else None
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        return _detail_redirect(
+            work_order_id,
+            error="Enter a valid approved amount for every expense item.",
+        )
+
+    command_id = uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        outcome = approve_field_expense_request_command(
+            db,
+            command=ApproveFieldExpenseRequest(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"user:{actor_id}",
+                    scope="operations:expense_request:write",
+                    reason=f"approve_expense_request:{expense_request_id}",
+                    idempotency_key=str(command_id),
+                ),
+                expense_request_id=expense_request_id,
+                reviewer_system_user_id=actor_id,
+                lines=tuple(lines),
+                adjustment_reason=_form_text(raw_form, "adjustment_reason"),
+                expected_revision=expected_revision,
+                expected_work_order_public_id=work_order_id,
+            ),
+        )
+    except DomainError as exc:
+        db_session_adapter.discard_failed_transaction(db)
+        return _detail_redirect(work_order_id, error=exc.message)
+    label = "adjusted and approved" if outcome.amounts_adjusted else "approved"
+    return _detail_redirect(
+        work_order_id,
+        notice=f"Expense {expense_request_id} {label}",
     )
 
 

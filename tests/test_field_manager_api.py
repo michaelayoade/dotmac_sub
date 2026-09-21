@@ -29,9 +29,11 @@ from app.services.field import expense_categories as expense_categories_module
 from app.services.field.expense_recovery import ExpensePaymentDeliveryRecoveryPreview
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
+    ExpenseApprovalLineInput,
     ExpenseCategoryRule,
     ExpenseRequestLineInput,
     ExpenseWorkOrderIdentity,
+    FieldExpenseRequestError,
     RejectFieldExpenseRequest,
     SubmitFieldExpenseRequest,
     approve_field_expense_request_command,
@@ -84,7 +86,15 @@ def _auth(user: SystemUser, roles: list[str] | None = None) -> dict:
     }
 
 
-def _approve_expense(db_session, *, request_id, reviewer_id):
+def _approve_expense(
+    db_session,
+    *,
+    request_id,
+    reviewer_id,
+    lines=(),
+    adjustment_reason=None,
+    expected_revision=None,
+):
     command_id = uuid4()
     db_session.commit()
     return approve_field_expense_request_command(
@@ -100,6 +110,9 @@ def _approve_expense(db_session, *, request_id, reviewer_id):
             ),
             expense_request_id=request_id,
             reviewer_system_user_id=reviewer_id,
+            lines=tuple(lines),
+            adjustment_reason=adjustment_reason,
+            expected_revision=expected_revision,
         ),
     )
 
@@ -456,6 +469,182 @@ def test_manager_expense_approve_and_reject(db_session):
     }
     assert str(first["id"]) not in still_pending
     assert str(second["id"]) not in still_pending
+
+
+def test_manager_can_approve_expense_as_submitted_without_reason(db_session):
+    manager = _user(db_session, "PlainApprovalManager")
+    tech_user = _user(db_session, "PlainApprovalTech")
+    profile = _profile(db_session, tech_user, crm_person_id="plain-approval-tech")
+    work_order = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-plain-approval",
+        status="in_progress",
+        assigned_to_crm_person_id="plain-approval-tech",
+    )
+    created = _expense(db_session, tech_user, profile, work_order)
+
+    outcome = _approve_expense(
+        db_session,
+        request_id=created["id"],
+        reviewer_id=manager.id,
+    )
+
+    request = db_session.get(FieldExpenseRequest, created["id"])
+    assert request is not None
+    assert request.items[0].amount == Decimal("2500.00")
+    assert request.items[0].approved_amount == Decimal("2500.00")
+    assert request.approval_adjustment_reason is None
+    assert outcome.amounts_adjusted is False
+    assert outcome.approved_total_amount == Decimal("2500.00")
+
+
+def test_manager_can_adjust_amount_and_approve_with_reason(db_session):
+    manager = _user(db_session, "AdjustedApprovalManager")
+    tech_user = _user(db_session, "AdjustedApprovalTech")
+    profile = _profile(db_session, tech_user, crm_person_id="adjusted-approval-tech")
+    work_order = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-adjusted-approval",
+        status="in_progress",
+        assigned_to_crm_person_id="adjusted-approval-tech",
+    )
+    created = _expense(db_session, tech_user, profile, work_order)
+    request = db_session.get(FieldExpenseRequest, created["id"])
+    assert request is not None
+    item_id = request.items[0].id
+
+    outcome = _approve_expense(
+        db_session,
+        request_id=request.id,
+        reviewer_id=manager.id,
+        lines=(
+            ExpenseApprovalLineInput(
+                expense_item_id=item_id,
+                approved_amount=Decimal("2000.00"),
+            ),
+        ),
+        adjustment_reason="Approved transport rate",
+        expected_revision=1,
+    )
+
+    persisted = db_session.get(FieldExpenseRequest, request.id)
+    assert persisted is not None
+    assert persisted.items[0].amount == Decimal("2500.00")
+    assert persisted.items[0].approved_amount == Decimal("2000.00")
+    assert persisted.approval_adjustment_reason == "Approved transport rate"
+    assert outcome.requested_total_amount == Decimal("2500.00")
+    assert outcome.approved_total_amount == Decimal("2000.00")
+    assert outcome.amounts_adjusted is True
+    assert outcome.revision == 2
+
+
+def test_adjusted_approval_requires_reason_and_rolls_back(db_session):
+    manager = _user(db_session, "MissingReasonManager")
+    tech_user = _user(db_session, "MissingReasonTech")
+    profile = _profile(db_session, tech_user, crm_person_id="missing-reason-tech")
+    work_order = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-missing-reason",
+        status="in_progress",
+        assigned_to_crm_person_id="missing-reason-tech",
+    )
+    created = _expense(db_session, tech_user, profile, work_order)
+    request = db_session.get(FieldExpenseRequest, created["id"])
+    assert request is not None
+    item_id = request.items[0].id
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        _approve_expense(
+            db_session,
+            request_id=request.id,
+            reviewer_id=manager.id,
+            lines=(
+                ExpenseApprovalLineInput(
+                    expense_item_id=item_id,
+                    approved_amount=Decimal("2000.00"),
+                ),
+            ),
+        )
+
+    assert raised.value.code.endswith("adjustment_reason_required")
+    persisted = db_session.get(FieldExpenseRequest, request.id)
+    assert persisted is not None
+    assert persisted.status == "submitted"
+    assert persisted.items[0].approved_amount is None
+
+
+def test_adjusted_approval_rejects_stale_revision_before_mutation(db_session):
+    manager = _user(db_session, "StaleApprovalManager")
+    tech_user = _user(db_session, "StaleApprovalTech")
+    profile = _profile(db_session, tech_user, crm_person_id="stale-approval-tech")
+    work_order = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-stale-approval",
+        status="in_progress",
+        assigned_to_crm_person_id="stale-approval-tech",
+    )
+    created = _expense(db_session, tech_user, profile, work_order)
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        _approve_expense(
+            db_session,
+            request_id=created["id"],
+            reviewer_id=manager.id,
+            expected_revision=2,
+        )
+
+    assert raised.value.code.endswith("stale_approval")
+    persisted = db_session.get(FieldExpenseRequest, created["id"])
+    assert persisted is not None
+    assert persisted.status == "submitted"
+    assert persisted.items[0].approved_amount is None
+
+
+def test_adjusted_approval_requires_each_line_exactly_once(db_session):
+    manager = _user(db_session, "LineSetApprovalManager")
+    tech_user = _user(db_session, "LineSetApprovalTech")
+    profile = _profile(db_session, tech_user, crm_person_id="line-set-approval-tech")
+    work_order = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-line-set-approval",
+        status="in_progress",
+        assigned_to_crm_person_id="line-set-approval-tech",
+    )
+    created = _expense(db_session, tech_user, profile, work_order)
+    request = db_session.get(FieldExpenseRequest, created["id"])
+    assert request is not None
+    item_id = request.items[0].id
+    duplicate_lines = (
+        ExpenseApprovalLineInput(
+            expense_item_id=item_id,
+            approved_amount=Decimal("2000.00"),
+        ),
+        ExpenseApprovalLineInput(
+            expense_item_id=item_id,
+            approved_amount=Decimal("1900.00"),
+        ),
+    )
+
+    with pytest.raises(FieldExpenseRequestError) as raised:
+        _approve_expense(
+            db_session,
+            request_id=request.id,
+            reviewer_id=manager.id,
+            lines=duplicate_lines,
+            adjustment_reason="Approved transport rate",
+            expected_revision=1,
+        )
+
+    assert raised.value.code.endswith("approval_lines_mismatch")
+    persisted = db_session.get(FieldExpenseRequest, request.id)
+    assert persisted is not None
+    assert persisted.status == "submitted"
+    assert persisted.items[0].approved_amount is None
 
 
 def test_manager_api(db_session):

@@ -119,6 +119,13 @@ class ErpExpenseClaimTransitionOutcome(BaseModel):
     status: Literal["submitted", "approved", "rejected"]
 
 
+class ErpExpenseApprovalLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_line_id: UUID
+    approved_amount: str
+
+
 class ErpExpenseApprovalCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,6 +134,8 @@ class ErpExpenseApprovalCommand(BaseModel):
     decided_by_email: str
     decided_at: str
     notes: str | None = None
+    items: tuple[ErpExpenseApprovalLine, ...] = ()
+    adjustment_reason: str | None = None
 
 
 class ErpExpenseRejectionCommand(ErpExpenseApprovalCommand):

@@ -180,6 +180,111 @@ void main() {
     expect(find.text('Expense rejected'), findsOneWidget);
   });
 
+  testWidgets(
+    'manager can adjust an amount while the plain approve stays visible',
+    (tester) async {
+      final adapter = FakeHttpAdapter();
+      final store = InMemoryTokenStore();
+      await store.save(
+        accessToken: fakeJwt(
+          expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
+        ),
+        refreshToken: 'refresh',
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://test.local'))
+        ..httpClientAdapter = adapter;
+      final client = ApiClient(
+        baseUrl: 'https://test.local',
+        tokenStore: store,
+        dio: dio,
+      );
+
+      adapter.on(
+        'GET',
+        '/api/v1/field/manager/expenses',
+        (_) => (
+          200,
+          {
+            'items': [
+              {
+                'id': 'exp-adjust',
+                'status': 'submitted',
+                'purpose': 'Site transport',
+                'currency': 'NGN',
+                'total_amount': '2500.00',
+                'requested_total_amount': '2500.00',
+                'revision': 1,
+                'items': [
+                  {
+                    'id': 'line-1',
+                    'category_code': 'transport',
+                    'description': 'Bike delivery',
+                    'amount': '2500.00',
+                  },
+                ],
+              },
+            ],
+          },
+        ),
+      );
+      adapter.on('POST', '/api/v1/field/manager/expenses/exp-adjust/approve', (
+        options,
+      ) {
+        expect(options.data, {
+          'lines': [
+            {'expense_item_id': 'line-1', 'approved_amount': '2000.00'},
+          ],
+          'adjustment_reason': 'Approved transport rate',
+          'expected_revision': 1,
+        });
+        return (
+          200,
+          {
+            'id': 'exp-adjust',
+            'status': 'approved',
+            'erp_sync_status': 'pending',
+            'requested_total_amount': '2500.00',
+            'approved_total_amount': '2000.00',
+            'amounts_adjusted': true,
+            'adjustment_reason': 'Approved transport rate',
+            'revision': 2,
+          },
+        );
+      });
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [apiClientProvider.overrideWithValue(client)],
+          child: const MaterialApp(
+            home: ManagerExpenseReviewScreen(
+              filter: ManagerExpenseReviewFilter.pendingApprovals,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('approve-expense-exp-adjust')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('adjust-expense-exp-adjust')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('approved-amount-line-1')),
+        '2000',
+      );
+      await tester.enterText(
+        find.byKey(const Key('expense-adjustment-reason')),
+        'Approved transport rate',
+      );
+      await tester.tap(find.byKey(const Key('approve-adjusted-expense')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Expense adjusted and approved'), findsOneWidget);
+    },
+  );
+
   testWidgets('authorized manager can queue payment for an approved expense', (
     tester,
   ) async {

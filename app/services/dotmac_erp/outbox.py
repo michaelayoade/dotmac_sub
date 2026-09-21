@@ -105,6 +105,7 @@ _EXPENSE_ACTION_ENDPOINTS = {
     "release_approved_v2": "typed:expense-release-v2",
     "expense_submit_v3": "typed:expense-submit-v3",
     "expense_approve_v3": "typed:expense-approve-v3",
+    "expense_approve_v4": "typed:expense-approve-v4",
     "expense_reject_v3": "typed:expense-reject-v3",
 }
 
@@ -386,6 +387,7 @@ def _is_typed_expense_event(row: FieldErpSyncEvent) -> bool:
         "release_approved_v2",
         "expense_submit_v3",
         "expense_approve_v3",
+        "expense_approve_v4",
         "expense_reject_v3",
         "initiate_payment",
     }
@@ -405,7 +407,7 @@ def _required_expense_client_methods(row: FieldErpSyncEvent) -> tuple[str, ...]:
             "upload_expense_receipt",
             "submit_expense_claim",
         )
-    if action == "expense_approve_v3":
+    if action in {"expense_approve_v3", "expense_approve_v4"}:
         return ("approve_expense_claim",)
     if action == "initiate_payment":
         return ("initiate_expense_payment",)
@@ -423,7 +425,7 @@ def _deliver_typed_expense_event(
         return _deliver_approved_expense_release(db, row, client=client)
     if action == "expense_submit_v3":
         return _deliver_expense_submission(db, row, client=client)
-    if action == "expense_approve_v3":
+    if action in {"expense_approve_v3", "expense_approve_v4"}:
         command = ErpExpenseApprovalCommand.model_validate(_transport_payload(row))
         outcome = client.approve_expense_claim(
             command, idempotency_key=row.idempotency_key

@@ -14926,7 +14926,7 @@
     "header:x-api-key",
     "path:expense_request_id!"
    ],
-   "request": null,
+   "request": "3e38f82cede4",
    "responses": {
     "200": "39a569c0cfe0",
     "422": "a11c9d9b2af8"
@@ -19642,7 +19642,7 @@
   "FieldEquipmentRead": "c401fc79d178",
   "FieldEquipmentRecord": "7c7bcf16d5ae",
   "FieldEquipmentReturnRequest": "80e3640552d3",
-  "FieldExpenseApprovalRead": "64ecf6941a17",
+  "FieldExpenseApprovalRead": "1dfb9669a781",
   "FieldExpenseApproverRead": "b302644dd976",
   "FieldExpenseBankRead": "580ea29aafbe",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
@@ -19660,8 +19660,8 @@
   "FieldExpenseRejectionRead": "41e6ae96c94b",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
-  "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "f6681091e1da",
+  "FieldExpenseRequestItemRead": "67410920d16f",
+  "FieldExpenseRequestRead": "1935a4bdfb20",
   "FieldExpenseRequestSubmit": "60c02371fc62",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
@@ -19694,6 +19694,8 @@
   "FieldLiveMapPosition": "ae257e574bcc",
   "FieldLiveMapTechnicianDetail": "bf1e0e8c76ef",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
+  "FieldManagerExpenseApprovalLine": "5e10620348d5",
+  "FieldManagerExpenseApproveRequest": "fd6218929b38",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",
   "FieldManagerJobAssignRequest": "b448cdab2bda",

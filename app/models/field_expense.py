@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -49,6 +50,15 @@ class FieldExpenseRequest(Base):
             "ix_field_expense_requests_selected_approver",
             "selected_approver_system_user_id",
         ),
+        Index(
+            "ix_field_expense_requests_approved_by",
+            "approved_by_system_user_id",
+        ),
+        Index(
+            "ux_field_expense_requests_approval_decision",
+            "approval_decision_id",
+            unique=True,
+        ),
         Index("ix_field_expense_requests_client_ref", "client_ref", unique=True),
         CheckConstraint(
             "status IN ('draft', 'submitted', 'approved', 'rejected', 'paid', 'canceled')",
@@ -86,6 +96,12 @@ class FieldExpenseRequest(Base):
     )
     selected_approver_name: Mapped[str | None] = mapped_column(String(200))
     selected_approver_email: Mapped[str | None] = mapped_column(String(255))
+    approved_by_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id")
+    )
+    approval_decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    approval_adjustment_reason: Mapped[str | None] = mapped_column(String(500))
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     payment_destination_mode: Mapped[str | None] = mapped_column(String(30))
     payment_destination_token: Mapped[str | None] = mapped_column(Text)
     recipient_bank_code: Mapped[str | None] = mapped_column(String(20))
@@ -136,6 +152,9 @@ class FieldExpenseRequest(Base):
     selected_approver_system_user = relationship(
         "SystemUser", foreign_keys=[selected_approver_system_user_id]
     )
+    approved_by_system_user = relationship(
+        "SystemUser", foreign_keys=[approved_by_system_user_id]
+    )
     items = relationship(
         "FieldExpenseRequestItem",
         back_populates="expense_request",
@@ -144,7 +163,36 @@ class FieldExpenseRequest(Base):
 
     @property
     def total_amount(self) -> Decimal:
+        """Return the operational amount: approved after decision, claimed before."""
+        if self.status in {"approved", "paid"}:
+            return sum(
+                (
+                    item.approved_amount
+                    if item.approved_amount is not None
+                    else item.amount
+                    for item in self.items
+                ),
+                Decimal("0"),
+            )
+        return self.requested_total_amount
+
+    @property
+    def requested_total_amount(self) -> Decimal:
         return sum((item.amount for item in self.items), Decimal("0"))
+
+    @property
+    def approved_total_amount(self) -> Decimal | None:
+        if self.status not in {"approved", "paid"}:
+            return None
+        return sum(
+            (
+                item.approved_amount
+                if item.approved_amount is not None
+                else item.amount
+                for item in self.items
+            ),
+            Decimal("0"),
+        )
 
 
 class FieldExpenseRequestItem(Base):
@@ -163,6 +211,10 @@ class FieldExpenseRequestItem(Base):
             "amount > 0",
             name="ck_field_expense_request_items_amount_positive",
         ),
+        CheckConstraint(
+            "approved_amount IS NULL OR approved_amount > 0",
+            name="ck_field_expense_request_items_approved_amount_positive",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -177,6 +229,7 @@ class FieldExpenseRequestItem(Base):
     category_name: Mapped[str | None] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    approved_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     expense_date: Mapped[date | None] = mapped_column(Date)
     vendor_name: Mapped[str | None] = mapped_column(String(200))
     receipt_url: Mapped[str | None] = mapped_column(String(500))

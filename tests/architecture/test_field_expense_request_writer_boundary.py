@@ -11,6 +11,9 @@ PROJECTION_WRITER = Path("app/services/dotmac_erp/expense_sync.py")
 EXPENSE_MUTABLE_FIELDS = {
     "status",
     "approved_at",
+    "approved_by_system_user_id",
+    "approval_decision_id",
+    "approval_adjustment_reason",
     "rejected_at",
     "paid_at",
     "rejection_reason",
@@ -19,6 +22,7 @@ EXPENSE_MUTABLE_FIELDS = {
     "expense_claim_number",
     "expense_claim_status",
     "metadata_",
+    "revision",
 }
 
 

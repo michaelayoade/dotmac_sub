@@ -899,7 +899,7 @@ def test_claim_bound_destination_accepts_complete_canonical_identity_path(
     delivery = rows[-1]
     assert delivery.payload["source_claim_id"] == str(source_claim_id)
     assert delivery.idempotency_key.startswith(f"exp-{source_claim_id}-approved-")
-    assert delivery.idempotency_key.endswith("-v3")
+    assert delivery.idempotency_key.endswith("-v4")
 
     delivered = outbox.deliver_pending(db_session, client=client)
 
@@ -1207,8 +1207,14 @@ def test_approval_enqueues_with_owner_and_enabled_capability(db_session):
     row = rows[-1]
     assert row.flow == FieldErpSyncFlow.expense_claim.value
     assert row.idempotency_key.startswith(f"exp-{request.id}-approved-")
-    assert row.idempotency_key.endswith("-v3")
-    assert row.payload["_expense_action"] == "expense_approve_v3"
+    assert row.idempotency_key.endswith("-v4")
+    assert row.payload["_expense_action"] == "expense_approve_v4"
+    assert row.payload["items"] == [
+        {
+            "source_line_id": str(request.items[0].id),
+            "approved_amount": str(request.items[0].amount),
+        }
+    ]
     assert row.payload["_depends_on_idempotency_key"] == (
         f"exp-{request.id}-submitted-v3"
     )
@@ -1305,7 +1311,7 @@ def test_payment_stages_after_approval_with_a_distinct_permission(db_session):
     assert payment.payload["_depends_on_idempotency_key"].startswith(
         f"exp-{request.id}-approved-"
     )
-    assert payment.payload["_depends_on_idempotency_key"].endswith("-v3")
+    assert payment.payload["_depends_on_idempotency_key"].endswith("-v4")
     assert payment.payload["initiated_by_email"] == manager.email
 
 

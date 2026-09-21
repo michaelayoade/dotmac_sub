@@ -50,6 +50,7 @@ def test_project_cost_summary_uses_native_worklogs_and_approved_expenses(
             category_code="materials",
             description="Drop cable",
             amount=Decimal("500.00"),
+            approved_amount=Decimal("400.00"),
         )
     )
     db_session.commit()
@@ -62,6 +63,6 @@ def test_project_cost_summary_uses_native_worklogs_and_approved_expenses(
 
     assert summary.labor_minutes == 90
     assert summary.labor_cost == Decimal("180.00")
-    assert summary.expense_total == Decimal("500.00")
-    assert summary.total_cost == Decimal("680.00")
+    assert summary.expense_total == Decimal("400.00")
+    assert summary.total_cost == Decimal("580.00")
     assert summary.currency == "NGN"

@@ -42,9 +42,8 @@ class ExpensesScreen extends ConsumerWidget {
             requestCount == null
                 ? 'My expense requests'
                 : 'My expense requests ($requestCount)',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           drafts.when(
@@ -320,9 +319,8 @@ class _ExpenseRequestDetailScreenState
           children: [
             Text(
               data.purpose ?? data.displayNumber,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
             Text(
@@ -352,6 +350,18 @@ class _ExpenseRequestDetailScreenState
                 child: Text(data.rejectionReason!),
               ),
             ],
+            if (data.amountsAdjusted) ...[
+              const SizedBox(height: 16),
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Approval adjustment',
+                ),
+                child: Text(
+                  data.approvalAdjustmentReason ??
+                      'The approver changed the reimbursable amount.',
+                ),
+              ),
+            ],
             if (data.notes != null && data.notes!.isNotEmpty) ...[
               const SizedBox(height: 16),
               Text(data.notes!),
@@ -367,18 +377,35 @@ class _ExpenseRequestDetailScreenState
               const Divider(height: 24),
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Total',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                      data.amountsAdjusted ? 'Requested total' : 'Total',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
                   Text(
-                    _money(data.currency, data.totalAmount),
+                    _money(data.currency, data.requestedTotalAmount),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
+              if (data.amountsAdjusted && data.approvedTotal != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Approved total',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text(
+                      _money(data.currency, data.approvedTotal!),
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ],
             ],
             if (data.status == 'submitted') ...[
               const SizedBox(height: 24),
@@ -623,7 +650,9 @@ class _ExpenseRequestItemTile extends StatelessWidget {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 112),
             child: Text(
-              _money(currency, item.amount),
+              item.approvedAmount != null && item.approvedAmount != item.amount
+                  ? '${_money(currency, item.amount)} → ${_money(currency, item.approvedAmount!)}'
+                  : _money(currency, item.amount),
               textAlign: TextAlign.right,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -863,9 +892,8 @@ class _NewExpenseRequestScreenState
         );
     ref.invalidate(expenseRequestDraftsProvider);
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Draft saved')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Draft saved')));
   }
 
   Future<void> _syncDestinationMode() async {
@@ -1254,16 +1282,14 @@ class _NewExpenseRequestScreenState
     };
     if (_items.any((item) => !categoryCodes.contains(item.categoryCode))) {
       setState(
-        () => _submitError =
-            'A saved expense uses a category that is no longer available. Remove it and add it again.',
+        () => _submitError = 'A saved expense uses a category that is no longer available. Remove it and add it again.',
       );
       return;
     }
     if (_destinationMode == ExpensePaymentMode.erpProfile &&
         !formContext.profileDestination.available) {
       setState(
-        () => _submitError =
-            'Your ERP payment profile is unavailable. Use different payment details.',
+        () => _submitError = 'Your ERP payment profile is unavailable. Use different payment details.',
       );
       return;
     }
@@ -1329,9 +1355,8 @@ class _NewExpenseRequestScreenState
       if (error.response == null) {
         const message = 'Please connect to the internet and try again.';
         setState(() => _submitError = message);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text(message)));
         return;
       }
       final message = _expenseErrorMessage(
@@ -1339,16 +1364,14 @@ class _NewExpenseRequestScreenState
         'Could not submit expense request',
       );
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (!mounted) return;
       const message = 'Could not submit expense request';
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1580,8 +1603,7 @@ class _NewExpenseRequestScreenState
                     ),
                     error: (_, _) => _ExpenseDataAvailability(
                       label: 'Approval and payment',
-                      message:
-                          'Could not load expense approvers and payment details.',
+                      message: 'Could not load expense approvers and payment details.',
                       onRetry: _retryFormContext,
                       retryKey: const Key('expense-form-context-retry'),
                     ),
@@ -1591,8 +1613,7 @@ class _NewExpenseRequestScreenState
                         if (data.approvers.isEmpty)
                           _ExpenseDataAvailability(
                             label: 'Expense approver',
-                            message:
-                                'No expense approver is available for your account.',
+                            message: 'No expense approver is available for your account.',
                             onRetry: _retryFormContext,
                             retryKey: const Key('expense-approver-retry'),
                           )
@@ -1633,8 +1654,7 @@ class _NewExpenseRequestScreenState
                             data.banks.isEmpty)
                           _ExpenseDataAvailability(
                             label: 'Payment destination',
-                            message:
-                                'No payment account is available. Please contact an administrator.',
+                            message: 'No payment account is available. Please contact an administrator.',
                             onRetry: _retryFormContext,
                             retryKey: const Key('expense-payment-retry'),
                           )
@@ -1746,8 +1766,7 @@ class _NewExpenseRequestScreenState
             data: (items) => items.isEmpty
                 ? _ExpenseDataAvailability(
                     label: 'Expense category',
-                    message:
-                        'No expense categories are available. Ask an administrator to check the ERP category list.',
+                    message: 'No expense categories are available. Ask an administrator to check the ERP category list.',
                     onRetry: _retryCategories,
                     retryKey: const Key('expense-category-retry'),
                   )
@@ -1944,9 +1963,8 @@ class _NewExpenseRequestScreenState
               alignment: Alignment.centerRight,
               child: Text(
                 'Total ${_money('NGN', total)}',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
           if (_items.isNotEmpty && categoriesReady && !itemCategoriesValid) ...[
@@ -2168,9 +2186,8 @@ class _WorkOrderPickerSheetState extends State<_WorkOrderPickerSheet> {
                   Expanded(
                     child: Text(
                       'Select work order',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: Theme.of(context).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ),
                   IconButton(

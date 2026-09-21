@@ -379,7 +379,7 @@ def get_expense_decision_delivery(
         .all()
     )
     accepted_actions = (
-        {"approve", "release_approved_v2", "expense_approve_v3"}
+        {"approve", "release_approved_v2", "expense_approve_v3", "expense_approve_v4"}
         if action == "approve"
         else {"reject", "expense_reject_v3"}
     )
@@ -507,7 +507,7 @@ def enqueue_expense_decision(
         db,
         request,
         action=(
-            ExpenseErpAction.APPROVE_V3
+            ExpenseErpAction.APPROVE_V4
             if action == "approve"
             else ExpenseErpAction.REJECT_V3
         ),
