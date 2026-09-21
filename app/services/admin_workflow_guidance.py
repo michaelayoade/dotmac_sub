@@ -530,6 +530,23 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/billing",),
     ),
     _guide(
+        "billing-accounts",
+        "Billing",
+        "Review and change an account billing mode",
+        "Billing staff and billing leads",
+        "Review an account and safely change it between prepaid and postpaid.",
+        ("/admin/billing/accounts",),
+        "Open the billing account and confirm the customer, current billing mode, services, prices, credit, receivables, and next billing dates.",
+        "Review every readiness item. Resolve missing or unclear pricing, unsupported packages, open treatments, pending plan changes, draft invoices, or active enforcement locks before continuing.",
+        "Choose the opposite billing mode, enter a clear approval reason, and confirm only the preview you reviewed.",
+        "After confirmation, verify that the account and every current service show the same billing mode and that existing credit, invoices, and paid service dates are unchanged.",
+        notes=(
+            "The conversion is account-wide; it does not change one service by itself.",
+            "A stale preview is rejected. Reload the account and review the new evidence.",
+            "Missing or unclear prices require review and do not change the customer's current service or activity by themselves.",
+        ),
+    ),
+    _guide(
         "invoice",
         "Billing",
         "Create, issue, and correct invoices",
@@ -1234,6 +1251,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-billing", "Review financial records", 1),
         _action("investigate-billing-record", "Investigate a billing record", 2),
     ),
+    "billing-accounts": (
+        _action("review-billing-account", "Review the billing account", 0),
+        _action("resolve-mode-blockers", "Resolve conversion blockers", 1),
+        _action(
+            "confirm-billing-mode",
+            "Confirm the billing-mode change",
+            2,
+            permission="billing:mode:write",
+        ),
+        _action("verify-billing-mode", "Verify the billing-mode change", 3),
+    ),
     "invoice": (
         _action(
             "create-review-invoice",
@@ -1721,6 +1749,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Billing",
         (
             "billing-overview",
+            "billing-accounts",
             "invoice",
             "credit",
             "service-extension",
@@ -1822,6 +1851,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Only sections containing pages with different read scopes need an override.
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),

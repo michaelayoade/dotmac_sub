@@ -25,9 +25,6 @@ from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import (
     BillingMode,
     NasDevice,
-    OfferPrice,
-    OfferVersionPrice,
-    PriceType,
     Subscription,
     SubscriptionStatus,
 )
@@ -60,8 +57,13 @@ from app.schemas.infrastructure import (
 from app.services import infrastructure_catalogue
 from app.services import support as support_service
 from app.services.billing_profile import effective_billing_mode_clause
-from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.customer_account_visibility import splynx_deleted_import_clause
+from app.services.customer_chargeability import (
+    CustomerChargeability,
+    CustomerChargeabilityStatus,
+    non_billable_section_customer_clause,
+    resolve_customer_chargeability,
+)
 from app.services.customer_support_links import (
     ticket_customer_any_link_filter,
     ticket_customer_linked_ids,
@@ -74,9 +76,6 @@ from app.services.list_query import (
     SortDirection,
 )
 from app.services.status_presentation import account_status_presentation
-from app.services.subscription_billing_treatments import (
-    effective_customer_billing_treatment_clause,
-)
 
 _SUBSCRIBER_CATEGORY_COL: Any = Subscriber.metadata_["subscriber_category"].as_string()
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -663,7 +662,11 @@ def _individual_customer_clause():
     return not_(_business_customer_clause())
 
 
-def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
+def _build_customer_dict(
+    person: Subscriber,
+    *,
+    chargeability: CustomerChargeability | None = None,
+) -> dict[str, Any]:
     """Build a customer dict from a subscriber, including subscription info."""
     pppoe_login = None
     ipv4 = None
@@ -775,6 +778,46 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
         "business_name": person.legal_name if person.is_business else None,
         "created_at": person.created_at,
         "raw": person,
+        "chargeability": chargeability,
+        "chargeability_label": (
+            {
+                CustomerChargeabilityStatus.confirmed_non_billable: (
+                    "Confirmed non-billable"
+                ),
+                CustomerChargeabilityStatus.review_required: "Review required",
+                CustomerChargeabilityStatus.billable: "Billable",
+                CustomerChargeabilityStatus.no_current_service: "No current service",
+            }[chargeability.status]
+            if chargeability is not None
+            else "Unavailable"
+        ),
+        "chargeability_detail": (
+            ", ".join(
+                reason.value.replace("_", " ") for reason in chargeability.reasons
+            )
+            if chargeability is not None
+            else "Chargeability was not resolved."
+        ),
+        "chargeability_badge_classes": (
+            {
+                CustomerChargeabilityStatus.confirmed_non_billable: (
+                    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 "
+                    "dark:text-emerald-300"
+                ),
+                CustomerChargeabilityStatus.review_required: (
+                    "bg-amber-100 text-amber-800 dark:bg-amber-900/30 "
+                    "dark:text-amber-300"
+                ),
+                CustomerChargeabilityStatus.billable: (
+                    "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                ),
+                CustomerChargeabilityStatus.no_current_service: (
+                    "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300"
+                ),
+            }[chargeability.status]
+            if chargeability is not None
+            else "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300"
+        ),
     }
 
 
@@ -806,86 +849,13 @@ def _status_filter_clause(status: str | None) -> Any:
     return None
 
 
-def _genuinely_free_catalog_product_clause() -> ColumnElement[bool]:
-    """Identify an explicit zero-priced recurring product, never a missing price."""
-
-    version_price_amount = (
-        db_select(OfferVersionPrice.amount)
-        .where(
-            OfferVersionPrice.offer_version_id == Subscription.offer_version_id,
-            OfferVersionPrice.price_type == PriceType.recurring,
-            OfferVersionPrice.is_active.is_(True),
-        )
-        .order_by(
-            OfferVersionPrice.created_at.desc(),
-            OfferVersionPrice.id.desc(),
-        )
-        .limit(1)
-        .correlate(Subscription)
-        .scalar_subquery()
-    )
-    offer_price_amount = (
-        db_select(OfferPrice.amount)
-        .where(
-            OfferPrice.offer_id == Subscription.offer_id,
-            OfferPrice.price_type == PriceType.recurring,
-            OfferPrice.is_active.is_(True),
-        )
-        .order_by(OfferPrice.created_at.desc(), OfferPrice.id.desc())
-        .limit(1)
-        .correlate(Subscription)
-        .scalar_subquery()
-    )
-    catalog_amount = func.coalesce(version_price_amount, offer_price_amount)
-    return and_(
-        catalog_amount.is_not(None),
-        catalog_amount == 0,
-        or_(Subscription.unit_price.is_(None), Subscription.unit_price <= 0),
-    )
-
-
-def _fully_non_billable_customer_clause() -> ColumnElement[bool]:
-    """Identify accounts whose complete collectible service scope is free."""
-
-    suppressed_service = or_(
-        effective_customer_billing_treatment_clause(),
-        _genuinely_free_catalog_product_clause(),
-    )
-    has_suppressed_service = (
-        db_select(Subscription.id)
-        .where(
-            Subscription.subscriber_id == Subscriber.id,
-            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
-            suppressed_service,
-        )
-        .correlate(Subscriber)
-        .exists()
-    )
-    has_chargeable_service = (
-        db_select(Subscription.id)
-        .where(
-            Subscription.subscriber_id == Subscriber.id,
-            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
-            not_(
-                or_(
-                    effective_customer_billing_treatment_clause(),
-                    _genuinely_free_catalog_product_clause(),
-                )
-            ),
-        )
-        .correlate(Subscriber)
-        .exists()
-    )
-    return and_(has_suppressed_service, not_(has_chargeable_service))
-
-
 def _billing_filter_clause(
     billing_mode: str | None,
 ) -> ColumnElement[bool] | None:
     normalized = normalize_customer_billing_filter(billing_mode)
     if normalized is None:
         return None
-    non_billable = _fully_non_billable_customer_clause()
+    non_billable = non_billable_section_customer_clause()
     if normalized is CustomerBillingFilter.non_billable:
         return non_billable
     effective_mode = BillingMode(normalized.value)
@@ -1603,7 +1573,17 @@ def build_customers_index_context(
     infrastructure_type = list_query.filter_value("infrastructure_type")
     infrastructure_id = list_query.filter_value("infrastructure_id")
     people = page.query.all()
-    customers: list[dict[str, Any]] = [_build_customer_dict(p) for p in people]
+    chargeability_by_account = resolve_customer_chargeability(
+        db,
+        tuple(person.id for person in people),
+    )
+    customers: list[dict[str, Any]] = [
+        _build_customer_dict(
+            person,
+            chargeability=chargeability_by_account.get(person.id),
+        )
+        for person in people
+    ]
 
     business_clause = _business_customer_clause()
     stats_row = (

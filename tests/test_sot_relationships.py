@@ -612,6 +612,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.accounts",
         "access.subscription_lifecycle",
         "financial.billing_profile",
+        "financial.customer_chargeability",
         "financial.invoices",
         "financial.payments",
         "financial.subscription_billing_treatments",

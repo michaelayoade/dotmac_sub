@@ -104,6 +104,12 @@ class HighImpactEditor:
 
 HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
     HighImpactEditor(
+        key="admin.billing_mode_transition",
+        surface="/admin/billing/accounts/{account_id}/billing-mode",
+        status="contracted",
+        contract_key="admin.billing_mode_transition",
+    ),
+    HighImpactEditor(
         key="customer.plan_change",
         surface="/portal/services/{id}/change",
         status="contracted",

@@ -11,7 +11,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -620,6 +620,7 @@ def emit_event(
     event_type: EventType,
     payload: dict[str, Any],
     *,
+    event_id: UUID | None = None,
     actor: str | None = None,
     subscriber_id: UUID | str | None = None,
     account_id: UUID | str | None = None,
@@ -641,6 +642,7 @@ def emit_event(
         db: Database session
         event_type: The type of event
         payload: Event-specific data
+        event_id: Optional caller-owned deterministic event identity
         actor: Who/what triggered the event
         subscriber_id: Related subscriber ID
         account_id: Related account ID
@@ -675,6 +677,7 @@ def emit_event(
     event = Event(
         event_type=event_type,
         payload=payload,
+        event_id=event_id or uuid4(),
         actor=actor,
         subscriber_id=to_uuid(subscriber_id),
         account_id=to_uuid(account_id),

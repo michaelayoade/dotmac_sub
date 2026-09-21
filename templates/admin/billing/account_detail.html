@@ -5,6 +5,7 @@
     empty_state, action_button, animation_styles, timeline_item,
     icon_plus, icon_view, icon_invoice
 %}
+{% from "components/actions/action_readiness.html" import action_readiness_panel %}
 
 {% block title %}Account Detail - Admin{% endblock %}
 
@@ -13,6 +14,16 @@
 {% set account_currency = account.currency if account.currency is defined else default_currency|default('NGN') %}
 
 <div class="relative space-y-8">
+    {% if billing_mode_message %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300" role="status">
+        {{ billing_mode_message }}
+    </div>
+    {% endif %}
+    {% if billing_mode_error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300" role="alert">
+        {{ billing_mode_error }}
+    </div>
+    {% endif %}
     {# ── Page Header ── #}
     {% call(content) page_header(
         title=(account.name if account else ("Account " ~ ((account.id|string)[:8]))),
@@ -72,6 +83,75 @@
             action_label=account_overview.prepaid_funding_reason
         ) }}
     </div>
+
+    {% if billing_mode_transition and billing_mode_transition_panel %}
+    <section class="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm dark:border-slate-700/70 dark:bg-slate-800" aria-labelledby="billing-mode-transition-title">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Reviewed account action</p>
+                <h2 id="billing-mode-transition-title" class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">Change billing mode</h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {{ billing_mode_transition.current_mode.value|title if billing_mode_transition.current_mode else 'Unknown' }}
+                    &rarr; {{ billing_mode_transition.target_mode.value|title }} for
+                    {{ billing_mode_transition.subscriptions|length }} current service{{ '' if billing_mode_transition.subscriptions|length == 1 else 's' }}.
+                </p>
+            </div>
+            {% if billing_mode_transition.first_target_billing_at %}
+            <div class="rounded-xl bg-slate-50 px-4 py-3 text-right dark:bg-slate-900/50">
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">First target-mode boundary</p>
+                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ billing_mode_transition.first_target_billing_at | app_datetime('%b %d, %Y %H:%M', 'Unavailable') }}</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <dl class="mt-5 grid gap-3 sm:grid-cols-3">
+            <div class="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <dt class="text-xs text-slate-500">Outstanding receivables</dt>
+                <dd class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ billing_mode_transition.currency or 'Currency unavailable' }} {{ billing_mode_transition.outstanding_receivables }}</dd>
+            </div>
+            <div class="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <dt class="text-xs text-slate-500">Required prepaid funding now</dt>
+                <dd class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ billing_mode_transition.currency or 'Currency unavailable' }} {{ billing_mode_transition.required_prepaid_funding }}</dd>
+            </div>
+            <div class="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <dt class="text-xs text-slate-500">Available native credit</dt>
+                <dd class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ billing_mode_transition.currency or 'Currency unavailable' }} {{ billing_mode_transition.available_credit }}</dd>
+            </div>
+        </dl>
+
+        <div class="mt-5">
+            {{ action_readiness_panel(billing_mode_transition_panel, heading="Conversion readiness") }}
+        </div>
+
+        <div class="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">What confirmation will do</h3>
+            <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-600 dark:text-slate-300">
+                {% for consequence in billing_mode_transition_contract.consequences %}
+                <li>{{ consequence.label }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        {% if billing_mode_transition.allowed %}
+        <form method="post"
+              action="/admin/billing/accounts/{{ account.id }}/billing-mode"
+              class="mt-5 rounded-xl border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-900/60 dark:bg-amber-950/20"
+              onsubmit="return confirm('Change this account and every current service to {{ billing_mode_transition.target_mode.value }} billing?')">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="target_mode" value="{{ billing_mode_transition.target_mode.value }}">
+            <input type="hidden" name="preview_fingerprint" value="{{ billing_mode_transition.fingerprint }}">
+            <input type="hidden" name="idempotency_key" value="{{ billing_mode_idempotency_key }}">
+            <label for="billing-mode-reason" class="block text-sm font-semibold text-slate-800 dark:text-slate-200">Reason for change</label>
+            <textarea id="billing-mode-reason" name="reason" required minlength="8" maxlength="500" rows="2"
+                      class="mt-2 block w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-amber-900/60 dark:bg-slate-900 dark:text-white"
+                      placeholder="Record the approved customer case and billing boundary."></textarea>
+            <button type="submit" class="mt-3 inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
+                Confirm change to {{ billing_mode_transition.target_mode.value|title }}
+            </button>
+        </form>
+        {% endif %}
+    </section>
+    {% endif %}
 
     <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-500 dark:text-slate-400">
         <span>Account <span class="font-mono text-slate-700 dark:text-slate-300">{{ account.account_number or account.id }}</span></span>
