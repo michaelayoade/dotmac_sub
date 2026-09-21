@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.models.ai_intake import (
     AiIntakeConfig,
@@ -59,6 +60,7 @@ from app.services.integrations.whatsapp_capability import (
 from app.services.operator_tenant import provision_operator_tenant
 from app.services.owner_commands import CommandContext
 from app.tasks import notifications as notification_tasks
+from app.tasks import team_inbox as team_inbox_tasks
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 
@@ -619,6 +621,58 @@ def _enable_langgraph(config: AiIntakeConfig) -> None:
         "conversational_engine_enabled": True,
         "conversation_engine_mode": "langgraph_v1",
     }
+
+
+def test_ai_intake_database_failure_escapes_owner_for_rollback_and_retry(
+    db_session, monkeypatch
+):
+    fallback = _team(db_session, "Database Retry Fallback")
+    _config(db_session, fallback_team_id=fallback.id)
+    received = _receive(
+        db_session,
+        message_id="database-failure-retry",
+        body="No internet",
+    )
+    db_session.commit()
+
+    def _raise_database_failure(*_args, **_kwargs):
+        raise OperationalError(
+            "UPDATE ai_intake_sessions SET state = %s",
+            ("failed",),
+            RuntimeError("deadlock detected"),
+        )
+
+    monkeypatch.setattr(
+        ai_conversation_intake,
+        "_process_one_session",
+        _raise_database_failure,
+    )
+
+    with pytest.raises(OperationalError, match="deadlock detected"):
+        ai_conversation_intake.process_ready_sessions(
+            db_session,
+            ai_conversation_intake.AiSessionProcessCommand(
+                context=CommandContext.system(
+                    actor="task:test-ai-intake-db-retry",
+                    scope="ai:intake-session",
+                    reason="prove transaction-fatal database errors reach the owner",
+                ),
+                limit=1,
+            ),
+        )
+
+    assert db_session.in_transaction() is False
+    stored = (
+        db_session.query(AiIntakeSession)
+        .filter(AiIntakeSession.conversation_id == received.conversation_id)
+        .one()
+    )
+    assert stored.completed_at is None
+    assert stored.state != "failed"
+
+
+def test_ai_intake_task_retries_transient_database_failures():
+    assert OperationalError in team_inbox_tasks.process_ai_intake_sessions.autoretry_for
 
 
 def test_invalid_classifier_output_asks_without_handoff(db_session, monkeypatch):
