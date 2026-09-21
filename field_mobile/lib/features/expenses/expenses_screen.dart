@@ -42,8 +42,9 @@ class ExpensesScreen extends ConsumerWidget {
             requestCount == null
                 ? 'My expense requests'
                 : 'My expense requests ($requestCount)',
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           drafts.when(
@@ -206,9 +207,9 @@ class _ExpenseRequestDetailScreenState
         ..invalidate(expenseRequestProvider(widget.id))
         ..invalidate(expenseRequestsProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Submitting to ERP…')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Submitting to ERP…')));
       }
       for (var attempt = 0; attempt < 30; attempt += 1) {
         await Future<void>.delayed(const Duration(seconds: 2));
@@ -319,8 +320,9 @@ class _ExpenseRequestDetailScreenState
           children: [
             Text(
               data.purpose ?? data.displayNumber,
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
             Text(
@@ -892,8 +894,9 @@ class _NewExpenseRequestScreenState
         );
     ref.invalidate(expenseRequestDraftsProvider);
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Draft saved')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Draft saved')));
   }
 
   Future<void> _syncDestinationMode() async {
@@ -1282,14 +1285,16 @@ class _NewExpenseRequestScreenState
     };
     if (_items.any((item) => !categoryCodes.contains(item.categoryCode))) {
       setState(
-        () => _submitError = 'A saved expense uses a category that is no longer available. Remove it and add it again.',
+        () => _submitError =
+            'A saved expense uses a category that is no longer available. Remove it and add it again.',
       );
       return;
     }
     if (_destinationMode == ExpensePaymentMode.erpProfile &&
         !formContext.profileDestination.available) {
       setState(
-        () => _submitError = 'Your ERP payment profile is unavailable. Use different payment details.',
+        () => _submitError =
+            'Your ERP payment profile is unavailable. Use different payment details.',
       );
       return;
     }
@@ -1355,8 +1360,9 @@ class _NewExpenseRequestScreenState
       if (error.response == null) {
         const message = 'Please connect to the internet and try again.';
         setState(() => _submitError = message);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(message)));
         return;
       }
       final message = _expenseErrorMessage(
@@ -1364,14 +1370,16 @@ class _NewExpenseRequestScreenState
         'Could not submit expense request',
       );
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (!mounted) return;
       const message = 'Could not submit expense request';
       setState(() => _submitError = message);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1416,9 +1424,9 @@ class _NewExpenseRequestScreenState
       if (current.erpSyncStatus == 'accepted') {
         _invalidateExpenseProjections(ref);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$displayNumber submitted')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$displayNumber submitted')));
         context.go('/expenses');
         return;
       }
@@ -1603,7 +1611,8 @@ class _NewExpenseRequestScreenState
                     ),
                     error: (_, _) => _ExpenseDataAvailability(
                       label: 'Approval and payment',
-                      message: 'Could not load expense approvers and payment details.',
+                      message:
+                          'Could not load expense approvers and payment details.',
                       onRetry: _retryFormContext,
                       retryKey: const Key('expense-form-context-retry'),
                     ),
@@ -1613,7 +1622,8 @@ class _NewExpenseRequestScreenState
                         if (data.approvers.isEmpty)
                           _ExpenseDataAvailability(
                             label: 'Expense approver',
-                            message: 'No expense approver is available for your account.',
+                            message:
+                                'No expense approver is available for your account.',
                             onRetry: _retryFormContext,
                             retryKey: const Key('expense-approver-retry'),
                           )
@@ -1654,7 +1664,8 @@ class _NewExpenseRequestScreenState
                             data.banks.isEmpty)
                           _ExpenseDataAvailability(
                             label: 'Payment destination',
-                            message: 'No payment account is available. Please contact an administrator.',
+                            message:
+                                'No payment account is available. Please contact an administrator.',
                             onRetry: _retryFormContext,
                             retryKey: const Key('expense-payment-retry'),
                           )
@@ -1766,7 +1777,8 @@ class _NewExpenseRequestScreenState
             data: (items) => items.isEmpty
                 ? _ExpenseDataAvailability(
                     label: 'Expense category',
-                    message: 'No expense categories are available. Ask an administrator to check the ERP category list.',
+                    message:
+                        'No expense categories are available. Ask an administrator to check the ERP category list.',
                     onRetry: _retryCategories,
                     retryKey: const Key('expense-category-retry'),
                   )
@@ -1963,8 +1975,9 @@ class _NewExpenseRequestScreenState
               alignment: Alignment.centerRight,
               child: Text(
                 'Total ${_money('NGN', total)}',
-                style: Theme.of(context).textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
           if (_items.isNotEmpty && categoriesReady && !itemCategoriesValid) ...[
@@ -2186,8 +2199,9 @@ class _WorkOrderPickerSheetState extends State<_WorkOrderPickerSheet> {
                   Expanded(
                     child: Text(
                       'Select work order',
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -2265,8 +2279,8 @@ String _money(String? currency, double value) =>
 Color _expenseStatusColor(BuildContext context, String status) {
   final scheme = Theme.of(context).colorScheme;
   return switch (status) {
-    'submitted' || 'submitting to ERP' =>
-      AppColors.statusTone(context, StatusTone.info),
+    'submitted' ||
+    'submitting to ERP' => AppColors.statusTone(context, StatusTone.info),
     'submission failed' => scheme.error,
     'approved' || 'paid' => AppColors.statusTone(context, StatusTone.positive),
     'rejected' => scheme.error,

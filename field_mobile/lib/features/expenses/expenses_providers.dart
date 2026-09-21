@@ -236,21 +236,10 @@ class ExpenseReceiptFileIdentity {
         '.gif',
         DioMediaType('image', 'gif'),
       ),
-      [
-        0x52,
-        0x49,
-        0x46,
-        0x46,
-        _,
-        _,
-        _,
-        _,
-        0x57,
-        0x45,
-        0x42,
-        0x50,
-        ...
-      ] => ('.webp', DioMediaType('image', 'webp')),
+      [0x52, 0x49, 0x46, 0x46, _, _, _, _, 0x57, 0x45, 0x42, 0x50, ...] => (
+        '.webp',
+        DioMediaType('image', 'webp'),
+      ),
       [0x25, 0x50, 0x44, 0x46, ...] => (
         '.pdf',
         DioMediaType('application', 'pdf'),

@@ -56,14 +56,16 @@ class ManagerDashboardScreen extends ConsumerWidget {
           children: [
             Text(
               'Operations dashboard',
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               'Dispatch load, active technicians, and approvals.',
-              style: Theme.of(context).textTheme.bodyMedium
-                  ?.copyWith(color: AppColors.subdued(context)),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.subdued(context),
+              ),
             ),
             const SizedBox(height: 18),
             summary.when(
@@ -305,8 +307,9 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
           ' · ${positions.where((item) => !item.isLive).length} stale'
           ' · updated ${_relativeTime(feed.receivedAt)}'
           ' · live window ${feed.staleAfterSeconds}s',
-          style: Theme.of(context).textTheme.bodySmall
-              ?.copyWith(color: AppColors.subdued(context)),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: AppColors.subdued(context)),
         ),
       ],
     );
@@ -503,8 +506,9 @@ class ManagerDispatchScreen extends ConsumerWidget {
             children: [
               Text(
                 'Open work orders',
-                style: Theme.of(context).textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
               if (items.isEmpty)
@@ -753,8 +757,9 @@ class _ManagerExpenseDetail extends StatelessWidget {
       children: [
         Text(
           request.purpose ?? request.displayNumber,
-          style: Theme.of(context).textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
         Wrap(
@@ -765,8 +770,9 @@ class _ManagerExpenseDetail extends StatelessWidget {
             Chip(label: Text(request.statusLabel)),
             Text(
               _money(request.currency, request.totalAmount),
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
           ],
         ),
@@ -807,8 +813,9 @@ class _ManagerExpenseDetail extends StatelessWidget {
         const SizedBox(height: 12),
         Text(
           'Items (${request.items.length})',
-          style: Theme.of(context).textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
         if (request.items.isEmpty)
@@ -866,16 +873,18 @@ class _ExpenseDetailSection extends StatelessWidget {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
             for (var index = 0; index < visibleValues.length; index++) ...[
               if (index > 0) const Divider(height: 20),
               Text(
                 visibleValues[index].$1,
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: AppColors.subdued(context)),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.subdued(context),
+                ),
               ),
               const SizedBox(height: 2),
               Text(visibleValues[index].$2!),
@@ -932,7 +941,9 @@ class _ApprovalRefreshError extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                initialLoad ? 'Could not load expense approvals.' : 'Could not refresh approvals. Showing the last loaded results.',
+                initialLoad
+                    ? 'Could not load expense approvals.'
+                    : 'Could not refresh approvals. Showing the last loaded results.',
               ),
             ),
             TextButton(onPressed: onRetry, child: const Text('Retry')),
@@ -998,8 +1009,9 @@ class _MetricCard extends StatelessWidget {
             const SizedBox(height: 14),
             Text(
               value,
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w900),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 4),
             Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1007,8 +1019,9 @@ class _MetricCard extends StatelessWidget {
             Text(
               detail,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: AppColors.subdued(context)),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.subdued(context),
+              ),
             ),
           ],
         ),
@@ -1345,8 +1358,9 @@ class _TeamMapControls extends StatelessWidget {
         const SizedBox(height: 14),
         Text(
           total == null ? 'Technicians' : 'Technicians · $total total',
-          style: Theme.of(context).textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
         ),
       ],
     );
@@ -1415,8 +1429,9 @@ class _TechnicianLocationSheet extends ConsumerWidget {
             children: [
               Text(
                 title,
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w800),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 6),
               Text(status),
@@ -1426,8 +1441,9 @@ class _TechnicianLocationSheet extends ConsumerWidget {
                   displayedPosition!.isLive
                       ? 'Live location address'
                       : 'Last known address',
-                  style: Theme.of(context).textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w800),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 3),
                 locationDetail.when(
@@ -1483,8 +1499,9 @@ class _TechnicianLocationSheet extends ConsumerWidget {
                 const SizedBox(height: 14),
                 Text(
                   'Current work order',
-                  style: Theme.of(context).textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w800),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 3),
                 Text(technician!.activeWorkOrderTitle!),
@@ -1776,13 +1793,15 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
         ..invalidate(managerExpensesProvider)
         ..invalidate(managerSummaryProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(failureMessage)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(failureMessage)));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1815,8 +1834,9 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
                   Expanded(
                     child: Text(
                       request.purpose ?? request.displayNumber,
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w800),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                   Text(
@@ -1834,8 +1854,9 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
                       : 'WO ${request.workOrderId}',
                   '${request.items.length} item${request.items.length == 1 ? '' : 's'}',
                 ].whereType<String>().join(' · '),
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: AppColors.subdued(context)),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.subdued(context),
+                ),
               ),
               const SizedBox(height: 4),
               Text(
@@ -1932,8 +1953,9 @@ class _ExpenseSectionTitle extends StatelessWidget {
     padding: const EdgeInsets.only(bottom: 8),
     child: Text(
       '$title ($count)',
-      style: Theme.of(context).textTheme.titleMedium
-          ?.copyWith(fontWeight: FontWeight.w800),
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
     ),
   );
 }
@@ -1988,8 +2010,10 @@ class _StatusPill extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Text(
           label,
-          style: Theme.of(context).textTheme.labelSmall
-              ?.copyWith(color: color, fontWeight: FontWeight.w800),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -2026,8 +2050,9 @@ Future<void> _assign(
         children: [
           Text(
             'Assign technician',
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
           for (final tech in technicians)
@@ -2069,8 +2094,9 @@ Future<void> _assign(
     }
   } catch (_) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Could not assign job')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not assign job')));
     }
   }
 }
@@ -2115,8 +2141,9 @@ Future<void> _unassign(
       ..invalidate(managerSummaryProvider)
       ..invalidate(managerTechniciansProvider);
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Technician unassigned')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Technician unassigned')));
     }
   } catch (_) {
     if (context.mounted) {
