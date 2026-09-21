@@ -147,6 +147,9 @@ def test_send_expiry_reminders_ignores_non_infrastructure_tickets(
         subscription.next_billing_at
     )
     assert args[2]["reminder_boundary_source"] == "next_billing_at"
+    assert args[2]["renewed_through"] == subscription.next_billing_at.strftime(
+        "%b %d, %Y"
+    )
     assert kwargs["subscription_id"] == subscription.id
     assert kwargs["account_id"] == subscriber.id
 
@@ -183,6 +186,7 @@ def test_send_expiry_reminders_uses_end_at_when_renewal_anchor_missing(
     args, _kwargs = events[0]
     assert args[2]["reminder_boundary"] == _expected_boundary(subscription.end_at)
     assert args[2]["reminder_boundary_source"] == "end_at"
+    assert args[2]["renewed_through"] == subscription.end_at.strftime("%b %d, %Y")
 
 
 def test_send_expiry_reminders_dedupes_same_renewal_period(

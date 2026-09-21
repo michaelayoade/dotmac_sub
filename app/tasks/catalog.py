@@ -190,6 +190,10 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
                     {
                         "days_remaining": str(days_left),
                         "end_date": boundary.strftime("%b %d, %Y"),
+                        # Active editable reminder templates are allowed to use
+                        # renewed_through. The selected reminder boundary is the
+                        # authoritative service-through date for this event.
+                        "renewed_through": boundary.strftime("%b %d, %Y"),
                         "plan_name": sub.offer.name if sub.offer else "your plan",
                         "reminder_boundary": boundary_key,
                         "reminder_boundary_source": candidate.source,
