@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
+from typing import cast
 
 from sqlalchemy import select
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.olt_protocol_adapters import OltConnectionConfig
 from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.tasks._postgres_lock import postgres_session_advisory_lock
 
@@ -18,6 +21,46 @@ logger = logging.getLogger(__name__)
 def _olt_lock_key(olt_id: str) -> int:
     digest = hashlib.blake2b(olt_id.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big", signed=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _HuaweiOltStatusTarget:
+    connection: OltConnectionConfig
+    fsps: tuple[str, ...]
+    has_inventory: bool
+
+
+def _load_huawei_olt_status_target(olt_id: str) -> _HuaweiOltStatusTarget | None:
+    """Project one poll target and finish the database read before device I/O."""
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.ont_runtime_status import (
+        _ont_fsp,
+        huawei_olt_status_pollable,
+    )
+
+    with db_session_adapter.read_session() as db:
+        olt = db.get(OLTDevice, olt_id)
+        if olt is None or not huawei_olt_status_pollable(olt):
+            return None
+        onts = list(
+            db.scalars(
+                select(OntUnit).where(
+                    OntUnit.olt_device_id == olt.id,
+                    OntUnit.is_active.is_(True),
+                )
+            ).all()
+        )
+        fsps: set[str] = set()
+        for ont in onts:
+            try:
+                fsps.add(_ont_fsp(db, ont))
+            except ValueError:
+                continue
+        return _HuaweiOltStatusTarget(
+            connection=OltConnectionConfig.from_model(olt),
+            fsps=tuple(sorted(fsps)),
+            has_inventory=bool(onts),
+        )
 
 
 @celery_app.task(name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status")
@@ -58,27 +101,50 @@ def dispatch_huawei_ont_status() -> dict[str, int]:
     time_limit=300,
 )
 def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
-    """Persist one bulk OLT observation; transport/parser failures retry."""
+    """Read one OLT outside a DB transaction, then persist the observation."""
     from app.models.network import OLTDevice
+    from app.services.network.olt_ssh_ont.status import get_registered_ont_serials
     from app.services.network.ont_runtime_status import (
         huawei_olt_status_pollable,
         record_olt_poll_failure,
-        refresh_huawei_olt_status,
+        refresh_huawei_olt_status as persist_huawei_olt_status,
     )
 
     with postgres_session_advisory_lock(_olt_lock_key(olt_id)) as acquired:
         if not acquired:
             return {"olt_id": olt_id, "skipped": "already_running"}
+
+        target = _load_huawei_olt_status_target(olt_id)
+        if target is None:
+            return {"olt_id": olt_id, "skipped": "not_pollable"}
+
+        entries = ()
+        if target.fsps:
+            ok, message, observed = get_registered_ont_serials(
+                cast(OLTDevice, target.connection),
+                target.fsps,
+            )
+            if not ok:
+                error = RuntimeError(message)
+                with db_session_adapter.session() as db:
+                    olt = db.get(OLTDevice, olt_id)
+                    if olt is not None and huawei_olt_status_pollable(olt):
+                        record_olt_poll_failure(olt, error)
+                        db.commit()
+                raise error
+            entries = tuple(observed)
+        elif not target.has_inventory:
+            entries = ()
+
         with db_session_adapter.session() as db:
             olt = db.get(OLTDevice, olt_id)
             if olt is None or not huawei_olt_status_pollable(olt):
                 return {"olt_id": olt_id, "skipped": "not_pollable"}
-            try:
-                stats = refresh_huawei_olt_status(db, olt)
-            except (RuntimeError, OSError, TimeoutError) as exc:
-                record_olt_poll_failure(olt, exc)
-                db.commit()
-                raise
+            stats = persist_huawei_olt_status(
+                db,
+                olt,
+                observed_entries=entries,
+            )
             db.commit()
             return {
                 "olt_id": stats.olt_id,
