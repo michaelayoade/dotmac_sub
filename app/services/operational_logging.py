@@ -24,6 +24,7 @@ class OperationalEventName(StrEnum):
 class OperationalOutcome(StrEnum):
     COMPLETED = "completed"
     COMPLETED_WITH_RETRIES = "completed_with_retries"
+    COMPLETED_WITH_FAILURES = "completed_with_failures"
 
 
 @dataclass(frozen=True)
