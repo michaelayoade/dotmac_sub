@@ -20,6 +20,7 @@ class QuotaBucketBase(BaseModel):
     period_end: datetime
     included_gb: Decimal | None = None
     used_gb: Decimal = Decimal("0")
+    usage_floor_gb: Decimal = Decimal("0")
     rollover_gb: Decimal = Decimal("0")
     topup_gb: Decimal = Decimal("0")
     overage_gb: Decimal = Decimal("0")
@@ -35,6 +36,7 @@ class QuotaBucketUpdate(BaseModel):
     period_end: datetime | None = None
     included_gb: Decimal | None = None
     used_gb: Decimal | None = None
+    usage_floor_gb: Decimal | None = None
     rollover_gb: Decimal | None = None
     topup_gb: Decimal | None = None
     overage_gb: Decimal | None = None

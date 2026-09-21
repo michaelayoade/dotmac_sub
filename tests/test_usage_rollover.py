@@ -97,6 +97,45 @@ def test_rollover_capped_at_one_period(db_session, subscriber):
     assert Decimal(str(bucket.rollover_gb)) == Decimal("10.00")
 
 
+def test_rollover_uses_prior_rollover_before_fresh_base(db_session, subscriber):
+    sub = _setup(db_session, subscriber, rollover=True)
+    now = datetime.now(UTC)
+    period_start, _ = _period_bounds_for_record(now)
+    # Six GB came from the prior cycle's rollover, so all 10 GB of fresh base
+    # remains eligible for one (and only one) following cycle.
+    _prev_bucket(
+        db_session,
+        sub,
+        period_start,
+        used=Decimal("6.00"),
+        rollover=Decimal("10.00"),
+    )
+    db_session.commit()
+
+    bucket = _resolve_or_create_quota_bucket(db_session, sub, now)
+    assert Decimal(str(bucket.rollover_gb)) == Decimal("10.00")
+    assert bucket.rollover_origin_bucket_id is not None
+
+
+def test_rollover_never_re_rolls_prior_rollover(db_session, subscriber):
+    sub = _setup(db_session, subscriber, rollover=True)
+    now = datetime.now(UTC)
+    period_start, _ = _period_bounds_for_record(now)
+    # The prior rollover is gone first; five GB of this cycle's fresh base is
+    # left and may carry. The unused prior rollover itself never carries.
+    _prev_bucket(
+        db_session,
+        sub,
+        period_start,
+        used=Decimal("15.00"),
+        rollover=Decimal("10.00"),
+    )
+    db_session.commit()
+
+    bucket = _resolve_or_create_quota_bucket(db_session, sub, now)
+    assert Decimal(str(bucket.rollover_gb)) == Decimal("5.00")
+
+
 def test_no_rollover_when_disabled(db_session, subscriber):
     sub = _setup(db_session, subscriber, rollover=False)
     now = datetime.now(UTC)

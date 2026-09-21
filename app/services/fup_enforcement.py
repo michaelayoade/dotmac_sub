@@ -342,6 +342,24 @@ def _evaluate_subscription(
         return FupSubscriptionOutcome(reset=int(bool(result.get("lifted"))))
 
     bucket = _current_quota_bucket(db, subscription.id, command.evaluated_at)
+    if (
+        state is not None
+        and state.action_status is not FupActionStatus.none
+        and bucket is not None
+        and state.last_evaluated_at is not None
+        and state.last_evaluated_at < bucket.period_start
+    ):
+        # A capped early renewal opens a new funded quota interval before the
+        # old cap_resets_at. The bucket boundary, not the stale old deadline,
+        # is proof that the prior cycle's throttle/block must be released.
+        from app.services.enforcement import lift_fup_enforcement
+
+        result = lift_fup_enforcement(
+            db,
+            str(subscription.id),
+            evaluated_at=command.evaluated_at,
+        )
+        return FupSubscriptionOutcome(reset=int(bool(result.get("lifted"))))
     if bucket is None and _requires_quota_bucket(db, subscription.offer_id):
         # A monthly rule measures against the billing bucket, so without one
         # there is nothing to compare and skipping is correct.
@@ -364,6 +382,7 @@ def _evaluate_subscription(
         str(subscription.offer_id),
         command.evaluated_at,
         current_usage,
+        ((bucket.period_start, bucket.period_end) if bucket is not None else None),
     )
     prior_status = state.action_status.value if state else "none"
     # Time-of-day windows are wall-clock facts about the customer's night, and
