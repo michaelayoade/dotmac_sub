@@ -1808,7 +1808,7 @@ DOMAIN = DomainSOT(
                     ),
                     cutover_gate=(
                         "High-speed capped allowances are classified as 30-day "
-                        "renewal cycles by migration 617."
+                        "renewal cycles by migration 618."
                     ),
                     fallback_retirement=(
                         "Calendar-month arithmetic remains only for allowances "

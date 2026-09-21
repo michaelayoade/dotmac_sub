@@ -197,7 +197,7 @@ existing claims remain readable during rollout. `requested_by_technician_id` on 
 and person identity remain mandatory for new web submissions. The downgrade
 fails closed while any staff-created rows without technician links exist.
 
-Revision `617_expense_approval_adjustments` adds nullable per-line approved
+Revision `619_expense_approval_adjustments` adds nullable per-line approved
 amounts, approving-user and decision identity, adjustment reason, and a request
 revision. Existing approved and paid lines are backfilled with their requested
 amount so historical reimbursement and project-cost totals do not change.

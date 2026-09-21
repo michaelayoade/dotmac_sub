@@ -1251,6 +1251,7 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         ):
             changed_subscription_ids.append(str(sub.id))
         metered += 1
+    db.flush()
     logger.info(
         "usage_metered_into_quota",
         extra={"metered": metered, "changed": len(changed_subscription_ids)},

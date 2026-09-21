@@ -1478,7 +1478,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
                 receipt_upload=ExpenseReceiptUploadInput(
                     file_name="taxi.pdf",
                     mime_type="application/pdf",
-                    content=b"taxi receipt",
+                    content=b"%PDF-1.4\ntaxi receipt",
                     client_ref=receipt_client_refs[0],
                 ),
             )[0],
@@ -1488,7 +1488,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
                 receipt_upload=ExpenseReceiptUploadInput(
                     file_name="hotel.pdf",
                     mime_type="application/pdf",
-                    content=b"hotel receipt",
+                    content=b"%PDF-1.4\nhotel receipt",
                     client_ref=receipt_client_refs[1],
                 ),
             )[0],
@@ -1500,7 +1500,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
     def resolve_receipt(_db, *, work_order_id, attachment_id, allowed_owner_ids):
         assert work_order_id == request.work_order_mirror_id
         assert request.requested_by_system_user_id in allowed_owner_ids
-        content = f"receipt:{attachment_id}".encode()
+        content = b"%PDF-1.4\n" + f"receipt:{attachment_id}".encode()
         return ResolvedExpenseReceiptAttachment(
             attachment_id=attachment_id,
             work_order_id=work_order_id,
@@ -1568,14 +1568,14 @@ def test_permanent_receipt_failure_is_dead_with_safe_diagnostics(
             receipt_upload=ExpenseReceiptUploadInput(
                 file_name="private-person-name.pdf",
                 mime_type="application/pdf",
-                content=b"private receipt bytes",
+                content=b"%PDF-1.4\nprivate receipt bytes",
                 client_ref=uuid4(),
             )
         ),
     )
     attachment_id = request.items[0].receipt_attachment_id
     assert attachment_id is not None
-    content = b"private receipt bytes"
+    content = b"%PDF-1.4\nprivate receipt bytes"
     monkeypatch.setattr(
         attachments_module,
         "resolve_expense_receipt_attachment",

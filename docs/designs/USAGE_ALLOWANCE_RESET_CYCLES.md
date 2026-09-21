@@ -12,7 +12,7 @@ UsageAllowance is the catalogue authority for quota reset behavior:
   interval at the payment instant. Existing live coverage does not defer that
   new capped cycle.
 
-Migration 617 classifies existing capped high_speed_data allowances as
+Migration 618 classifies existing capped high_speed_data allowances as
 renewal_cycle with 30-day validity. All other allowances retain calendar_month.
 
 ## Rollover

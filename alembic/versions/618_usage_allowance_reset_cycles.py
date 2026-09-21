@@ -1,6 +1,6 @@
 """Add catalogue-driven usage allowance reset cycles.
 
-Revision ID: 617_usage_allowance_reset_cycles
+Revision ID: 618_usage_allowance_reset_cycles
 Revises: 617_billing_mode_transition_permission
 Create Date: 2026-09-21
 """
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "617_usage_allowance_reset_cycles"
+revision: str = "618_usage_allowance_reset_cycles"
 down_revision: str | None = "617_billing_mode_transition_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

@@ -1,7 +1,7 @@
 """Add auditable approved amounts to field expense requests.
 
-Revision ID: 617_expense_approval_adjustments
-Revises: 617_usage_allowance_reset_cycles
+Revision ID: 619_expense_approval_adjustments
+Revises: 618_usage_allowance_reset_cycles
 Create Date: 2026-09-21
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "617_expense_approval_adjustments"
-down_revision: str | None = "617_usage_allowance_reset_cycles"
+revision: str = "619_expense_approval_adjustments"
+down_revision: str | None = "618_usage_allowance_reset_cycles"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

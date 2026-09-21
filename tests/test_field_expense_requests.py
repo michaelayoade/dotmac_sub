@@ -668,12 +668,12 @@ def test_expense_request_api(db_session, fake_uploads, monkeypatch):
     receipt = client.post(
         "/api/v1/field/expense-requests/receipts",
         data={"work_order_id": "wo-expense-api"},
-        files={"file": ("taxi.png", b"\xff\xd8\xff\xd9", "image/png")},
+        files={"file": ("taxi.png", b"\x89PNG\r\n\x1a\n", "image/png")},
     )
     assert receipt.status_code == 201
     assert receipt.json()["work_order_id"] == "wo-expense-api"
-    assert receipt.json()["file_name"] == "taxi.jpg"
-    assert receipt.json()["mime_type"] == "image/jpeg"
+    assert receipt.json()["file_name"] == "taxi.png"
+    assert receipt.json()["mime_type"] == "image/png"
 
     retired = client.post(
         "/api/v1/field/expense-requests",
