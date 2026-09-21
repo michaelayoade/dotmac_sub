@@ -67,6 +67,7 @@ from app.services.field.expense_requests import (
     RecoverExpensePaymentDelivery,
     RejectFieldExpenseRequest,
     ResolveFieldExpenseSubmissionContext,
+    RetrySubmittedExpenseDelivery,
     SelectedExpenseApprover,
     SubmitFieldExpenseRequest,
     VerifiedExpenseDestinationInput,
@@ -78,6 +79,7 @@ from app.services.field.expense_requests import (
     recover_expense_payment_delivery,
     reject_field_expense_request_command,
     resolve_field_expense_submission_context,
+    retry_submitted_expense_delivery_command,
     submit_field_expense_request_command,
     verify_field_expense_destination,
 )
@@ -1115,6 +1117,42 @@ def test_submit_atomically_enqueues_v3_event(db_session):
     rows = _outbox_rows(db_session, request)
     assert len(rows) == 1
     assert rows[0].payload["_expense_action"] == "expense_submit_v3"
+
+
+def test_requester_retry_requeues_same_dead_submission_event(db_session):
+    request = _make_submitted_request(db_session)
+    event = _outbox_rows(db_session, request)[0]
+    event.status = FieldErpSyncStatus.dead.value
+    event.attempts = 1
+    event.last_error = "ERP rejected the receipt"
+    original_key = event.idempotency_key
+    requester_id = request.requested_by_system_user_id
+    assert requester_id is not None
+    db_session.commit()
+
+    command_id = uuid4()
+    outcome = retry_submitted_expense_delivery_command(
+        db_session,
+        command=RetrySubmittedExpenseDelivery(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=f"user:{requester_id}",
+                scope="field:expense_requests:write",
+                reason=f"retry_expense_submission:{request.id}",
+                idempotency_key=str(command_id),
+            ),
+            expense_request_id=request.id,
+        ),
+    )
+
+    db_session.refresh(event)
+    assert outcome.erp_sync_event_id == event.id
+    assert outcome.erp_sync_status == "pending"
+    assert outcome.replayed is False
+    assert event.status == FieldErpSyncStatus.pending.value
+    assert event.idempotency_key == original_key
+    assert event.attempts == 1
 
 
 def test_approval_fails_closed_before_ownership_cutover(db_session):

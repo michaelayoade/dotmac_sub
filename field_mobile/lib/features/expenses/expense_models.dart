@@ -172,10 +172,12 @@ class ExpenseReceiptUploadResult {
   const ExpenseReceiptUploadResult({
     required this.attachmentId,
     required this.downloadPath,
+    this.fileName,
   });
 
   final String attachmentId;
   final String downloadPath;
+  final String? fileName;
 
   factory ExpenseReceiptUploadResult.fromJson(Map<String, dynamic> json) {
     final attachmentId = json['id']?.toString().trim() ?? '';
@@ -188,8 +190,31 @@ class ExpenseReceiptUploadResult {
     return ExpenseReceiptUploadResult(
       attachmentId: attachmentId,
       downloadPath: downloadPath,
+      fileName: _string(json['file_name']),
     );
   }
+}
+
+class ExpenseSubmissionRetryResult {
+  const ExpenseSubmissionRetryResult({
+    required this.id,
+    required this.erpSyncStatus,
+    required this.eventId,
+    required this.replayed,
+  });
+
+  final String id;
+  final String erpSyncStatus;
+  final String eventId;
+  final bool replayed;
+
+  factory ExpenseSubmissionRetryResult.fromJson(Map<String, dynamic> json) =>
+      ExpenseSubmissionRetryResult(
+        id: _requiredString(json, 'id'),
+        erpSyncStatus: _requiredString(json, 'erp_sync_status'),
+        eventId: _requiredString(json, 'erp_sync_event_id'),
+        replayed: json['replayed'] == true,
+      );
 }
 
 class ExpenseItemDraft {
@@ -426,6 +451,18 @@ class ExpenseRequest {
         ? value
         : '${value[0].toUpperCase()}${value.substring(1)}';
   }
+
+  bool get isErpSubmissionPending =>
+      status == 'submitted' && {'pending', 'sent'}.contains(erpSyncStatus);
+
+  bool get hasErpSubmissionFailed =>
+      status == 'submitted' && {'dead', 'rejected'}.contains(erpSyncStatus);
+
+  String get displayStatus => switch ((status, erpSyncStatus)) {
+    ('submitted', 'pending' || 'sent') => 'submitting to ERP',
+    ('submitted', 'dead' || 'rejected') => 'submission failed',
+    _ => status,
+  };
 }
 
 class ExpenseRequestHistory {

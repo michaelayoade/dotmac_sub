@@ -36,6 +36,7 @@ from app.services.backoffice import (
     BackofficeDeliveryView,
     BackofficeEnqueueResult,
     BackofficeEnqueueStatus,
+    BackofficeUnavailableError,
     expense_payment_projection,
     get_expense_claim_deliveries,
     get_expense_decision_delivery,
@@ -252,6 +253,12 @@ class CancelFieldExpenseRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrySubmittedExpenseDelivery:
+    context: CommandContext
+    expense_request_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class RecoverExpenseDelivery:
     context: CommandContext
     dead_event_id: UUID
@@ -314,6 +321,14 @@ class ExpenseRequestRejectionOutcome:
 class ExpenseRequestCancellationOutcome:
     id: UUID
     status: Literal["canceled"]
+
+
+@dataclass(frozen=True, slots=True)
+class ExpenseSubmissionRetryOutcome:
+    id: UUID
+    erp_sync_status: Literal["pending"]
+    erp_sync_event_id: UUID
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -679,6 +694,12 @@ _CANCEL_EXPENSE_REQUEST = OwnerCommandDefinition(
     owner="operations.expense_requests",
     concern="field expense request cancellation",
     name="cancel_field_expense_request",
+)
+
+_RETRY_EXPENSE_SUBMISSION = OwnerCommandDefinition(
+    owner="operations.expense_requests",
+    concern="dead submitted expense delivery retry",
+    name="retry_submitted_expense_delivery",
 )
 
 _RECOVER_EXPENSE_DELIVERY = OwnerCommandDefinition(
@@ -1304,6 +1325,74 @@ def cancel_field_expense_request_command(
     return execute_owner_command(
         db,
         definition=_CANCEL_EXPENSE_REQUEST,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def retry_submitted_expense_delivery_command(
+    db: Session, *, command: RetrySubmittedExpenseDelivery
+) -> ExpenseSubmissionRetryOutcome:
+    """Retry the requester's existing dead submission event idempotently."""
+
+    from app.services.backoffice import requeue_expense_submission_delivery
+
+    def operation() -> ExpenseSubmissionRetryOutcome:
+        system_user_id = _system_user_id_for_actor(db, command.context)
+        if system_user_id is None:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.requester_not_found",
+                message="An authenticated staff user is required.",
+            )
+        identity = _requester_identity(db, system_user_id)
+        request = (
+            _requester_expense_query(db, identity)
+            .filter(FieldExpenseRequest.id == command.expense_request_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if request is None:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.request_not_found",
+                message="Expense request was not found.",
+            )
+        if request.status != ExpenseRequestStatus.SUBMITTED.value:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_transition",
+                message="Only a submitted expense can be retried.",
+            )
+        _require_token_bound_request_identity(request)
+        validate_expense_receipt_delivery(
+            db,
+            request,
+            category_rules=resolve_authoritative_expense_category_rules(db),
+        )
+        delivery = get_expense_claim_deliveries(db, [request.id]).get(request.id)
+        if delivery is None or delivery.event_id is None:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.delivery_not_found",
+                message="The expense submission could not be retried.",
+            )
+        try:
+            staged = requeue_expense_submission_delivery(
+                db,
+                event_id=delivery.event_id,
+            )
+        except BackofficeUnavailableError as exc:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.delivery_not_recoverable",
+                message="The expense submission could not be retried.",
+            ) from exc
+        return ExpenseSubmissionRetryOutcome(
+            id=request.id,
+            erp_sync_status="pending",
+            erp_sync_event_id=staged.event_id,
+            replayed=staged.replayed,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_RETRY_EXPENSE_SUBMISSION,
         context=command.context,
         operation=operation,
     )
