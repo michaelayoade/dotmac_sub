@@ -52,6 +52,9 @@ disables, fraud/FUP locks, or canceled accounts.
 Staff with `billing:mode:write` can preview and confirm an account-wide change
 from prepaid to postpaid or postpaid to prepaid on the billing account detail
 page. The permission is registered without a default role grant.
+The high-impact editor uses the registered `admin.billing_mode_transition`
+form contract to show owner-checked prerequisites and the consequences of
+confirmation beside the action.
 
 The preview fails closed unless:
 

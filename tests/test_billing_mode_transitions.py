@@ -20,6 +20,7 @@ from app.services.billing_mode_transitions import (
     BillingModeTransitionError,
     ConfirmBillingModeTransitionCommand,
     PreviewBillingModeTransitionRequest,
+    billing_mode_transition_form_state,
     confirm_billing_mode_transition,
     preview_billing_mode_transition,
 )
@@ -114,6 +115,9 @@ def test_account_and_current_subscriptions_change_mode_atomically(
     )
     assert preview.allowed is True
     assert preview.currency == "NGN"
+    form_state = billing_mode_transition_form_state(preview)
+    assert form_state["submittable"] is True
+    assert len(form_state["consequences"]) == 4
     db_session.commit()
 
     outcome = confirm_billing_mode_transition(
@@ -187,6 +191,7 @@ def test_pricing_review_blocks_conversion(db_session, subscriber, subscription):
     )
 
     assert preview.allowed is False
+    assert billing_mode_transition_form_state(preview)["submittable"] is False
     assert "pricing_review_required" in {
         blocker.code for blocker in preview.readiness.blocking_blockers
     }

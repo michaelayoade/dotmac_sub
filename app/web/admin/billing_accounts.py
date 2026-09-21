@@ -21,6 +21,7 @@ from app.services.billing_mode_transitions import (
     BILLING_MODE_WRITE_SCOPE,
     ConfirmBillingModeTransitionCommand,
     PreviewBillingModeTransitionRequest,
+    billing_mode_transition_form_state,
     confirm_billing_mode_transition,
     preview_billing_mode_transition,
 )
@@ -257,6 +258,7 @@ def account_detail(
     auth = getattr(getattr(request, "state", None), "auth", None) or {}
     billing_mode_transition = None
     billing_mode_transition_panel = None
+    billing_mode_transition_contract = None
     if has_permission(auth, db, BILLING_MODE_WRITE_SCOPE):
         account = cast(Subscriber, state["account"])
         target_mode = (
@@ -274,6 +276,9 @@ def account_detail(
         billing_mode_transition_panel = web_action_readiness.readiness_panel(
             billing_mode_transition.readiness,
             audience="staff",
+        )
+        billing_mode_transition_contract = billing_mode_transition_form_state(
+            billing_mode_transition
         )
     statement_range = web_billing_statements_service.parse_statement_range(
         statement_start, statement_end
@@ -295,6 +300,7 @@ def account_detail(
             "statement_range": statement_range,
             "billing_mode_transition": billing_mode_transition,
             "billing_mode_transition_panel": billing_mode_transition_panel,
+            "billing_mode_transition_contract": billing_mode_transition_contract,
             "billing_mode_idempotency_key": f"billing-mode:{uuid4()}",
             "billing_mode_message": request.query_params.get("billing_mode_message"),
             "billing_mode_error": request.query_params.get("billing_mode_error"),

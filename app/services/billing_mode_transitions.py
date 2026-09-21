@@ -56,6 +56,8 @@ from app.services.customer_financial_position import (
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.form_contracts import FormConsequence, FormContract, FormPrerequisite
+from app.services.form_contracts import register as register_form_contract
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -74,6 +76,45 @@ _CONFIRM_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="account-wide billing-mode transition",
     name="confirm_billing_mode_transition",
+)
+
+BILLING_MODE_TRANSITION_FORM = register_form_contract(
+    FormContract(
+        key="admin.billing_mode_transition",
+        title="Change account billing mode",
+        entity="subscriber",
+        command_owner=_OWNER,
+        consequences=(
+            FormConsequence(
+                key="account_scope",
+                label=(
+                    "The account and every current subscription change to the "
+                    "reviewed target billing mode in one transaction"
+                ),
+            ),
+            FormConsequence(
+                key="billing_boundary",
+                label=(
+                    "Existing billing anchors and already-paid service periods are "
+                    "preserved to prevent overlapping charges"
+                ),
+            ),
+            FormConsequence(
+                key="financial_history",
+                label=(
+                    "Existing credit, finalized invoices, allocations, and receivables "
+                    "remain unchanged and any outstanding debt remains payable"
+                ),
+            ),
+            FormConsequence(
+                key="prepaid_enforcement",
+                label=(
+                    "Obsolete prepaid enforcement timers are cleared only when the "
+                    "account leaves prepaid billing"
+                ),
+            ),
+        ),
+    )
 )
 
 
@@ -169,6 +210,42 @@ class BillingModeTransitionOutcome:
     changed_subscription_ids: tuple[UUID, ...]
     first_target_billing_at: datetime | None
     replayed: bool
+
+
+def billing_mode_transition_form_state(
+    preview: BillingModeTransitionPreview,
+) -> dict[str, object]:
+    """Project the owner verdict into the declared high-impact form contract."""
+
+    prerequisites = [
+        FormPrerequisite(
+            key="conversion_ready",
+            label=(
+                "Account, service, pricing, package, invoice, lock, and funding "
+                "checks all permit this conversion"
+            ),
+            met=preview.allowed,
+            reason=(
+                None
+                if preview.allowed
+                else "Resolve every blocking item in the conversion readiness panel."
+            ),
+        ),
+        FormPrerequisite(
+            key="reviewed_target_scope",
+            label=(
+                f"The preview covers {len(preview.subscriptions)} current service(s) "
+                f"moving to {preview.target_mode.value}"
+            ),
+            met=bool(preview.subscriptions),
+            reason=(
+                None
+                if preview.subscriptions
+                else "The account has no current service to convert."
+            ),
+        ),
+    ]
+    return BILLING_MODE_TRANSITION_FORM.state(prerequisites)
 
 
 def _actor(context: CommandContext) -> tuple[AuditActorType, str]:
@@ -978,6 +1055,7 @@ def confirm_billing_mode_transition(
 
 __all__ = [
     "BILLING_MODE_WRITE_SCOPE",
+    "BILLING_MODE_TRANSITION_FORM",
     "BillingModeSubscriptionImpact",
     "BillingModeTransitionError",
     "BillingModeTransitionIssue",
@@ -986,5 +1064,6 @@ __all__ = [
     "ConfirmBillingModeTransitionCommand",
     "PreviewBillingModeTransitionRequest",
     "confirm_billing_mode_transition",
+    "billing_mode_transition_form_state",
     "preview_billing_mode_transition",
 ]
