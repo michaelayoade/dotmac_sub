@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from app.models.network import DeviceStatus, OLTDevice
+from app.models.network import DeviceStatus, OLTDevice, OntUnit
 from app.services.network import ont_runtime_status
 from app.services.queue_adapter import QueueDispatchResult
 from app.tasks import ont_runtime_status as ont_runtime_status_tasks
@@ -147,3 +147,68 @@ def test_worker_rechecks_pollability_before_device_io(db_session, monkeypatch):
     result = ont_runtime_status_tasks.refresh_huawei_olt_status.run(str(olt.id))
 
     assert result == {"olt_id": str(olt.id), "skipped": "not_pollable"}
+
+
+def test_worker_closes_database_read_before_huawei_device_io(db_session, monkeypatch):
+    olt = _olt(
+        db_session,
+        name="Detached Huawei Poll",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.1",
+        ssh_username="poller",
+        ssh_password="encrypted",
+    )
+    db_session.add(
+        OntUnit(
+            serial_number="HWTCDETACHED01",
+            olt_device_id=olt.id,
+            board="0/1",
+            port="0",
+        )
+    )
+    db_session.commit()
+
+    @contextmanager
+    def read_session():
+        try:
+            yield db_session
+        finally:
+            db_session.rollback()
+
+    @contextmanager
+    def write_session():
+        yield db_session
+
+    @contextmanager
+    def acquired(_lock_key: int):
+        yield True
+
+    def fake_registered(_olt, fsps, **_kwargs):
+        assert db_session.in_transaction() is False
+        assert list(fsps) == ["0/1/0"]
+        return True, "ok", []
+
+    monkeypatch.setattr(
+        ont_runtime_status_tasks.db_session_adapter,
+        "read_session",
+        read_session,
+    )
+    monkeypatch.setattr(
+        ont_runtime_status_tasks.db_session_adapter,
+        "session",
+        write_session,
+    )
+    monkeypatch.setattr(
+        ont_runtime_status_tasks,
+        "postgres_session_advisory_lock",
+        acquired,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        fake_registered,
+    )
+
+    result = ont_runtime_status_tasks.refresh_huawei_olt_status.run(str(olt.id))
+
+    assert result["olt_id"] == str(olt.id)
+    assert result["observed"] == 0
