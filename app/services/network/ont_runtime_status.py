@@ -17,6 +17,7 @@ from app.models.network import (
     OnuOnlineStatus,
     PollStatus,
 )
+from app.services.network.olt_ssh_ont._common import RegisteredOntEntry
 from app.services.network.ont_status import apply_olt_status_observation
 from app.services.network.parsers.cli import canonical_fsp
 from app.services.network.serial_utils import canonical, parse_ont_id_on_olt
@@ -168,6 +169,7 @@ def refresh_huawei_olt_status(
     olt: OLTDevice,
     *,
     now: datetime | None = None,
+    observed_entries: tuple[RegisteredOntEntry, ...] | None = None,
 ) -> OltStatusRefreshStats:
     """Read all ONTs in one OLT command and persist matched observations.
 
@@ -212,9 +214,12 @@ def refresh_huawei_olt_status(
             invalid=invalid_locations,
         )
 
-    ok, message, entries = get_registered_ont_serials(olt, sorted(fsps))
-    if not ok:
-        raise RuntimeError(message)
+    if observed_entries is None:
+        ok, message, entries = get_registered_ont_serials(olt, sorted(fsps))
+        if not ok:
+            raise RuntimeError(message)
+    else:
+        entries = list(observed_entries)
 
     by_serial = {
         canonical(serial): ont
