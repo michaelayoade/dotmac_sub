@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 const _livePosition = ManagerTeamMapPosition(
   technicianId: 'tech-live',
@@ -36,6 +37,7 @@ const _technicians = [
     region: 'Lagos',
     locationSharingEnabled: true,
     isLive: true,
+    activeWorkOrderId: 'wo-live',
     activeWorkOrderTitle: 'Install at Marina',
   ),
   ManagerTechnician(
@@ -99,6 +101,47 @@ Widget _subject({
   );
 }
 
+Widget _routedSubject() {
+  final router = GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (_, _) => const ManagerTeamMapScreen(showTiles: false),
+      ),
+      GoRoute(
+        path: '/manager/dispatch/:id',
+        builder: (_, state) => Scaffold(
+          body: Center(
+            child: Text(
+              'Selected dispatch ${state.pathParameters['id']} for '
+              '${state.uri.queryParameters['personId']}',
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+  return ProviderScope(
+    overrides: [
+      managerTeamMapProvider.overrideWith(
+        (ref) async => _feed(const [_livePosition, _stalePosition]),
+      ),
+      managerTechniciansProvider.overrideWith((ref) async => _technicians),
+      managerTechnicianLocationDetailProvider.overrideWith((
+        ref,
+        technicianId,
+      ) async {
+        return const ManagerTechnicianLocationDetail(
+          position: _livePosition,
+          addressStatus: ManagerLocationAddressStatus.available,
+          addressText: 'Marina Road, Lagos',
+        );
+      }),
+    ],
+    child: MaterialApp.router(routerConfig: router),
+  );
+}
+
 void main() {
   testWidgets('renders every sharing technician at geographic coordinates', (
     tester,
@@ -128,6 +171,51 @@ void main() {
     expect(find.text('View dispatch'), findsOneWidget);
     expect(find.text('Live location address'), findsOneWidget);
     expect(find.text('Marina Road, Lagos'), findsOneWidget);
+  });
+
+  testWidgets('view dispatch opens the selected technician work order', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_routedSubject());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('team-map-marker-tech-live')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('View dispatch'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Selected dispatch wo-live for person-live'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('work-order title alone does not create a dispatch target', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _subject(
+        positions: const [_livePosition],
+        technicians: const [
+          ManagerTechnician(
+            personId: 'person-live',
+            technicianId: 'tech-live',
+            name: 'Ada Technician',
+            status: 'on_shift',
+            locationSharingEnabled: true,
+            isLive: true,
+            activeWorkOrderTitle: 'Install at Marina',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('team-map-marker-tech-live')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Install at Marina'), findsOneWidget);
+    expect(find.text('View dispatch'), findsNothing);
   });
 
   testWidgets(

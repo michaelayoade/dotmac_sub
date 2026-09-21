@@ -418,17 +418,27 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
     }
     if (!mounted) return;
     if (position != null) _focusPosition(position);
+    final activeWorkOrderId = technician?.activeWorkOrderId?.trim();
+    final activePersonId = technician?.personId.trim();
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => _TechnicianLocationSheet(
         technician: technician,
         position: position,
-        onOpenDispatch: technician?.activeWorkOrderTitle == null
+        onOpenDispatch:
+            activeWorkOrderId == null ||
+                activeWorkOrderId.isEmpty ||
+                activePersonId == null ||
+                activePersonId.isEmpty
             ? null
             : () {
                 Navigator.of(sheetContext).pop();
-                context.go('/schedule');
+                context.push(
+                  '/manager/dispatch/'
+                  '${Uri.encodeComponent(activeWorkOrderId)}'
+                  '?personId=${Uri.encodeComponent(activePersonId)}',
+                );
               },
       ),
     );
@@ -1563,71 +1573,86 @@ class _DispatchJobCard extends ConsumerWidget {
         : DateFormat('d MMM, HH:mm').format(job.scheduledStart!.toLocal());
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                StatusPill(job.statusPresentation),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    time,
-                    textAlign: TextAlign.right,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: Key('dispatch-job-${job.id}'),
+        onTap: () =>
+            context.push('/manager/dispatch/${Uri.encodeComponent(job.id)}'),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  StatusPill(job.statusPresentation),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      time,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                job.title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                [
+                      job.workType,
+                      job.priority,
+                      job.subscriberLabel,
+                      job.addressText,
+                    ]
+                    .whereType<String>()
+                    .where((value) => value.isNotEmpty)
+                    .join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.subdued(context),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              job.title,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              [job.workType, job.priority, job.subscriberLabel, job.addressText]
-                  .whereType<String>()
-                  .where((value) => value.isNotEmpty)
-                  .join(' · '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: AppColors.subdued(context)),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    job.assignedToLabel == null
-                        ? 'Unassigned'
-                        : 'Assigned to ${job.assignedToLabel}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      job.assignedToLabel == null
+                          ? 'Unassigned'
+                          : 'Assigned to ${job.assignedToLabel}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: canUnassign
-                      ? () => _unassign(context, ref, job)
-                      : technicians.isEmpty
-                      ? null
-                      : () => _assign(context, ref, job, technicians),
-                  icon: Icon(
-                    canUnassign
-                        ? Icons.person_remove_outlined
-                        : Icons.assignment_ind_outlined,
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: canUnassign
+                        ? () => _unassign(context, ref, job)
+                        : technicians.isEmpty
+                        ? null
+                        : () => _assign(context, ref, job, technicians),
+                    icon: Icon(
+                      canUnassign
+                          ? Icons.person_remove_outlined
+                          : Icons.assignment_ind_outlined,
+                    ),
+                    label: Text(canUnassign ? 'Unassign' : 'Assign'),
                   ),
-                  label: Text(canUnassign ? 'Unassign' : 'Assign'),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
