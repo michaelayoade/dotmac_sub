@@ -220,7 +220,7 @@ def test_reset_password_page_uses_configured_min_length(db_session):
 
     assert 'minlength="12"' in body
     assert "At least 12 characters" in body
-    assert "password.length >= this.passwordMinLength" in body
+    assert "value.length >= this.passwordMinLength" in body
 
 
 def _enable_force_admin_mfa(db_session):
