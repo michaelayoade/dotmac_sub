@@ -400,6 +400,7 @@ class ExpenseRequestSubmissionOutcome:
     notes: str | None
     client_ref: UUID
     total_amount: Decimal
+    requested_total_amount: Decimal
     submitted_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -1829,6 +1830,7 @@ def _submission_outcome(
         notes=request.notes,
         client_ref=request.client_ref,
         total_amount=request.total_amount,
+        requested_total_amount=request.requested_total_amount,
         submitted_at=request.submitted_at,
         created_at=request.created_at,
         updated_at=request.updated_at,

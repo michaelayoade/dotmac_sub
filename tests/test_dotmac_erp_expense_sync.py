@@ -229,7 +229,7 @@ def _items(**overrides):
 def _receipt_attachment(
     db, request: FieldExpenseRequest, attachment_id, *, file_name: str
 ) -> FieldAttachment:
-    content = f"receipt:{attachment_id}".encode()
+    content = b"%PDF-1.4\n" + f"receipt:{attachment_id}".encode()
     stored = StoredFile(
         entity_type="field_attachment",
         entity_id=request.work_order_mirror.public_id,
@@ -1127,6 +1127,7 @@ def test_requester_retry_requeues_same_dead_submission_event(db_session):
     event.last_error = "ERP rejected the receipt"
     original_key = event.idempotency_key
     requester_id = request.requested_by_system_user_id
+    expense_request_id = request.id
     assert requester_id is not None
     db_session.commit()
 
@@ -1139,10 +1140,10 @@ def test_requester_retry_requeues_same_dead_submission_event(db_session):
                 correlation_id=command_id,
                 actor=f"user:{requester_id}",
                 scope="field:expense_requests:write",
-                reason=f"retry_expense_submission:{request.id}",
+                reason=f"retry_expense_submission:{expense_request_id}",
                 idempotency_key=str(command_id),
             ),
-            expense_request_id=request.id,
+            expense_request_id=expense_request_id,
         ),
     )
 

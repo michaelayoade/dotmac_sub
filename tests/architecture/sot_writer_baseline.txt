@@ -168,7 +168,6 @@ app.services.tr069
 app.services.uisp_control_plane
 app.services.unit_of_work
 app.services.unmatched_radio_queue
-app.services.usage
 app.services.user_profile
 app.services.vendor_admin
 app.services.web_billing_reconciliation

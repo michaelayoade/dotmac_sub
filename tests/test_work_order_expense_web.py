@@ -612,7 +612,7 @@ def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     upload = ExpenseReceiptUploadInput(
         file_name="receipt.exe",
         mime_type="application/octet-stream",
-        content=b"not-a-receipt",
+        content=b"%PDF-1.4",
         client_ref=uuid4(),
     )
     command = _command(

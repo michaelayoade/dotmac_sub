@@ -137,6 +137,11 @@ def test_worker_rechecks_pollability_before_device_io(db_session, monkeypatch):
     def acquired(_lock_key: int):
         yield True
 
+    monkeypatch.setattr(
+        ont_runtime_status_tasks.db_session_adapter,
+        "read_session",
+        session,
+    )
     monkeypatch.setattr(ont_runtime_status_tasks.db_session_adapter, "session", session)
     monkeypatch.setattr(
         ont_runtime_status_tasks,

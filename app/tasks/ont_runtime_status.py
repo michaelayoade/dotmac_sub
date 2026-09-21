@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import select
 
@@ -14,6 +14,9 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.network.olt_protocol_adapters import OltConnectionConfig
 from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.tasks._postgres_lock import postgres_session_advisory_lock
+
+if TYPE_CHECKING:
+    from app.services.network.olt_ssh_ont import RegisteredOntEntry
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +123,7 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
         if target is None:
             return {"olt_id": olt_id, "skipped": "not_pollable"}
 
-        entries = ()
+        entries: tuple[RegisteredOntEntry, ...] = ()
         if target.fsps:
             ok, message, observed = get_registered_ont_serials(
                 cast(OLTDevice, target.connection),

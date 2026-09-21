@@ -427,6 +427,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Expense details'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('ERP-EXP-42'), 300);
     expect(find.text('ERP-EXP-42'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Taxi to site'), 300);
     expect(find.text('Taxi to site'), findsOneWidget);

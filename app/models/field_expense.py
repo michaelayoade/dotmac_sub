@@ -101,7 +101,12 @@ class FieldExpenseRequest(Base):
     )
     approval_decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     approval_adjustment_reason: Mapped[str | None] = mapped_column(String(500))
-    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    revision: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     payment_destination_mode: Mapped[str | None] = mapped_column(String(30))
     payment_destination_token: Mapped[str | None] = mapped_column(Text)
     recipient_bank_code: Mapped[str | None] = mapped_column(String(20))

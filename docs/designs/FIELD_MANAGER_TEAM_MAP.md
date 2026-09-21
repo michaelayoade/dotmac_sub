@@ -65,7 +65,7 @@ Owner: field operations UI
   identifier from that feed and does not derive status, assignment eligibility,
   or execution state.
 - **Primary entity:** one native work order keyed by its public work-order
-  identifier. Retained CRM identifiers and mirror UUIDs are not shown.
+  identifier. Retained legacy external identifiers and mirror UUIDs are not shown.
 - **First viewport:** work-order title, owner-supplied status presentation,
   work type, priority, schedule, and current technician assignment.
 - **Later sections:** subscriber/site context, full address and coordinates

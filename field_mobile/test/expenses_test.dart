@@ -884,6 +884,21 @@ void main() {
       '/api/v1/field/expense-requests',
       (_) => (200, {'items': <Object>[]}),
     );
+    adapter.on(
+      'GET',
+      '/api/v1/field/expense-requests/exp-9',
+      (_) => (
+        200,
+        {
+          'id': 'exp-9',
+          'number': 'EXP-0009',
+          'status': 'submitted',
+          'purpose': 'Site logistics',
+          'total_amount': '2500.00',
+          'erp_sync_status': 'accepted',
+        },
+      ),
+    );
 
     final router = GoRouter(
       initialLocation: '/expenses/new',
