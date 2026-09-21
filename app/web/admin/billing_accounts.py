@@ -1,6 +1,8 @@
 """Admin billing accounts routes."""
 
-from uuid import UUID
+from typing import cast
+from urllib.parse import quote_plus
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -8,11 +10,24 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.catalog import BillingMode
+from app.models.subscriber import Subscriber
+from app.services import web_action_readiness
 from app.services import web_billing_accounts as web_billing_accounts_service
 from app.services import web_billing_statements as web_billing_statements_service
 from app.services.audit_helpers import build_audit_activities
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
+from app.services.billing_mode_transitions import (
+    BILLING_MODE_WRITE_SCOPE,
+    ConfirmBillingModeTransitionCommand,
+    PreviewBillingModeTransitionRequest,
+    confirm_billing_mode_transition,
+    preview_billing_mode_transition,
+)
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition
+from app.services.owner_commands import CommandContext
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -239,6 +254,27 @@ def account_detail(
     state = web_billing_accounts_service.build_account_detail_data(
         db, account_id=str(account_id)
     )
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    billing_mode_transition = None
+    billing_mode_transition_panel = None
+    if has_permission(auth, db, BILLING_MODE_WRITE_SCOPE):
+        account = cast(Subscriber, state["account"])
+        target_mode = (
+            BillingMode.postpaid
+            if account.billing_mode == BillingMode.prepaid
+            else BillingMode.prepaid
+        )
+        billing_mode_transition = preview_billing_mode_transition(
+            db,
+            PreviewBillingModeTransitionRequest(
+                account_id=account_id,
+                target_mode=target_mode,
+            ),
+        )
+        billing_mode_transition_panel = web_action_readiness.readiness_panel(
+            billing_mode_transition.readiness,
+            audience="staff",
+        )
     statement_range = web_billing_statements_service.parse_statement_range(
         statement_start, statement_end
     )
@@ -257,7 +293,76 @@ def account_detail(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "statement_range": statement_range,
+            "billing_mode_transition": billing_mode_transition,
+            "billing_mode_transition_panel": billing_mode_transition_panel,
+            "billing_mode_idempotency_key": f"billing-mode:{uuid4()}",
+            "billing_mode_message": request.query_params.get("billing_mode_message"),
+            "billing_mode_error": request.query_params.get("billing_mode_error"),
         },
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/billing-mode",
+    dependencies=[Depends(require_permission(BILLING_MODE_WRITE_SCOPE))],
+)
+def account_billing_mode_transition(
+    request: Request,
+    account_id: UUID,
+    target_mode: str = Form(...),
+    preview_fingerprint: str = Form(..., min_length=64, max_length=64),
+    idempotency_key: str = Form(..., min_length=16, max_length=120),
+    reason: str = Form(..., min_length=8, max_length=500),
+    db: Session = Depends(get_db),
+):
+    try:
+        target = BillingMode(target_mode.strip().lower())
+    except ValueError:
+        return RedirectResponse(
+            url=(
+                f"/admin/billing/accounts/{account_id}?billing_mode_error="
+                f"{quote_plus('Select a supported billing mode.')}"
+            ),
+            status_code=303,
+        )
+    actor_id = _actor_id(request) or "admin"
+    command_id = uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        outcome = confirm_billing_mode_transition(
+            db,
+            ConfirmBillingModeTransitionCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"user:{actor_id}",
+                    scope=BILLING_MODE_WRITE_SCOPE,
+                    reason=reason,
+                    idempotency_key=idempotency_key,
+                ),
+                account_id=account_id,
+                target_mode=target,
+                expected_preview_fingerprint=preview_fingerprint,
+            ),
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            url=(
+                f"/admin/billing/accounts/{account_id}?billing_mode_error="
+                f"{quote_plus(exc.message)}"
+            ),
+            status_code=303,
+        )
+    message = (
+        f"Billing mode changed from {outcome.prior_mode.value} "
+        f"to {outcome.billing_mode.value}."
+    )
+    return RedirectResponse(
+        url=(
+            f"/admin/billing/accounts/{account_id}?billing_mode_message="
+            f"{quote_plus(message)}"
+        ),
+        status_code=303,
     )
 
 

@@ -446,6 +446,7 @@ DOMAIN = DomainSOT(
                 "customer.accounts",
                 "access.subscription_lifecycle",
                 "financial.subscription_billing_treatments",
+                "financial.customer_chargeability",
                 "events.dispatcher",
                 "observability.audit_log",
             ),
@@ -454,8 +455,10 @@ DOMAIN = DomainSOT(
                 "not an independent runtime switch. Revocation disables "
                 "non-terminal service through access.subscription_lifecycle; "
                 "re-approval restores only a disable created by this owner. "
-                "Explicit billing treatments, not this flag, own complimentary "
-                "or sponsored service."
+                "Explicit billing treatments own account-specific complimentary "
+                "or sponsored service. Canonical chargeability recognizes a "
+                "genuinely free zero-priced catalog product without treating "
+                "missing pricing as free."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -480,6 +483,7 @@ DOMAIN = DomainSOT(
                             "canonical account lifecycle state",
                             "canonical subscription lifecycle state",
                             "effective subscription billing treatment",
+                            "canonical customer chargeability",
                         ),
                     ),
                 ),
@@ -521,6 +525,15 @@ DOMAIN = DomainSOT(
                         source=(
                             "effective, evidence-bound complimentary or sponsored "
                             "billing-treatment decision"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical customer chargeability",
+                        owner="financial.customer_chargeability",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "current service scope, effective treatments, and "
+                            "explicit catalog recurring-price evidence"
                         ),
                     ),
                 ),
@@ -586,17 +599,19 @@ DOMAIN = DomainSOT(
                             "canonical account billing-approval fact",
                             "canonical subscription lifecycle state",
                             "effective subscription billing treatment",
+                            "canonical customer chargeability",
                         ),
                         writer="customer.billing_approval",
                         freshness="Reconciled every fifteen minutes.",
                         stale_behavior=(
                             "An unapproved active service is fail-safe drift: an "
-                            "effective treatment repairs redundant approval to true; "
-                            "otherwise the account is disabled."
+                            "effective treatment or genuinely free catalog evidence "
+                            "repairs redundant approval to true; missing or "
+                            "contradictory pricing remains review-only."
                         ),
                         drift_signal=(
-                            "Subscriber.billing_enabled=false joined to an active "
-                            "Subscription."
+                            "Subscriber.billing_enabled=false joined to a current "
+                            "Subscription, including billing-owned disabled rows."
                         ),
                         rebuild_operation=(
                             "reconcile_account_billing_approval for the bounded "

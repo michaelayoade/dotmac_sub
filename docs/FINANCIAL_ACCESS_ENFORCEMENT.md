@@ -42,6 +42,8 @@ account-scoped; it is never coerced to zero, paid, funded, or safe-to-suspend.
 | Append-only customer-position entries | `financial.ledger` | Owns adjustment/reversal evidence; it does not replace invoice or payment owners. |
 | Prepaid opening position | `financial.prepaid_funding_reconstruction` | Owns the one-time reviewed baseline and native-after-cutover projection. |
 | Customer-facing financial position | `customer.financial_position` | Resolves document/event facts without becoming their writer. |
+| Customer chargeability | `financial.customer_chargeability` | Classifies current service as billable, confirmed non-billable, review-required, or absent from explicit price/treatment evidence. |
+| Billing-mode transition | `financial.billing_mode_transition` | Previews and atomically confirms reviewed account-wide prepaid/postpaid changes without rewriting money or paid periods. |
 | Current prepaid coverage | `financial.prepaid_service_coverage` | Classifies exact evidence; writes no money, dates, or access state. |
 | Service-extension lifecycle | `financial.service_extensions` | Owns create/apply/cancel/reverse, immutable grant and linked reversal evidence, and extension-caused billing-anchor changes; requests restoration from the access lifecycle owner. |
 | Prepaid renewal charge and execution | `financial.prepaid_service_renewals` | Resolves the exact taxed contract charge and coordinates the paid invoice, funding application, entitlement, anchor, and renewed outcome together. |

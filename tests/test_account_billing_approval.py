@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.api.subscribers import change_subscriber_billing_approval
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import OfferPrice, PriceType, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
 from app.models.event_store import EventStore
 from app.models.subscriber import SubscriberStatus
@@ -292,7 +293,7 @@ def test_reconciler_repairs_redundant_false_when_all_active_service_is_treated(
     )
 
 
-def test_drift_query_returns_only_active_unapproved_accounts(
+def test_drift_query_returns_active_unapproved_accounts(
     db_session, subscriber, subscription
 ):
     account_id = subscriber.id
@@ -302,4 +303,76 @@ def test_drift_query_returns_only_active_unapproved_accounts(
 
     assert account_id in approval_service.find_billing_approval_drift_account_ids(
         db_session
+    )
+
+
+def test_reconciler_restores_billing_owned_disable_for_genuinely_free_product(
+    db_session, subscriber, subscription
+):
+    account_id = subscriber.id
+    subscription_id = subscription.id
+    subscriber.billing_enabled = True
+    subscriber.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.active
+    subscription.unit_price = Decimal("0.00")
+    db_session.add(
+        OfferPrice(
+            offer_id=subscription.offer_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("0.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _change(db_session, account_id, False)
+    db_session.commit()
+
+    assert account_id in approval_service.find_billing_approval_drift_account_ids(
+        db_session
+    )
+    db_session.commit()
+    outcome = approval_service.reconcile_account_billing_approval(
+        db_session,
+        approval_service.ReconcileAccountBillingApprovalCommand(
+            context=_context("Restore genuinely free catalog service"),
+            account_id=account_id,
+        ),
+    )
+
+    assert outcome.action is approval_service.BillingApprovalAction.free_catalog_aligned
+    assert db_session.get(type(subscriber), account_id).billing_enabled is True
+    assert (
+        db_session.get(type(subscriber), account_id).status is SubscriberStatus.active
+    )
+    assert (
+        db_session.get(type(subscription), subscription_id).status
+        is SubscriptionStatus.active
+    )
+
+
+def test_reconciler_does_not_restore_missing_price_review_case(
+    db_session, subscriber, subscription
+):
+    account_id = subscriber.id
+    subscriber.billing_enabled = True
+    subscriber.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.active
+    subscription.unit_price = None
+    db_session.commit()
+    _change(db_session, account_id, False)
+    db_session.commit()
+
+    outcome = approval_service.reconcile_account_billing_approval(
+        db_session,
+        approval_service.ReconcileAccountBillingApprovalCommand(
+            context=_context("Keep ambiguous pricing in manual review"),
+            account_id=account_id,
+        ),
+    )
+
+    assert outcome.action is approval_service.BillingApprovalAction.unchanged
+    assert db_session.get(type(subscriber), account_id).billing_enabled is False
+    assert (
+        db_session.get(type(subscriber), account_id).status is SubscriberStatus.disabled
     )

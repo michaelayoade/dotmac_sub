@@ -42,6 +42,7 @@ class EventType(enum.Enum):
     subscriber_location_prompt_snoozed = "subscriber.location_prompt_snoozed"
     field_location_history_pruned = "field_location.history_pruned"
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
+    subscriber_billing_mode_changed = "subscriber.billing_mode_changed"
     carried_source_identity_adjudicated = "billing.carried_source_identity.adjudicated"
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"

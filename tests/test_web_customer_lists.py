@@ -356,6 +356,102 @@ def test_customer_non_billable_filter_requires_every_collectible_service_to_be_f
     assert {item["email"] for item in postpaid["customers"]} == {mixed.email}
 
 
+def test_customer_non_billable_section_includes_missing_catalog_price_for_review(
+    db_session,
+):
+    customer = _make_customer(db_session, "missing-price-review@example.com")
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        offer=_make_offer(db_session, recurring_amount=None),
+    )
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search="missing-price-review",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        billing_mode="non_billable",
+        page=1,
+        per_page=25,
+    )
+
+    assert {item["email"] for item in context["customers"]} == {customer.email}
+    row = context["customers"][0]
+    assert row["chargeability_label"] == "Review required"
+    assert "missing catalog price" in row["chargeability_detail"]
+
+
+def test_customer_non_billable_section_includes_disabled_free_service(db_session):
+    customer = _make_customer(db_session, "disabled-free-review@example.com")
+    customer.status = SubscriberStatus.delinquent
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.prepaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("0.00")),
+    )
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search="disabled-free-review",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        billing_mode="non_billable",
+        page=1,
+        per_page=25,
+    )
+
+    assert {item["email"] for item in context["customers"]} == {customer.email}
+    assert context["customers"][0]["chargeability_label"] == ("Confirmed non-billable")
+    assert context["customers"][0]["status"] == SubscriberStatus.delinquent.value
+
+
+def test_customer_non_billable_section_marks_paid_and_unknown_mix_for_review(
+    db_session,
+):
+    customer = _make_customer(db_session, "mixed-paid-unknown-review@example.com")
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("9000.00")),
+    )
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=None),
+    )
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search="mixed-paid-unknown-review",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        billing_mode="non_billable",
+        page=1,
+        per_page=25,
+    )
+
+    assert {item["email"] for item in context["customers"]} == {customer.email}
+    assert context["customers"][0]["chargeability_label"] == "Review required"
+
+
 def test_customer_billing_filter_rejects_unsupported_value():
     try:
         build_customer_list_query(

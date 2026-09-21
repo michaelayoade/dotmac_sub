@@ -57,6 +57,7 @@ class BillingApprovalAction(StrEnum):
     disabled = "disabled"
     restored = "restored"
     treatment_aligned = "treatment_aligned"
+    free_catalog_aligned = "free_catalog_aligned"
 
 
 class AccountBillingApprovalError(DomainError):
@@ -324,13 +325,21 @@ def change_account_billing_approval(
 def find_billing_approval_drift_account_ids(
     db: Session, *, limit: int = 200
 ) -> tuple[UUID, ...]:
-    """Return active-service accounts excluded by the approval fact."""
+    """Return current-service accounts excluded by the approval fact.
+
+    Disabled rows remain in scope because a legacy approval decision may have
+    disabled a genuinely free catalog service.  The command owner decides
+    whether that billing-owned disable is safe to restore; this query only
+    discovers the bounded repair cohort.
+    """
+    from app.services.customer_chargeability import CHARGEABILITY_SERVICE_STATUSES
+
     rows = db.scalars(
         select(Subscriber.id)
         .join(Subscription, Subscription.subscriber_id == Subscriber.id)
         .where(
             Subscriber.billing_enabled.is_(False),
-            Subscription.status == SubscriptionStatus.active,
+            Subscription.status.in_(CHARGEABILITY_SERVICE_STATUSES),
         )
         .distinct()
         .order_by(Subscriber.id)
@@ -344,9 +353,11 @@ def reconcile_account_billing_approval(
 ) -> BillingApprovalOutcome:
     """Repair one legacy active/unapproved account without inventing a waiver.
 
-    An effective treatment already owns suppression of customer billing, so a
-    redundant false approval flag is repaired to true.  Otherwise the explicit
-    false fact wins fail-safe and the account is administratively disabled.
+    An effective treatment already owns suppression of customer billing. A
+    genuinely free catalog product is likewise explicit non-billable evidence.
+    A redundant false approval flag is repaired to true for either case.
+    Missing or contradictory pricing never qualifies and stays fail-safe for
+    manual review.
     """
 
     def operation() -> BillingApprovalOutcome:
@@ -354,13 +365,26 @@ def reconcile_account_billing_approval(
         account, subscriptions = _lock_account_and_subscriptions(db, command.account_id)
         prior_approved = bool(account.billing_enabled)
         prior_status = account.status
-        active = [
+        current = [
             subscription
             for subscription in subscriptions
+            if subscription.status
+            in {
+                SubscriptionStatus.pending,
+                SubscriptionStatus.active,
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.suspended,
+                SubscriptionStatus.stopped,
+                SubscriptionStatus.disabled,
+            }
+        ]
+        active = [
+            subscription
+            for subscription in current
             if subscription.status == SubscriptionStatus.active
         ]
-        affected = tuple(subscription.id for subscription in active)
-        if prior_approved or not active:
+        affected = tuple(subscription.id for subscription in current)
+        if prior_approved or not current:
             return _outcome(
                 account=account,
                 prior_approved=prior_approved,
@@ -374,16 +398,54 @@ def reconcile_account_billing_approval(
             resolve_subscription_billing_treatments,
         )
 
-        treatments = resolve_subscription_billing_treatments(db, active)
-        all_treated = all(
+        treatments = resolve_subscription_billing_treatments(db, current)
+        all_treated = bool(current) and all(
             treatments[subscription.id].status
             == BillingTreatmentDecisionStatus.effective
-            for subscription in active
+            for subscription in current
+        )
+        from app.services.customer_chargeability import (
+            CustomerChargeabilityStatus,
+            resolve_customer_chargeability,
+        )
+
+        chargeability = resolve_customer_chargeability(db, (account.id,))[account.id]
+        genuinely_free = (
+            chargeability.status is CustomerChargeabilityStatus.confirmed_non_billable
         )
         source = f"{_SOURCE_PREFIX}reconcile:{command.context.command_id}"
-        if all_treated:
+        restore_owned_disable = _was_disabled_by_billing_approval(account)
+        if all_treated or genuinely_free:
             account.billing_enabled = True
-            action = BillingApprovalAction.treatment_aligned
+            if restore_owned_disable:
+                clear_account_lifecycle_override(
+                    db,
+                    str(account.id),
+                    reason=command.context.reason,
+                    source=source,
+                )
+                for subscription in current:
+                    if subscription.status == SubscriptionStatus.disabled:
+                        enable_subscription(
+                            db,
+                            str(subscription.id),
+                            reason=command.context.reason,
+                            source=source,
+                        )
+                compute_account_status(db, str(account.id))
+            action = (
+                BillingApprovalAction.treatment_aligned
+                if all_treated
+                else BillingApprovalAction.free_catalog_aligned
+            )
+        elif not active:
+            return _outcome(
+                account=account,
+                prior_approved=prior_approved,
+                prior_status=prior_status,
+                action=BillingApprovalAction.unchanged,
+                affected_subscription_ids=affected,
+            )
         else:
             transition_account_status(
                 db,

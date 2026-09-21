@@ -236,7 +236,7 @@
                                 {"value": "", "label": "All Billing"},
                                 {"value": "prepaid", "label": "Prepaid"},
                                 {"value": "postpaid", "label": "Postpaid"},
-                                {"value": "non_billable", "label": "Non-billable"}
+                                {"value": "non_billable", "label": "Non-billable / review"}
                             ] %}
                             {{ filter_select("billing_mode", billing_mode_options, value=billing_mode or "", label="Billing", color="amber", attrs=live_filter_attrs) }}
                         </div>
@@ -246,6 +246,7 @@
                                 {"value": "active", "label": "Active"},
                                 {"value": "blocked", "label": "Blocked"},
                                 {"value": "suspended", "label": "Suspended"},
+                                {"value": "delinquent", "label": "Delinquent"},
                                 {"value": "disabled", "label": "Disabled"},
                                 {"value": "new", "label": "New"},
                                 {"value": "canceled", "label": "Canceled"},
