@@ -1251,6 +1251,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-billing", "Review financial records", 1),
         _action("investigate-billing-record", "Investigate a billing record", 2),
     ),
+    "billing-accounts": (
+        _action("review-billing-account", "Review the billing account", 0),
+        _action("resolve-mode-blockers", "Resolve conversion blockers", 1),
+        _action(
+            "confirm-billing-mode",
+            "Confirm the billing-mode change",
+            2,
+            permission="billing:mode:write",
+        ),
+        _action("verify-billing-mode", "Verify the billing-mode change", 3),
+    ),
     "invoice": (
         _action(
             "create-review-invoice",

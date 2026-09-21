@@ -25,6 +25,7 @@ from app.services.billing_mode_transitions import (
     preview_billing_mode_transition,
 )
 from app.services.owner_commands import CommandContext
+from tests.datetime_fixture_helpers import naive_utc
 
 
 def _prepare(db, subscriber, subscription, *, mode: BillingMode) -> None:
@@ -136,8 +137,14 @@ def test_account_and_current_subscriptions_change_mode_atomically(
         assert subscriber.prepaid_low_balance_at is None
         assert subscriber.prepaid_deactivation_at is None
     else:
-        assert subscriber.prepaid_low_balance_at == original_low_balance_at
-        assert subscriber.prepaid_deactivation_at == original_deactivation_at
+        assert subscriber.prepaid_low_balance_at is not None
+        assert subscriber.prepaid_deactivation_at is not None
+        assert naive_utc(subscriber.prepaid_low_balance_at) == naive_utc(
+            original_low_balance_at
+        )
+        assert naive_utc(subscriber.prepaid_deactivation_at) == naive_utc(
+            original_deactivation_at
+        )
 
 
 def test_confirmation_is_idempotent(db_session, subscriber, subscription):
