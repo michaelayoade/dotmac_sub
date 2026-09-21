@@ -53,6 +53,15 @@ the selected work order when the request is submitted.
   fact. Cost-centre, ERP task, fleet vehicle, and receipt-number controls remain
   out of scope.
 
+  Approval has two explicit paths. **Approve as submitted** copies every
+  immutable technician-requested line amount into the approved amount and does
+  not require a reason. **Adjust and approve** accepts one positive approved
+  amount for every existing line and requires a bounded reason when any amount
+  differs. It cannot add, remove, recategorize, or otherwise rewrite a submitted
+  line. The owner locks the request, checks its revision and selected approver,
+  validates current category limits, writes all approved amounts, records the
+  decision, changes lifecycle state, and stages ERP delivery in one transaction.
+
 The Field app offers the technician's masked ERP bank profile by default. A
 technician may instead enter an ERP bank and account number for this expense
 only. For both modes, Sub asks ERP to resolve the account before submission,
@@ -115,10 +124,13 @@ becomes visible only after ERP returns `SUBMITTED`. Receipt bytes/base64 never
 enter the database outbox; supported URL receipts remain claim-line data.
 
 Sub remains authoritative for the manager decision. Approval and rejection
-stage separate `expense_approve_v3` and `expense_reject_v3` consequences ordered
+stage separate `expense_approve_v4` and `expense_reject_v3` consequences ordered
 after accepted submission. A decision that arrives first remains pending without
 consuming delivery attempts. ERP remains authoritative for accounting, payment,
 reconciliation, and paid status. Payment waits for accepted approval.
+The v4 approval contains every stable source-line ID and approved amount. ERP
+updates the submitted draft lines and approves them atomically. Historical
+queued v3 approvals remain deliverable, but new approvals never use v3.
 
 For every new request, destination verification `source_claim_id`, `client_ref`,
 `FieldExpenseRequest.id`, ERP `source_claim_id`, and polling `source_claim_id`
@@ -165,6 +177,11 @@ is resolved only when its persisted technician or Person link yields one exact
 SystemUser; otherwise it is labelled unavailable. The client never infers a
 requester from the current work-order assignment. The manager navigation does
 not expose the Materials destination.
+Both the Field app and the admin work-order detail retain a primary **Approve**
+action for an unchanged request and a secondary **Adjust amount** action. The
+latter opens line-level amount inputs and ends with **Approve adjusted amount**.
+Technician and manager history show requested and approved totals plus the
+adjustment reason when they differ.
 
 ## Schema change
 
@@ -174,6 +191,11 @@ existing claims remain readable during rollout. `requested_by_technician_id` on 
 `uploaded_by_technician_id` on field attachments become nullable. System-user
 and person identity remain mandatory for new web submissions. The downgrade
 fails closed while any staff-created rows without technician links exist.
+
+Revision `617_expense_approval_adjustments` adds nullable per-line approved
+amounts, approving-user and decision identity, adjustment reason, and a request
+revision. Existing approved and paid lines are backfilled with their requested
+amount so historical reimbursement and project-cost totals do not change.
 
 ## Validation and recovery
 
@@ -187,6 +209,10 @@ file input itself as required. It changes the shared Receipt marker and help
 text when the category changes, then validates the URL-or-file choice as one
 requirement. Category receipt and maximum rules are enforced again by the
 command owner. Browser calculations and required markers are assistance only.
+Approval accepts either no line overrides (approve as submitted) or exactly one
+approved amount for every submitted line. Partial, duplicate, stale, zero, or
+negative adjustments fail closed. A reason is required only when at least one
+approved amount differs from its requested amount.
 
 Private attachments must be active, owned by the same authoritative work order,
 present in storage, within the receipt size limit, and have a supported MIME,

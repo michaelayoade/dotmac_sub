@@ -577,6 +577,7 @@ class FieldExpenseRequestItemRead(BaseModel):
     category_name: str | None = None
     description: str
     amount: Decimal
+    approved_amount: Decimal | None = None
     expense_date: date | None = None
     vendor_name: str | None = None
     receipt_url: str | None = None
@@ -615,6 +616,12 @@ class FieldExpenseRequestRead(BaseModel):
     payment_error: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
+    requested_total_amount: Decimal
+    approved_total_amount: Decimal | None = None
+    amounts_adjusted: bool = False
+    approval_adjustment_reason: str | None = None
+    approved_by_system_user_id: UUID | None = None
+    revision: int = 1
     submitted_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
@@ -631,6 +638,11 @@ class FieldExpenseApprovalRead(BaseModel):
     erp_sync_status: str
     erp_sync_event_id: UUID | None = None
     erp_sync_error: str | None = None
+    requested_total_amount: Decimal
+    approved_total_amount: Decimal
+    amounts_adjusted: bool
+    adjustment_reason: str | None = None
+    revision: int
 
 
 class FieldExpenseRejectionRead(BaseModel):
@@ -1474,3 +1486,18 @@ class FieldManagerJobUnassignRequest(BaseModel):
 
 class FieldManagerExpenseRejectRequest(BaseModel):
     reason: str = Field(min_length=2, max_length=500)
+
+
+class FieldManagerExpenseApprovalLine(BaseModel):
+    expense_item_id: UUID
+    approved_amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+
+
+class FieldManagerExpenseApproveRequest(BaseModel):
+    """Empty lines approve as submitted; supplied lines adjust and approve."""
+
+    lines: list[FieldManagerExpenseApprovalLine] = Field(
+        default_factory=list, max_length=50
+    )
+    adjustment_reason: str | None = Field(default=None, max_length=500)
+    expected_revision: int | None = Field(default=None, ge=1)

@@ -60,6 +60,22 @@
 {% if claim.rejection_reason %}<p class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200"><strong>Rejected:</strong> {{ claim.rejection_reason }}</p>{% endif %}
 </article>
 {% endfor %}</div>{% else %}<p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/50">You have not created an expense claim for this work order.</p>{% endif %}
+{% if expense_panel.approvals %}
+<section class="mt-5 border-t border-slate-200 pt-5 dark:border-slate-700" aria-labelledby="expense-approvals-heading">
+<div><h3 id="expense-approvals-heading" class="font-semibold text-slate-900 dark:text-white">Expense approvals</h3><p class="mt-1 text-sm text-slate-500">Approve the request unchanged, or adjust line amounts and provide a reason.</p></div>
+<div class="mt-3 space-y-4">{% for approval in expense_panel.approvals %}
+<article class="rounded-xl border border-emerald-200 p-4 dark:border-emerald-800">
+<div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><h4 class="font-semibold">{{ approval.purpose }}</h4><p class="text-sm text-slate-500">Raised by {{ approval.requested_by_name }} · Requested {{ approval.currency }} {{ '%.2f'|format(approval.requested_total_amount) }}</p></div>
+<form method="post" action="/admin/dispatch/work-orders/{{ work_order.public_id }}/expenses/{{ approval.id }}/approve">{% include "components/forms/csrf_input.html" %}<input type="hidden" name="expected_revision" value="{{ approval.revision }}"><button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Approve</button></form></div>
+<details class="mt-3 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50"><summary class="cursor-pointer text-sm font-semibold text-emerald-800 dark:text-emerald-200">Adjust amount</summary>
+<form method="post" action="/admin/dispatch/work-orders/{{ work_order.public_id }}/expenses/{{ approval.id }}/approve" class="mt-3 space-y-3">{% include "components/forms/csrf_input.html" %}<input type="hidden" name="expected_revision" value="{{ approval.revision }}">
+{% for line in approval.lines %}<label class="grid gap-1 text-sm sm:grid-cols-[1fr_12rem] sm:items-center"><span><strong>{{ line.description }}</strong><span class="block text-xs text-slate-500">{{ line.category_name }} · Requested {{ approval.currency }} {{ '%.2f'|format(line.requested_amount) }}</span></span><input type="number" min="0.01" step="0.01" required name="approved_amount_{{ line.id }}" value="{{ '%.2f'|format(line.requested_amount) }}" class="rounded-xl border border-slate-300 px-3 py-2 text-right dark:bg-slate-900" aria-label="Approved amount for {{ line.description }}"></label>{% endfor %}
+<label class="block text-sm font-semibold">Adjustment reason <span class="font-normal text-slate-500">(required when any amount changes)</span><textarea name="adjustment_reason" maxlength="500" rows="2" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"></textarea></label>
+<div class="flex justify-end"><button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Approve adjusted amount</button></div>
+</form></details>
+</article>{% endfor %}</div>
+</section>
+{% endif %}
 {% if not action_permitted(request, expense_panel.create_action) %}<p id="expense-creation-unavailable" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ expense_panel.create_action.reason or 'Expense creation is unavailable.' }}</p>{% endif %}
 {% if expense_panel.category_message and expense_panel.category_message != expense_panel.create_action.reason %}<p class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ expense_panel.category_message }}</p>{% endif %}
 {% if action_permitted(request, expense_panel.create_action) %}

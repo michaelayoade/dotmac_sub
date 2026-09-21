@@ -60,6 +60,7 @@ class ExpenseErpAction(StrEnum):
     RELEASE_APPROVED = "release_approved_v2"
     SUBMIT_V3 = "expense_submit_v3"
     APPROVE_V3 = "expense_approve_v3"
+    APPROVE_V4 = "expense_approve_v4"
     REJECT_V3 = "expense_reject_v3"
     INITIATE_PAYMENT = "initiate_payment"
 
@@ -87,10 +88,19 @@ def expense_submission_idempotency_key(request: FieldExpenseRequest) -> str:
 def expense_decision_idempotency_key(
     request: FieldExpenseRequest, action: ExpenseErpAction, decision_id: UUID
 ) -> str:
-    if action not in {ExpenseErpAction.APPROVE_V3, ExpenseErpAction.REJECT_V3}:
-        raise ValueError("A v3 approval or rejection action is required")
-    verb = "approved" if action is ExpenseErpAction.APPROVE_V3 else "rejected"
-    return f"exp-{request.id}-{verb}-{decision_id}-v3"
+    if action not in {
+        ExpenseErpAction.APPROVE_V3,
+        ExpenseErpAction.APPROVE_V4,
+        ExpenseErpAction.REJECT_V3,
+    }:
+        raise ValueError("A versioned approval or rejection action is required")
+    verb = (
+        "approved"
+        if action in {ExpenseErpAction.APPROVE_V3, ExpenseErpAction.APPROVE_V4}
+        else "rejected"
+    )
+    version = "v4" if action is ExpenseErpAction.APPROVE_V4 else "v3"
+    return f"exp-{request.id}-{verb}-{decision_id}-{version}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,11 +282,17 @@ def enqueue_expense_decision(
     notes: str | None = None,
     isolate: bool = False,
 ) -> FieldErpSyncEvent:
-    if action not in {ExpenseErpAction.APPROVE_V3, ExpenseErpAction.REJECT_V3}:
-        raise ValueError("Only a v3 manager decision may be staged here")
+    if action not in {
+        ExpenseErpAction.APPROVE_V3,
+        ExpenseErpAction.APPROVE_V4,
+        ExpenseErpAction.REJECT_V3,
+    }:
+        raise ValueError("Only a versioned manager decision may be staged here")
     require_expense_delivery_identity(request)
     expected_status = (
-        "approved" if action is ExpenseErpAction.APPROVE_V3 else "rejected"
+        "approved"
+        if action in {ExpenseErpAction.APPROVE_V3, ExpenseErpAction.APPROVE_V4}
+        else "rejected"
     )
     if request.status != expected_status:
         raise ValueError(f"Only a {expected_status} expense may stage this decision")
@@ -290,6 +306,20 @@ def enqueue_expense_decision(
         if not reason:
             raise ValueError("A rejection reason is required")
         decision["reason"] = reason
+    if action is ExpenseErpAction.APPROVE_V4:
+        decision["items"] = [
+            {
+                "source_line_id": str(item.id),
+                "approved_amount": str(
+                    item.approved_amount
+                    if item.approved_amount is not None
+                    else item.amount
+                ),
+            }
+            for item in request.items
+        ]
+        if request.approval_adjustment_reason:
+            decision["adjustment_reason"] = request.approval_adjustment_reason
     return outbox.enqueue(
         db,
         flow=FieldErpSyncFlow.expense_claim,
@@ -298,7 +328,11 @@ def enqueue_expense_decision(
         idempotency_key=expense_decision_idempotency_key(request, action, decision_id),
         payload={
             "_expense_action": action.value,
-            "_expense_contract_version": "work-order-expense.v3",
+            "_expense_contract_version": (
+                "work-order-expense.v4"
+                if action is ExpenseErpAction.APPROVE_V4
+                else "work-order-expense.v3"
+            ),
             "_depends_on_idempotency_key": expense_submission_idempotency_key(request),
             "source_claim_id": str(request.id),
             **decision,
@@ -349,7 +383,7 @@ def enqueue_expense_payment(
             event.idempotency_key
             for event in approval_event
             if str((event.payload or {}).get("_expense_action"))
-            in {"expense_approve_v3", "release_approved_v2"}
+            in {"expense_approve_v4", "expense_approve_v3", "release_approved_v2"}
         ),
         expense_release_idempotency_key(request),
     )

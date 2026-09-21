@@ -267,6 +267,7 @@ class ExpenseRequestItem {
     required this.id,
     required this.categoryCode,
     required this.amount,
+    this.approvedAmount,
     this.categoryName,
     this.description,
     this.expenseDate,
@@ -279,6 +280,7 @@ class ExpenseRequestItem {
   final String id;
   final String categoryCode;
   final double amount;
+  final double? approvedAmount;
   final String? categoryName;
   final String? description;
   final String? expenseDate;
@@ -296,6 +298,7 @@ class ExpenseRequestItem {
         id: json['id'].toString(),
         categoryCode: json['category_code']?.toString() ?? '',
         amount: _double(json['amount']) ?? 0,
+        approvedAmount: _double(json['approved_amount']),
         categoryName: _string(json['category_name']),
         description: _string(json['description']),
         expenseDate: _string(json['expense_date']),
@@ -330,6 +333,11 @@ class ExpenseRequest {
     this.maskedAccountNumber,
     this.verifiedBeneficiaryName,
     this.total,
+    this.requestedTotal,
+    this.approvedTotal,
+    this.amountsAdjusted = false,
+    this.approvalAdjustmentReason,
+    this.revision = 1,
     this.ticketId,
     this.projectId,
     this.workOrderId,
@@ -364,6 +372,11 @@ class ExpenseRequest {
   final String? maskedAccountNumber;
   final String? verifiedBeneficiaryName;
   final double? total;
+  final double? requestedTotal;
+  final double? approvedTotal;
+  final bool amountsAdjusted;
+  final String? approvalAdjustmentReason;
+  final int revision;
   final String? ticketId;
   final String? projectId;
   final String? workOrderId;
@@ -402,6 +415,15 @@ class ExpenseRequest {
     maskedAccountNumber: _string(json['masked_account_number']),
     verifiedBeneficiaryName: _string(json['verified_beneficiary_name']),
     total: _double(json['total_amount']),
+    requestedTotal: _double(json['requested_total_amount']),
+    approvedTotal: _double(json['approved_total_amount']),
+    amountsAdjusted: json['amounts_adjusted'] == true,
+    approvalAdjustmentReason: _string(json['approval_adjustment_reason']),
+    revision: switch (json['revision']) {
+      int value => value,
+      String value => int.tryParse(value) ?? 1,
+      _ => 1,
+    },
     ticketId: json['ticket_id']?.toString(),
     projectId: json['project_id']?.toString(),
     workOrderId: json['work_order_id']?.toString(),
@@ -419,6 +441,9 @@ class ExpenseRequest {
 
   double get totalAmount =>
       total ?? items.fold<double>(0, (sum, item) => sum + item.amount);
+
+  double get requestedTotalAmount =>
+      requestedTotal ?? items.fold<double>(0, (sum, item) => sum + item.amount);
 
   String get statusLabel {
     final value = status.replaceAll('_', ' ');

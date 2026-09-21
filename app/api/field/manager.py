@@ -28,6 +28,7 @@ from app.schemas.field import (
     FieldLiveMapFeedQuery,
     FieldLiveMapTechnicianDetail,
     FieldLiveMapTechnicianDetailQuery,
+    FieldManagerExpenseApproveRequest,
     FieldManagerExpenseRejectRequest,
     FieldManagerJob,
     FieldManagerJobAssignRequest,
@@ -60,6 +61,7 @@ from app.services.field.expense_recovery import (
 )
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
+    ExpenseApprovalLineInput,
     ExpenseRequestStatus,
     FieldExpenseRequestError,
     InitiateFieldExpensePayment,
@@ -489,6 +491,7 @@ def field_manager_expenses(
 )
 def field_manager_approve_expense(
     expense_request_id: UUID,
+    payload: FieldManagerExpenseApproveRequest | None = None,
     auth: dict = Depends(_expense_write),
     request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
@@ -506,6 +509,19 @@ def field_manager_approve_expense(
                 ),
                 expense_request_id=expense_request_id,
                 reviewer_system_user_id=UUID(str(auth["principal_id"])),
+                lines=tuple(
+                    ExpenseApprovalLineInput(
+                        expense_item_id=line.expense_item_id,
+                        approved_amount=line.approved_amount,
+                    )
+                    for line in (payload.lines if payload is not None else ())
+                ),
+                adjustment_reason=(
+                    payload.adjustment_reason if payload is not None else None
+                ),
+                expected_revision=(
+                    payload.expected_revision if payload is not None else None
+                ),
             ),
         )
     except FieldExpenseRequestError as exc:

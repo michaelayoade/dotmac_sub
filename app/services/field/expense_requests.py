@@ -157,6 +157,14 @@ class ExpenseRequestLineInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpenseApprovalLineInput:
+    """One approver-selected amount for an immutable submitted expense line."""
+
+    expense_item_id: UUID
+    approved_amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class SelectedExpenseApprover:
     erp_employee_id: UUID
     system_user_id: UUID
@@ -234,6 +242,10 @@ class ApproveFieldExpenseRequest:
     context: CommandContext
     expense_request_id: UUID
     reviewer_system_user_id: UUID
+    lines: tuple[ExpenseApprovalLineInput, ...] = ()
+    adjustment_reason: str | None = None
+    expected_revision: int | None = None
+    expected_work_order_public_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +311,11 @@ class ExpenseRequestApprovalOutcome:
     erp_sync_status: ExpenseErpSyncStatus
     erp_sync_event_id: UUID | None
     erp_sync_error: str | None
+    requested_total_amount: Decimal
+    approved_total_amount: Decimal
+    amounts_adjusted: bool
+    adjustment_reason: str | None
+    revision: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +364,7 @@ class ExpenseRequestItemOutcome:
     category_name: str | None
     description: str
     amount: Decimal
+    approved_amount: Decimal | None
     expense_date: date | None
     vendor_name: str | None
     receipt_url: str | None
@@ -405,6 +423,12 @@ class ExpenseRequestView:
     payment_error: str | None
     client_ref: UUID | None
     total_amount: Decimal
+    requested_total_amount: Decimal
+    approved_total_amount: Decimal | None
+    amounts_adjusted: bool
+    approval_adjustment_reason: str | None
+    approved_by_system_user_id: UUID | None
+    revision: int
     submitted_at: datetime | None
     approved_at: datetime | None
     rejected_at: datetime | None
@@ -441,6 +465,7 @@ class RequesterExpenseHistoryPage:
 class ManagerExpenseReviewQuery:
     approver_system_user_id: UUID | None
     status: ExpenseRequestStatus | None = None
+    work_order_public_id: str | None = None
     limit: int = 100
     offset: int = 0
 
@@ -1044,11 +1069,46 @@ def approve_field_expense_request_command(
     def operation() -> ExpenseRequestApprovalOutcome:
         request = _locked_expense_request(db, command.expense_request_id)
         if request.status == "approved":
+            if command.lines:
+                current_amounts = {
+                    item.id: (
+                        item.approved_amount
+                        if item.approved_amount is not None
+                        else item.amount
+                    )
+                    for item in request.items
+                }
+                replay_amounts = {
+                    line.expense_item_id: _approval_amount(line.approved_amount)
+                    for line in command.lines
+                }
+                if replay_amounts != current_amounts:
+                    raise FieldExpenseRequestError(
+                        code="operations.expense_requests.idempotency_conflict",
+                        message="This expense was already approved with different amounts.",
+                    )
             return _approval_outcome(db, request)
         if request.status != "submitted":
             raise FieldExpenseRequestError(
                 code="operations.expense_requests.invalid_transition",
                 message="Only submitted expense requests can be approved.",
+            )
+        if (
+            command.expected_revision is not None
+            and command.expected_revision != request.revision
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.stale_approval",
+                message="This expense changed after it was opened. Refresh and try again.",
+            )
+        if (
+            command.expected_work_order_public_id is not None
+            and request.work_order_mirror.public_id
+            != command.expected_work_order_public_id
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.work_order_unauthorized",
+                message="This expense does not belong to the selected work order.",
             )
         _require_consistent_claim_identity(request)
         requester_system_user_id = _expense_requester_system_user_ids(
@@ -1089,10 +1149,37 @@ def approve_field_expense_request_command(
             request,
             category_rules=category_rules,
         )
+        approved_amounts = _resolve_approval_amounts(
+            request,
+            lines=command.lines,
+            category_rules=category_rules,
+        )
+        amounts_adjusted = any(
+            approved_amounts[item.id] != item.amount for item in request.items
+        )
+        adjustment_reason = (command.adjustment_reason or "").strip()
+        if amounts_adjusted and len(adjustment_reason) < 2:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.adjustment_reason_required",
+                message="Explain why the approved amount differs from the request.",
+            )
+        if len(adjustment_reason) > 500:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_request",
+                message="The adjustment reason must not exceed 500 characters.",
+            )
 
         now = datetime.now(UTC)
+        for item in request.items:
+            item.approved_amount = approved_amounts[item.id]
         request.status = "approved"
         request.approved_at = now
+        request.approved_by_system_user_id = command.reviewer_system_user_id
+        request.approval_decision_id = command.context.command_id
+        request.approval_adjustment_reason = (
+            adjustment_reason if amounts_adjusted else None
+        )
+        request.revision += 1
         request.payment_destination_locked_at = now
         request.rejection_reason = None
         _note_approval_command(request, command, occurred_at=now)
@@ -1138,6 +1225,70 @@ def approve_field_expense_request_command(
         context=command.context,
         operation=operation,
     )
+
+
+def _approval_amount(value: Decimal) -> Decimal:
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.invalid_approval_amount",
+            message="Every approved amount must be a valid monetary amount.",
+        ) from exc
+    if amount <= 0 or amount > Decimal("999999999999.99"):
+        raise FieldExpenseRequestError(
+            code="operations.expense_requests.invalid_approval_amount",
+            message="Every approved amount must be greater than zero.",
+        )
+    return amount
+
+
+def _resolve_approval_amounts(
+    request: FieldExpenseRequest,
+    *,
+    lines: tuple[ExpenseApprovalLineInput, ...],
+    category_rules: tuple[ExpenseCategoryRule, ...],
+) -> dict[UUID, Decimal]:
+    existing_ids = {item.id for item in request.items}
+    if lines:
+        supplied_ids = [line.expense_item_id for line in lines]
+        if (
+            len(supplied_ids) != len(set(supplied_ids))
+            or set(supplied_ids) != existing_ids
+        ):
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.approval_lines_mismatch",
+                message="Approve every existing expense line exactly once.",
+            )
+        amounts = {
+            line.expense_item_id: _approval_amount(line.approved_amount)
+            for line in lines
+        }
+    else:
+        amounts = {item.id: _approval_amount(item.amount) for item in request.items}
+
+    rules = {rule.category_code: rule for rule in category_rules}
+    category_totals: dict[str, Decimal] = {}
+    for item in request.items:
+        category_totals[item.category_code] = (
+            category_totals.get(item.category_code, Decimal("0")) + amounts[item.id]
+        )
+    for category_code, total in category_totals.items():
+        rule = rules.get(category_code)
+        if rule is None:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.category_invalid",
+                message="An expense category is no longer available in ERP.",
+            )
+        if rule.max_amount_per_claim is not None and total > rule.max_amount_per_claim:
+            raise FieldExpenseRequestError(
+                code="operations.expense_requests.invalid_approval_amount",
+                message=(
+                    f"{rule.category_name} cannot exceed "
+                    f"{rule.max_amount_per_claim:.2f} per claim."
+                ),
+            )
+    return amounts
 
 
 def _require_consistent_claim_identity(request: FieldExpenseRequest) -> None:
@@ -1599,6 +1750,7 @@ def _submission_outcome(
                 category_name=item.category_name,
                 description=item.description,
                 amount=item.amount,
+                approved_amount=item.approved_amount,
                 expense_date=item.expense_date,
                 vendor_name=item.vendor_name,
                 receipt_url=item.receipt_url,
@@ -1689,6 +1841,15 @@ def _expense_request_view(
         payment_error=payment_error,
         client_ref=request.client_ref,
         total_amount=request.total_amount,
+        requested_total_amount=request.requested_total_amount,
+        approved_total_amount=request.approved_total_amount,
+        amounts_adjusted=(
+            request.approved_total_amount is not None
+            and request.approved_total_amount != request.requested_total_amount
+        ),
+        approval_adjustment_reason=request.approval_adjustment_reason,
+        approved_by_system_user_id=request.approved_by_system_user_id,
+        revision=request.revision,
         submitted_at=request.submitted_at,
         approved_at=request.approved_at,
         rejected_at=request.rejected_at,
@@ -1702,6 +1863,7 @@ def _expense_request_view(
                 category_name=item.category_name,
                 description=item.description,
                 amount=item.amount,
+                approved_amount=item.approved_amount,
                 expense_date=item.expense_date,
                 vendor_name=item.vendor_name,
                 receipt_url=item.receipt_url,
@@ -1747,6 +1909,12 @@ def _legacy_expense_request_view(view: ExpenseRequestView) -> dict[str, object]:
         "payment_error": view.payment_error,
         "client_ref": view.client_ref,
         "total_amount": view.total_amount,
+        "requested_total_amount": view.requested_total_amount,
+        "approved_total_amount": view.approved_total_amount,
+        "amounts_adjusted": view.amounts_adjusted,
+        "approval_adjustment_reason": view.approval_adjustment_reason,
+        "approved_by_system_user_id": view.approved_by_system_user_id,
+        "revision": view.revision,
         "submitted_at": view.submitted_at,
         "approved_at": view.approved_at,
         "rejected_at": view.rejected_at,
@@ -1760,6 +1928,7 @@ def _legacy_expense_request_view(view: ExpenseRequestView) -> dict[str, object]:
                 "category_name": item.category_name,
                 "description": item.description,
                 "amount": item.amount,
+                "approved_amount": item.approved_amount,
                 "expense_date": item.expense_date,
                 "vendor_name": item.vendor_name,
                 "receipt_url": item.receipt_url,
@@ -2034,6 +2203,11 @@ def list_manager_expense_requests(
     )
     if query.status is not None:
         review = review.filter(FieldExpenseRequest.status == query.status.value)
+    if query.work_order_public_id is not None:
+        review = review.join(
+            WorkOrder,
+            WorkOrder.id == FieldExpenseRequest.work_order_mirror_id,
+        ).filter(WorkOrder.public_id == query.work_order_public_id)
     if query.approver_system_user_id is not None:
         review = review.filter(
             or_(
@@ -2593,6 +2767,14 @@ def _approval_outcome(
         erp_sync_status=sync_status,
         erp_sync_event_id=delivery.event_id,
         erp_sync_error=_expense_sync_error(delivery),
+        requested_total_amount=request.requested_total_amount,
+        approved_total_amount=(request.approved_total_amount or Decimal("0")),
+        amounts_adjusted=(
+            request.approved_total_amount is not None
+            and request.approved_total_amount != request.requested_total_amount
+        ),
+        adjustment_reason=request.approval_adjustment_reason,
+        revision=request.revision,
     )
 
 
