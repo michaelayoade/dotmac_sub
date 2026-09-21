@@ -149,9 +149,7 @@ def test_worker_rechecks_pollability_before_device_io(db_session, monkeypatch):
     assert result == {"olt_id": str(olt.id), "skipped": "not_pollable"}
 
 
-def test_worker_closes_database_read_before_huawei_device_io(
-    db_session, monkeypatch
-):
+def test_worker_closes_database_read_before_huawei_device_io(db_session, monkeypatch):
     olt = _olt(
         db_session,
         name="Detached Huawei Poll",
