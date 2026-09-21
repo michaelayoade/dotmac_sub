@@ -100,6 +100,7 @@ def test_account_and_current_subscriptions_change_mode_atomically(
     target_mode,
 ):
     _prepare(db_session, subscriber, subscription, mode=current_mode)
+    account_id = subscriber.id
     original_anchor = subscription.next_billing_at
     subscriber.prepaid_low_balance_at = datetime.now(UTC) - timedelta(days=1)
     subscriber.prepaid_deactivation_at = datetime.now(UTC) + timedelta(days=1)
@@ -122,7 +123,7 @@ def test_account_and_current_subscriptions_change_mode_atomically(
 
     outcome = confirm_billing_mode_transition(
         db_session,
-        _command(subscriber.id, target_mode, preview.fingerprint),
+        _command(account_id, target_mode, preview.fingerprint),
     )
 
     assert outcome.prior_mode is current_mode
@@ -141,6 +142,7 @@ def test_account_and_current_subscriptions_change_mode_atomically(
 
 def test_confirmation_is_idempotent(db_session, subscriber, subscription):
     _prepare(db_session, subscriber, subscription, mode=BillingMode.prepaid)
+    account_id = subscriber.id
     preview = preview_billing_mode_transition(
         db_session,
         PreviewBillingModeTransitionRequest(
@@ -153,7 +155,7 @@ def test_confirmation_is_idempotent(db_session, subscriber, subscription):
     first = confirm_billing_mode_transition(
         db_session,
         _command(
-            subscriber.id,
+            account_id,
             BillingMode.postpaid,
             preview.fingerprint,
             key=key,
@@ -163,7 +165,7 @@ def test_confirmation_is_idempotent(db_session, subscriber, subscription):
     replay = confirm_billing_mode_transition(
         db_session,
         _command(
-            subscriber.id,
+            account_id,
             BillingMode.postpaid,
             preview.fingerprint,
             key=key,
@@ -285,6 +287,7 @@ def test_disabled_account_cannot_convert(db_session, subscriber, subscription):
 
 def test_stale_preview_cannot_change_mode(db_session, subscriber, subscription):
     _prepare(db_session, subscriber, subscription, mode=BillingMode.prepaid)
+    account_id = subscriber.id
     preview = preview_billing_mode_transition(
         db_session,
         PreviewBillingModeTransitionRequest(
@@ -298,7 +301,7 @@ def test_stale_preview_cannot_change_mode(db_session, subscriber, subscription):
     with pytest.raises(BillingModeTransitionError) as exc_info:
         confirm_billing_mode_transition(
             db_session,
-            _command(subscriber.id, BillingMode.postpaid, preview.fingerprint),
+            _command(account_id, BillingMode.postpaid, preview.fingerprint),
         )
 
     assert exc_info.value.code.endswith("stale_preview")

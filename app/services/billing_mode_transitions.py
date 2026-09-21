@@ -9,18 +9,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import BillingMode, CatalogOffer, Subscription
 from app.models.enforcement_lock import EnforcementLock
 from app.models.event_store import EventStore
-from app.models.idempotency import IdempotencyKey
 from app.models.offer_availability import OfferBillingModeAvailability
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_billing_treatment import (
@@ -38,7 +36,7 @@ from app.services.action_readiness import (
     ReadinessImpact,
     ReadinessState,
 )
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.billing_profile import (
     BillingProfileReason,
     resolve_billing_profile,
@@ -72,6 +70,7 @@ from app.services.subscription_billing_treatments import (
 BILLING_MODE_WRITE_SCOPE = "billing:mode:write"
 _OWNER = "financial.billing_mode_transition"
 _IDEMPOTENCY_SCOPE = "billing_mode_transition"
+_IDEMPOTENCY_NAMESPACE = UUID("d6498579-92d2-48f1-ad0f-817528dd1377")
 _CONFIRM_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="account-wide billing-mode transition",
@@ -248,16 +247,16 @@ def billing_mode_transition_form_state(
     return BILLING_MODE_TRANSITION_FORM.state(prerequisites)
 
 
-def _actor(context: CommandContext) -> tuple[AuditActorType, str]:
+def _actor(context: CommandContext) -> AuditActor:
     prefix, separator, identifier = context.actor.partition(":")
     actor_id = identifier if separator and identifier else context.actor
     if prefix == "api_key":
-        return AuditActorType.api_key, actor_id
+        return AuditActor.api_key(actor_id)
     if prefix == "user":
-        return AuditActorType.user, actor_id
+        return AuditActor.user(actor_id)
     if prefix == "service":
-        return AuditActorType.service, actor_id
-    return AuditActorType.system, actor_id
+        return AuditActor.service(actor_id)
+    return AuditActor.system(component_id=actor_id)
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -831,44 +830,17 @@ def _lock_transition_scope(db: Session, account_id: UUID) -> Subscriber:
     return account
 
 
-def _reserve_idempotency(
-    db: Session,
-    *,
-    command: ConfirmBillingModeTransitionCommand,
-) -> IdempotencyKey:
+def _idempotency_event_id(command: ConfirmBillingModeTransitionCommand) -> UUID:
     key = str(command.context.idempotency_key or "").strip()
     if len(key) < 16 or len(key) > 120:
         raise _error(
             "invalid_idempotency_key",
             "A billing-mode idempotency key containing 16-120 characters is required.",
         )
-    scope = f"{_IDEMPOTENCY_SCOPE}:{command.target_mode.value}"
-    existing = db.scalar(
-        select(IdempotencyKey)
-        .where(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
-        .with_for_update()
+    return uuid5(
+        _IDEMPOTENCY_NAMESPACE,
+        f"{_IDEMPOTENCY_SCOPE}:{command.target_mode.value}:{key}",
     )
-    if existing is not None:
-        if existing.account_id != command.account_id:
-            raise _error(
-                "idempotency_account_mismatch",
-                "The billing-mode confirmation belongs to another account.",
-            )
-        return existing
-    reservation = IdempotencyKey(
-        scope=scope,
-        key=key,
-        account_id=command.account_id,
-    )
-    db.add(reservation)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        raise _error(
-            "idempotency_conflict",
-            "The billing-mode confirmation conflicted with another request.",
-        ) from exc
-    return reservation
 
 
 def _replayed(
@@ -876,23 +848,20 @@ def _replayed(
     *,
     account: Subscriber,
     target_mode: BillingMode,
-    ref_id: str,
+    event_id: UUID,
 ) -> BillingModeTransitionOutcome:
-    try:
-        event_id = UUID(ref_id)
-    except ValueError as exc:
-        raise _error(
-            "invalid_replay_evidence",
-            "Stored billing-mode replay evidence is invalid.",
-        ) from exc
     event = db.scalar(
         select(EventStore).where(
             EventStore.event_id == event_id,
             EventStore.event_type == EventType.subscriber_billing_mode_changed.value,
-            EventStore.account_id == account.id,
         )
     )
     payload = event.payload if event is not None else {}
+    if event is not None and event.account_id != account.id:
+        raise _error(
+            "idempotency_account_mismatch",
+            "The billing-mode confirmation belongs to another account.",
+        )
     if (
         payload.get("account_id") != str(account.id)
         or payload.get("billing_mode") != target_mode.value
@@ -945,13 +914,18 @@ def confirm_billing_mode_transition(
     def operation() -> BillingModeTransitionOutcome:
         _validate_command(command)
         account = _lock_transition_scope(db, command.account_id)
-        reservation = _reserve_idempotency(db, command=command)
-        if reservation.ref_id:
+        idempotency_event_id = _idempotency_event_id(command)
+        replay_event = db.scalar(
+            select(EventStore)
+            .where(EventStore.event_id == idempotency_event_id)
+            .with_for_update()
+        )
+        if replay_event is not None:
             return _replayed(
                 db,
                 account=account,
                 target_mode=command.target_mode,
-                ref_id=reservation.ref_id,
+                event_id=idempotency_event_id,
             )
 
         preview = _preview(
@@ -996,7 +970,7 @@ def confirm_billing_mode_transition(
             clear_prepaid_enforcement_timers(db, account.id)
         db.flush()
 
-        actor_type, actor_id = _actor(command.context)
+        actor = _actor(command.context)
         metadata: dict[str, object] = {
             "schema_version": 1,
             "account_id": str(account.id),
@@ -1014,6 +988,9 @@ def confirm_billing_mode_transition(
             "reason": command.context.reason,
             "command_id": str(command.context.command_id),
             "correlation_id": str(command.context.correlation_id),
+            "idempotency_key_sha256": hashlib.sha256(
+                str(command.context.idempotency_key).encode()
+            ).hexdigest(),
             "preview_fingerprint": preview.fingerprint,
         }
         stage_audit_event(
@@ -1021,20 +998,25 @@ def confirm_billing_mode_transition(
             action="billing.account_mode_changed",
             entity_type="subscriber",
             entity_id=str(account.id),
-            actor_type=actor_type,
-            actor_id=actor_id,
+            actor=actor,
             request_id=str(command.context.correlation_id),
             metadata=metadata,
         )
-        event = emit_event(
-            db,
-            EventType.subscriber_billing_mode_changed,
-            metadata,
-            actor=command.context.actor,
-            subscriber_id=account.id,
-            account_id=account.id,
-        )
-        reservation.ref_id = str(event.event_id)
+        try:
+            emit_event(
+                db,
+                EventType.subscriber_billing_mode_changed,
+                metadata,
+                event_id=idempotency_event_id,
+                actor=command.context.actor,
+                subscriber_id=account.id,
+                account_id=account.id,
+            )
+        except IntegrityError as exc:
+            raise _error(
+                "idempotency_conflict",
+                "The billing-mode confirmation conflicted with another request.",
+            ) from exc
         db.flush()
         return BillingModeTransitionOutcome(
             account_id=account.id,

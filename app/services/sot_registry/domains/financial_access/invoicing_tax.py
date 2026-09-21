@@ -2918,8 +2918,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "invoices in stable identifier order before re-previewing."
                 ),
                 idempotency=(
-                    "A unique target-scoped IdempotencyKey replays the original typed "
-                    "outcome; different-account reuse fails closed."
+                    "A target-scoped deterministic outbox event identity replays the "
+                    "original typed outcome; different-account reuse fails closed."
                 ),
                 retries=(
                     "Transient transaction failures may retry with identical command and "

@@ -315,6 +315,7 @@ def resolve_customer_chargeability(
     outcomes: dict[UUID, CustomerChargeability] = {}
     for account_id in account_ids:
         services = tuple(by_account[account_id])
+        reasons: tuple[ChargeabilityReason, ...]
         if not services:
             status = CustomerChargeabilityStatus.no_current_service
             reasons = (ChargeabilityReason.no_current_service,)
