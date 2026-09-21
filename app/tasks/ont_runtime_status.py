@@ -107,6 +107,8 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
     from app.services.network.ont_runtime_status import (
         huawei_olt_status_pollable,
         record_olt_poll_failure,
+    )
+    from app.services.network.ont_runtime_status import (
         refresh_huawei_olt_status as persist_huawei_olt_status,
     )
 
