@@ -493,7 +493,7 @@ def _parse_iso_ts(value: object) -> datetime | None:
     return parsed
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
+def _as_optional_utc(value: datetime | None) -> datetime | None:
     """Normalize for comparison: radacct (Postgres) hands back aware datetimes
     while SQLite-backed local rows can be naive — treat naive as UTC."""
     if value is None:
@@ -584,8 +584,8 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
         and existing.terminate_cause == _REAPED_TERMINATE_CAUSE
         and new_stop_at is None
     ):
-        observed_utc = _as_utc(observed_at)
-        reaped_seen_utc = _as_utc(existing.last_update_at)
+        observed_utc = _as_optional_utc(observed_at)
+        reaped_seen_utc = _as_optional_utc(existing.last_update_at)
         if observed_utc is None or (
             reaped_seen_utc is not None and observed_utc <= reaped_seen_utc
         ):
@@ -1091,7 +1091,7 @@ def _capture_crossing_session_baselines(
 ) -> None:
     """Snapshot live counters for sessions that cross a new cycle boundary."""
 
-    sessions = (
+    session_query = (
         db.query(RadiusAccountingSession)
         .filter(RadiusAccountingSession.subscription_id == subscription.id)
         .filter(RadiusAccountingSession.session_start < bucket.period_end)
@@ -1103,10 +1103,10 @@ def _capture_crossing_session_baselines(
         )
     )
     if not include_started_within:
-        sessions = sessions.filter(
+        session_query = session_query.filter(
             RadiusAccountingSession.session_start < bucket.period_start
         )
-    sessions = sessions.all()
+    sessions = session_query.all()
     for session in sessions:
         db.add(
             QuotaSessionBaseline(
