@@ -94,8 +94,10 @@ and no submit surface.
 
 The work-order card shows only claims created by the authenticated staff
 identity. Local submission, ERP delivery, manager decision, and payment facts
-remain distinct. A technician sees the local lifecycle label **Submitted**;
-connector queue and ERP draft details are not exposed in the technician UI.
+remain distinct. A technician sees **Submitting to ERP** while the durable
+submission is pending or sent, **Submitted** only after ERP acceptance, and
+**Submission failed** with a requester-owned retry action when the durable
+submission is dead. Connector internals and ERP draft details are not exposed.
 Administrative projections may distinguish **Sending to ERP**, **Submitted to
 ERP**, **Approval syncing**, **Approved**, **Rejected**, and **ERP delivery
 failed**. `sent` outbox evidence is never presented as ERP acceptance.
@@ -113,6 +115,9 @@ streams each private receipt from storage, uploads only missing attachments, and
 invokes explicit ERP submission. The draft is invisible to normal ERP users and
 becomes visible only after ERP returns `SUBMITTED`. Receipt bytes/base64 never
 enter the database outbox; supported URL receipts remain claim-line data.
+An explicit requester retry revalidates current receipt evidence and requeues
+the same dead `expense_submit_v3` event with its original idempotency key. It
+does not create another request or ERP claim.
 
 Sub remains authoritative for the manager decision. Approval and rejection
 stage separate `expense_approve_v3` and `expense_reject_v3` consequences ordered

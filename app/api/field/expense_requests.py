@@ -29,6 +29,7 @@ from app.schemas.field import (
     FieldExpenseRequestItemRead,
     FieldExpenseRequestRead,
     FieldExpenseRequestSubmit,
+    FieldExpenseSubmissionRetryRead,
     FieldExpenseVendorRead,
 )
 from app.services.auth_dependencies import require_user_auth
@@ -52,6 +53,7 @@ from app.services.field.expense_requests import (
     RequesterExpenseDetailQuery,
     RequesterExpenseHistoryQuery,
     ResolveFieldExpenseSubmissionContext,
+    RetrySubmittedExpenseDelivery,
     SubmitFieldExpenseRequest,
     VerifyFieldExpenseDestination,
     cancel_field_expense_request_command,
@@ -60,6 +62,7 @@ from app.services.field.expense_requests import (
     list_expense_vendors,
     list_requester_expense_requests,
     resolve_field_expense_submission_context,
+    retry_submitted_expense_delivery_command,
     submit_field_expense_request_command,
     verify_field_expense_destination,
 )
@@ -393,6 +396,34 @@ def create_and_submit_field_expense_request(
                 ),
                 selected_approver=submission_context.selected_approver,
                 payment_destination=submission_context.payment_destination,
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_command_error(exc) from exc
+
+
+@router.post(
+    "/{expense_request_id}/retry-delivery",
+    response_model=FieldExpenseSubmissionRetryRead,
+)
+def retry_field_expense_delivery(
+    expense_request_id: UUID,
+    auth: dict = Depends(require_user_auth),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    command_id = request_id or uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return retry_submitted_expense_delivery_command(
+            db,
+            command=RetrySubmittedExpenseDelivery(
+                context=_command_context(
+                    auth,
+                    request_id=command_id,
+                    reason="field_expense_submission_retry",
+                ),
+                expense_request_id=expense_request_id,
             ),
         )
     except FieldExpenseRequestError as exc:

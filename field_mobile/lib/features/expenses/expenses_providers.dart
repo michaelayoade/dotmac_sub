@@ -1,5 +1,8 @@
+import 'dart:io' as io;
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as path;
 
 import '../auth/auth_state.dart';
 import '../execution/execution_controller.dart';
@@ -107,6 +110,16 @@ class ExpensesRepository {
     );
   }
 
+  Future<ExpenseSubmissionRetryResult> retrySubmission(String id) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .post('/api/v1/field/expense-requests/$id/retry-delivery');
+    return ExpenseSubmissionRetryResult.fromJson(
+      (response.data as Map).cast<String, dynamic>(),
+    );
+  }
+
   Future<List<ExpenseCategory>> fetchCategories() async {
     final response = await _ref
         .read(apiClientProvider)
@@ -173,6 +186,11 @@ class ExpensesRepository {
     required String fileName,
     String? clientRef,
   }) async {
+    final content = await io.File(filePath).readAsBytes();
+    final identity = ExpenseReceiptFileIdentity.fromBytes(
+      originalFileName: fileName,
+      content: content,
+    );
     final response = await _ref
         .read(apiClientProvider)
         .dio
@@ -182,11 +200,67 @@ class ExpensesRepository {
             'work_order_id': workOrderId.trim(),
             if (clientRef != null && clientRef.trim().isNotEmpty)
               'client_ref': clientRef.trim(),
-            'file': await MultipartFile.fromFile(filePath, filename: fileName),
+            'file': MultipartFile.fromBytes(
+              content,
+              filename: identity.fileName,
+              contentType: identity.contentType,
+            ),
           }),
         );
     return ExpenseReceiptUploadResult.fromJson(
       (response.data as Map).cast<String, dynamic>(),
+    );
+  }
+}
+
+class ExpenseReceiptFileIdentity {
+  const ExpenseReceiptFileIdentity({
+    required this.fileName,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final DioMediaType contentType;
+
+  factory ExpenseReceiptFileIdentity.fromBytes({
+    required String originalFileName,
+    required List<int> content,
+  }) {
+    final (extension, contentType) = switch (content) {
+      [0xff, 0xd8, 0xff, ...] => ('.jpg', DioMediaType('image', 'jpeg')),
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...] => (
+        '.png',
+        DioMediaType('image', 'png'),
+      ),
+      [0x47, 0x49, 0x46, 0x38, 0x37 || 0x39, 0x61, ...] => (
+        '.gif',
+        DioMediaType('image', 'gif'),
+      ),
+      [
+        0x52,
+        0x49,
+        0x46,
+        0x46,
+        _,
+        _,
+        _,
+        _,
+        0x57,
+        0x45,
+        0x42,
+        0x50,
+        ...
+      ] => ('.webp', DioMediaType('image', 'webp')),
+      [0x25, 0x50, 0x44, 0x46, ...] => (
+        '.pdf',
+        DioMediaType('application', 'pdf'),
+      ),
+      _ => throw const FormatException('Receipt file type is unsupported.'),
+    };
+    final stem = path.basenameWithoutExtension(originalFileName).trim();
+    return ExpenseReceiptFileIdentity(
+      fileName: '${stem.isEmpty ? 'receipt' : stem}$extension',
+      contentType: contentType,
     );
   }
 }

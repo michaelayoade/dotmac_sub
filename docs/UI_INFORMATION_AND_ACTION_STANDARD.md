@@ -756,9 +756,10 @@ implementation.
   replacement, work-order completion, or reassignment cannot hide history;
   another requester's claim remains unavailable. New submission continues to
   require the owner-resolved active technician and assigned work order.
-- States: loading, empty, read failure, locally queued drafts, submitted,
-  approved, rejected, canceled, paid, and ERP/payment delivery problems remain
-  distinct. Manager mode defaults to `Pending` and provides separate
+- States: loading, empty, read failure, locally queued drafts, submitting to
+  ERP, submitted after ERP acceptance, submission failed with an inline Retry
+  action, approved, rejected, canceled, paid, and ERP/payment delivery problems
+  remain distinct. Manager mode defaults to `Pending` and provides separate
   `My request` and `History` tabs. The requester tab uses the same requester
   query. The pending and resolved manager tabs filter the authoritative manager
   projection without reinterpreting expense status, and every history item

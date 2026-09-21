@@ -624,6 +624,13 @@ class FieldExpenseRequestRead(BaseModel):
     items: list[FieldExpenseRequestItemRead] = Field(default_factory=list)
 
 
+class FieldExpenseSubmissionRetryRead(BaseModel):
+    id: UUID
+    erp_sync_status: Literal["pending"]
+    erp_sync_event_id: UUID
+    replayed: bool
+
+
 class FieldExpenseApprovalRead(BaseModel):
     id: UUID
     status: Literal["approved"]

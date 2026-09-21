@@ -892,6 +892,7 @@ SERVICES: tuple[SOTService, ...] = (
             "field expense ERP form context",
             "expense receipt staging for submitted claims",
             "field expense lifecycle ERP delivery staging",
+            "dead submitted expense delivery retry",
             "dead expense delivery recovery",
             "dead expense payment delivery recovery",
             "ERP expense-claim payment outcome observation",
@@ -993,6 +994,17 @@ SERVICES: tuple[SOTService, ...] = (
                         "selected expense approver",
                         "ERP-owned expense category rules",
                         "validated receipt content",
+                        "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="dead submitted expense delivery retry",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical submitted expense request",
+                        "validated receipt content",
+                        "failed expense submission delivery evidence",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -1174,6 +1186,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "Durable dead outbox event for initiate_payment with an "
                         "allowlisted permission_denied diagnostic, HTTP 403, and "
                         "the original stable ERP idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="failed expense submission delivery evidence",
+                    owner="integration.backoffice_adapter",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Durable dead expense_submit_v3 outbox event, stable ERP "
+                        "idempotency key, partial-delivery progress, and allowlisted "
+                        "diagnostic evidence"
                     ),
                 ),
                 AuthorityInput(

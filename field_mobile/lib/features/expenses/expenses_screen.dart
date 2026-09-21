@@ -157,7 +157,7 @@ class _ExpenseRequestTile extends StatelessWidget {
                       runSpacing: 4,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _ExpenseStatusChip(status: request.status),
+                        _ExpenseStatusChip(status: request.displayStatus),
                         Text(request.displayNumber),
                         if (date != null) Text(date),
                       ],
@@ -196,6 +196,66 @@ class ExpenseRequestDetailScreen extends ConsumerStatefulWidget {
 class _ExpenseRequestDetailScreenState
     extends ConsumerState<ExpenseRequestDetailScreen> {
   bool _canceling = false;
+  bool _retrying = false;
+
+  Future<void> _retrySubmission() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    try {
+      await ref.read(expensesRepositoryProvider).retrySubmission(widget.id);
+      ref
+        ..invalidate(expenseRequestProvider(widget.id))
+        ..invalidate(expenseRequestsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Submitting to ERP…')),
+        );
+      }
+      for (var attempt = 0; attempt < 30; attempt += 1) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        final current = await ref
+            .read(expensesRepositoryProvider)
+            .fetchRequest(widget.id);
+        if (current.erpSyncStatus == 'accepted' ||
+            current.hasErpSubmissionFailed) {
+          ref
+            ..invalidate(expenseRequestProvider(widget.id))
+            ..invalidate(expenseRequestsProvider);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                current.erpSyncStatus == 'accepted'
+                    ? 'Expense submitted'
+                    : current.erpSyncError ??
+                          'ERP could not accept this submission.',
+              ),
+            ),
+          );
+          return;
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Still submitting to ERP. Check again shortly.'),
+          ),
+        );
+      }
+    } on DioException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _expenseErrorMessage(error, 'Could not retry this submission'),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
 
   Future<void> _cancel() async {
     if (_canceling) return;
@@ -274,7 +334,7 @@ class _ExpenseRequestDetailScreenState
               spacing: 8,
               runSpacing: 8,
               children: [
-                _ExpenseStatusChip(status: data.status),
+                _ExpenseStatusChip(status: data.displayStatus),
                 if (data.expenseDate != null)
                   Chip(label: Text(data.expenseDate!)),
               ],
@@ -327,6 +387,20 @@ class _ExpenseRequestDetailScreenState
                 onPressed: _canceling ? null : _cancel,
                 icon: const Icon(Icons.cancel_outlined),
                 label: Text(_canceling ? 'Canceling...' : 'Cancel request'),
+              ),
+            ],
+            if (data.hasErpSubmissionFailed) ...[
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                key: const Key('retry-expense-submission'),
+                onPressed: _retrying ? null : _retrySubmission,
+                icon: _retrying
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+                label: Text(_retrying ? 'Submitting…' : 'Retry submission'),
               ),
             ],
           ],
@@ -642,6 +716,8 @@ class _NewExpenseRequestScreenState
   bool _saving = false;
   bool _verifyingDestination = false;
   bool _receiptUploading = false;
+  bool _deliveryFailed = false;
+  String? _submittedRequestId;
   String _receiptFileName = '';
   String? _receiptAttachmentId;
   String _submitError = '';
@@ -1063,7 +1139,7 @@ class _NewExpenseRequestScreenState
       setState(() {
         _receiptUrl.clear();
         _receiptAttachmentId = upload.attachmentId;
-        _receiptFileName = picked.name;
+        _receiptFileName = upload.fileName ?? picked.name;
       });
     } on DioException catch (error) {
       if (!mounted) return;
@@ -1109,6 +1185,10 @@ class _NewExpenseRequestScreenState
 
   Future<void> _submit() async {
     if (_items.isEmpty || _saving) return;
+    if (_deliveryFailed && _submittedRequestId != null) {
+      await _retryCreatedSubmission();
+      return;
+    }
     if (_purpose.text.trim().isEmpty) {
       setState(() => _submitError = 'Purpose is required.');
       return;
@@ -1240,20 +1320,10 @@ class _NewExpenseRequestScreenState
             selectedApprover: selectedApprover,
             paymentDestination: verified,
           );
-      _invalidateExpenseProjections(ref);
-      try {
-        await ref.read(expenseRequestsProvider.future);
-      } catch (_) {
-        // The request was created; the list can still be refreshed manually.
-      }
+      _submittedRequestId = request.id;
       await ref.read(draftStoreProvider).delete(expenseRequestDraftId);
       ref.invalidate(expenseRequestDraftsProvider);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${request.displayNumber} submitted')),
-        );
-        context.go('/expenses');
-      }
+      await _waitForErpSubmission(request.id, request.displayNumber);
     } on DioException catch (error) {
       if (!mounted) return;
       if (error.response == null) {
@@ -1282,6 +1352,71 @@ class _NewExpenseRequestScreenState
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _retryCreatedSubmission() async {
+    final requestId = _submittedRequestId;
+    if (requestId == null || _saving) return;
+    setState(() {
+      _saving = true;
+      _deliveryFailed = false;
+      _submitError = '';
+    });
+    try {
+      await ref.read(expensesRepositoryProvider).retrySubmission(requestId);
+      await _waitForErpSubmission(requestId, requestId.substring(0, 8));
+    } on DioException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _deliveryFailed = true;
+        _submitError = _expenseErrorMessage(
+          error,
+          'Could not retry this submission.',
+        );
+      });
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _waitForErpSubmission(
+    String requestId,
+    String displayNumber,
+  ) async {
+    for (var attempt = 0; attempt < 30; attempt += 1) {
+      if (attempt > 0) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      final current = await ref
+          .read(expensesRepositoryProvider)
+          .fetchRequest(requestId);
+      if (current.erpSyncStatus == 'accepted') {
+        _invalidateExpenseProjections(ref);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$displayNumber submitted')),
+        );
+        context.go('/expenses');
+        return;
+      }
+      if (current.hasErpSubmissionFailed) {
+        if (!mounted) return;
+        setState(() {
+          _deliveryFailed = true;
+          _submitError =
+              current.erpSyncError ?? 'ERP could not accept this submission.';
+        });
+        return;
+      }
+    }
+    _invalidateExpenseProjections(ref);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Still submitting to ERP. You can check its status.'),
+      ),
+    );
+    context.go('/expenses/$requestId');
   }
 
   @override
@@ -1840,17 +1975,23 @@ class _NewExpenseRequestScreenState
             children: [
               PrimaryActionButton(
                 key: const Key('submit-expense-request'),
-                onPressed:
-                    _items.isEmpty ||
-                        _saving ||
-                        _verifyingDestination ||
-                        !paymentDestinationReady ||
-                        !requiredServerDataReady ||
-                        !itemCategoriesValid
+                onPressed: _saving
+                    ? null
+                    : _deliveryFailed
+                    ? _submit
+                    : _items.isEmpty ||
+                          _verifyingDestination ||
+                          !paymentDestinationReady ||
+                          !requiredServerDataReady ||
+                          !itemCategoriesValid
                     ? null
                     : _submit,
                 icon: Icons.check_rounded,
-                label: _saving ? 'Submitting…' : 'Submit request',
+                label: _saving
+                    ? 'Submitting…'
+                    : _deliveryFailed
+                    ? 'Retry submission'
+                    : 'Submit request',
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -2107,7 +2248,9 @@ String _money(String? currency, double value) =>
 Color _expenseStatusColor(BuildContext context, String status) {
   final scheme = Theme.of(context).colorScheme;
   return switch (status) {
-    'submitted' => AppColors.statusTone(context, StatusTone.info),
+    'submitted' || 'submitting to ERP' =>
+      AppColors.statusTone(context, StatusTone.info),
+    'submission failed' => scheme.error,
     'approved' || 'paid' => AppColors.statusTone(context, StatusTone.positive),
     'rejected' => scheme.error,
     'canceled' || 'cancelled' || 'draft' => scheme.outline,
@@ -2151,6 +2294,27 @@ String _expenseErrorMessage(DioException error, String fallback) {
 }
 
 List<_StatusStep> _timelineSteps(ExpenseRequest request) {
+  if (request.hasErpSubmissionFailed) {
+    return [
+      _StatusStep(
+        label: 'Submission failed',
+        date: request.updatedAt,
+        complete: true,
+        active: true,
+        error: true,
+      ),
+    ];
+  }
+  if (request.isErpSubmissionPending) {
+    return [
+      _StatusStep(
+        label: 'Submitting to ERP',
+        date: request.submittedAt ?? request.createdAt,
+        complete: false,
+        active: true,
+      ),
+    ];
+  }
   if (request.status == 'rejected') {
     return [
       _StatusStep(

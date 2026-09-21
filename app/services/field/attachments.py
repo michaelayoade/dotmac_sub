@@ -63,6 +63,41 @@ class ResolvedExpenseReceiptAttachment:
     content: bytes = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ExpenseReceiptFileIdentity:
+    """Canonical receipt name and MIME derived from the stored bytes."""
+
+    file_name: str
+    mime_type: str
+
+
+def resolve_expense_receipt_file_identity(
+    *, file_name: str, content: bytes
+) -> ExpenseReceiptFileIdentity:
+    """Return an ERP-safe file identity from receipt magic bytes."""
+
+    if content.startswith(b"\xff\xd8\xff"):
+        extension, mime_type = ".jpg", "image/jpeg"
+    elif content.startswith(b"\x89PNG\r\n\x1a\n"):
+        extension, mime_type = ".png", "image/png"
+    elif content.startswith((b"GIF87a", b"GIF89a")):
+        extension, mime_type = ".gif", "image/gif"
+    elif (
+        len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    ):
+        extension, mime_type = ".webp", "image/webp"
+    elif content.startswith(b"%PDF"):
+        extension, mime_type = ".pdf", "application/pdf"
+    else:
+        raise _expense_receipt_error("Receipt file type is unsupported")
+
+    stem = Path(file_name).stem.strip() or "receipt"
+    return ExpenseReceiptFileIdentity(
+        file_name=f"{stem}{extension}",
+        mime_type=mime_type,
+    )
+
+
 def resolve_expense_receipt_attachment(
     db: Session,
     *,
@@ -119,16 +154,18 @@ def resolve_expense_receipt_attachment(
         or len(content) > MAX_EXPENSE_RECEIPT_BYTES
     ):
         raise _expense_receipt_error("Receipt checksum evidence is invalid")
-    if stream.content_type and stream.content_type != attachment.mime_type:
-        raise _expense_receipt_error("Receipt MIME evidence is inconsistent")
     checksum = hashlib.sha256(content).hexdigest()
     if stored.checksum and stored.checksum.casefold() != checksum:
         raise _expense_receipt_error("Receipt checksum evidence is inconsistent")
+    identity = resolve_expense_receipt_file_identity(
+        file_name=attachment.file_name,
+        content=content,
+    )
     return ResolvedExpenseReceiptAttachment(
         attachment_id=attachment.id,
         work_order_id=attachment.work_order_mirror_id,
-        file_name=attachment.file_name,
-        mime_type=attachment.mime_type,
+        file_name=identity.file_name,
+        mime_type=identity.mime_type,
         size_bytes=len(content),
         checksum_sha256=checksum,
         content=content,
@@ -151,6 +188,10 @@ def stage_expense_receipt_attachment(
         raise _expense_receipt_error("Work order not found")
     if not command.content:
         raise _expense_receipt_error("Receipt file is empty")
+    identity = resolve_expense_receipt_file_identity(
+        file_name=command.file_name or "receipt",
+        content=command.content,
+    )
     existing = (
         db.query(FieldAttachment)
         .filter(FieldAttachment.client_ref == command.client_ref)
@@ -171,8 +212,8 @@ def stage_expense_receipt_attachment(
             domain="attachments",
             entity_type="field_attachment",
             entity_id=work_order.public_id,
-            original_filename=command.file_name or "receipt",
-            content_type=command.mime_type,
+            original_filename=identity.file_name,
+            content_type=identity.mime_type,
             data=command.content,
             # StoredFile.uploaded_by is a legacy subscriber-only foreign key.
             # Staff provenance belongs on the FieldAttachment fields below.
