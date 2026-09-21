@@ -18,8 +18,8 @@ from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.models.ai_intake import (
     AiIntakeConfig,
