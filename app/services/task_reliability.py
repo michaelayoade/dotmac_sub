@@ -747,7 +747,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Locks ready AI intake sessions with skip_locked, records generation "
         "attempt evidence, and sends outbound messages with deterministic "
-        "dedupe keys after rechecking human takeover.",
+        "dedupe keys after rechecking human takeover. Transaction-fatal database "
+        "errors escape to the owner boundary and are retried with bounded task "
+        "backoff rather than being converted into a session failure.",
     ),
     "app.tasks.team_inbox.repair_whatsapp_locations": _c(
         "support",

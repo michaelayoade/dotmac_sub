@@ -245,6 +245,10 @@ def usage_allowance_form_defaults() -> dict[str, object]:
         "included_gb": "",
         "overage_rate": "",
         "overage_cap_gb": "",
+        "reset_basis": "calendar_month",
+        "validity_days": "",
+        "rollover_enabled": False,
+        "rollover_validity_cycles": 1,
         "is_active": True,
     }
 
@@ -274,6 +278,10 @@ def usage_allowance_form_context(
             "included_gb": obj.included_gb or "",
             "overage_rate": obj.overage_rate or "",
             "overage_cap_gb": obj.overage_cap_gb or "",
+            "reset_basis": obj.reset_basis.value,
+            "validity_days": obj.validity_days or "",
+            "rollover_enabled": obj.rollover_enabled,
+            "rollover_validity_cycles": obj.rollover_validity_cycles,
             "is_active": obj.is_active,
         },
         "action_url": (f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit"),
@@ -292,6 +300,10 @@ def parse_usage_allowance_form(form) -> dict[str, object]:
         "included_gb": form_str("included_gb").strip(),
         "overage_rate": form_str("overage_rate").strip(),
         "overage_cap_gb": form_str("overage_cap_gb").strip(),
+        "reset_basis": form_str("reset_basis", "calendar_month").strip(),
+        "validity_days": form_str("validity_days").strip(),
+        "rollover_enabled": form.get("rollover_enabled") == "true",
+        "rollover_validity_cycles": form_str("rollover_validity_cycles", "1").strip(),
         "is_active": form_str("is_active") == "true",
     }
 
@@ -307,6 +319,10 @@ def _usage_allowance_payload(values: dict[str, object]) -> dict[str, object]:
         "included_gb": _optional_int(values["included_gb"]),
         "overage_rate": values["overage_rate"] or None,
         "overage_cap_gb": _optional_int(values["overage_cap_gb"]),
+        "reset_basis": values["reset_basis"],
+        "validity_days": _optional_int(values["validity_days"]),
+        "rollover_enabled": values["rollover_enabled"],
+        "rollover_validity_cycles": _optional_int(values["rollover_validity_cycles"]),
         "is_active": values["is_active"],
     }
 
@@ -985,6 +1001,10 @@ def export_usage_allowances_csv(db: Session) -> str:
             "Included GB",
             "Overage Rate",
             "Overage Cap GB",
+            "Reset Basis",
+            "Validity Days",
+            "Rollover",
+            "Rollover Validity Cycles",
             "Active",
         ]
     )
@@ -996,6 +1016,10 @@ def export_usage_allowances_csv(db: Session) -> str:
                 a.included_gb or "",
                 a.overage_rate or "",
                 a.overage_cap_gb or "",
+                a.reset_basis.value,
+                a.validity_days or "",
+                "Yes" if a.rollover_enabled else "No",
+                a.rollover_validity_cycles,
                 "Yes" if a.is_active else "No",
             ]
         )

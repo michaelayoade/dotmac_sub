@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -14,7 +14,9 @@ from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
 from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
     FieldErpSyncFlow,
+    FieldErpSyncStatus,
     SyncFlowOwner,
     SyncFlowOwnership,
 )
@@ -666,10 +668,12 @@ def test_expense_request_api(db_session, fake_uploads, monkeypatch):
     receipt = client.post(
         "/api/v1/field/expense-requests/receipts",
         data={"work_order_id": "wo-expense-api"},
-        files={"file": ("taxi.jpg", b"receipt-bytes", "image/jpeg")},
+        files={"file": ("taxi.png", b"\x89PNG\r\n\x1a\n", "image/png")},
     )
     assert receipt.status_code == 201
     assert receipt.json()["work_order_id"] == "wo-expense-api"
+    assert receipt.json()["file_name"] == "taxi.png"
+    assert receipt.json()["mime_type"] == "image/png"
 
     retired = client.post(
         "/api/v1/field/expense-requests",
@@ -736,6 +740,18 @@ def test_expense_request_api(db_session, fake_uploads, monkeypatch):
     detail = client.get(f"/api/v1/field/expense-requests/{request_id}")
     assert detail.status_code == 200
     assert detail.json()["id"] == request_id
+
+    delivery = (
+        db_session.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.entity_id == UUID(request_id))
+        .one()
+    )
+    delivery.status = FieldErpSyncStatus.dead.value
+    db_session.commit()
+    retried = client.post(f"/api/v1/field/expense-requests/{request_id}/retry-delivery")
+    assert retried.status_code == 200
+    assert retried.json()["erp_sync_status"] == "pending"
+    assert retried.json()["erp_sync_event_id"] == str(delivery.id)
 
     legacy_submit = client.post(f"/api/v1/field/expense-requests/{request_id}/submit")
     assert legacy_submit.status_code == 410

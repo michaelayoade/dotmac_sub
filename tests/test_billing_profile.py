@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.offer_availability import OfferBillingModeAvailability
 from app.services.billing_profile import (
     BillingModeWriteRejected,
     BillingProfileError,
@@ -152,3 +153,55 @@ def test_subscription_write_failure_has_stable_domain_code(db_session):
 
     assert exc_info.value.reason is BillingProfileReason.SUBSCRIBER_NOT_FOUND
     assert exc_info.value.code == "financial.billing_profile.subscriber_not_found"
+
+
+def test_active_offer_availability_allows_account_mode_variant(
+    db_session, subscriber_account, catalog_offer
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    catalog_offer.billing_mode = BillingMode.prepaid
+    db_session.add(
+        OfferBillingModeAvailability(
+            offer_id=catalog_offer.id,
+            billing_mode=BillingMode.postpaid,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    resolved = resolve_subscription_billing_mode_for_write(
+        db_session,
+        account_id=subscriber_account.id,
+        offer_id=catalog_offer.id,
+        requested_mode=BillingMode.postpaid,
+    )
+
+    assert resolved is BillingMode.postpaid
+
+
+def test_active_offer_availability_rejects_unlisted_mode(
+    db_session, subscriber_account, catalog_offer
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    catalog_offer.billing_mode = BillingMode.prepaid
+    db_session.add(
+        OfferBillingModeAvailability(
+            offer_id=catalog_offer.id,
+            billing_mode=BillingMode.prepaid,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(BillingModeWriteRejected) as exc_info:
+        resolve_subscription_billing_mode_for_write(
+            db_session,
+            account_id=subscriber_account.id,
+            offer_id=catalog_offer.id,
+            requested_mode=BillingMode.postpaid,
+        )
+
+    assert (
+        exc_info.value.reason
+        is BillingProfileReason.ACCOUNT_OFFER_BILLING_MODE_MISMATCH
+    )

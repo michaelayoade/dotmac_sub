@@ -50,7 +50,17 @@ def project_cost_summary(db: Session, project_id: str) -> ProjectCostSummary:
         Decimal("0.01")
     )
     expense_total = (
-        db.query(func.coalesce(func.sum(FieldExpenseRequestItem.amount), _ZERO))
+        db.query(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        FieldExpenseRequestItem.approved_amount,
+                        FieldExpenseRequestItem.amount,
+                    )
+                ),
+                _ZERO,
+            )
+        )
         .join(
             FieldExpenseRequest,
             FieldExpenseRequest.id == FieldExpenseRequestItem.expense_request_id,

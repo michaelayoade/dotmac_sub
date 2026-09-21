@@ -736,6 +736,12 @@ implementation.
   acceptance, accepted, approved, rejected with reason, paid, and sync
   unavailable/failed remain distinct. A sent outbox event is never labelled
   accepted by ERP.
+- Approval actions: a selected approver with expense-write permission sees a
+  separate approval section for submitted claims on the exact work order.
+  **Approve** accepts every requested line amount unchanged and requires no
+  reason. **Adjust amount** opens positive line-level approved amounts and ends
+  with **Approve adjusted amount**; a reason is required only when a value
+  differs. Requested values remain visible and immutable.
 - Responsive behavior: line items are stacked cards at every width, controls
   retain labels and text errors, totals name their currency, and add/remove and
   submit actions remain accessible without relying on colour.
@@ -756,9 +762,10 @@ implementation.
   replacement, work-order completion, or reassignment cannot hide history;
   another requester's claim remains unavailable. New submission continues to
   require the owner-resolved active technician and assigned work order.
-- States: loading, empty, read failure, locally queued drafts, submitted,
-  approved, rejected, canceled, paid, and ERP/payment delivery problems remain
-  distinct. Manager mode defaults to `Pending` and provides separate
+- States: loading, empty, read failure, locally queued drafts, submitting to
+  ERP, submitted after ERP acceptance, submission failed with an inline Retry
+  action, approved, rejected, canceled, paid, and ERP/payment delivery problems
+  remain distinct. Manager mode defaults to `Pending` and provides separate
   `My request` and `History` tabs. The requester tab uses the same requester
   query. The pending and resolved manager tabs filter the authoritative manager
   projection without reinterpreting expense status, and every history item
@@ -772,6 +779,11 @@ implementation.
   is unresolved or unavailable, navigation also omits Materials, and a manager
   restored onto that branch receives manager content rather than the material
   list.
+- Manager approval actions: **Approve** remains the primary one-tap action for
+  an unchanged request. **Adjust amount** is secondary and prepopulates every
+  line with its requested value. Adjusted approvals show requested total,
+  approved total, and reason in manager and requester history. Approval is
+  online-only and a stale revision fails closed with refresh guidance.
 
 ## Field Work-Order Note Contract
 

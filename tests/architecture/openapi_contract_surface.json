@@ -14696,6 +14696,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/expense-requests/{expense_request_id}/retry-delivery": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:expense_request_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "9e4801c62fbf",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/expense-requests/{expense_request_id}/submit": {
    "params": [
     "header:authorization",
@@ -14926,7 +14939,7 @@
     "header:x-api-key",
     "path:expense_request_id!"
    ],
-   "request": null,
+   "request": "3e38f82cede4",
    "responses": {
     "200": "39a569c0cfe0",
     "422": "a11c9d9b2af8"
@@ -19642,7 +19655,7 @@
   "FieldEquipmentRead": "c401fc79d178",
   "FieldEquipmentRecord": "7c7bcf16d5ae",
   "FieldEquipmentReturnRequest": "80e3640552d3",
-  "FieldExpenseApprovalRead": "64ecf6941a17",
+  "FieldExpenseApprovalRead": "1dfb9669a781",
   "FieldExpenseApproverRead": "b302644dd976",
   "FieldExpenseBankRead": "580ea29aafbe",
   "FieldExpenseCategoryRead": "c8edfa89ab4d",
@@ -19660,9 +19673,10 @@
   "FieldExpenseRejectionRead": "41e6ae96c94b",
   "FieldExpenseRequestCreate": "4a21a0cb3712",
   "FieldExpenseRequestItemCreate": "3b23aa8d5a6d",
-  "FieldExpenseRequestItemRead": "515094e4452b",
-  "FieldExpenseRequestRead": "f6681091e1da",
+  "FieldExpenseRequestItemRead": "67410920d16f",
+  "FieldExpenseRequestRead": "1935a4bdfb20",
   "FieldExpenseRequestSubmit": "60c02371fc62",
+  "FieldExpenseSubmissionRetryRead": "eddf66dbfe5d",
   "FieldExpenseVendorRead": "fd8c5d96e664",
   "FieldFiberCustomerTraceRead": "77b4750e8e06",
   "FieldFiberOntLiveRead": "b56481e9b334",
@@ -19694,6 +19708,8 @@
   "FieldLiveMapPosition": "ae257e574bcc",
   "FieldLiveMapTechnicianDetail": "bf1e0e8c76ef",
   "FieldManagerActiveWorkOrder": "f637e2628bf8",
+  "FieldManagerExpenseApprovalLine": "5e10620348d5",
+  "FieldManagerExpenseApproveRequest": "fd6218929b38",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
   "FieldManagerJob": "ec32bb6e783f",
   "FieldManagerJobAssignRequest": "b448cdab2bda",
@@ -20434,9 +20450,9 @@
   "PushTokenRead": "969e73f63758",
   "PushTokenRegister": "22a9784f2304",
   "QualificationStatus": "4b4e6d689bca",
-  "QuotaBucketCreate": "6fb66e0ff1f2",
-  "QuotaBucketRead": "8f8ae6360d0d",
-  "QuotaBucketUpdate": "4f890c55f818",
+  "QuotaBucketCreate": "8a73e8fe4220",
+  "QuotaBucketRead": "fbfa251629ae",
+  "QuotaBucketUpdate": "43ccdcdff777",
   "QuoteCreate": "5c102cc6cb47",
   "QuoteDepositInitiateRequest": "a4218e7a8569",
   "QuoteDepositInitiateResponse": "cbc971929ac9",
@@ -20708,9 +20724,10 @@
   "UptimeReportItem": "f304a6c052eb",
   "UptimeReportRequest": "3c6e26b26aeb",
   "UptimeReportResponse": "fa073ce2f2ec",
-  "UsageAllowanceCreate": "c0d41d92373f",
-  "UsageAllowanceRead": "f00b200e3247",
-  "UsageAllowanceUpdate": "b0e8a62c1ec8",
+  "UsageAllowanceCreate": "a2f59a7ebd06",
+  "UsageAllowanceRead": "e9bd71c095b6",
+  "UsageAllowanceResetBasis": "854bba944654",
+  "UsageAllowanceUpdate": "587c0d06f55d",
   "UsageChargePostBatchRequest": "efc2858459ac",
   "UsageChargePostBatchResponse": "97b1c0161a19",
   "UsageChargePostRequest": "7d964858524a",

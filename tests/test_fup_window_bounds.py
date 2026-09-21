@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from app.models.fup import FupConsumptionPeriod
-from app.services.fup_usage import fup_window_bounds, period_value
+from app.services.fup_usage import (
+    build_usage_by_period,
+    fup_window_bounds,
+    period_value,
+)
 
 LAGOS = ZoneInfo("Africa/Lagos")  # UTC+1, no DST
 
@@ -45,6 +50,38 @@ def test_monthly_is_utc_calendar_month():
 def test_monthly_december_rolls_year():
     w = fup_window_bounds("monthly", datetime(2026, 12, 15, tzinfo=UTC), UTC)
     assert w.end == datetime(2027, 1, 1, tzinfo=UTC)
+
+
+def test_monthly_usage_can_follow_exact_quota_bucket_window(monkeypatch):
+    from app.services.fup import FupPolicies
+
+    monkeypatch.setattr(
+        FupPolicies,
+        "get_by_offer",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            rules=[
+                SimpleNamespace(
+                    is_active=True,
+                    consumption_period=FupConsumptionPeriod.monthly,
+                )
+            ]
+        ),
+    )
+    start = datetime(2026, 9, 14, 12, tzinfo=UTC)
+    end = start + timedelta(days=30)
+
+    usage = build_usage_by_period(
+        None,
+        None,
+        "offer-id",
+        start + timedelta(days=1),
+        56.17,
+        (start, end),
+    )
+
+    assert usage["monthly"].window.start == start
+    assert usage["monthly"].window.end == end
+    assert usage["monthly"].used_gb == 56.17
 
 
 def test_period_value_normalizes():

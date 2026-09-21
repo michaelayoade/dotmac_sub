@@ -65,10 +65,19 @@ class QuotaBucket(Base):
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=False
     )
+    usage_allowance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usage_allowances.id")
+    )
+    rollover_origin_bucket_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quota_buckets.id")
+    )
     period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     included_gb: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     used_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    # Preserved usage already measured before a legacy/manual bucket receives
+    # per-session counter baselines during reset-policy cutover.
+    usage_floor_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     rollover_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     # GB granted by data top-up purchases this period (counts toward the
     # allowance before overage, alongside included + rollover).
@@ -86,6 +95,36 @@ class QuotaBucket(Base):
 
     subscription = relationship("Subscription", back_populates="quota_buckets")
     usage_records = relationship("UsageRecord", back_populates="quota_bucket")
+
+
+class QuotaSessionBaseline(Base):
+    """Accounting counters already present when a quota cycle starts."""
+
+    __tablename__ = "quota_session_baselines"
+    __table_args__ = (
+        UniqueConstraint(
+            "quota_bucket_id",
+            "radius_accounting_session_id",
+            name="uq_quota_session_baselines_bucket_session",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    quota_bucket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quota_buckets.id"), nullable=False
+    )
+    radius_accounting_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("radius_accounting_sessions.id"),
+        nullable=False,
+    )
+    input_octets: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    output_octets: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
 
 
 class RadiusAccountingSession(Base):

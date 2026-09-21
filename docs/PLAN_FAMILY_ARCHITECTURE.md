@@ -369,6 +369,12 @@ inactive rows remain historical and are reactivated on reassignment. The offer
 detail/edit surfaces show either the active reseller restriction list or an
 explicit unrestricted state.
 
+Active `OfferBillingModeAvailability` rows are the complete supported-mode set
+for new writes and reviewed account-wide conversions. If an offer has no active
+availability row, its `CatalogOffer.billing_mode` is the legacy/default
+supported mode. The offer field remains the display/default choice; it does not
+override an explicit active availability variant.
+
 This mechanism is separate from `allowed_change_plan_ids`. The latter narrows
 which target offers a customer may choose from a current offer, after customer
 self-service eligibility has scoped the choices to the current plan family.

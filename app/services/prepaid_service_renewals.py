@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, NoReturn
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -62,6 +63,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
+    UsageAllowance,
+    UsageAllowanceResetBasis,
 )
 from app.models.idempotency import IdempotencyKey
 from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
@@ -395,6 +398,40 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+def _renewal_cycle_allowance(subscription: Subscription) -> UsageAllowance | None:
+    allowance = None
+    if subscription.offer_version and subscription.offer_version.usage_allowance_id:
+        allowance = subscription.offer_version.usage_allowance
+    elif subscription.offer and subscription.offer.usage_allowance_id:
+        allowance = subscription.offer.usage_allowance
+    if (
+        allowance is not None
+        and allowance.reset_basis is UsageAllowanceResetBasis.renewal_cycle
+    ):
+        return allowance
+    return None
+
+
+def _resolve_validity_period(
+    *,
+    effective_at: datetime,
+    validity_days: int,
+    timezone_name: str,
+) -> PrepaidSettlementPeriod:
+    zone = ZoneInfo(timezone_name)
+    starts_at = _utc(effective_at)
+    ends_at = starts_at + timedelta(days=validity_days)
+    local_start = starts_at.astimezone(zone)
+    local_end = ends_at.astimezone(zone)
+    return PrepaidSettlementPeriod(
+        starts_at=starts_at,
+        ends_at=ends_at,
+        starts_on=local_start.date(),
+        ends_on=local_end.date(),
+        timezone_name=timezone_name,
+    )
+
+
 def resolve_prepaid_settlement_period(
     query: PrepaidSettlementPeriodQuery,
 ) -> PrepaidSettlementPeriod:
@@ -533,6 +570,26 @@ def resolve_prepaid_subscription_settlement_period(
         as_of=query.effective_at,
         exclude_source_invoice_id=query.exclude_source_invoice_id,
     )
+    subscription = db.get(Subscription, query.subscription_id)
+    allowance = (
+        _renewal_cycle_allowance(subscription) if subscription is not None else None
+    )
+    if allowance is not None:
+        if allowance.validity_days is None:
+            _error(
+                "invalid_usage_allowance_policy",
+                "Renewal-cycle usage allowance is missing validity days.",
+                usage_allowance_id=str(allowance.id),
+            )
+        return PrepaidSubscriptionSettlementPeriod(
+            period=_resolve_validity_period(
+                effective_at=query.effective_at,
+                validity_days=int(allowance.validity_days),
+                timezone_name=query.timezone_name,
+            ),
+            covered_through=covered_through,
+        )
+
     if covered_through is None:
         period = resolve_prepaid_settlement_period(
             PrepaidSettlementPeriodQuery(
@@ -1670,6 +1727,16 @@ def _subscription_for_request(
     return subscription
 
 
+def _initialize_funded_quota_cycle(
+    db: Session,
+    subscription: Subscription,
+    starts_at: datetime,
+) -> None:
+    from app.services.usage import initialize_renewal_quota_cycle
+
+    initialize_renewal_quota_cycle(db, subscription, starts_at)
+
+
 def _existing_period_entitlement(
     db: Session,
     *,
@@ -1678,12 +1745,14 @@ def _existing_period_entitlement(
     ends_at: datetime,
 ) -> ServiceEntitlement | None:
     return db.scalar(
-        select(ServiceEntitlement).where(
+        select(ServiceEntitlement)
+        .where(
             ServiceEntitlement.subscription_id == subscription_id,
             ServiceEntitlement.status == ServiceEntitlementStatus.active,
             ServiceEntitlement.starts_at < ends_at,
             ServiceEntitlement.ends_at > starts_at,
         )
+        .order_by(ServiceEntitlement.starts_at.desc())
     )
 
 
@@ -1882,7 +1951,12 @@ def preview_prepaid_service_renewal(
         starts_at=period_start,
         ends_at=period_end,
     )
-    if overlap is not None:
+    restart_overlap = (
+        overlap is not None
+        and _renewal_cycle_allowance(subscription) is not None
+        and _utc(overlap.starts_at) < period_start
+    )
+    if overlap is not None and not restart_overlap:
         existing_adjustment = db.scalar(
             select(AccountAdjustment).where(
                 AccountAdjustment.origin == _ORIGIN,
@@ -1992,6 +2066,7 @@ def confirm_prepaid_service_renewal(
                 "idempotency_conflict",
                 "Prepaid renewal idempotency evidence does not match the request.",
             )
+        _initialize_funded_quota_cycle(db, subscription, preview.starts_at)
         return PrepaidServiceRenewalResult(
             preview=preview,
             invoice=invoice_evidence.invoice,
@@ -2053,6 +2128,7 @@ def confirm_prepaid_service_renewal(
             entitlement=entitlement,
             require_existing=True,
         )
+        _initialize_funded_quota_cycle(db, subscription, preview.starts_at)
         return PrepaidServiceRenewalResult(
             preview=preview,
             invoice=None,
@@ -2299,6 +2375,7 @@ def confirm_prepaid_service_renewal(
             details={"invoice_id": str(invoice.id)},
             retryable=False,
         )
+    _initialize_funded_quota_cycle(db, subscription, current.starts_at)
     return PrepaidServiceRenewalResult(
         preview=current,
         invoice=evidence_result.invoice,

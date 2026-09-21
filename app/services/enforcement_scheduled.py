@@ -48,7 +48,7 @@ def cleanup_subscription_block_sessions(
 
 
 def reconcile_billing_approval_drift() -> dict[str, int]:
-    """Converge active service away from the unapproved-account split state."""
+    """Converge current service away from the unapproved-account split state."""
     with db_session_adapter.read_session() as db:
         account_ids = account_billing_approval.find_billing_approval_drift_account_ids(
             db
@@ -58,6 +58,7 @@ def reconcile_billing_approval_drift() -> dict[str, int]:
         "candidates": len(account_ids),
         "disabled": 0,
         "treatment_aligned": 0,
+        "free_catalog_aligned": 0,
         "unchanged": 0,
         "errors": 0,
     }
@@ -68,7 +69,7 @@ def reconcile_billing_approval_drift() -> dict[str, int]:
             correlation_id=command_id,
             actor="service:billing_approval_reconciler",
             scope=account_billing_approval.BILLING_APPROVAL_WRITE_SCOPE,
-            reason="Repair active service with revoked billing approval",
+            reason="Repair current service with revoked billing approval",
             idempotency_key=f"billing-approval-reconcile:{account_id}:{command_id}",
         )
         try:

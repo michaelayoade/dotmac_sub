@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -16,13 +17,14 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
     UsageAllowance,
+    UsageAllowanceResetBasis,
 )
 from app.models.usage import (
     AccountingStatus,
     QuotaBucket,
     RadiusAccountingSession,
 )
-from app.services.usage import meter_usage_into_quota
+from app.services.usage import initialize_renewal_quota_cycle, meter_usage_into_quota
 
 _GB = 1024**3
 
@@ -150,3 +152,98 @@ def test_metering_is_idempotent(db_session, subscriber):
     )
     assert Decimal(str(bucket.used_gb)) == Decimal("3.00")
     assert result["changed_subscription_ids"] == []
+
+
+def test_renewal_cycle_subtracts_open_session_baseline(db_session, subscriber):
+    allowance = _allowance(db_session, 10)
+    allowance.reset_basis = UsageAllowanceResetBasis.renewal_cycle
+    allowance.validity_days = 30
+    offer = _offer(db_session, "renewal-cycle-10", allowance=allowance)
+    sub = _sub(db_session, subscriber, offer)
+    cycle_start = datetime(2026, 9, 20, tzinfo=UTC)
+    entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=sub.id,
+        starts_at=cycle_start,
+        ends_at=cycle_start + timedelta(days=30),
+        amount_funded=Decimal("1.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+    )
+    session = RadiusAccountingSession(
+        subscription_id=sub.id,
+        session_id=uuid.uuid4().hex,
+        status_type=AccountingStatus.interim,
+        session_start=cycle_start - timedelta(days=2),
+        input_octets=3 * _GB,
+        output_octets=2 * _GB,
+    )
+    db_session.add_all([entitlement, session])
+    db_session.flush()
+    bucket = initialize_renewal_quota_cycle(db_session, sub, cycle_start)
+    assert bucket is not None
+    session.input_octets = 4 * _GB
+    session.output_octets = 3 * _GB
+    db_session.commit()
+
+    meter_usage_into_quota(db_session, now=cycle_start + timedelta(hours=1))
+    db_session.refresh(bucket)
+
+    assert bucket.period_start.replace(tzinfo=UTC) == cycle_start
+    assert bucket.period_end.replace(tzinfo=UTC) == cycle_start + timedelta(days=30)
+    assert Decimal(str(bucket.used_gb)) == Decimal("2.00")
+
+
+def test_existing_repair_bucket_preserves_usage_then_counts_forward(
+    db_session, subscriber
+):
+    allowance = _allowance(db_session, 10)
+    allowance.reset_basis = UsageAllowanceResetBasis.renewal_cycle
+    allowance.validity_days = 30
+    offer = _offer(db_session, "renewal-cycle-cutover", allowance=allowance)
+    sub = _sub(db_session, subscriber, offer)
+    cycle_start = datetime(2026, 9, 20, tzinfo=UTC)
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber.id,
+            subscription_id=sub.id,
+            starts_at=cycle_start,
+            ends_at=cycle_start + timedelta(days=30),
+            amount_funded=Decimal("1.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+        )
+    )
+    session = RadiusAccountingSession(
+        subscription_id=sub.id,
+        session_id=uuid.uuid4().hex,
+        status_type=AccountingStatus.interim,
+        session_start=cycle_start + timedelta(hours=1),
+        input_octets=4 * _GB,
+        output_octets=3 * _GB,
+    )
+    bucket = QuotaBucket(
+        subscription_id=sub.id,
+        period_start=cycle_start,
+        period_end=cycle_start + timedelta(days=30),
+        included_gb=Decimal("10.00"),
+        used_gb=Decimal("5.00"),
+        rollover_gb=Decimal("0.00"),
+        topup_gb=Decimal("0.00"),
+        overage_gb=Decimal("0.00"),
+    )
+    db_session.add_all([session, bucket])
+    db_session.flush()
+
+    adopted = initialize_renewal_quota_cycle(db_session, sub, cycle_start)
+    assert adopted is not None
+    assert adopted.usage_allowance_id == allowance.id
+    assert Decimal(str(adopted.usage_floor_gb)) == Decimal("5.00")
+    session.input_octets = 5 * _GB
+    session.output_octets = 4 * _GB
+    db_session.commit()
+
+    meter_usage_into_quota(db_session, now=cycle_start + timedelta(days=1))
+    db_session.refresh(bucket)
+
+    assert Decimal(str(bucket.used_gb)) == Decimal("7.00")

@@ -67,6 +67,7 @@ from app.services.field.expense_requests import (
     RecoverExpensePaymentDelivery,
     RejectFieldExpenseRequest,
     ResolveFieldExpenseSubmissionContext,
+    RetrySubmittedExpenseDelivery,
     SelectedExpenseApprover,
     SubmitFieldExpenseRequest,
     VerifiedExpenseDestinationInput,
@@ -78,6 +79,7 @@ from app.services.field.expense_requests import (
     recover_expense_payment_delivery,
     reject_field_expense_request_command,
     resolve_field_expense_submission_context,
+    retry_submitted_expense_delivery_command,
     submit_field_expense_request_command,
     verify_field_expense_destination,
 )
@@ -227,7 +229,7 @@ def _items(**overrides):
 def _receipt_attachment(
     db, request: FieldExpenseRequest, attachment_id, *, file_name: str
 ) -> FieldAttachment:
-    content = f"receipt:{attachment_id}".encode()
+    content = b"%PDF-1.4\n" + f"receipt:{attachment_id}".encode()
     stored = StoredFile(
         entity_type="field_attachment",
         entity_id=request.work_order_mirror.public_id,
@@ -897,7 +899,7 @@ def test_claim_bound_destination_accepts_complete_canonical_identity_path(
     delivery = rows[-1]
     assert delivery.payload["source_claim_id"] == str(source_claim_id)
     assert delivery.idempotency_key.startswith(f"exp-{source_claim_id}-approved-")
-    assert delivery.idempotency_key.endswith("-v3")
+    assert delivery.idempotency_key.endswith("-v4")
 
     delivered = outbox.deliver_pending(db_session, client=client)
 
@@ -1117,6 +1119,43 @@ def test_submit_atomically_enqueues_v3_event(db_session):
     assert rows[0].payload["_expense_action"] == "expense_submit_v3"
 
 
+def test_requester_retry_requeues_same_dead_submission_event(db_session):
+    request = _make_submitted_request(db_session)
+    event = _outbox_rows(db_session, request)[0]
+    event.status = FieldErpSyncStatus.dead.value
+    event.attempts = 1
+    event.last_error = "ERP rejected the receipt"
+    original_key = event.idempotency_key
+    requester_id = request.requested_by_system_user_id
+    expense_request_id = request.id
+    assert requester_id is not None
+    db_session.commit()
+
+    command_id = uuid4()
+    outcome = retry_submitted_expense_delivery_command(
+        db_session,
+        command=RetrySubmittedExpenseDelivery(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=f"user:{requester_id}",
+                scope="field:expense_requests:write",
+                reason=f"retry_expense_submission:{expense_request_id}",
+                idempotency_key=str(command_id),
+            ),
+            expense_request_id=expense_request_id,
+        ),
+    )
+
+    db_session.refresh(event)
+    assert outcome.erp_sync_event_id == event.id
+    assert outcome.erp_sync_status == "pending"
+    assert outcome.replayed is False
+    assert event.status == FieldErpSyncStatus.pending.value
+    assert event.idempotency_key == original_key
+    assert event.attempts == 1
+
+
 def test_approval_fails_closed_before_ownership_cutover(db_session):
     request = _make_submitted_request(db_session)
     ownership = (
@@ -1169,8 +1208,14 @@ def test_approval_enqueues_with_owner_and_enabled_capability(db_session):
     row = rows[-1]
     assert row.flow == FieldErpSyncFlow.expense_claim.value
     assert row.idempotency_key.startswith(f"exp-{request.id}-approved-")
-    assert row.idempotency_key.endswith("-v3")
-    assert row.payload["_expense_action"] == "expense_approve_v3"
+    assert row.idempotency_key.endswith("-v4")
+    assert row.payload["_expense_action"] == "expense_approve_v4"
+    assert row.payload["items"] == [
+        {
+            "source_line_id": str(request.items[0].id),
+            "approved_amount": str(request.items[0].amount),
+        }
+    ]
     assert row.payload["_depends_on_idempotency_key"] == (
         f"exp-{request.id}-submitted-v3"
     )
@@ -1267,7 +1312,7 @@ def test_payment_stages_after_approval_with_a_distinct_permission(db_session):
     assert payment.payload["_depends_on_idempotency_key"].startswith(
         f"exp-{request.id}-approved-"
     )
-    assert payment.payload["_depends_on_idempotency_key"].endswith("-v3")
+    assert payment.payload["_depends_on_idempotency_key"].endswith("-v4")
     assert payment.payload["initiated_by_email"] == manager.email
 
 
@@ -1433,7 +1478,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
                 receipt_upload=ExpenseReceiptUploadInput(
                     file_name="taxi.pdf",
                     mime_type="application/pdf",
-                    content=b"taxi receipt",
+                    content=b"%PDF-1.4\ntaxi receipt",
                     client_ref=receipt_client_refs[0],
                 ),
             )[0],
@@ -1443,7 +1488,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
                 receipt_upload=ExpenseReceiptUploadInput(
                     file_name="hotel.pdf",
                     mime_type="application/pdf",
-                    content=b"hotel receipt",
+                    content=b"%PDF-1.4\nhotel receipt",
                     client_ref=receipt_client_refs[1],
                 ),
             )[0],
@@ -1455,7 +1500,7 @@ def test_partial_receipt_failure_reuses_claim_and_uploads_only_missing_receipts(
     def resolve_receipt(_db, *, work_order_id, attachment_id, allowed_owner_ids):
         assert work_order_id == request.work_order_mirror_id
         assert request.requested_by_system_user_id in allowed_owner_ids
-        content = f"receipt:{attachment_id}".encode()
+        content = b"%PDF-1.4\n" + f"receipt:{attachment_id}".encode()
         return ResolvedExpenseReceiptAttachment(
             attachment_id=attachment_id,
             work_order_id=work_order_id,
@@ -1523,14 +1568,14 @@ def test_permanent_receipt_failure_is_dead_with_safe_diagnostics(
             receipt_upload=ExpenseReceiptUploadInput(
                 file_name="private-person-name.pdf",
                 mime_type="application/pdf",
-                content=b"private receipt bytes",
+                content=b"%PDF-1.4\nprivate receipt bytes",
                 client_ref=uuid4(),
             )
         ),
     )
     attachment_id = request.items[0].receipt_attachment_id
     assert attachment_id is not None
-    content = b"private receipt bytes"
+    content = b"%PDF-1.4\nprivate receipt bytes"
     monkeypatch.setattr(
         attachments_module,
         "resolve_expense_receipt_attachment",

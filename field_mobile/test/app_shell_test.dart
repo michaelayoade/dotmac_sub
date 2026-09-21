@@ -305,6 +305,13 @@ void main() {
             status: 'scheduled',
             priority: 'normal',
             workType: 'install',
+            description: 'Install the customer drop and commission the ONT.',
+            scheduledStart: DateTime.utc(2026, 9, 22, 8),
+            scheduledEnd: DateTime.utc(2026, 9, 22, 10),
+            subscriberLabel: 'Amina Bello (SUB-42)',
+            addressText: '14 Garki Road, Abuja',
+            latitude: 9.0579,
+            longitude: 7.4951,
           ),
           ManagerJob(
             id: 'wo-dispatch-2',
@@ -374,6 +381,33 @@ void main() {
     expect(find.text('Assigned to Ada Technician'), findsOneWidget);
     expect(find.text('Unassign'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('dispatch-job-wo-dispatch-1')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dispatch details'), findsOneWidget);
+    expect(find.text('Install service at Garki'), findsOneWidget);
+    expect(find.text('Amina Bello (SUB-42)'), findsOneWidget);
+    expect(find.text('14 Garki Road, Abuja'), findsOneWidget);
+    expect(find.text('Unassigned'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Install the customer drop and commission the ONT.'),
+      250,
+    );
+    expect(
+      find.text('Install the customer drop and commission the ONT.'),
+      findsOneWidget,
+    );
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Unassign'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unassign technician?'), findsOneWidget);
+    expect(find.text('Dispatch details'), findsNothing);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
     await tester.tap(find.widgetWithText(NavigationDestination, 'Expenses'));
     await tester.pumpAndSettle();
 
@@ -393,6 +427,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Expense details'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('ERP-EXP-42'), 300);
     expect(find.text('ERP-EXP-42'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Taxi to site'), 300);
     expect(find.text('Taxi to site'), findsOneWidget);

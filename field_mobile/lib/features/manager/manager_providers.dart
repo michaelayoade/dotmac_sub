@@ -32,6 +32,9 @@ class ManagerProfile {
     return false;
   }
 
+  bool get canViewDispatch =>
+      allows('operations:work_order:read') ||
+      allows('operations:technician:read');
   bool get canViewTeamMap => allows('operations:dispatch:read');
   bool get canPayExpenses => allows('operations:expense_request:pay');
 
@@ -256,6 +259,7 @@ class ManagerJob {
     required this.status,
     required this.priority,
     required this.workType,
+    this.description,
     this.scheduledStart,
     this.scheduledEnd,
     this.assignmentQueueId,
@@ -275,6 +279,7 @@ class ManagerJob {
   final StatusPresentation statusPresentation;
   final String priority;
   final String workType;
+  final String? description;
   final DateTime? scheduledStart;
   final DateTime? scheduledEnd;
   final String? assignmentQueueId;
@@ -295,6 +300,7 @@ class ManagerJob {
     ),
     priority: json['priority']?.toString() ?? 'normal',
     workType: json['work_type']?.toString() ?? 'other',
+    description: json['description']?.toString(),
     scheduledStart: _date(json['scheduled_start']),
     scheduledEnd: _date(json['scheduled_end']),
     assignmentQueueId: json['assignment_queue_id']?.toString(),
@@ -327,6 +333,11 @@ class ExpenseApprovalResult {
     required this.erpSyncStatus,
     this.erpSyncEventId,
     this.erpSyncError,
+    this.requestedTotalAmount,
+    this.approvedTotalAmount,
+    this.amountsAdjusted = false,
+    this.adjustmentReason,
+    this.revision,
   });
 
   final String id;
@@ -334,6 +345,11 @@ class ExpenseApprovalResult {
   final String erpSyncStatus;
   final String? erpSyncEventId;
   final String? erpSyncError;
+  final double? requestedTotalAmount;
+  final double? approvedTotalAmount;
+  final bool amountsAdjusted;
+  final String? adjustmentReason;
+  final int? revision;
 
   factory ExpenseApprovalResult.fromJson(Map<String, dynamic> json) =>
       ExpenseApprovalResult(
@@ -342,6 +358,11 @@ class ExpenseApprovalResult {
         erpSyncStatus: json['erp_sync_status']?.toString() ?? 'not_queued',
         erpSyncEventId: json['erp_sync_event_id']?.toString(),
         erpSyncError: json['erp_sync_error']?.toString(),
+        requestedTotalAmount: _double(json['requested_total_amount']),
+        approvedTotalAmount: _double(json['approved_total_amount']),
+        amountsAdjusted: json['amounts_adjusted'] == true,
+        adjustmentReason: json['adjustment_reason']?.toString(),
+        revision: _int(json['revision']),
       );
 }
 
@@ -433,11 +454,14 @@ class ManagerRepository {
     );
   }
 
-  Future<List<ManagerJob>> fetchJobs() async {
+  Future<List<ManagerJob>> fetchJobs({String? assignedToPersonId}) async {
     final response = await _ref
         .read(apiClientProvider)
         .dio
-        .get('/api/v1/field/manager/jobs');
+        .get(
+          '/api/v1/field/manager/jobs',
+          queryParameters: {'assigned_to_person_id': ?assignedToPersonId},
+        );
     return _items(response.data).map(ManagerJob.fromJson).toList();
   }
 
@@ -478,12 +502,28 @@ class ManagerRepository {
     return _items(response.data).map(ExpenseRequest.fromJson).toList();
   }
 
-  Future<ExpenseApprovalResult> approveExpense(String id) async {
+  Future<ExpenseApprovalResult> approveExpense(
+    String id, {
+    Map<String, double> approvedAmounts = const {},
+    String? adjustmentReason,
+    int? expectedRevision,
+  }) async {
     final response = await _ref
         .read(apiClientProvider)
         .dio
         .post(
           '/api/v1/field/manager/expenses/$id/approve',
+          data: {
+            'lines': [
+              for (final entry in approvedAmounts.entries)
+                {
+                  'expense_item_id': entry.key,
+                  'approved_amount': entry.value.toStringAsFixed(2),
+                },
+            ],
+            'adjustment_reason': ?adjustmentReason,
+            'expected_revision': ?expectedRevision,
+          },
           options: Options(headers: {'X-Request-ID': const Uuid().v4()}),
         );
     return ExpenseApprovalResult.fromJson(
@@ -547,6 +587,29 @@ final managerTechnicianLocationDetailProvider = FutureProvider.autoDispose
 final managerJobsProvider = FutureProvider<List<ManagerJob>>(
   (ref) => ref.watch(managerRepositoryProvider).fetchJobs(),
 );
+
+/// One exact item from the manager dispatch projection.
+///
+/// The manager jobs endpoint owns the authorized work-order facts. This lookup
+/// only selects the route's stable public identifier from that typed feed; it
+/// does not derive status or action eligibility in the mobile client.
+typedef ManagerJobDetailRequest = ({String jobId, String? assignedToPersonId});
+
+final managerJobProvider =
+    FutureProvider.family<ManagerJob?, ManagerJobDetailRequest>((
+      ref,
+      request,
+    ) async {
+      final jobs = request.assignedToPersonId == null
+          ? await ref.watch(managerJobsProvider.future)
+          : await ref
+                .watch(managerRepositoryProvider)
+                .fetchJobs(assignedToPersonId: request.assignedToPersonId);
+      for (final job in jobs) {
+        if (job.id == request.jobId) return job;
+      }
+      return null;
+    });
 
 final managerExpensesProvider = FutureProvider<List<ExpenseRequest>>(
   (ref) => ref.watch(managerRepositoryProvider).fetchExpenses(),

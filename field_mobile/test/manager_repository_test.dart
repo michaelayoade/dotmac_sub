@@ -94,4 +94,43 @@ void main() {
       expect(detail.addressStatus, ManagerLocationAddressStatus.available);
     },
   );
+
+  test('fetchJobs reads manager dispatch detail fields', () async {
+    adapter.on('GET', '/api/v1/field/manager/jobs', (options) {
+      expect(options.queryParameters, {'assigned_to_person_id': 'person-1'});
+      return (
+        200,
+        {
+          'items': [
+            {
+              'id': 'wo-dispatch-1',
+              'title': 'Install service at Garki',
+              'description': 'Replace the drop cable and commission the ONT.',
+              'status': 'dispatched',
+              'priority': 'high',
+              'work_type': 'install',
+              'assigned_to_label': 'Ada Technician',
+              'subscriber_label': 'Amina Bello (SUB-42)',
+              'address_text': '14 Garki Road, Abuja',
+              'latitude': 9.0579,
+              'longitude': 7.4951,
+            },
+          ],
+        },
+      );
+    });
+
+    final jobs = await container
+        .read(managerRepositoryProvider)
+        .fetchJobs(assignedToPersonId: 'person-1');
+
+    expect(jobs, hasLength(1));
+    expect(jobs.single.id, 'wo-dispatch-1');
+    expect(
+      jobs.single.description,
+      'Replace the drop cable and commission the ONT.',
+    );
+    expect(jobs.single.assignedToLabel, 'Ada Technician');
+    expect(jobs.single.addressText, '14 Garki Road, Abuja');
+  });
 }

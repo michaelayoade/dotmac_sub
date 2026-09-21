@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.catalog import BillingMode, CatalogOffer, Subscription
+from app.models.offer_availability import OfferBillingModeAvailability
 from app.models.subscriber import Subscriber
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.domain_errors import DomainError
@@ -45,6 +46,7 @@ class BillingProfileReason(StrEnum):
     REQUESTED_BILLING_MODE_MISMATCH = "requested_billing_mode_mismatch"
     SUBSCRIBER_NOT_FOUND = "subscriber_not_found"
     OFFER_NOT_FOUND = "offer_not_found"
+    OFFER_BILLING_MODE_UNAVAILABLE = "offer_billing_mode_unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +111,7 @@ class SubscriptionBillingModeWriteDecision:
     resolved_mode: BillingMode | None
     allowed: bool
     reason: BillingProfileReason | None = None
+    supported_offer_modes: frozenset[BillingMode] = frozenset()
 
 
 class BillingProfileError(DomainError):
@@ -336,11 +339,17 @@ def plan_subscription_billing_mode_write(
     account_mode: BillingMode | None,
     offer_mode: BillingMode | None,
     requested_mode: BillingMode | None,
+    supported_offer_modes: frozenset[BillingMode] | None = None,
 ) -> SubscriptionBillingModeWriteDecision:
+    supported_modes = (
+        supported_offer_modes
+        if supported_offer_modes is not None
+        else frozenset({offer_mode} if offer_mode is not None else ())
+    )
     if (
         account_mode is not None
-        and offer_mode is not None
-        and account_mode != offer_mode
+        and supported_modes
+        and account_mode not in supported_modes
     ):
         return SubscriptionBillingModeWriteDecision(
             account_mode=account_mode,
@@ -349,9 +358,10 @@ def plan_subscription_billing_mode_write(
             resolved_mode=None,
             allowed=False,
             reason=BillingProfileReason.ACCOUNT_OFFER_BILLING_MODE_MISMATCH,
+            supported_offer_modes=supported_modes,
         )
 
-    resolved_mode = offer_mode or account_mode or requested_mode
+    resolved_mode = account_mode or requested_mode or offer_mode
     if resolved_mode is None:
         return SubscriptionBillingModeWriteDecision(
             account_mode=account_mode,
@@ -360,6 +370,7 @@ def plan_subscription_billing_mode_write(
             resolved_mode=None,
             allowed=False,
             reason=BillingProfileReason.BILLING_MODE_UNRESOLVED,
+            supported_offer_modes=supported_modes,
         )
     if requested_mode is not None and requested_mode != resolved_mode:
         return SubscriptionBillingModeWriteDecision(
@@ -369,6 +380,17 @@ def plan_subscription_billing_mode_write(
             resolved_mode=resolved_mode,
             allowed=False,
             reason=BillingProfileReason.REQUESTED_BILLING_MODE_MISMATCH,
+            supported_offer_modes=supported_modes,
+        )
+    if supported_modes and resolved_mode not in supported_modes:
+        return SubscriptionBillingModeWriteDecision(
+            account_mode=account_mode,
+            offer_mode=offer_mode,
+            requested_mode=requested_mode,
+            resolved_mode=resolved_mode,
+            allowed=False,
+            reason=BillingProfileReason.OFFER_BILLING_MODE_UNAVAILABLE,
+            supported_offer_modes=supported_modes,
         )
     return SubscriptionBillingModeWriteDecision(
         account_mode=account_mode,
@@ -376,7 +398,27 @@ def plan_subscription_billing_mode_write(
         requested_mode=requested_mode,
         resolved_mode=resolved_mode,
         allowed=True,
+        supported_offer_modes=supported_modes,
     )
+
+
+def resolve_offer_supported_billing_modes(
+    db: Session,
+    offer: CatalogOffer,
+) -> frozenset[BillingMode]:
+    """Resolve supported sale variants, falling back to the offer default."""
+
+    modes = frozenset(
+        db.scalars(
+            select(OfferBillingModeAvailability.billing_mode).where(
+                OfferBillingModeAvailability.offer_id == offer.id,
+                OfferBillingModeAvailability.is_active.is_(True),
+            )
+        ).all()
+    )
+    if modes:
+        return modes
+    return frozenset({offer.billing_mode} if offer.billing_mode is not None else ())
 
 
 def resolve_subscription_billing_mode_for_write(
@@ -396,6 +438,7 @@ def resolve_subscription_billing_mode_for_write(
         account_mode=account.billing_mode,
         offer_mode=offer.billing_mode,
         requested_mode=requested_mode,
+        supported_offer_modes=resolve_offer_supported_billing_modes(db, offer),
     )
     if not decision.allowed or decision.resolved_mode is None:
         raise BillingModeWriteRejected(

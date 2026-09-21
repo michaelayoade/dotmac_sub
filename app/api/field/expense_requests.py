@@ -29,6 +29,7 @@ from app.schemas.field import (
     FieldExpenseRequestItemRead,
     FieldExpenseRequestRead,
     FieldExpenseRequestSubmit,
+    FieldExpenseSubmissionRetryRead,
     FieldExpenseVendorRead,
 )
 from app.services.auth_dependencies import require_user_auth
@@ -52,6 +53,7 @@ from app.services.field.expense_requests import (
     RequesterExpenseDetailQuery,
     RequesterExpenseHistoryQuery,
     ResolveFieldExpenseSubmissionContext,
+    RetrySubmittedExpenseDelivery,
     SubmitFieldExpenseRequest,
     VerifyFieldExpenseDestination,
     cancel_field_expense_request_command,
@@ -60,6 +62,7 @@ from app.services.field.expense_requests import (
     list_expense_vendors,
     list_requester_expense_requests,
     resolve_field_expense_submission_context,
+    retry_submitted_expense_delivery_command,
     submit_field_expense_request_command,
     verify_field_expense_destination,
 )
@@ -145,6 +148,12 @@ def _expense_read(view: ExpenseRequestView) -> FieldExpenseRequestRead:
         payment_error=view.payment_error,
         client_ref=view.client_ref,
         total_amount=view.total_amount,
+        requested_total_amount=view.requested_total_amount,
+        approved_total_amount=view.approved_total_amount,
+        amounts_adjusted=view.amounts_adjusted,
+        approval_adjustment_reason=view.approval_adjustment_reason,
+        approved_by_system_user_id=view.approved_by_system_user_id,
+        revision=view.revision,
         submitted_at=view.submitted_at,
         approved_at=view.approved_at,
         rejected_at=view.rejected_at,
@@ -158,6 +167,7 @@ def _expense_read(view: ExpenseRequestView) -> FieldExpenseRequestRead:
                 category_name=item.category_name,
                 description=item.description,
                 amount=item.amount,
+                approved_amount=item.approved_amount,
                 expense_date=item.expense_date,
                 vendor_name=item.vendor_name,
                 receipt_url=item.receipt_url,
@@ -393,6 +403,34 @@ def create_and_submit_field_expense_request(
                 ),
                 selected_approver=submission_context.selected_approver,
                 payment_destination=submission_context.payment_destination,
+            ),
+        )
+    except FieldExpenseRequestError as exc:
+        raise _expense_command_error(exc) from exc
+
+
+@router.post(
+    "/{expense_request_id}/retry-delivery",
+    response_model=FieldExpenseSubmissionRetryRead,
+)
+def retry_field_expense_delivery(
+    expense_request_id: UUID,
+    auth: dict = Depends(require_user_auth),
+    request_id: UUID | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    command_id = request_id or uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return retry_submitted_expense_delivery_command(
+            db,
+            command=RetrySubmittedExpenseDelivery(
+                context=_command_context(
+                    auth,
+                    request_id=command_id,
+                    reason="field_expense_submission_retry",
+                ),
+                expense_request_id=expense_request_id,
             ),
         )
     except FieldExpenseRequestError as exc:

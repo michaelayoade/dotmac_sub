@@ -6,6 +6,8 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy.exc import OperationalError
+
 from app.celery_app import celery_app
 from app.models.domain_settings import SettingDomain
 from app.services import (
@@ -188,7 +190,14 @@ def send_queue_position_notifications(*, limit: int = 200) -> dict[str, int]:
         return payload
 
 
-@celery_app.task(name="app.tasks.team_inbox.process_ai_intake_sessions")
+@celery_app.task(
+    name="app.tasks.team_inbox.process_ai_intake_sessions",
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+)
 def process_ai_intake_sessions(*, limit: int = 100) -> dict[str, int]:
     with db_session_adapter.session() as session:
         result = ai_conversation_intake.process_ready_sessions(

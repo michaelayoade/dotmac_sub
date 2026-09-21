@@ -725,19 +725,23 @@ Dashboard implementation notes:
     "search": str | None,
     "customer_type": str | None,        # filter: "person" | "organization" | None
     "billing_mode": str | None,         # "prepaid" | "postpaid" | "non_billable"
+    # Each row also carries a typed chargeability label, detail, and badge tone.
     "active_page": "customers",
 }
 ```
 
 The Billing filter is owned by `ui.customer_list_projection`. Prepaid and
 postpaid consume `financial.billing_profile`, including its collectible-service
-precedence and mixed-mode fail-closed behavior. Non-billable means every
-collectible service is currently charge-suppressed by an effective
-complimentary/sponsored treatment or is a genuinely zero-priced recurring
-catalog product. Missing price evidence, `Subscriber.billing_enabled`, and plan
-name text (including names containing "Non Billing") do not classify the
-customer. An account with both paid and free services remains in its canonical
-prepaid/postpaid cohort.
+precedence and mixed-mode fail-closed behavior. **Non-billable / review** is an
+operational section containing two visibly distinct results from
+`financial.customer_chargeability`: confirmed non-billable customers and
+customers whose catalog pricing requires staff review. Missing price evidence
+appears as **Review required** and is never assumed free. Classification covers
+pending, active, blocked, suspended, stopped, and disabled services, so account
+status (including delinquent) does not hide a matching customer. Plan-name text
+and `Subscriber.billing_enabled` are not chargeability evidence. An account
+with coherent paid service remains billable; any missing or contradictory price
+keeps the whole account in review until staff resolves it.
 
 #### `GET /admin/customers/{type}/{id}` (Person Detail)
 **Template:** `admin/customers/detail.html`

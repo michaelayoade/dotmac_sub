@@ -162,6 +162,16 @@ def test_dispatch_work_order_routes_require_operations_dispatch_permission():
             "POST",
             "operations:dispatch:read",
         ),
+        (
+            "/dispatch/work-orders/{work_order_id}/expenses/{expense_request_id}/approve",
+            "POST",
+            "operations:dispatch:read",
+        ),
+        (
+            "/dispatch/work-orders/{work_order_id}/expenses/{expense_request_id}/approve",
+            "POST",
+            "operations:expense_request:write",
+        ),
         ("/dispatch/work-orders", "POST", "operations:dispatch:write"),
         ("/dispatch/work-orders/{work_order_id}", "POST", "operations:dispatch:write"),
         (

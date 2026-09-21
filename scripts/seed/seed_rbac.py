@@ -294,7 +294,10 @@ DEFAULT_PERMISSIONS = [
     ("operations:service_team:retire", "Activate or deactivate service teams"),
     # Operations - Field Expense Requests
     ("operations:expense_request:read", "View field expense requests"),
-    ("operations:expense_request:write", "Approve or reject field expense requests"),
+    (
+        "operations:expense_request:write",
+        "Adjust amounts and approve or reject field expense requests",
+    ),
     ("operations:expense_request:pay", "Initiate approved expense reimbursements"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),

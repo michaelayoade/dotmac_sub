@@ -16,6 +16,7 @@ import '../features/jobs/job_detail_screen.dart';
 import '../features/jobs/jobs_providers.dart';
 import '../features/jobs/work_order_evidence_map_screen.dart';
 import '../features/location/location_tracking_controller.dart';
+import '../features/manager/manager_dispatch_detail_screen.dart';
 import '../features/manager/manager_providers.dart';
 import '../features/manager/manager_screen.dart';
 import '../features/materials/materials_screen.dart';
@@ -145,6 +146,13 @@ GoRouter buildRouter(Ref ref) {
         path: '/manager/expenses/:id',
         builder: (_, state) => ManagerExpenseDetailScreen(
           expenseRequestId: state.pathParameters['id']!,
+        ),
+      ),
+      GoRoute(
+        path: '/manager/dispatch/:id',
+        builder: (_, state) => ManagerDispatchDetailScreen(
+          jobId: state.pathParameters['id']!,
+          assignedToPersonId: state.uri.queryParameters['personId'],
         ),
       ),
       StatefulShellRoute.indexedStack(

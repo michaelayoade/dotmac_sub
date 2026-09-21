@@ -34,13 +34,16 @@ from app.services.field.expense_categories import (
 from app.services.field.expense_requests import (
     ExpenseCategoryRule,
     ExpenseReceiptUploadInput,
+    ExpenseRequestStatus,
     FieldExpenseRequestError,
     FieldExpenseVendorOption,
     GetFieldExpenseFormContext,
     ListFieldExpenseVendors,
+    ManagerExpenseReviewQuery,
     evaluate_expense_work_order_eligibility,
     get_field_expense_form_context,
     list_expense_vendors,
+    list_manager_expense_requests,
 )
 from app.services.integrations.diagnostics import (
     DELIVERY_DIAGNOSTIC_KEY,
@@ -151,10 +154,30 @@ class WorkOrderExpenseClaimView:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkOrderExpenseApprovalLineView:
+    id: UUID
+    description: str
+    category_name: str
+    requested_amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class WorkOrderExpenseApprovalView:
+    id: UUID
+    purpose: str
+    requested_by_name: str
+    currency: str
+    requested_total_amount: Decimal
+    revision: int
+    lines: tuple[WorkOrderExpenseApprovalLineView, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkOrderExpensePanel:
     work_order_id: UUID
     work_order_public_id: str
     claims: tuple[WorkOrderExpenseClaimView, ...]
+    approvals: tuple[WorkOrderExpenseApprovalView, ...]
     categories: tuple[ExpenseCategoryRule, ...]
     vendors: tuple[FieldExpenseVendorOption, ...]
     approvers: tuple[ExpenseApproverView, ...]
@@ -213,6 +236,7 @@ def build_work_order_expense_panel(
     actor_system_user_id: UUID,
     form: WorkOrderExpenseFormInput | None = None,
     errors: tuple[ExpenseFieldError, ...] = (),
+    can_review_expenses: bool = False,
 ) -> WorkOrderExpensePanel:
     work_order = (
         db.query(WorkOrder)
@@ -277,6 +301,37 @@ def build_work_order_expense_panel(
         query=ListFieldExpenseVendors(limit=100),
     )
     claims = _claim_views(db, work_order=work_order, user=user)
+    approvals: tuple[WorkOrderExpenseApprovalView, ...] = ()
+    if can_review_expenses:
+        review_page = list_manager_expense_requests(
+            db,
+            ManagerExpenseReviewQuery(
+                approver_system_user_id=user.id,
+                status=ExpenseRequestStatus.SUBMITTED,
+                work_order_public_id=work_order.public_id,
+                limit=100,
+            ),
+        )
+        approvals = tuple(
+            WorkOrderExpenseApprovalView(
+                id=request.id,
+                purpose=request.purpose,
+                requested_by_name=request.requested_by_name or "Unavailable",
+                currency=request.currency,
+                requested_total_amount=request.requested_total_amount,
+                revision=request.revision,
+                lines=tuple(
+                    WorkOrderExpenseApprovalLineView(
+                        id=line.id,
+                        description=line.description,
+                        category_name=line.category_name or line.category_code,
+                        requested_amount=line.amount,
+                    )
+                    for line in request.items
+                ),
+            )
+            for request in review_page.items
+        )
     eligibility = evaluate_expense_work_order_eligibility(
         db,
         work_order=work_order,
@@ -293,6 +348,7 @@ def build_work_order_expense_panel(
         work_order_id=work_order.id,
         work_order_public_id=work_order.public_id,
         claims=claims,
+        approvals=approvals,
         categories=categories,
         vendors=vendors,
         approvers=approvers,

@@ -24,8 +24,9 @@ Owner: field operations UI
   synchronized roster immediately below it.
 - **Actions:** tap a marker or roster row to bring the map into view, focus the
   exact shared coordinate, and inspect status, nearest address, observation
-  time, accuracy, and current work. The one workflow action opens the dispatch
-  queue.
+  time, accuracy, and current work. When current work has an authoritative
+  public work-order identifier, the one workflow action opens that exact
+  dispatch detail; a title alone never creates a navigation target.
 - **Sensitivity:** exact coordinates are private operational data. The map
   owner excludes technicians with sharing disabled before serialization, and
   the roster contract never contains latitude, longitude, accuracy, or the
@@ -47,6 +48,43 @@ Owner: field operations UI
   text status in addition to color. Controls remain horizontally scrollable,
   the roster is lazily built, and the map retains a stable mobile height.
 
+## Manager dispatch detail page contract
+
+- **Screen identifier and type:** `mobile.manager.dispatch_detail`, read-only
+  operational work-order detail.
+- **Audience and permission:** authenticated staff managers holding
+  `operations:work_order:read` or `operations:technician:read`, matching the
+  manager jobs API. The mobile route fails closed when the manager profile or
+  permission is absent. Entry through Team Map additionally requires that
+  surface's `operations:dispatch:read` permission.
+- **Operational job and decision:** confirm which exact open work order is
+  being dispatched, its current authoritative status and priority, when and
+  where it is scheduled, who is assigned, and the scope to be performed.
+- **Authoritative read owner:** `operations.work_orders`, projected through the
+  typed field-manager jobs contract. The mobile client selects the exact public
+  identifier from that feed and does not derive status, assignment eligibility,
+  or execution state.
+- **Primary entity:** one native work order keyed by its public work-order
+  identifier. Retained legacy external identifiers and mirror UUIDs are not shown.
+- **First viewport:** work-order title, owner-supplied status presentation,
+  work type, priority, schedule, and current technician assignment.
+- **Later sections:** subscriber/site context, full address and coordinates
+  when supplied by the owner, followed by the scope of work.
+- **Actions:** the detail is read-only. Assignment and unassignment remain the
+  dispatch queue's existing row action; technician execution actions are not
+  exposed to managers by this screen.
+- **Freshness and states:** pull-to-refresh reloads the authoritative manager
+  jobs feed. Loading, retryable read failure, permission denial, and a job that
+  has left the open dispatch queue remain distinct states.
+- **Drill-down entry points:** tapping any dispatch queue card and tapping
+  `View dispatch` for a selected technician both open the same route with the
+  exact public work-order identifier. Team Map also supplies the authoritative
+  person identifier so the existing manager query can retrieve that assigned
+  work independently of the bounded general queue page.
+- **Responsive and accessibility:** the page uses a single scrollable column,
+  text labels in addition to status color/icon, wrapping content, and no raw
+  horizontal evidence table.
+
 ## Validation contract
 
 - Backend tests prove disabled sharing and invalid coordinates fail closed.
@@ -54,6 +92,7 @@ Owner: field operations UI
   `operations:dispatch:read`.
 - Flutter widget tests cover live and stale geographic markers, marker detail,
   roster focus, live/last-known address detail, filtering, invalid coordinates,
-  and retryable error state.
+  retryable error state, exact-dispatch navigation, detail permission and
+  availability states, and narrow-screen layout.
 - The standard mobile viewport must be checked for overflow with one, many,
   and no mapped technicians before release.

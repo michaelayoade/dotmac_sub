@@ -1731,13 +1731,113 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="usage.quota_cycle_policy",
+            module="app.services.usage",
+            owns=("catalogue-driven quota cycle and rollover policy resolution",),
+            depends_on=(
+                "access.subscription_lifecycle",
+                "financial.prepaid_service_renewals",
+                "service_intent.catalog_policy",
+                "sessions.radius_reconciliation",
+            ),
+            notes=(
+                "Resolves calendar-month versus funded renewal intervals, "
+                "one-cycle fresh-base rollover, and open-session counter deltas. "
+                "The prepaid renewal and usage-metering owners persist its result."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "catalogue-driven quota cycle and rollover policy "
+                            "resolution"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "usage allowance reset policy",
+                            "funded subscription interval",
+                            "RADIUS accounting facts",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="usage allowance reset policy",
+                        owner="service_intent.catalog_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "UsageAllowance reset_basis, validity_days, "
+                            "rollover_enabled, and rollover_validity_cycles"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="funded subscription interval",
+                        owner="financial.prepaid_service_renewals",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="latest active ServiceEntitlement containing the observation",
+                    ),
+                    AuthorityInput(
+                        name="RADIUS accounting facts",
+                        owner="sessions.radius_reconciliation",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="session start/end and cumulative octet counters",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Resolution is deterministic over catalogue, entitlement, "
+                        "prior-bucket, and accounting facts; callers own persistence."
+                    ),
+                    locking="The caller locks its renewal or metering scope.",
+                    idempotency="The same evidence returns the same interval and grants.",
+                    retries="Callers may repeat resolution before flushing.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="prepaid renewal and usage task adapters",
+                    fail_closed_on=("missing funded interval for renewal-cycle usage",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="hard-coded UTC calendar-month quota arithmetic",
+                    new_owner="usage.quota_cycle_policy",
+                    verification=(
+                        "Renewal boundary, rollover provenance, and crossing-session "
+                        "baseline regression tests."
+                    ),
+                    cutover_gate=(
+                        "High-speed capped allowances are classified as 30-day "
+                        "renewal cycles by migration 618."
+                    ),
+                    fallback_retirement=(
+                        "Calendar-month arithmetic remains only for allowances "
+                        "whose catalogue reset_basis explicitly selects it."
+                    ),
+                ),
+                steward="billing and network access",
+                design_refs=(
+                    "docs/designs/USAGE_ALLOWANCE_RESET_CYCLES.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_usage_metering.py",
+                    "tests/test_usage_rollover.py",
+                    "tests/test_prepaid_service_renewals.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="access.fup_usage_windows",
             module="app.services.fup_usage",
             owns=(
                 "FUP consumption window bounds",
                 "windowed FUP usage aggregation",
             ),
-            depends_on=("sessions.radius_reconciliation",),
+            depends_on=(
+                "sessions.radius_reconciliation",
+                "usage.quota_cycle_policy",
+            ),
             notes=(
                 "Single source of truth for FUP consumption windows and "
                 "windowed usage reads; read-only over usage facts."
@@ -1773,8 +1873,8 @@ DOMAIN = DomainSOT(
                         owner="sessions.radius_reconciliation",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "rated QuotaBucket totals and timestamped RADIUS "
-                            "usage samples"
+                            "rated QuotaBucket totals, exact bucket interval, and "
+                            "crossing-session baselines"
                         ),
                     ),
                 ),

@@ -892,6 +892,7 @@ SERVICES: tuple[SOTService, ...] = (
             "field expense ERP form context",
             "expense receipt staging for submitted claims",
             "field expense lifecycle ERP delivery staging",
+            "dead submitted expense delivery retry",
             "dead expense delivery recovery",
             "dead expense payment delivery recovery",
             "ERP expense-claim payment outcome observation",
@@ -935,6 +936,10 @@ SERVICES: tuple[SOTService, ...] = (
             "it owns the selected local approver link and masked expense snapshot, "
             "excludes the requester from local approver choices, and refuses "
             "self-selection and self-approval before mutation or ERP staging. "
+            "Approval preserves immutable requested line amounts and supports "
+            "either unchanged approval or one approved amount per existing line; "
+            "adjustments require a reason and are staged to ERP in the same owner "
+            "transaction. "
             "ERP delivery failures retain only typed allowlisted diagnostic codes, "
             "HTTP status, and request identifiers alongside partial-delivery progress."
             " Requester history resolves exact SystemUser, Person Party, and every "
@@ -993,6 +998,17 @@ SERVICES: tuple[SOTService, ...] = (
                         "selected expense approver",
                         "ERP-owned expense category rules",
                         "validated receipt content",
+                        "expense ERP delivery cutover control",
+                    ),
+                    canonical_writer="operations.expense_requests",
+                ),
+                ConcernContract(
+                    name="dead submitted expense delivery retry",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical submitted expense request",
+                        "validated receipt content",
+                        "failed expense submission delivery evidence",
                         "expense ERP delivery cutover control",
                     ),
                     canonical_writer="operations.expense_requests",
@@ -1177,6 +1193,16 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="failed expense submission delivery evidence",
+                    owner="integration.backoffice_adapter",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Durable dead expense_submit_v3 outbox event, stable ERP "
+                        "idempotency key, partial-delivery progress, and allowlisted "
+                        "diagnostic evidence"
+                    ),
+                ),
+                AuthorityInput(
                     name="selected expense approver",
                     owner="operations.expense_requests",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1191,7 +1217,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "Locked active FieldExpenseRequest, item rows, requester "
-                        "identity, and submitted lifecycle evidence"
+                        "identity, immutable requested amounts, request revision, "
+                        "and submitted lifecycle evidence"
                     ),
                 ),
                 AuthorityInput(
@@ -1289,8 +1316,11 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "operations.expense_requests.invalid_request",
+                    "operations.expense_requests.invalid_approval_amount",
                     "operations.expense_requests.approver_invalid",
                     "operations.expense_requests.approver_mismatch",
+                    "operations.expense_requests.adjustment_reason_required",
+                    "operations.expense_requests.approval_lines_mismatch",
                     "operations.expense_requests.claim_identity_inconsistent",
                     "operations.expense_requests.destination_expired",
                     "operations.expense_requests.destination_invalid",
@@ -1309,6 +1339,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.expense_requests.request_not_found",
                     "operations.expense_requests.receipt_required",
                     "operations.expense_requests.receipt_url_invalid",
+                    "operations.expense_requests.stale_approval",
                     "operations.expense_requests.recovery_not_available",
                     "operations.expense_requests.recovery_state_invalid",
                     "operations.expense_requests.recovery_erp_unavailable",

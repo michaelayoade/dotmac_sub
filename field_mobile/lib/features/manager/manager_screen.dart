@@ -421,17 +421,27 @@ class _ManagerTeamMapScreenState extends ConsumerState<ManagerTeamMapScreen>
     }
     if (!mounted) return;
     if (position != null) _focusPosition(position);
+    final activeWorkOrderId = technician?.activeWorkOrderId?.trim();
+    final activePersonId = technician?.personId.trim();
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => _TechnicianLocationSheet(
         technician: technician,
         position: position,
-        onOpenDispatch: technician?.activeWorkOrderTitle == null
+        onOpenDispatch:
+            activeWorkOrderId == null ||
+                activeWorkOrderId.isEmpty ||
+                activePersonId == null ||
+                activePersonId.isEmpty
             ? null
             : () {
                 Navigator.of(sheetContext).pop();
-                context.go('/schedule');
+                context.push(
+                  '/manager/dispatch/'
+                  '${Uri.encodeComponent(activeWorkOrderId)}'
+                  '?personId=${Uri.encodeComponent(activePersonId)}',
+                );
               },
       ),
     );
@@ -718,6 +728,12 @@ class _ManagerExpenseDetail extends StatelessWidget {
       ('Approver', request.selectedApproverName),
       ('Work order', request.workOrderId),
       ('Expense date', request.expenseDate),
+      (
+        'Requested total',
+        _money(request.currency, request.requestedTotalAmount),
+      ),
+      if (request.approvedTotal != null)
+        ('Approved total', _money(request.currency, request.approvedTotal!)),
       ('Submitted', _expenseTimestamp(request.submittedAt)),
       ('Approved', _expenseTimestamp(request.approvedAt)),
       ('Rejected', _expenseTimestamp(request.rejectedAt)),
@@ -762,12 +778,15 @@ class _ManagerExpenseDetail extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         _ExpenseDetailSection(title: 'Request', values: details),
-        if (request.notes != null || request.rejectionReason != null) ...[
+        if (request.notes != null ||
+            request.approvalAdjustmentReason != null ||
+            request.rejectionReason != null) ...[
           const SizedBox(height: 12),
           _ExpenseDetailSection(
             title: 'Decision notes',
             values: [
               ('Notes', request.notes),
+              ('Adjustment reason', request.approvalAdjustmentReason),
               ('Rejection reason', request.rejectionReason),
             ],
           ),
@@ -824,7 +843,10 @@ class _ManagerExpenseDetail extends StatelessWidget {
                       .join(' · '),
                 ),
                 trailing: Text(
-                  _money(request.currency, item.amount),
+                  item.approvedAmount != null &&
+                          item.approvedAmount != item.amount
+                      ? '${_money(request.currency, item.amount)} → ${_money(request.currency, item.approvedAmount!)}'
+                      : _money(request.currency, item.amount),
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -1568,73 +1590,86 @@ class _DispatchJobCard extends ConsumerWidget {
         : DateFormat('d MMM, HH:mm').format(job.scheduledStart!.toLocal());
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                StatusPill(job.statusPresentation),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    time,
-                    textAlign: TextAlign.right,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: Key('dispatch-job-${job.id}'),
+        onTap: () =>
+            context.push('/manager/dispatch/${Uri.encodeComponent(job.id)}'),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  StatusPill(job.statusPresentation),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      time,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              job.title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              [job.workType, job.priority, job.subscriberLabel, job.addressText]
-                  .whereType<String>()
-                  .where((value) => value.isNotEmpty)
-                  .join(' · '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppColors.subdued(context),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right),
+                ],
               ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    job.assignedToLabel == null
-                        ? 'Unassigned'
-                        : 'Assigned to ${job.assignedToLabel}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
+              const SizedBox(height: 10),
+              Text(
+                job.title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                [
+                      job.workType,
+                      job.priority,
+                      job.subscriberLabel,
+                      job.addressText,
+                    ]
+                    .whereType<String>()
+                    .where((value) => value.isNotEmpty)
+                    .join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.subdued(context),
                 ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: canUnassign
-                      ? () => _unassign(context, ref, job)
-                      : technicians.isEmpty
-                      ? null
-                      : () => _assign(context, ref, job, technicians),
-                  icon: Icon(
-                    canUnassign
-                        ? Icons.person_remove_outlined
-                        : Icons.assignment_ind_outlined,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      job.assignedToLabel == null
+                          ? 'Unassigned'
+                          : 'Assigned to ${job.assignedToLabel}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                   ),
-                  label: Text(canUnassign ? 'Unassign' : 'Assign'),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: canUnassign
+                        ? () => _unassign(context, ref, job)
+                        : technicians.isEmpty
+                        ? null
+                        : () => _assign(context, ref, job, technicians),
+                    icon: Icon(
+                      canUnassign
+                          ? Icons.person_remove_outlined
+                          : Icons.assignment_ind_outlined,
+                    ),
+                    label: Text(canUnassign ? 'Unassign' : 'Assign'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1667,12 +1702,33 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
       () async {
         final result = await ref
             .read(managerRepositoryProvider)
-            .approveExpense(widget.request.id);
+            .approveExpense(
+              widget.request.id,
+              expectedRevision: widget.request.revision,
+            );
         return expenseApprovalMessage(result);
       },
       failureMessage:
           'Expense was not approved; ERP sync is unavailable. Please retry.',
     );
+  }
+
+  Future<void> _adjustAndApprove() async {
+    final selection = await _adjustExpenseAmounts(context, widget.request);
+    if (selection == null) return;
+    await _run(() async {
+      final result = await ref
+          .read(managerRepositoryProvider)
+          .approveExpense(
+            widget.request.id,
+            approvedAmounts: selection.amounts,
+            adjustmentReason: selection.reason,
+            expectedRevision: widget.request.revision,
+          );
+      return result.amountsAdjusted
+          ? 'Expense adjusted and approved'
+          : expenseApprovalMessage(result);
+    }, failureMessage: 'Could not adjust and approve this expense.');
   }
 
   Future<void> _reject() async {
@@ -1829,22 +1885,35 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
                 const SizedBox(height: 10),
               ],
               if (request.status == 'submitted')
-                Row(
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _reject,
-                        icon: const Icon(Icons.close),
-                        label: const Text('Reject'),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _busy ? null : _reject,
+                            icon: const Icon(Icons.close),
+                            label: const Text('Reject'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton.icon(
+                            key: Key('approve-expense-${request.id}'),
+                            onPressed: _busy ? null : _approve,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Approve'),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _busy ? null : _approve,
-                        icon: const Icon(Icons.check),
-                        label: const Text('Approve'),
-                      ),
+                    const SizedBox(height: 6),
+                    TextButton.icon(
+                      key: Key('adjust-expense-${request.id}'),
+                      onPressed: _busy ? null : _adjustAndApprove,
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Adjust amount'),
                     ),
                   ],
                 )
@@ -2090,6 +2159,151 @@ Future<String?> _rejectReason(BuildContext context) async {
     context: context,
     builder: (_) => const _RejectExpenseDialog(),
   );
+}
+
+class _ExpenseAdjustmentSelection {
+  const _ExpenseAdjustmentSelection({required this.amounts, this.reason});
+
+  final Map<String, double> amounts;
+  final String? reason;
+}
+
+Future<_ExpenseAdjustmentSelection?> _adjustExpenseAmounts(
+  BuildContext context,
+  ExpenseRequest request,
+) async {
+  return showDialog<_ExpenseAdjustmentSelection>(
+    context: context,
+    builder: (_) => _AdjustExpenseDialog(request: request),
+  );
+}
+
+class _AdjustExpenseDialog extends StatefulWidget {
+  const _AdjustExpenseDialog({required this.request});
+
+  final ExpenseRequest request;
+
+  @override
+  State<_AdjustExpenseDialog> createState() => _AdjustExpenseDialogState();
+}
+
+class _AdjustExpenseDialogState extends State<_AdjustExpenseDialog> {
+  late final Map<String, TextEditingController> _amounts;
+  final _reason = TextEditingController();
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _amounts = {
+      for (final item in widget.request.items)
+        item.id: TextEditingController(text: item.amount.toStringAsFixed(2)),
+    };
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _amounts.values) {
+      controller.dispose();
+    }
+    _reason.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final parsed = <String, double>{};
+    for (final item in widget.request.items) {
+      final amount = double.tryParse(_amounts[item.id]!.text.trim());
+      if (amount == null || amount <= 0) {
+        setState(
+          () => _error = 'Every approved amount must be greater than zero.',
+        );
+        return;
+      }
+      parsed[item.id] = amount;
+    }
+    final adjusted = widget.request.items.any(
+      (item) => (parsed[item.id]! - item.amount).abs() >= 0.005,
+    );
+    final reason = _reason.text.trim();
+    if (adjusted && reason.length < 2) {
+      setState(() => _error = 'Enter a reason for changing the amount.');
+      return;
+    }
+    Navigator.of(context).pop(
+      _ExpenseAdjustmentSelection(
+        amounts: parsed,
+        reason: adjusted ? reason : null,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Adjust and approve'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Requested total: ${_money(widget.request.currency, widget.request.requestedTotalAmount)}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              for (final item in widget.request.items) ...[
+                Text(item.description ?? item.categoryLabel),
+                const SizedBox(height: 4),
+                TextField(
+                  key: Key('approved-amount-${item.id}'),
+                  controller: _amounts[item.id],
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Approved amount',
+                    helperText:
+                        'Requested ${_money(widget.request.currency, item.amount)}',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                key: const Key('expense-adjustment-reason'),
+                controller: _reason,
+                maxLength: 500,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Adjustment reason',
+                  helperText: 'Required only when an amount changes',
+                ),
+              ),
+              if (_error != null)
+                Text(
+                  _error!,
+                  key: const Key('expense-adjustment-error'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('approve-adjusted-expense'),
+          onPressed: _submit,
+          child: const Text('Approve adjusted amount'),
+        ),
+      ],
+    );
+  }
 }
 
 class _RejectExpenseDialog extends StatefulWidget {

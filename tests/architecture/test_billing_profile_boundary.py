@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.services.sot_relationships import all_services
@@ -10,6 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNER = PROJECT_ROOT / "app" / "services" / "billing_profile.py"
 CLEANUP = PROJECT_ROOT / "app" / "services" / "billing_cleanup_remediation.py"
 GRACE_POLICY = PROJECT_ROOT / "app" / "services" / "collections" / "grace_policy.py"
+TRANSITION_OWNER = PROJECT_ROOT / "app" / "services" / "billing_mode_transitions.py"
+CHARGEABILITY_OWNER = PROJECT_ROOT / "app" / "services" / "customer_chargeability.py"
+ADMIN_ADAPTER = PROJECT_ROOT / "app" / "web" / "admin" / "billing_accounts.py"
 
 
 def test_billing_profile_has_a_complete_read_only_manifest() -> None:
@@ -49,3 +53,56 @@ def test_cleanup_and_grace_callers_do_not_recreate_billing_profile_policy() -> N
     assert "live_modes =" not in cleanup_source
     assert "require_effective_billing_mode(profile)" in grace_source
     assert "or account.billing_mode or BillingMode.prepaid" not in grace_source
+
+
+def test_billing_mode_transition_is_a_contracted_owner_command() -> None:
+    service = next(
+        item
+        for item in all_services()
+        if item.name == "financial.billing_mode_transition"
+    )
+    source = TRANSITION_OWNER.read_text(encoding="utf-8")
+
+    assert service.is_contracted
+    assert service.contract is not None
+    assert service.contract.transaction.mode.value == "coordinator_managed"
+    assert "execute_owner_command(" in source
+    assert "ConfirmBillingModeTransitionCommand" in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
+
+
+def test_customer_chargeability_is_one_contracted_read_owner() -> None:
+    service = next(
+        item
+        for item in all_services()
+        if item.name == "financial.customer_chargeability"
+    )
+    source = CHARGEABILITY_OWNER.read_text(encoding="utf-8")
+
+    assert service.is_contracted
+    assert service.contract is not None
+    assert service.contract.transaction.mode.value == "read_only"
+    assert {concern.name for concern in service.contract.concerns} == set(service.owns)
+    assert "class CustomerChargeabilityStatus(StrEnum)" in source
+    assert "resolve_customer_chargeability(" in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
+
+
+def test_admin_billing_mode_adapter_delegates_the_transaction() -> None:
+    source = ADMIN_ADAPTER.read_text(encoding="utf-8")
+
+    assert "confirm_billing_mode_transition(" in source
+    assert "db_session_adapter.release_read_transaction(db)" in source
+    assert re.search(r"account\.billing_mode\s*=(?!=)", source) is None
+    assert re.search(r"subscription\.billing_mode\s*=(?!=)", source) is None
+    assert "if has_permission(auth, db, BILLING_MODE_WRITE_SCOPE):" in source
+    assert (
+        "dependencies=[Depends(require_permission(BILLING_MODE_WRITE_SCOPE))]" in source
+    )
+
+    template = (
+        PROJECT_ROOT / "templates" / "admin" / "billing" / "account_detail.html"
+    ).read_text(encoding="utf-8")
+    assert "components/forms/csrf_input.html" in template

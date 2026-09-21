@@ -612,7 +612,7 @@ def test_receipt_upload_failure_rolls_back_claim(db_session, monkeypatch):
     upload = ExpenseReceiptUploadInput(
         file_name="receipt.exe",
         mime_type="application/octet-stream",
-        content=b"not-a-receipt",
+        content=b"%PDF-1.4",
         client_ref=uuid4(),
     )
     command = _command(
@@ -803,6 +803,53 @@ def test_panel_isolates_claims_and_does_not_treat_sent_as_accepted(
     )
 
 
+def test_panel_exposes_selected_approver_claim_with_immutable_requested_amount(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        expense_web,
+        "list_expense_categories",
+        lambda _db, _query: (),
+    )
+    approver = _user(db_session, "Approval Owner")
+    requester = _user(db_session, "Expense Requester")
+    work_order = _work_order(db_session, "sub-expense-approval-panel")
+    request = FieldExpenseRequest(
+        work_order_mirror_id=work_order.id,
+        requested_by_person_id=requester.id,
+        requested_by_system_user_id=requester.id,
+        selected_approver_system_user_id=approver.id,
+        status="submitted",
+        purpose="Site transport",
+        currency="NGN",
+        client_ref=uuid4(),
+    )
+    request.items.append(
+        FieldExpenseRequestItem(
+            category_code="transport",
+            category_name="Transport",
+            description="Taxi",
+            amount=Decimal("2500.00"),
+        )
+    )
+    db_session.add(request)
+    db_session.commit()
+
+    panel = expense_web.build_work_order_expense_panel(
+        db_session,
+        work_order_public_id=work_order.public_id,
+        actor_system_user_id=approver.id,
+        can_review_expenses=True,
+    )
+
+    assert len(panel.approvals) == 1
+    approval = panel.approvals[0]
+    assert approval.id == request.id
+    assert approval.requested_total_amount == Decimal("2500.00")
+    assert approval.lines[0].requested_amount == Decimal("2500.00")
+    assert approval.lines[0].description == "Taxi"
+
+
 @pytest.mark.parametrize(
     ("status", "state", "label"),
     [
@@ -909,7 +956,9 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     source = Path("templates/admin/dispatch/work_order_detail.html").read_text(
         encoding="utf-8"
     )
-    expense_form = next(form for form in source.split("</form>") if "/expenses" in form)
+    expense_form = next(
+        form for form in source.split("</form>") if "data-expense-form" in form
+    )
 
     assert "components/forms/csrf_input.html" in expense_form
     assert 'name="work_order_id"' not in expense_form
@@ -925,6 +974,10 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
     assert "data-expense-total" in expense_form
     assert "md:grid-cols-2" in expense_form
     assert source.count(">New Expense Claim<") >= 2
+    assert ">Approve<" in source
+    assert ">Adjust amount<" in source
+    assert ">Approve adjusted amount<" in source
+    assert 'name="adjustment_reason"' in source
     assert 'aria-describedby="expense-creation-unavailable"' in source
     assert 'id="expense-creation-unavailable"' in source
     assert (

@@ -18,6 +18,7 @@ from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.ai_intake import (
@@ -3096,6 +3097,12 @@ def process_ready_sessions(
                     processed += 1
                 else:
                     skipped += 1
+            except SQLAlchemyError:
+                # Database failures invalidate the owner transaction. They cannot
+                # be converted into a per-session AI failure because the public
+                # command boundary must own rollback and the task adapter must
+                # retain the original retry classification.
+                raise
             except Exception:
                 session.state = "failed"
                 session.completed_at = datetime.now(UTC)

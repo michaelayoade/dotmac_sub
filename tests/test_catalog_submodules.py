@@ -29,6 +29,7 @@ from app.models.catalog import (
     ProrationPolicy,
     ServiceType,
     SubscriptionStatus,
+    UsageAllowanceResetBasis,
 )
 from app.schemas.catalog import (
     AccessCredentialCreate,
@@ -675,6 +676,31 @@ class TestUsageAllowances:
         )
         assert ua.id is not None
         assert ua.included_gb == 100
+
+    def test_create_renewal_cycle_allowance(self, db_session):
+        ua = catalog_service.usage_allowances.create(
+            db_session,
+            UsageAllowanceCreate(
+                name="100GB / 30 days",
+                included_gb=100,
+                reset_basis=UsageAllowanceResetBasis.renewal_cycle,
+                validity_days=30,
+                rollover_enabled=True,
+            ),
+        )
+
+        assert ua.reset_basis is UsageAllowanceResetBasis.renewal_cycle
+        assert ua.validity_days == 30
+        assert ua.rollover_enabled is True
+        assert ua.rollover_validity_cycles == 1
+
+    def test_renewal_cycle_requires_validity_days(self):
+        with pytest.raises(ValueError, match="validity_days"):
+            UsageAllowanceCreate(
+                name="Missing validity",
+                included_gb=100,
+                reset_basis=UsageAllowanceResetBasis.renewal_cycle,
+            )
 
     def test_get_usage_allowance(self, db_session):
         ua = catalog_service.usage_allowances.create(

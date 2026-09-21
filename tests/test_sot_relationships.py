@@ -538,6 +538,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.subscription_billing_grants",
         "financial.subscription_billing_treatments",
         "events.dispatcher",
+        "service_intent.catalog_policy",
     )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
         "control.settings_spec",
@@ -612,6 +613,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.accounts",
         "access.subscription_lifecycle",
         "financial.billing_profile",
+        "financial.customer_chargeability",
         "financial.invoices",
         "financial.payments",
         "financial.subscription_billing_treatments",

@@ -120,6 +120,15 @@ class BackofficeExpensePaymentRecoveryStaging:
 
 
 @dataclass(frozen=True, slots=True)
+class BackofficeExpenseSubmissionRetryStaging:
+    """Provider-neutral evidence for retrying one submitted expense."""
+
+    event_id: UUID
+    idempotency_key: str
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class BackofficeExpensePaymentRecoveryView:
     """Provider-neutral evidence for one payment-delivery recovery check."""
 
@@ -370,7 +379,7 @@ def get_expense_decision_delivery(
         .all()
     )
     accepted_actions = (
-        {"approve", "release_approved_v2", "expense_approve_v3"}
+        {"approve", "release_approved_v2", "expense_approve_v3", "expense_approve_v4"}
         if action == "approve"
         else {"reject", "expense_reject_v3"}
     )
@@ -498,7 +507,7 @@ def enqueue_expense_decision(
         db,
         request,
         action=(
-            ExpenseErpAction.APPROVE_V3
+            ExpenseErpAction.APPROVE_V4
             if action == "approve"
             else ExpenseErpAction.REJECT_V3
         ),
@@ -661,6 +670,60 @@ def requeue_expense_payment_delivery(
     return BackofficeExpensePaymentRecoveryStaging(
         event_id=event.id,
         idempotency_key=event.idempotency_key,
+    )
+
+
+def requeue_expense_submission_delivery(
+    db: Session,
+    *,
+    event_id: UUID,
+) -> BackofficeExpenseSubmissionRetryStaging:
+    """Requeue the existing v3 submission event with its stable key."""
+
+    from app.models.field_erp_sync import (
+        FieldErpSyncEvent,
+        FieldErpSyncFlow,
+        FieldErpSyncStatus,
+    )
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.expense_requests"):
+        raise RuntimeError("Expense submission retry requires the expense owner")
+    event = (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.id == event_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if (
+        event is None
+        or event.flow != FieldErpSyncFlow.expense_claim.value
+        or event.entity_type != "field_expense_request"
+        or str((event.payload or {}).get("_expense_action")) != "expense_submit_v3"
+    ):
+        raise BackofficeUnavailableError(
+            "The expense submission delivery is not recoverable"
+        )
+    if event.status in {
+        FieldErpSyncStatus.pending.value,
+        FieldErpSyncStatus.sent.value,
+        FieldErpSyncStatus.accepted.value,
+    }:
+        return BackofficeExpenseSubmissionRetryStaging(
+            event_id=event.id,
+            idempotency_key=event.idempotency_key,
+            replayed=True,
+        )
+    if event.status != FieldErpSyncStatus.dead.value:
+        raise BackofficeUnavailableError(
+            "The expense submission delivery is not recoverable"
+        )
+    event.status = FieldErpSyncStatus.pending.value
+    db.flush()
+    return BackofficeExpenseSubmissionRetryStaging(
+        event_id=event.id,
+        idempotency_key=event.idempotency_key,
+        replayed=False,
     )
 
 

@@ -12,9 +12,11 @@ test_fup_evaluate_commits.py): the tasks use the production ``SessionLocal`` +
 ``commit()``, which the rollback-isolated ``db_session`` fixture can't host.
 """
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from app.models.fup_state import FupActionStatus
 from tests.fup_helpers import execute_owner_command_for_test
 
 
@@ -128,6 +130,55 @@ def test_reduce_speed_with_profile_still_notifies():
     pending_arg = notif_mock.call_args[0][1]
     assert len(pending_arg) == 1
     assert pending_arg[0]["kind"] == "throttled"
+
+
+def test_new_renewal_bucket_lifts_old_cycle_throttle():
+    from app.services.fup_enforcement import (
+        EvaluateFupSubscriptionCommand,
+        _evaluate_subscription,
+    )
+
+    evaluated_at = datetime(2026, 9, 14, 12, tzinfo=UTC)
+    sub = _sub()
+    state = MagicMock(
+        action_status=FupActionStatus.throttled,
+        last_evaluated_at=evaluated_at - timedelta(minutes=1),
+        cap_resets_at=evaluated_at + timedelta(days=16),
+    )
+    bucket = MagicMock(
+        period_start=evaluated_at, period_end=evaluated_at + timedelta(days=30)
+    )
+    lift = MagicMock(return_value={"lifted": True})
+
+    with (
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            return_value=sub,
+        ),
+        patch(
+            "app.services.fup_enforcement.fup_state_service.fup_state.get_for_update",
+            return_value=state,
+        ),
+        patch(
+            "app.services.fup_enforcement._current_quota_bucket",
+            return_value=bucket,
+        ),
+        patch("app.services.enforcement.lift_fup_enforcement", lift),
+    ):
+        outcome = _evaluate_subscription(
+            MagicMock(),
+            EvaluateFupSubscriptionCommand(
+                context=MagicMock(),
+                subscription_id=sub.id,
+                evaluated_at=evaluated_at,
+                warning_enabled=False,
+                warning_ratio=0.8,
+                throttle_profile_configured=False,
+            ),
+        )
+
+    assert outcome.reset == 1
+    lift.assert_called_once()
 
 
 def _run_safety_net(*, lift_results):

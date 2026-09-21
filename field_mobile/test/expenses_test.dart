@@ -350,6 +350,31 @@ void main() {
     expect(request.status, 'canceled');
   });
 
+  test('retrySubmission requeues the existing ERP delivery', () async {
+    adapter.on(
+      'POST',
+      '/api/v1/field/expense-requests/exp-1/retry-delivery',
+      (_) => (
+        200,
+        {
+          'id': 'exp-1',
+          'erp_sync_status': 'pending',
+          'erp_sync_event_id': 'event-1',
+          'replayed': false,
+        },
+      ),
+    );
+
+    final result = await container
+        .read(expensesRepositoryProvider)
+        .retrySubmission('exp-1');
+
+    expect(result.id, 'exp-1');
+    expect(result.erpSyncStatus, 'pending');
+    expect(result.eventId, 'event-1');
+    expect(result.replayed, isFalse);
+  });
+
   test('fetchCategories reads a bare category list', () async {
     adapter.on('GET', '/api/v1/field/expense-requests/categories', (_) {
       return (
@@ -490,7 +515,7 @@ void main() {
     'uploadReceipt posts multipart receipt and returns its typed result',
     () async {
       final dir = await io.Directory.systemTemp.createTemp('receipt-test');
-      final file = io.File('${dir.path}/receipt.jpg');
+      final file = io.File('${dir.path}/receipt.png');
       await file.writeAsBytes([0xff, 0xd8, 0xff, 0xd9]);
       addTearDown(() => dir.delete(recursive: true));
 
@@ -509,10 +534,13 @@ void main() {
           isTrue,
         );
         expect(form.files.single.key, 'file');
+        expect(form.files.single.value.filename, 'receipt.jpg');
+        expect(form.files.single.value.contentType.toString(), 'image/jpeg');
         return (
           201,
           {
             'id': 'attachment-1',
+            'file_name': 'receipt.jpg',
             'download_path': '/api/v1/field/attachments/attachment-1/content',
           },
         );
@@ -523,7 +551,7 @@ void main() {
           .uploadReceipt(
             workOrderId: 'wo-1',
             filePath: file.path,
-            fileName: 'receipt.jpg',
+            fileName: 'receipt.png',
             clientRef: 'ref-1',
           );
 
@@ -532,6 +560,7 @@ void main() {
         result.downloadPath,
         '/api/v1/field/attachments/attachment-1/content',
       );
+      expect(result.fileName, 'receipt.jpg');
     },
   );
 
@@ -672,6 +701,30 @@ void main() {
 
     expect(request.displayNumber, 'abcdef12');
     expect(request.totalAmount, 15.0);
+  });
+
+  test('ExpenseRequest shows ERP delivery state for submitted requests', () {
+    final pending = ExpenseRequest.fromJson({
+      'id': 'exp-pending',
+      'status': 'submitted',
+      'erp_sync_status': 'pending',
+    });
+    final failed = ExpenseRequest.fromJson({
+      'id': 'exp-failed',
+      'status': 'submitted',
+      'erp_sync_status': 'dead',
+    });
+    final accepted = ExpenseRequest.fromJson({
+      'id': 'exp-accepted',
+      'status': 'submitted',
+      'erp_sync_status': 'accepted',
+    });
+
+    expect(pending.displayStatus, 'submitting to ERP');
+    expect(pending.isErpSubmissionPending, isTrue);
+    expect(failed.displayStatus, 'submission failed');
+    expect(failed.hasErpSubmissionFailed, isTrue);
+    expect(accepted.displayStatus, 'submitted');
   });
 
   testWidgets('expenses screen lists submitted and rejected requests', (
@@ -830,6 +883,21 @@ void main() {
       'GET',
       '/api/v1/field/expense-requests',
       (_) => (200, {'items': <Object>[]}),
+    );
+    adapter.on(
+      'GET',
+      '/api/v1/field/expense-requests/exp-9',
+      (_) => (
+        200,
+        {
+          'id': 'exp-9',
+          'number': 'EXP-0009',
+          'status': 'submitted',
+          'purpose': 'Site logistics',
+          'total_amount': '2500.00',
+          'erp_sync_status': 'accepted',
+        },
+      ),
     );
 
     final router = GoRouter(
