@@ -43,6 +43,7 @@ from app.models.catalog import (
     ServiceType,
     SubscriptionStatus,
     SuspensionAction,
+    UsageAllowanceResetBasis,
 )
 from app.schemas.status_presentation import StatusPresentation
 
@@ -55,6 +56,10 @@ class UsageAllowanceRead(BaseModel):
     included_gb: int | None = None
     overage_rate: Decimal | None = None
     overage_cap_gb: int | None = None
+    reset_basis: UsageAllowanceResetBasis
+    validity_days: int | None = None
+    rollover_enabled: bool
+    rollover_validity_cycles: int
     is_active: bool
 
 
@@ -63,7 +68,20 @@ class UsageAllowanceCreate(BaseModel):
     included_gb: int | None = Field(default=None, ge=0)
     overage_rate: Decimal | None = Field(default=None, ge=0)
     overage_cap_gb: int | None = Field(default=None, ge=0)
+    reset_basis: UsageAllowanceResetBasis = UsageAllowanceResetBasis.calendar_month
+    validity_days: int | None = Field(default=None, ge=1, le=366)
+    rollover_enabled: bool = False
+    rollover_validity_cycles: int = Field(default=1, ge=1, le=1)
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_cycle_policy(self):
+        if (
+            self.reset_basis is UsageAllowanceResetBasis.renewal_cycle
+            and self.validity_days is None
+        ):
+            raise ValueError("validity_days is required for renewal-cycle allowances")
+        return self
 
 
 class UsageAllowanceUpdate(BaseModel):
@@ -71,7 +89,20 @@ class UsageAllowanceUpdate(BaseModel):
     included_gb: int | None = Field(default=None, ge=0)
     overage_rate: Decimal | None = Field(default=None, ge=0)
     overage_cap_gb: int | None = Field(default=None, ge=0)
+    reset_basis: UsageAllowanceResetBasis | None = None
+    validity_days: int | None = Field(default=None, ge=1, le=366)
+    rollover_enabled: bool | None = None
+    rollover_validity_cycles: int | None = Field(default=None, ge=1, le=1)
     is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_cycle_policy(self):
+        if (
+            self.reset_basis is UsageAllowanceResetBasis.renewal_cycle
+            and self.validity_days is None
+        ):
+            raise ValueError("validity_days is required when selecting renewal-cycle")
+        return self
 
 
 class SlaProfileRead(BaseModel):

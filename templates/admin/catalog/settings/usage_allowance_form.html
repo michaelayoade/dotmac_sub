@@ -85,6 +85,35 @@
                     </div>
                 </div>
 
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="reset_basis" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reset Basis</label>
+                        <select name="reset_basis" id="reset_basis"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="calendar_month" {{ 'selected' if allowance.reset_basis == 'calendar_month' else '' }}>Calendar month</option>
+                            <option value="renewal_cycle" {{ 'selected' if allowance.reset_basis == 'renewal_cycle' else '' }}>Subscription renewal cycle</option>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use calendar month for monthly FUP/unlimited products and renewal cycle for capped data plans.</p>
+                    </div>
+                    <div>
+                        <label for="validity_days" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Validity (days)</label>
+                        <input type="number" name="validity_days" id="validity_days" min="1" max="366"
+                               value="{{ allowance.validity_days }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required for renewal-cycle plans; use 30 for the current capped offers.</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="rollover_enabled" value="true" {{ 'checked' if allowance.rollover_enabled else '' }}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Carry unused fresh base data into the next cycle</span>
+                    </label>
+                    <input type="hidden" name="rollover_validity_cycles" value="1">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rollover is consumed first, expires at the end of the next cycle, and can never roll over again.</p>
+                </div>
+
                 <!-- Status -->
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>

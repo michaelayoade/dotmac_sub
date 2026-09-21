@@ -14,7 +14,13 @@ from sqlalchemy import and_, bindparam, create_engine, func, or_, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus, TaxApplication
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
+    TaxApplication,
+)
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -24,6 +30,7 @@ from app.models.catalog import (
     SubscriptionAddOn,
     SubscriptionStatus,
     UsageAllowance,
+    UsageAllowanceResetBasis,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusClient, RadiusUser
@@ -31,6 +38,7 @@ from app.models.subscriber import Subscriber
 from app.models.usage import (
     AccountingStatus,
     QuotaBucket,
+    QuotaSessionBaseline,
     RadiusAccountingSession,
     UsageCharge,
     UsageChargeStatus,
@@ -117,6 +125,10 @@ def _round_bucket_gb(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _period_bounds(payload: UsageRatingRunRequest) -> tuple[datetime, datetime]:
     now = datetime.now(UTC)
     if payload.period_start and payload.period_end:
@@ -137,13 +149,67 @@ def _resolve_allowance(subscription: Subscription) -> UsageAllowance | None:
     return None
 
 
-def _period_bounds_for_record(recorded_at: datetime) -> tuple[datetime, datetime]:
+def _calendar_month_bounds(recorded_at: datetime) -> tuple[datetime, datetime]:
+    recorded_at = _as_utc(recorded_at)
     start = datetime(recorded_at.year, recorded_at.month, 1, tzinfo=UTC)
     if recorded_at.month == 12:
         end = datetime(recorded_at.year + 1, 1, 1, tzinfo=UTC)
     else:
         end = datetime(recorded_at.year, recorded_at.month + 1, 1, tzinfo=UTC)
     return start, end
+
+
+def _period_bounds_for_record(
+    recorded_at: datetime,
+    *,
+    db: Session | None = None,
+    subscription: Subscription | None = None,
+    allowance: UsageAllowance | None = None,
+) -> tuple[datetime, datetime]:
+    """Resolve the quota interval from the allowance's catalogue policy.
+
+    Calendar-month remains the safe default for legacy and FUP/unlimited
+    products. A renewal-cycle allowance follows the latest funded entitlement
+    containing the observation; this is what makes an early capped renewal
+    begin a fresh validity window rather than reuse the old calendar bucket.
+    """
+
+    if (
+        allowance is None
+        or allowance.reset_basis is not UsageAllowanceResetBasis.renewal_cycle
+        or db is None
+        or subscription is None
+    ):
+        return _calendar_month_bounds(recorded_at)
+
+    observed_at = _as_utc(recorded_at)
+    entitlement = (
+        db.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.subscription_id == subscription.id)
+        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+        .filter(ServiceEntitlement.starts_at <= observed_at)
+        .filter(ServiceEntitlement.ends_at > observed_at)
+        .order_by(ServiceEntitlement.starts_at.desc())
+        .first()
+    )
+    if entitlement is not None:
+        return (
+            _as_utc(entitlement.starts_at),
+            _as_utc(entitlement.ends_at),
+        )
+
+    if allowance.validity_days is None:
+        raise ValueError(
+            "renewal-cycle usage allowance is missing required validity_days"
+        )
+    validity_days = int(allowance.validity_days)
+    anchor = subscription.start_at or observed_at
+    anchor = _as_utc(anchor)
+    if observed_at < anchor:
+        return anchor, anchor + timedelta(days=validity_days)
+    elapsed_cycles = int((observed_at - anchor) // timedelta(days=validity_days))
+    start = anchor + timedelta(days=elapsed_cycles * validity_days)
+    return start, start + timedelta(days=validity_days)
 
 
 def _normalize_mac_address(value: str | None) -> str | None:
@@ -919,7 +985,13 @@ def _parse_warning_thresholds(value: str | None) -> list[Decimal]:
 def _resolve_or_create_quota_bucket(
     db: Session, subscription: Subscription, recorded_at: datetime
 ) -> QuotaBucket:
-    period_start, period_end = _period_bounds_for_record(recorded_at)
+    allowance = _resolve_allowance(subscription)
+    period_start, period_end = _period_bounds_for_record(
+        recorded_at,
+        db=db,
+        subscription=subscription,
+        allowance=allowance,
+    )
     bucket = (
         db.query(QuotaBucket)
         .filter(QuotaBucket.subscription_id == subscription.id)
@@ -928,26 +1000,30 @@ def _resolve_or_create_quota_bucket(
         .first()
     )
     if bucket:
+        _adopt_existing_renewal_bucket(db, subscription, allowance, bucket)
         return bucket
-    allowance = _resolve_allowance(subscription)
     included_gb, _ = _prorate_allowance(
         allowance, subscription, period_start, period_end
     )
     rounded_included = _round_bucket_gb(included_gb)
-    rollover_gb = _carry_forward_rollover(
+    rollover_gb, rollover_origin_bucket_id = _carry_forward_rollover(
         db, subscription, allowance, period_start, rounded_included
     )
     bucket = QuotaBucket(
         subscription_id=subscription.id,
+        usage_allowance_id=allowance.id if allowance is not None else None,
+        rollover_origin_bucket_id=rollover_origin_bucket_id,
         period_start=period_start,
         period_end=period_end,
         included_gb=rounded_included,
         used_gb=Decimal("0.00"),
+        usage_floor_gb=Decimal("0.00"),
         rollover_gb=rollover_gb,
         overage_gb=Decimal("0.00"),
     )
     db.add(bucket)
     db.flush()
+    _capture_crossing_session_baselines(db, subscription, bucket)
     return bucket
 
 
@@ -957,28 +1033,167 @@ def _carry_forward_rollover(
     allowance,
     period_start: datetime,
     included_gb: Decimal,
-) -> Decimal:
-    """Unused allowance from the immediately-preceding period, when the plan has
-    rollover. Capped at one period's included_gb so it can't accumulate forever."""
-    if allowance is None or not getattr(allowance, "rollover_enabled", False):
-        return Decimal("0.00")
+) -> tuple[Decimal, uuid.UUID | None]:
+    """Carry only unused fresh base data into the immediately next cycle.
+
+    Consumption order is rollover, then expiring top-ups, then fresh base.
+    Prior rollover is therefore never re-rolled, even if it was unused.
+    """
+    if (
+        allowance is None
+        or not allowance.rollover_enabled
+        or allowance.rollover_validity_cycles != 1
+    ):
+        return Decimal("0.00"), None
     prev = (
         db.query(QuotaBucket)
         .filter(QuotaBucket.subscription_id == subscription.id)
-        .filter(QuotaBucket.period_end == period_start)
+        .filter(QuotaBucket.period_start < period_start)
+        .filter(QuotaBucket.period_end >= period_start)
+        .filter(
+            or_(
+                QuotaBucket.usage_allowance_id == allowance.id,
+                and_(
+                    QuotaBucket.usage_allowance_id.is_(None),
+                    QuotaBucket.period_end == period_start,
+                ),
+            )
+        )
+        .order_by(QuotaBucket.period_start.desc())
         .first()
     )
     if prev is None:
-        return Decimal("0.00")
-    available = (
-        Decimal(str(prev.included_gb or 0))
-        + Decimal(str(prev.rollover_gb or 0))
-        - Decimal(str(prev.used_gb or 0))
+        return Decimal("0.00"), None
+    used_after_expiring_grants = max(
+        Decimal(str(prev.used_gb or 0))
+        - Decimal(str(prev.rollover_gb or 0))
+        - Decimal(str(prev.topup_gb or 0)),
+        Decimal("0.00"),
     )
-    if available <= 0:
-        return Decimal("0.00")
-    capped = min(available, included_gb) if included_gb > 0 else available
-    return _round_bucket_gb(capped)
+    unused_fresh_base = max(
+        Decimal(str(prev.included_gb or 0)) - used_after_expiring_grants,
+        Decimal("0.00"),
+    )
+    if unused_fresh_base <= 0:
+        return Decimal("0.00"), None
+    capped = (
+        min(unused_fresh_base, included_gb) if included_gb > 0 else unused_fresh_base
+    )
+    return _round_bucket_gb(capped), prev.id
+
+
+def _capture_crossing_session_baselines(
+    db: Session,
+    subscription: Subscription,
+    bucket: QuotaBucket,
+    *,
+    include_started_within: bool = False,
+) -> None:
+    """Snapshot live counters for sessions that cross a new cycle boundary."""
+
+    sessions = (
+        db.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.subscription_id == subscription.id)
+        .filter(RadiusAccountingSession.session_start < bucket.period_end)
+        .filter(
+            or_(
+                RadiusAccountingSession.session_end.is_(None),
+                RadiusAccountingSession.session_end > bucket.period_start,
+            )
+        )
+    )
+    if not include_started_within:
+        sessions = sessions.filter(
+            RadiusAccountingSession.session_start < bucket.period_start
+        )
+    sessions = sessions.all()
+    for session in sessions:
+        db.add(
+            QuotaSessionBaseline(
+                quota_bucket_id=bucket.id,
+                radius_accounting_session_id=session.id,
+                input_octets=int(session.input_octets or 0),
+                output_octets=int(session.output_octets or 0),
+                captured_at=datetime.now(UTC),
+            )
+        )
+    if sessions:
+        db.flush()
+
+
+def _adopt_existing_renewal_bucket(
+    db: Session,
+    subscription: Subscription,
+    allowance: UsageAllowance | None,
+    bucket: QuotaBucket,
+) -> None:
+    """Attach policy and a forward-only counter baseline to a cutover bucket."""
+
+    if (
+        allowance is None
+        or allowance.reset_basis is not UsageAllowanceResetBasis.renewal_cycle
+        or bucket.usage_allowance_id is not None
+    ):
+        return
+    bucket.usage_allowance_id = allowance.id
+    bucket.usage_floor_gb = _round_bucket_gb(Decimal(str(bucket.used_gb or 0)))
+    _capture_crossing_session_baselines(
+        db,
+        subscription,
+        bucket,
+        include_started_within=True,
+    )
+    db.flush()
+
+
+def initialize_renewal_quota_cycle(
+    db: Session,
+    subscription: Subscription,
+    starts_at: datetime,
+) -> QuotaBucket | None:
+    """Create the funded cycle and open-session baselines inside renewal commit."""
+
+    allowance = _resolve_allowance(subscription)
+    if (
+        allowance is None
+        or allowance.reset_basis is not UsageAllowanceResetBasis.renewal_cycle
+    ):
+        return None
+    return _resolve_or_create_quota_bucket(db, subscription, starts_at)
+
+
+def _bucket_session_octets(db: Session, bucket: QuotaBucket) -> int:
+    sessions = (
+        db.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.subscription_id == bucket.subscription_id)
+        .filter(RadiusAccountingSession.session_start < bucket.period_end)
+        .filter(
+            or_(
+                RadiusAccountingSession.session_end.is_(None),
+                RadiusAccountingSession.session_end > bucket.period_start,
+            )
+        )
+        .all()
+    )
+    baselines = {
+        row.radius_accounting_session_id: row
+        for row in db.query(QuotaSessionBaseline)
+        .filter(QuotaSessionBaseline.quota_bucket_id == bucket.id)
+        .all()
+    }
+    total = 0
+    for session in sessions:
+        current = int(session.input_octets or 0) + int(session.output_octets or 0)
+        baseline = baselines.get(session.id)
+        if baseline is not None:
+            initial = int(baseline.input_octets) + int(baseline.output_octets)
+            total += max(current - initial, 0)
+            continue
+        if session.session_start and _as_utc(session.session_start) >= _as_utc(
+            bucket.period_start
+        ):
+            total += current
+    return total
 
 
 _GB_BYTES = 1024**3
@@ -1009,20 +1224,14 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         if _resolve_allowance(sub) is None:
             continue
         bucket = _resolve_or_create_quota_bucket(db, sub, now)
-        octets = (
-            db.query(
-                func.coalesce(func.sum(RadiusAccountingSession.input_octets), 0)
-                + func.coalesce(func.sum(RadiusAccountingSession.output_octets), 0)
-            )
-            .filter(RadiusAccountingSession.subscription_id == sub.id)
-            .filter(RadiusAccountingSession.session_start >= bucket.period_start)
-            .filter(RadiusAccountingSession.session_start < bucket.period_end)
-            .scalar()
-        ) or 0
+        octets = _bucket_session_octets(db, bucket)
         previous_used_gb = Decimal(str(bucket.used_gb or 0))
         previous_topup_gb = Decimal(str(bucket.topup_gb or 0))
         previous_overage_gb = Decimal(str(bucket.overage_gb or 0))
-        used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
+        used_gb = _round_bucket_gb(
+            Decimal(str(bucket.usage_floor_gb or 0))
+            + Decimal(int(octets)) / Decimal(_GB_BYTES)
+        )
         bucket.used_gb = used_gb
         # Refresh top-up from still-valid purchases so expired ones drop out.
         bucket.topup_gb = _round_bucket_gb(_active_topup_gb(db, sub, now))

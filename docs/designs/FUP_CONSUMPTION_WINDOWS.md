@@ -19,8 +19,9 @@ behind the *same* reader.
 
 ### Approach A — semantic reader (ships first, makes daily/weekly work)
 - **A1** `fup_window_bounds(period, now, tz)` → aligned `[start, end)` + `period_key` +
-  tz. daily/weekly align to subscriber-local midnight/Monday; monthly keeps the
-  UTC calendar month (matches QuotaBucket; existing rules unchanged).
+  tz. daily/weekly align to subscriber-local midnight/Monday; monthly uses the
+  authoritative QuotaBucket interval. Calendar allowances remain UTC-month
+  aligned while capped renewal-cycle allowances use their funded interval.
 - **A2** `get_fup_usage_gb(db, subscription, period, now) -> FupUsageWindow`
   (`used_gb`, window bounds, `source`, `is_authoritative`). monthly → QuotaBucket;
   daily/weekly → integrate `BandwidthSample`/VictoriaMetrics over the window

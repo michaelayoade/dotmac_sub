@@ -68,6 +68,13 @@ class BillingCycle(enum.Enum):
     annual = "annual"
 
 
+class UsageAllowanceResetBasis(enum.Enum):
+    """Authority that opens and closes a usage allowance bucket."""
+
+    calendar_month = "calendar_month"
+    renewal_cycle = "renewal_cycle"
+
+
 def billing_cycle_noun(cycle: "BillingCycle | None") -> str:
     """Human cadence noun for invoice line descriptions (e.g. 'quarterly')."""
     return {
@@ -438,6 +445,16 @@ class PolicyDunningStep(Base):
 
 class UsageAllowance(Base):
     __tablename__ = "usage_allowances"
+    __table_args__ = (
+        CheckConstraint(
+            "reset_basis != 'renewal_cycle' OR validity_days IS NOT NULL",
+            name="ck_usage_allowances_renewal_validity",
+        ),
+        CheckConstraint(
+            "rollover_validity_cycles = 1",
+            name="ck_usage_allowances_rollover_one_cycle",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -446,9 +463,20 @@ class UsageAllowance(Base):
     included_gb: Mapped[int | None] = mapped_column(Integer)
     overage_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     overage_cap_gb: Mapped[int | None] = mapped_column(Integer)
+    reset_basis: Mapped[UsageAllowanceResetBasis] = mapped_column(
+        Enum(
+            UsageAllowanceResetBasis,
+            name="usage_allowance_reset_basis",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        default=UsageAllowanceResetBasis.calendar_month,
+        nullable=False,
+    )
+    validity_days: Mapped[int | None] = mapped_column(Integer)
     # Unused allowance carries into next period's quota bucket (capped at one
     # period's included_gb). Sourced from imported fup_limits.rollover_data.
     rollover_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    rollover_validity_cycles: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

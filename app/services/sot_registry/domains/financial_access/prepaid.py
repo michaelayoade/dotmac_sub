@@ -3121,6 +3121,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.subscription_billing_grants",
             "financial.subscription_billing_treatments",
             "events.dispatcher",
+            "service_intent.catalog_policy",
         ),
         notes=(
             "A payment receipt proves cash settlement, not service duration. "
@@ -3162,10 +3163,12 @@ SERVICES: tuple[SOTService, ...] = (
             "retraction requires an explicit subscription-scoped preview, and "
             "applied service-extension evidence quarantines it so another "
             "owner's grant cannot be clawed back. Other evidence-free rows "
-            "remain review stock. A settlement period starts after exact "
-            "uninterrupted entitlement or applied-extension coverage containing "
-            "the payment instant. Without exact coverage, a lapsed period starts "
-            "at Africa/Lagos local midnight. The typed cadence persists UTC "
+            "remain review stock. A calendar-cycle settlement period starts "
+            "after exact uninterrupted entitlement or applied-extension coverage "
+            "containing the payment instant. Without exact coverage, a lapsed "
+            "calendar period starts at Africa/Lagos local midnight. A catalogue "
+            "renewal-cycle allowance instead starts at the exact payment instant "
+            "for its required validity_days. The typed cadence persists UTC "
             "boundaries; mutable anchors and canceled or reversed extensions do "
             "not defer the period. A fully funded renewal creates and settles one exact "
             "prepaid invoice through invoice, payment-credit, and reviewed-opening "
@@ -3221,6 +3224,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "settled payment evidence",
                         "prepaid subscription and renewal terms",
+                        "usage allowance reset policy",
                         "funded service entitlement evidence",
                         "applied service-extension coverage evidence",
                     ),
@@ -3355,6 +3359,15 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="usage allowance reset policy",
+                    owner="service_intent.catalog_policy",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "UsageAllowance reset_basis and required validity_days "
+                        "for the subscription's exact offer or offer version"
+                    ),
+                ),
+                AuthorityInput(
                     name="effective compatibility tax treatment",
                     owner="financial.billing_tax_resolution",
                     kind=AuthorityKind.DERIVED_PROJECTION,
@@ -3464,6 +3477,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_service_renewals.invalid_effective_at",
                     "financial.prepaid_service_renewals.invalid_period",
                     "financial.prepaid_service_renewals.invalid_preview_fingerprint",
+                    "financial.prepaid_service_renewals.invalid_usage_allowance_policy",
                     "financial.prepaid_service_renewals.missing_anchor",
                     "financial.prepaid_service_renewals.missing_evidence_ref",
                     "financial.prepaid_service_renewals.missing_price",
@@ -3573,6 +3587,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                 "docs/designs/FUNDED_PREPAID_RENEWAL_INVOICING.md",
+                "docs/designs/USAGE_ALLOWANCE_RESET_CYCLES.md",
                 "docs/runbooks/LEGACY_PREPAID_RENEWAL_TAX_INVOICE_CORRECTION.md",
                 "docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md",
             ),

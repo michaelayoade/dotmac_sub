@@ -289,6 +289,7 @@ def build_usage_by_period(
     offer_id: str,
     now: datetime,
     monthly_used_gb: float,
+    monthly_window: tuple[datetime, datetime] | None = None,
 ) -> dict[str, FupUsageWindow]:
     """Usage per consumption period needed by an offer's active FUP rules.
 
@@ -308,9 +309,19 @@ def build_usage_by_period(
     out: dict[str, FupUsageWindow] = {}
     for p in periods:
         if p == "monthly":
+            window = fup_window_bounds("monthly", now)
+            if monthly_window is not None:
+                start, end = monthly_window
+                window = FupWindow(
+                    period="monthly",
+                    start=start,
+                    end=end,
+                    period_key=f"{start.isoformat()}/{end.isoformat()}",
+                    timezone="UTC",
+                )
             out["monthly"] = FupUsageWindow(
                 used_gb=float(monthly_used_gb),
-                window=fup_window_bounds("monthly", now),  # monthly ignores tz
+                window=window,
                 source="quota_bucket",
                 is_authoritative=True,
             )
