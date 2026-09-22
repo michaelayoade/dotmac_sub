@@ -13,6 +13,7 @@ class _CatalogGridParser(HTMLParser):
         self.inside_results = False
         self.depth = 0
         self.search_outside_results = False
+        self.sort_state_inside_results = False
         self.result_controls: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -25,6 +26,8 @@ class _CatalogGridParser(HTMLParser):
         if attributes.get("name") == "search":
             self.search_outside_results = not self.inside_results
             self.result_controls.append(attributes)
+        elif attributes.get("name") in {"sort", "dir"}:
+            self.sort_state_inside_results = self.inside_results
         elif self.inside_results and "hx-get" in attributes:
             self.result_controls.append(attributes)
 
@@ -50,6 +53,7 @@ def test_catalog_search_swaps_results_without_replacing_the_input() -> None:
     parser.feed(html)
 
     assert parser.search_outside_results
+    assert parser.sort_state_inside_results
     assert len(parser.result_controls) >= 4
     assert all(
         control["hx-target"] == "#catalog-grid-results"

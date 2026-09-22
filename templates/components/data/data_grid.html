@@ -215,11 +215,11 @@
         </div>
     </div>
 
+    {% if stable_search %}<div id="{{ results_tgt }}" class="space-y-4">{% endif %}
     {# Hidden sort state for HTMX includes #}
     <input type="hidden" name="sort" value="{{ current_sort }}" />
     <input type="hidden" name="dir" value="{{ current_dir }}" />
 
-    {% if stable_search %}<div id="{{ results_tgt }}" class="space-y-4">{% endif %}
     {% if stable_search and show_count and total %}
     <p class="text-sm text-slate-500 dark:text-slate-400">
         <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
