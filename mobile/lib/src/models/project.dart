@@ -108,6 +108,9 @@ class ProjectItem {
   final String status;
   final StatusPresentation statusPresentation;
   final String? projectType;
+  bool get isRelocation =>
+      projectType == 'fiber_optics_relocation' ||
+      projectType == 'air_fiber_relocation';
   final int progressPct;
   final String experienceState;
   final String? currentStage;

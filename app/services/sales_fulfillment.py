@@ -134,7 +134,12 @@ def ensure_implementation_scope(
             quote_id=order.quote_id,
             subscriber_id=order.subscriber_id,
             lead_id=lead_id,
-            name=f"Installation — {order.order_number or order.id}",
+            name=(
+                f"Relocation — {order.order_number or order.id}"
+                if order.quote is not None
+                and str(order.quote.project_type or "").endswith("_relocation")
+                else f"Installation — {order.order_number or order.id}"
+            ),
             project_type=_project_type(db, order),
             customer_address=_customer_address(order, subscriber),
             region=service_address_service.address_parts(subscriber).region,

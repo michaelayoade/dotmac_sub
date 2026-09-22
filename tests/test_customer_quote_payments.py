@@ -98,6 +98,24 @@ def test_quote_payment_get_query_is_side_effect_free_and_server_priced(
     assert db_session.query(TopupIntent).count() == intent_count
 
 
+def test_relocation_quote_cannot_enter_installation_deposit_path(
+    db_session, subscriber
+):
+    quote = _quote(
+        db_session,
+        subscriber,
+        project_type="fiber_optics_relocation",
+        metadata_={
+            "deposit_percent": 50,
+            "service_option": "fiber_to_fiber_relocation",
+        },
+    )
+
+    with pytest.raises(quote_deposits.QuoteDepositError) as exc:
+        quote_deposits.quote_payment_page(db_session, _query(quote, subscriber))
+    assert exc.value.code == "sales.quote_deposits.status_ineligible"
+
+
 def test_direct_payment_commands_cannot_bypass_pending_staff_review(
     db_session, subscriber, monkeypatch
 ):

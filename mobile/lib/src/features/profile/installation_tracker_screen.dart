@@ -15,7 +15,7 @@ class InstallationTrackerScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final projects = ref.watch(projectsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Installation Progress')),
+      appBar: AppBar(title: const Text('Service progress')),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(projectsProvider);
@@ -33,7 +33,7 @@ class InstallationTrackerScreen extends ConsumerWidget {
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 32),
                       child: Text(
-                        'No installations in progress. Once your order is '
+                        'No installations or relocations in progress. Once your order is '
                         'scheduled, live progress shows here.',
                         textAlign: TextAlign.center,
                       ),

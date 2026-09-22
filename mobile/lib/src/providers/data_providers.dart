@@ -14,6 +14,7 @@ import '../models/payment_method.dart';
 import '../models/payment_proof.dart';
 import '../models/session.dart';
 import '../models/page.dart';
+import '../models/plan_change.dart';
 import '../models/subscription.dart';
 import '../models/technician_location.dart';
 import '../models/ticket.dart';
@@ -57,6 +58,11 @@ final usageRepositoryProvider = Provider<UsageRepository>(
 final catalogRepositoryProvider = Provider<CatalogRepository>(
   (ref) => CatalogRepository(ref.watch(apiClientProvider).dio),
 );
+
+final relocationPlansProvider = FutureProvider.autoDispose
+    .family<List<PlanOffer>, (String, String)>((ref, key) async {
+  return ref.watch(catalogRepositoryProvider).relocationPlans(key.$1, key.$2);
+});
 
 final chatRepositoryProvider = Provider<ChatRepository>(
   (ref) => ChatRepository(ref.watch(apiClientProvider).dio),

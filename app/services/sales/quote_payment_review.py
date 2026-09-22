@@ -130,6 +130,9 @@ def quote_fingerprint(quote: Quote) -> str:
         "total": str(Decimal(quote.total or 0)),
         "expires_at": quote.expires_at.isoformat() if quote.expires_at else None,
         "install": metadata.get("install"),
+        "service_option": metadata.get("service_option"),
+        "source_subscription_id": metadata.get("source_subscription_id"),
+        "destination_offer_id": metadata.get("destination_offer_id"),
         "feasibility": metadata.get("feasibility"),
         "deposit_percent": metadata.get("deposit_percent"),
         "estimate_provisional": metadata.get("estimate_provisional"),
@@ -234,6 +237,8 @@ def _request_operation(
         )
     if quote.payment_review_status != QuotePaymentReviewStatus.pending.value:
         raise _error("review_not_pending", "This Quote is not awaiting staff review.")
+    is_relocation = str(quote.project_type or "").endswith("_relocation")
+    service_name = "relocation" if is_relocation else "installation"
     queue_staff_review_request(db, quote)
     result = communication_intents.submit(
         db,
@@ -241,11 +246,11 @@ def _request_operation(
             subscriber_id=command.subscriber_id,
             event_type=REVIEW_REQUEST_EVENT,
             category="sales",
-            subject="Your installation estimate is under review",
+            subject=f"Your {service_name} request is under review",
             body=(
-                "We received your installation request and prepared an estimate. "
-                "Our staff will review the address, feasibility, and price. We "
-                "will notify you before payment is available."
+                f"We received your {service_name} request. Our staff will review "
+                "the address, coverage, and cost. We will notify you when the "
+                "cost and deposit are ready."
             ),
             default_channels=(NotificationChannel.push, NotificationChannel.email),
             include_reseller=False,
@@ -335,6 +340,11 @@ def _notify_customer(
     if quote.subscriber_id is None:
         return
     approved = decision is QuotePaymentReviewDecision.approve
+    service_name = (
+        "relocation"
+        if str(quote.project_type or "").endswith("_relocation")
+        else "installation"
+    )
     communication_intents.submit(
         db,
         communication_intents.CommunicationIntent(
@@ -346,16 +356,21 @@ def _notify_customer(
             ),
             category="sales",
             subject=(
-                "Your installation Quote is approved"
+                f"Your {service_name} quote is approved"
                 if approved
-                else "Update on your installation Quote"
+                else f"Update on your {service_name} quote"
             ),
             body=(
-                "Your Quote has been approved. Open Get a Quote to review the "
-                "estimate and pay the deposit."
+                (
+                    "Your relocation quote has been approved. Open Request service "
+                    "to review and pay the full charge."
+                    if service_name == "relocation"
+                    else "Your installation quote has been approved. Open Request "
+                    "service to review the cost and pay the deposit."
+                )
                 if approved
-                else "Your Quote was not approved. Please contact support if you "
-                "would like help with the installation request."
+                else f"Your {service_name} quote was not approved. Please contact "
+                "support if you would like help with the request."
             ),
             default_channels=(NotificationChannel.push, NotificationChannel.email),
             include_reseller=False,
@@ -402,6 +417,21 @@ def _operation(
     ).one_or_none()
     if quote is None or not quote.is_active:
         raise _error("quote_not_found", "Quote not found.")
+    from app.models.subscription_change import SubscriptionChangeRequest
+
+    if (
+        db.scalar(
+            select(SubscriptionChangeRequest.id).where(
+                SubscriptionChangeRequest.confirmation_idempotency_key
+                == f"customer-relocation-quote:{quote.id}"
+            )
+        )
+        is not None
+    ):
+        raise _error(
+            "quote_status_invalid",
+            "A booked relocation Quote cannot be reviewed again.",
+        )
     if quote.subscriber_id is None:
         raise _error(
             "customer_required", "Only a customer-linked Quote can be approved."
@@ -424,6 +454,23 @@ def _operation(
         raise _error("reason_invalid", "Review notes cannot exceed 500 characters.")
     if command.decision is QuotePaymentReviewDecision.reject and reason is None:
         raise _error("reason_required", "Add a reason before rejecting this Quote.")
+    if command.decision is QuotePaymentReviewDecision.approve and (
+        not quote.line_items
+        or Decimal(str(quote.total or 0)) <= 0
+        or int((quote.metadata_ or {}).get("deposit_percent") or 0) <= 0
+        or (
+            str(quote.project_type or "").endswith("_relocation")
+            and int((quote.metadata_ or {}).get("deposit_percent") or 0) != 100
+        )
+    ):
+        raise _error(
+            "price_required",
+            (
+                "Set the service cost and full-charge payment policy before approval."
+                if str(quote.project_type or "").endswith("_relocation")
+                else "Set the service cost and deposit policy before approving payment."
+            ),
+        )
 
     quote_snapshot = quote_fingerprint(quote)
     projection = resolve_payment_review(quote)

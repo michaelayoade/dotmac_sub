@@ -53,6 +53,7 @@ import '../features/support/ticket_detail_screen.dart';
 import '../features/support/tickets_screen.dart';
 import '../features/service/service_tab_screen.dart';
 import '../models/subscription.dart';
+import '../models/service_request_option.dart';
 import '../providers/auth_controller.dart';
 import '../providers/impersonation.dart';
 
@@ -181,7 +182,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/quotes', builder: (_, __) => const QuotesScreen()),
       GoRoute(
         path: '/quotes/request',
-        builder: (_, __) => const QuoteRequestScreen(),
+        redirect: (_, state) =>
+            state.extra is ServiceRequestSelection ? null : '/quotes',
+        builder: (_, state) => QuoteRequestScreen(
+          selection: state.extra as ServiceRequestSelection,
+        ),
       ),
       // Account — identity & settings, reached from the header avatar
       // (AccountAvatarButton) instead of a bottom-nav tab. A top-level route

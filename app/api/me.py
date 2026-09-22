@@ -12,6 +12,7 @@ Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -98,6 +99,7 @@ from app.schemas.portal import (
     QuoteRequestCreate,
     ReferAFriendRequest,
     ReferAFriendResponse,
+    RelocationQuotePrepareResponse,
     TechnicianLocation,
     TechnicianRatingRequest,
     TechnicianRatingResponse,
@@ -656,6 +658,43 @@ def _offer_summary(offer, summary) -> PlanOfferSummary | None:
 
 
 @router.get(
+    "/subscriptions/{subscription_id}/relocation-plans",
+    response_model=list[PlanOfferSummary],
+)
+def my_relocation_plans(
+    subscription_id: UUID,
+    access_type: Literal["fiber", "fixed_wireless"],
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> list[PlanOfferSummary]:
+    """Customer-selectable destination plans for one owned active service."""
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.services.customer_portal_context import get_available_portal_offers
+    from app.services.customer_portal_flow_changes import get_offer_price_summary
+
+    account_id = require_customer_account_id(db, _customer(db, principal))
+    subscription = db.get(Subscription, subscription_id)
+    if (
+        subscription is None
+        or str(subscription.subscriber_id) != str(account_id)
+        or subscription.status is not SubscriptionStatus.active
+    ):
+        raise HTTPException(status_code=404, detail="Service not found")
+    return [
+        summary
+        for offer in get_available_portal_offers(
+            db,
+            subscription,
+            apply_reseller_availability=False,
+            require_same_plan_family=False,
+        )
+        if offer.access_type.value == access_type
+        if (summary := _offer_summary(offer, get_offer_price_summary(offer)))
+        is not None
+    ]
+
+
+@router.get(
     "/subscriptions/{subscription_id}/service-change",
     response_model=PlanChangePageResponse,
 )
@@ -681,10 +720,9 @@ def my_plan_change_options(
         ),
         available_offers=[o for o in available if o is not None],
         prepaid_funding=ctx.get("prepaid_funding"),
-        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
-        collection_blocking_balance=ctx.get(
-            "collection_blocking_balance", Decimal("0.00")
-        ),
+        postpaid_receivables=ctx.get("postpaid_receivables"),
+        collection_blocking_balance=ctx.get("collection_blocking_balance"),
+        financial_position_unavailable=ctx.get("financial_position_unavailable", False),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
         service_addresses=ctx.get("service_addresses", []),
@@ -1299,8 +1337,8 @@ def my_quotes(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status. Behind the ``quotes_native_read_enabled``
+    """The caller's self-serve service quotes, coverage and review status.
+    Approved quotes also expose the amount due. Behind the ``quotes_native_read_enabled``
     read-flip flag: OFF serves the local CRM mirror (refreshed lazily),
     ON serves sub's native ``quotes`` table — same shape either way."""
     subscriber_id = _subscriber_id(principal)
@@ -1315,8 +1353,8 @@ def my_quote_request(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Request a map-pinned installation quote. The dropped pin drives the
-    feasibility check (proximity to fiber) + estimate + deposit. Behind the
+    """Request a map-pinned installation or relocation quote. The destination
+    pin drives the relevant coverage check; staff approve pricing. Behind the
     ``quotes_native_write_enabled`` write-flip flag: OFF delegates to the
     retired mirror owner and refuses without contacting CRM; ON creates the
     quote in sub's native ``quotes`` table (no CRM link required, so
@@ -1331,8 +1369,22 @@ def my_quote_request(
             address=payload.address,
             region=payload.region,
             note=payload.note,
+            service_option=payload.service_option,
+            subscription_id=payload.subscription_id,
+            destination_offer_id=payload.destination_offer_id,
         )
-        return selfserve_service.build_portal_quote_payload(db, quote)
+        return selfserve_service.build_portal_quote_payload(
+            db, quote, customer_view=True
+        )
+    if (
+        payload.service_option.value != "fiber_installation"
+        or payload.subscription_id is not None
+        or payload.destination_offer_id is not None
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Service requests are temporarily unavailable",
+        )
     return quotes_mirror.request_quote(
         db,
         subscriber_id,
@@ -1341,6 +1393,51 @@ def my_quote_request(
         address=payload.address,
         region=payload.region,
         note=payload.note,
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/relocation/prepare",
+    response_model=RelocationQuotePrepareResponse,
+)
+def my_relocation_quote_prepare(
+    quote_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> RelocationQuotePrepareResponse:
+    """Prepare one approved full-charge invoice under the relocation owner."""
+    from app.services.owner_commands import CommandContext
+    from app.services.subscription_change_execution import (
+        PrepareRelocationQuoteCommand,
+        RelocationQuotePreparationError,
+        prepare_approved_relocation_quote,
+    )
+
+    subscriber_id = UUID(_subscriber_id(principal))
+    db_session_adapter.release_read_transaction(db)
+    try:
+        result = prepare_approved_relocation_quote(
+            db,
+            PrepareRelocationQuoteCommand(
+                context=CommandContext.system(
+                    actor=f"subscriber:{subscriber_id}",
+                    scope="service-intent:approved-relocation-quote",
+                    reason="Customer opened approved relocation booking",
+                    command_id=quote_id,
+                    idempotency_key=f"customer-relocation-quote:{quote_id}",
+                ),
+                quote_id=quote_id,
+                subscriber_id=subscriber_id,
+            ),
+        )
+    except RelocationQuotePreparationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    return RelocationQuotePrepareResponse(
+        request_id=result.request_id,
+        invoice_id=result.invoice_id,
+        amount=str(result.amount),
+        currency=result.currency,
+        replayed=result.replayed,
     )
 
 

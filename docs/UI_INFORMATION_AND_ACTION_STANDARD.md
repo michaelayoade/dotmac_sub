@@ -449,6 +449,17 @@ implementation.
   required`. Rejected Quotes show the owner-supplied rejection message. Mobile
   must consume `can_pay_deposit`; it must not infer payment eligibility from
   Quote status or deposit amount.
+- Customer service requests show the selected installation or relocation type
+  and coverage before review. A move that changes access technology requires
+  the customer to choose a compatible destination plan before pinning the new
+  location. Customer Quote reads omit subtotal, tax, total,
+  deposit policy and amount, and priced line items until approval applies to the
+  current commercial snapshot. Staff must add at least one priced line and a
+  positive total before approving a request for payment. A changed Quote hides
+  prices again until staff approves its new snapshot. An approved relocation
+  shows the full charge and uses the canonical subscription-change Invoice
+  payment path. After settlement, the Home screen shows relocation progress
+  from the issued WorkOrder.
 - Mutation: the customer confirms through the CSRF-protected POST intent route.
   The request carries idempotency evidence only; it cannot submit amount,
   currency, invoice identity, or provider choice. The server fixes the provider

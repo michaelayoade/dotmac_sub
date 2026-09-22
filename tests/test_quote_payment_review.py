@@ -12,6 +12,7 @@ from app.models.notification import CommunicationIntentRecord
 from app.models.rbac import Role, SystemUserRole
 from app.models.sales import (
     Quote,
+    QuoteLineItem,
     QuotePaymentReview,
     QuotePaymentReviewDecision,
     QuotePaymentReviewStatus,
@@ -65,6 +66,16 @@ def _pending_quote(db_session, subscriber) -> Quote:
         is_active=True,
     )
     db_session.add(quote)
+    db_session.flush()
+    db_session.add(
+        QuoteLineItem(
+            quote_id=quote.id,
+            description="Installation service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100000.00"),
+            amount=Decimal("100000.00"),
+        )
+    )
     db_session.commit()
     return quote
 
@@ -121,6 +132,32 @@ def test_approval_records_reviewer_time_revision_and_exact_snapshot(
         .one()
     )
     assert intent.subscriber_id == subscriber.id
+
+
+def test_approval_requires_staff_to_price_the_request(db_session, subscriber):
+    reviewer = _reviewer(db_session)
+    quote = _pending_quote(db_session, subscriber)
+    db_session.query(QuoteLineItem).filter(QuoteLineItem.quote_id == quote.id).delete()
+    db_session.commit()
+    command = _command(quote, reviewer)
+    db_session.rollback()
+
+    with pytest.raises(quote_payment_review.QuotePaymentReviewError) as exc:
+        quote_payment_review.review_quote_payment(db_session, command)
+    assert exc.value.code == "sales.quote_payment_review.price_required"
+
+
+def test_relocation_approval_requires_the_full_charge(db_session, subscriber):
+    reviewer = _reviewer(db_session)
+    quote = _pending_quote(db_session, subscriber)
+    quote.project_type = "fiber_optics_relocation"
+    db_session.commit()
+    command = _command(quote, reviewer)
+    db_session.rollback()
+
+    with pytest.raises(quote_payment_review.QuotePaymentReviewError) as exc:
+        quote_payment_review.review_quote_payment(db_session, command)
+    assert exc.value.code == "sales.quote_payment_review.price_required"
 
 
 def test_review_command_replays_and_rejects_changed_command_reuse(

@@ -480,6 +480,22 @@ void main() {
     });
   });
 
+  group('PlanChangeOptions', () {
+    test('preserves unknown balances while funding is under review', () {
+      final options = PlanChangeOptions.fromJson({
+        'prepaid_funding': null,
+        'postpaid_receivables': null,
+        'collection_blocking_balance': null,
+        'financial_position_unavailable': true,
+      });
+
+      expect(options.prepaidFunding, isNull);
+      expect(options.postpaidReceivables, isNull);
+      expect(options.collectionBlockingBalance, isNull);
+      expect(options.financialPositionUnavailable, isTrue);
+    });
+  });
+
   group('PlanChangeQuote', () {
     test('parses a prepaid proration quote', () {
       final q = PlanChangeQuote.fromJson({
