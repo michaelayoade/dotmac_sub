@@ -74,6 +74,22 @@ building access, or construction readiness. The public response deliberately
 omits the internal access-point identity and measured distance, and tells the
 customer that Dotmac will confirm the installation details.
 
+### Fiber website location UX contract
+
+- Browser location must remain optional. Denying permission, using a browser
+  without geolocation, or submitting an address without coordinates must not
+  prevent the enquiry from being recorded for manual review.
+- Label the action `Use my current location` and place this explanation beside
+  it: `Use this only if you are currently at the installation address.`
+- Do not describe browser coordinates as a guaranteed or final coverage check.
+  When coordinates are present, the result is only the distance-based initial
+  feasibility indication described above.
+- The website should later add an address search or draggable map pin so a
+  customer can select the installation property while somewhere else. That
+  control must submit the selected property's coordinates through the same
+  optional latitude/longitude fields; it must not introduce a second coverage
+  rule in WordPress.
+
 Create and enable an `events.deliver.v1` `webhook.http` binding with URL
 `${MARKETING_BASE_URL}/api/v1/conversions/events`, method `POST`, and
 `authorization_scheme: Bearer`. Subscribe it to
