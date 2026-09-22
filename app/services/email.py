@@ -319,8 +319,9 @@ def _secret_setting_value(db: Session | None, key: str) -> str | None:
 
     Registered settings resolve through the settings kernel. SMTP sender
     profiles use dynamic keys (`smtp_sender.<sender_key>.password`) that are not
-    registered specs, so resolve their stored row with the same kernel crypto
-    primitive instead of returning the raw ciphertext.
+    registered specs, so ask the notification settings owner for their stored
+    row and resolve it with the same kernel crypto primitive instead of
+    returning the raw ciphertext.
 
     `resolve_secret` afterwards is the transition tolerance, not the mechanism:
     a row the conversion script has not reached still holds a `bao://` reference,
@@ -335,12 +336,10 @@ def _secret_setting_value(db: Session | None, key: str) -> str | None:
         return None
     resolved = resolve_value(db, _Domain.notification, key)
     if resolved is None:
-        setting = (
-            db.query(DomainSetting)
-            .filter(DomainSetting.domain == _Domain.notification)
-            .filter(DomainSetting.key == key)
-            .filter(DomainSetting.is_active.is_(True))
-            .first()
+        setting = notification_settings.get_optional_by_key(
+            db,
+            key,
+            active_only=True,
         )
         if not setting or not setting.is_secret or not setting.value_text:
             return None
