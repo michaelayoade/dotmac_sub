@@ -14,6 +14,7 @@ from uuid import UUID
 
 import redis
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import OperationalError
 
 from app.celery_app import celery_app
 from app.models.bandwidth import BandwidthSample
@@ -100,7 +101,14 @@ def _get_redis_client():
     return redis.from_url(REDIS_URL)
 
 
-@celery_app.task(name="app.tasks.bandwidth.process_bandwidth_stream")
+@celery_app.task(
+    name="app.tasks.bandwidth.process_bandwidth_stream",
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+)
 def process_bandwidth_stream():
     """
     Consume samples from the Redis stream and insert into PostgreSQL.
