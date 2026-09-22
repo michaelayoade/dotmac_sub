@@ -14,6 +14,8 @@ See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §5, slice 5.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -111,6 +113,41 @@ class TestQueueFiltersRoundTrip:
         inbox.apply_query_filter(query)
         inbox.expect_loaded()
         assert "Traceback" not in admin_page.content()
+
+    def test_assigned_to_me_swaps_queue_and_keeps_filter_state(
+        self, admin_page, settings
+    ):
+        inbox = AdminInboxPage(admin_page, settings.base_url)
+        inbox.goto()
+        actor_id = admin_page.evaluate(
+            "window.Alpine.$data(document.querySelector('[data-inbox-workspace]')).actorId"
+        )
+        if not actor_id:
+            pytest.skip("authenticated admin has no Inbox person identity")
+        admin_page.get_by_role(
+            "button", name=re.compile("Inbox Stats & Filters")
+        ).click()
+        admin_page.locator("#inbox-stats-filters summary").filter(
+            has_text="Assignment"
+        ).click()
+        assignment_button = admin_page.locator(
+            "#inbox-stats-filters fieldset"
+        ).get_by_role("button", name=re.compile(r"^Assigned to me\b"))
+
+        with admin_page.expect_response(
+            lambda response: (
+                response.request.headers.get("hx-target") == "inbox-conversation-queue"
+                and "/admin/inbox?" in response.url
+            )
+        ):
+            assignment_button.click()
+
+        expect(admin_page).to_have_url(re.compile(f"assigned_person_id={actor_id}"))
+        expect(admin_page.locator("#inbox-conversation-queue")).to_be_visible()
+        expect(assignment_button).to_have_class(re.compile("bg-white"))
+        expect(
+            admin_page.get_by_role("button", name="Assigned to me Remove filter")
+        ).to_be_visible()
 
 
 class TestResponsivePanes:

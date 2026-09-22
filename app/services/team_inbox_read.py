@@ -206,6 +206,7 @@ class InboxConversationListRow:
     latest_delivery_status: str | None
     latest_delivery_error: str | None
     active_assigned_person_id: str | None
+    active_assigned_person_name: str | None
     current_visible_position: int | None
     queued_at: datetime | None
     estimated_wait_minutes: int | None
@@ -1548,6 +1549,19 @@ def list_conversations(
         if conversation_ids
         else {}
     )
+    assigned_person_ids = {
+        assignment.person_id for assignment in active_assignments.values()
+    }
+    assigned_people = (
+        {
+            user.id: user
+            for user in db.query(SystemUser)
+            .filter(SystemUser.id.in_(assigned_person_ids))
+            .all()
+        }
+        if assigned_person_ids
+        else {}
+    )
     team_counts = (
         {
             conversation_id: count
@@ -1605,6 +1619,11 @@ def list_conversations(
         latest = latest_messages.get(conversation.id)
         contact_identity = contact_identities[conversation.id]
         active_assignment = active_assignments.get(conversation.id)
+        assigned_person = (
+            assigned_people.get(active_assignment.person_id)
+            if active_assignment is not None
+            else None
+        )
         queue_projection = queue_by_conversation.get(conversation.id)
         ownership = ownership_by_conversation[conversation.id]
         resolution_status = _contact_resolution_status(conversation)
@@ -1665,6 +1684,13 @@ def list_conversations(
                 latest_delivery_error=_delivery_error(latest),
                 active_assigned_person_id=str(active_assignment.person_id)
                 if active_assignment is not None
+                else None,
+                active_assigned_person_name=(
+                    assigned_person.display_name
+                    or f"{assigned_person.first_name} {assigned_person.last_name}".strip()
+                    or assigned_person.email
+                )
+                if assigned_person is not None
                 else None,
                 current_visible_position=(
                     queue_projection[1] if queue_projection else None

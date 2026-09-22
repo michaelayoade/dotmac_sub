@@ -39,7 +39,9 @@ COMMENTS = Path("templates/admin/inbox/comments.html").read_text(encoding="utf-8
 LAYOUT = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
 OVERLAYS = Path("templates/admin/inbox/_overlays.html").read_text(encoding="utf-8")
 QUEUE = Path("templates/admin/inbox/_queue_macros.html").read_text(encoding="utf-8")
-SIDEBAR = Path("templates/admin/inbox/_sidebar.html").read_text(encoding="utf-8")
+SIDEBAR = Path("templates/admin/inbox/_sidebar.html").read_text(
+    encoding="utf-8"
+) + Path("templates/admin/inbox/_queue.html").read_text(encoding="utf-8")
 TICKET_PANEL = Path("templates/admin/inbox/_ticket_panel.html").read_text(
     encoding="utf-8"
 )
@@ -558,8 +560,7 @@ def test_stats_filters_scroll_without_hiding_the_conversation_queue():
 
 
 def test_sidebar_filters_replace_stale_requests_and_expose_busy_state():
-    assert 'hx-sync="this:replace"' in SIDEBAR
-    assert 'hx-sync="#inbox-sidebar-content:replace"' in SIDEBAR
+    assert '@submit.prevent="applyAdvancedFilters($el)"' in SIDEBAR
     assert ':aria-busy="filterLoading.toString()"' in SIDEBAR
     assert "Checking for updates" in JAVASCRIPT
     assert "stale.xhr.abort()" in JAVASCRIPT
@@ -573,6 +574,7 @@ def test_sidebar_filters_replace_stale_requests_and_expose_busy_state():
     assert 'hx-get="/admin/inbox/manager-dashboard"' in SIDEBAR
     assert "def team_inbox_manager_dashboard(" in ROUTES
     assert 'htmx_target == "inbox-conversation-queue"' in ROUTES
+    assert '"admin/inbox/_queue.html"' in ROUTES
 
 
 def test_inbox_refresh_status_precedes_stats_filters_and_conversation_list():
@@ -1183,6 +1185,21 @@ def test_lifecycle_assignment_and_channel_filters_are_composable():
     assert 'clearScope === "assignment"' in body
     assert '@change="navigateFilter({ channel_type: $el.value })"' in SIDEBAR
     assert '@change="navigateFilter({ service_team_id: $el.value })"' in SIDEBAR
+
+
+def test_operator_filters_and_background_refreshes_use_the_queue_only_projection():
+    start = JAVASCRIPT.index("requestInboxList(urlValue, options = {}) {")
+    end = JAVASCRIPT.index("conversationIdFromPath(path) {", start)
+    body = JAVASCRIPT[start:end]
+    assert '"operator_filter"' in body
+    assert '"search"' in body
+    assert '"history"' in body
+    assert 'const backgroundIntents = ["poll", "read_state", "realtime"]' in body
+    assert "...backgroundIntents" in body
+    assert "target: options.target || (" in body
+    assert '"#inbox-conversation-queue"' in body
+    assert 'select: options.select || (queueOnly ? "#inbox-conversation-queue"' in body
+    assert 'swap: options.swap || (queueOnly ? "outerHTML"' in body
 
 
 def test_by_agent_panel_uses_live_agent_and_activity_filters():

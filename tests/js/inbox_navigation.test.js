@@ -29,6 +29,19 @@ function fixture(start = "/admin/inbox?view=all", selectedId = "") {
     ["#inbox-conversation-queue", node("inbox-conversation-queue")],
     ["#triage-detail", node("triage-detail")],
   ]);
+  const controls = [
+    { name: "assigned_person_id", type: "select-one", value: "" },
+    { name: "channel_type", type: "select-one", value: "" },
+    { name: "unread", type: "checkbox", checked: false },
+    { name: "filters", type: "hidden", value: "" },
+  ];
+  const form = node("inbox-filter-form");
+  form.querySelectorAll = () => controls;
+  form.querySelector = (selector) => selector === '[name="filters"]' ? controls[3] : null;
+  nodes.set("#inbox-filter-form", form);
+  const search = node("inbox-conversation-search");
+  search.value = "";
+  nodes.set("#inbox-conversation-search", search);
   function on(scope, type, listener) {
     const key = `${scope}:${type}`;
     if (!listeners.has(key)) listeners.set(key, []);
@@ -105,7 +118,8 @@ function fixture(start = "/admin/inbox?view=all", selectedId = "") {
     const detail = { ...record.detail, shouldSwap: status >= 200 && status < 300 && status !== 204 };
     emit("htmx:beforeSwap", detail);
     if (detail.shouldSwap) {
-      const query = new URL(record.url, location).searchParams;
+      const appliedUrl = nodes.get("#inbox-conversation-queue").dataset.inboxAppliedUrl;
+      const query = new URL(appliedUrl || record.url, location).searchParams;
       rendered.page = Number(query.get("page") || 1);
       rendered.assignee = query.get("assigned_person_id") || "";
       emit("htmx:afterSwap", detail);
@@ -123,7 +137,7 @@ function fixture(start = "/admin/inbox?view=all", selectedId = "") {
     const link = { href: new URL(url, location).href, closest: () => null, hasAttribute: () => false };
     return emit("click", {}, "document", { button: 0, target: { closest: () => link }, ...extra });
   }
-  return { workspace, window, nodes, location, requests, pushes, replacements, rendered, response, failure, emit, clickLink };
+  return { workspace, window, nodes, controls, location, requests, pushes, replacements, rendered, response, failure, emit, clickLink };
 }
 
 test("Next is handled once, keeps old URL while loading, and commits after queue swap", () => {
@@ -146,6 +160,9 @@ test("Assigned to me is active only after its matching rows have swapped", () =>
   const f = fixture("/admin/inbox?view=all&page=3&channel_type=whatsapp");
   f.workspace.applyAssignmentFilter("agent-1");
   assert.equal(f.pushes.length, 0);
+  assert.equal(f.requests[0].options.target, "#inbox-conversation-queue");
+  assert.equal(f.requests[0].options.select, "#inbox-conversation-queue");
+  assert.equal(f.requests[0].options.swap, "outerHTML");
   assert.equal(f.workspace.assignmentFilterActive("mine"), false);
   assert.equal(f.workspace.filterLoading, true);
   const query = new URL(f.requests[0].url, f.location).searchParams;
@@ -153,6 +170,7 @@ test("Assigned to me is active only after its matching rows have swapped", () =>
   assert.equal(query.get("channel_type"), "whatsapp");
   f.response(f.requests[0]);
   assert.equal(f.rendered.assignee, "agent-1");
+  assert.equal(f.controls[0].value, "agent-1");
   assert.equal(f.workspace.assignmentFilterActive("mine"), true);
   assert.ok(f.workspace.activeFilterChips().some(chip => chip.label === "Assigned to me"));
 });
@@ -165,6 +183,7 @@ for (const kind of ["timeout", "sendAbort", "sendError"]) {
     assert.equal(f.pushes.length, 0);
     assert.equal(f.rendered.assignee, "");
     assert.equal(f.location.searchParams.get("assigned_person_id"), null);
+    assert.equal(f.controls[0].value, "");
     assert.equal(f.workspace.filterLoading, false);
     assert.equal(f.workspace.inboxRefreshState, "error");
     assert.match(f.workspace.listRequestError, /Could not update/);
@@ -240,6 +259,24 @@ test("failed history navigation restores the rendered URL and preserves thread s
 test("background polling yields to an operator request", () => {
   const f = fixture(); f.workspace.applyAssignmentFilter("agent-1"); f.workspace.refreshSidebar("poll");
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0].xhr.aborted, false);
+});
+
+test("a queue response commits the server-applied canonical filter state", () => {
+  const f = fixture();
+  f.workspace.applyAssignmentFilter("agent-1");
+  f.nodes.get("#inbox-conversation-queue").dataset.inboxAppliedUrl =
+    "/admin/inbox?view=all&assigned_person_id=agent-1&channel_type=email";
+  f.response(f.requests[0]);
+  assert.equal(f.location.searchParams.get("channel_type"), "email");
+  assert.equal(f.controls[1].value, "email");
+  assert.equal(f.workspace.filterValue("channel_type"), "email");
+});
+
+test("background polling uses the queue-only projection", () => {
+  const f = fixture(); f.workspace.refreshSidebar("poll");
+  assert.equal(f.requests[0].options.target, "#inbox-conversation-queue");
+  assert.equal(f.requests[0].options.select, "#inbox-conversation-queue");
+  assert.equal(f.requests[0].options.swap, "outerHTML");
 });
 
 test("list AJAX uses a stable sidebar source separate from default thread transport", () => {
@@ -384,6 +421,9 @@ test("search replaces the URL only after the matching rendered response", () => 
   const f = fixture("/admin/inbox?assigned_person_id=agent-1&page=3");
   f.workspace.searchConversations("first"); f.workspace.searchConversations("latest");
   assert.equal(f.replacements.length, 0); assert.equal(f.requests[0].xhr.aborted, true);
+  assert.equal(f.requests[1].options.target, "#inbox-conversation-queue");
+  assert.equal(f.requests[1].options.select, "#inbox-conversation-queue");
+  assert.equal(f.requests[1].options.swap, "outerHTML");
   f.response(f.requests[1]);
   assert.equal(f.location.searchParams.get("search"), "latest");
   assert.equal(f.location.searchParams.get("page"), null);

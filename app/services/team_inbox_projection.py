@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from html import unescape
+from time import perf_counter
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -56,6 +58,7 @@ from app.services.list_query import (
 from app.services.sales import lead_intake
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+logger = logging.getLogger(__name__)
 
 SAFE_INLINE_IMAGE_CONTENT_TYPES: frozenset[str] = frozenset(
     {
@@ -2414,6 +2417,8 @@ def build_queue_projection(
 ) -> InboxQueueProjection:
     """Own filter normalization, sort, pagination, cohorts, and UI state."""
 
+    started_at = perf_counter()
+
     search = request.search
     raw_view = request.view
     raw_status = request.status
@@ -2571,6 +2576,7 @@ def build_queue_projection(
             include_total_count=include_exact_total,
         )
 
+    list_started_at = perf_counter()
     result = fetch(requested_query)
     count_is_exact = include_exact_total or result.count <= (
         requested_query.offset + len(result.items)
@@ -2583,6 +2589,7 @@ def build_queue_projection(
     list_query = requested_query.with_page(page_meta.page)
     if list_query.page != requested_query.page:
         result = fetch(list_query)
+    list_finished_at = perf_counter()
     selected_id = _uuid(request.selected_conversation_id)
     canonical_url = None
     if request_needs_canonicalization(
@@ -2635,6 +2642,7 @@ def build_queue_projection(
         else None
     )
     include_sidebar = request.composition is not InboxQueueComposition.queue_only
+    sidebar_started_at = perf_counter()
     queue_metrics = (
         team_inbox_operations.queue_metrics(db)
         if include_sidebar
@@ -2666,7 +2674,7 @@ def build_queue_projection(
             needs_attention=0,
         )
     )
-    return InboxQueueProjection(
+    projection = InboxQueueProjection(
         rows=tuple(result.items),
         queue_metrics=queue_metrics,
         social_comment_count=social_comment_thread_count(db) if include_sidebar else 0,
@@ -2703,7 +2711,9 @@ def build_queue_projection(
         service_team_options=tuple(
             InboxServiceTeamOption(id=team_id, name=name)
             for team_id, name in active_team_options
-        ),
+        )
+        if include_sidebar
+        else list_service_team_options(db),
         agent_options=list_agent_options(db) if include_sidebar else (),
         agent_presence=(
             get_agent_presence(db, request.actor_person_id) if include_sidebar else None
@@ -2716,9 +2726,9 @@ def build_queue_projection(
             if item.value not in SOCIAL_COMMENT_CHANNELS
         ),
         priority_options=INBOX_PRIORITY_OPTIONS,
-        label_options=(
-            tuple(team_inbox_operations.list_labels(db)) if include_sidebar else ()
-        ),
+        # The queue fragment contains the bulk-action toolbar, whose team and
+        # label selectors must remain usable after a queue-only swap.
+        label_options=tuple(team_inbox_operations.list_labels(db)),
         saved_filters=tuple(
             team_inbox_operations.list_saved_filters(
                 db, person_id=request.actor_person_id
@@ -2730,3 +2740,15 @@ def build_queue_projection(
         selected=selected,
         canonical_url=canonical_url,
     )
+    finished_at = perf_counter()
+    logger.info(
+        "inbox_queue_projection_timing",
+        extra={
+            "composition": request.composition.value,
+            "normalization_ms": round((list_started_at - started_at) * 1000, 2),
+            "list_ms": round((list_finished_at - list_started_at) * 1000, 2),
+            "sidebar_ms": round((finished_at - sidebar_started_at) * 1000, 2),
+            "total_ms": round((finished_at - started_at) * 1000, 2),
+        },
+    )
+    return projection

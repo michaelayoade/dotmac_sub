@@ -720,7 +720,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review and filter customer conversations without losing route, channel, or assignment context.",
         ("/admin/inbox",),
         "Use All for active human-actionable work, AI Intake for conversations still owned by AI, Queue for durable handoffs waiting for capacity, and History for resolved or older conversations.",
-        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the selected ownership view.",
+        "Use search, lifecycle, assignment, channel, team, and activity filters to narrow the selected ownership view. Assigned to me updates the conversation list while keeping the open conversation in place; the active filters reflect the list that actually loaded.",
         "While AI is handling a conversation or waiting for the customer, review it read-only; normal reply, note, assignment, status, ticket, macro, and bulk actions remain unavailable.",
         "When authorized human intervention is intentional, choose Take Over Conversation and confirm it before replying; an ordinary reply never takes ownership away from AI.",
         "After AI hands the conversation to the human queue, the first eligible reply claims it for that agent. If another agent already owns it, the reply is not sent and the Inbox names the current owner.",
@@ -731,6 +731,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
+            "Inbox overview counts reflect the last full page load. Choose Refresh counts when you need current totals; the filtered list updates separately.",
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
             "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
             "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",
