@@ -1188,12 +1188,13 @@ def test_lifecycle_assignment_and_channel_filters_are_composable():
 
 
 def test_operator_filters_and_background_refreshes_use_the_queue_only_projection():
-    marker = JAVASCRIPT.index("const queueOnlyIntents = [")
-    body = JAVASCRIPT[marker : marker + 900]
+    start = JAVASCRIPT.index("requestInboxList(urlValue, options = {}) {")
+    end = JAVASCRIPT.index("conversationIdFromPath(path) {", start)
+    body = JAVASCRIPT[start:end]
     assert '"operator_filter"' in body
     assert '"search"' in body
     assert '"history"' in body
-    assert 'const backgroundIntents = ["poll", "read_state", "realtime"]' in JAVASCRIPT
+    assert 'const backgroundIntents = ["poll", "read_state", "realtime"]' in body
     assert "...backgroundIntents" in body
     assert "target: options.target || (" in body
     assert '"#inbox-conversation-queue"' in body

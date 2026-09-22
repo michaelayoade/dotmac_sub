@@ -130,6 +130,9 @@ class TestQueueFiltersRoundTrip:
         admin_page.locator("#inbox-stats-filters summary").filter(
             has_text="Assignment"
         ).click()
+        assignment_button = admin_page.locator(
+            "#inbox-stats-filters fieldset"
+        ).get_by_role("button", name=re.compile(r"^Assigned to me\b"))
 
         with admin_page.expect_response(
             lambda response: (
@@ -137,15 +140,13 @@ class TestQueueFiltersRoundTrip:
                 and "/admin/inbox?" in response.url
             )
         ):
-            admin_page.get_by_role("button", name=re.compile("Assigned to me")).click()
+            assignment_button.click()
 
         expect(admin_page).to_have_url(re.compile(f"assigned_person_id={actor_id}"))
         expect(admin_page.locator("#inbox-conversation-queue")).to_be_visible()
+        expect(assignment_button).to_have_class(re.compile("bg-white"))
         expect(
-            admin_page.get_by_role("button", name=re.compile("Assigned to me"))
-        ).to_have_class(re.compile("bg-white"))
-        expect(
-            admin_page.get_by_text("Assigned to me", exact=True).first
+            admin_page.get_by_role("button", name="Assigned to me Remove filter")
         ).to_be_visible()
 
 
