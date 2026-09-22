@@ -224,8 +224,9 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
 
 class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   late final _amount = TextEditingController(text: widget.initialAmount ?? '');
-  final _bank = TextEditingController();
   final _reference = TextEditingController();
+  late String? _selectedAccountId =
+      widget.accounts.length == 1 ? widget.accounts.first.id : null;
   XFile? _file;
   bool _busy = false;
   String? _error;
@@ -233,7 +234,6 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   @override
   void dispose() {
     _amount.dispose();
-    _bank.dispose();
     _reference.dispose();
     super.dispose();
   }
@@ -251,6 +251,10 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
       setState(() => _error = 'Amount and a receipt image are both required.');
       return;
     }
+    if (widget.accounts.length > 1 && _selectedAccountId == null) {
+      setState(() => _error = 'Choose the bank account you paid into.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -258,11 +262,11 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
     try {
       await ref.read(billingRepositoryProvider).submitPaymentProof(
             amount: _amount.text.trim(),
-            bankName: _bank.text.trim(),
             reference: _reference.text.trim(),
             filePath: _file!.path,
             fileName: _file!.name,
             intentId: widget.intentId,
+            selectedAccountId: _selectedAccountId,
           );
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
@@ -296,12 +300,34 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
             if (widget.accounts.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
-                'Transfer to',
+                widget.accounts.length > 1
+                    ? 'Which account did you pay?'
+                    : 'Transfer to',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 6),
-              for (final acct in widget.accounts)
-                _BankAccountCard(account: acct),
+              if (widget.accounts.length > 1)
+                RadioGroup<String>(
+                  groupValue: _selectedAccountId,
+                  onChanged: (value) {
+                    if (_busy) return;
+                    setState(() => _selectedAccountId = value);
+                  },
+                  child: Column(
+                    children: [
+                      for (final acct in widget.accounts)
+                        RadioListTile<String>(
+                          contentPadding: EdgeInsets.zero,
+                          value: acct.id ?? acct.accountNumber,
+                          title: Text('${acct.bankName} ${acct.accountNumber}'),
+                          subtitle: Text(acct.accountName),
+                        ),
+                    ],
+                  ),
+                )
+              else
+                for (final acct in widget.accounts)
+                  _BankAccountCard(account: acct),
               if (widget.instructions != null &&
                   widget.instructions!.trim().isNotEmpty)
                 Padding(
@@ -325,14 +351,6 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               ),
               decoration: const InputDecoration(
                 labelText: 'Amount (NGN) *',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _bank,
-              decoration: const InputDecoration(
-                labelText: 'Bank',
                 border: OutlineInputBorder(),
               ),
             ),

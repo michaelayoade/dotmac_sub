@@ -1305,6 +1305,7 @@ class PaymentProviderOption(BaseModel):
 
 
 class BankTransferAccount(BaseModel):
+    id: str | None = None
     bank_name: str
     account_name: str
     account_number: str

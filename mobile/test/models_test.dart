@@ -695,6 +695,18 @@ void main() {
         'currency': 'NGN',
         'min_amount': 1000,
         'max_amount': 500000,
+        'direct_bank_transfer': {
+          'enabled': true,
+          'accounts': [
+            {
+              'id': 'zenith-main',
+              'bank_name': 'ZENITH BANK',
+              'account_name': 'Dotmac',
+              'account_number': '1234567890',
+              'sort_code': '057',
+            }
+          ],
+        },
         'deposit_allowed': false,
         'active_deposit_request': {
           'intent_id': 'intent-1',
@@ -719,6 +731,8 @@ void main() {
       expect(deposit.amount, 1000.0);
       expect(deposit.isAwaitingReceipt, isTrue);
       expect(deposit.canCancel, isTrue);
+      expect(page.bankTransfer.accounts.single.id, 'zenith-main');
+      expect(page.bankTransfer.accounts.single.sortCode, '057');
     });
 
     test(
