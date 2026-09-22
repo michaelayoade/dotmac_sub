@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -36,6 +37,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   bool _loadingPage = true;
   bool _previewLoading = false;
   int _previewRequestId = 0;
+  Timer? _previewDebounce;
 
   final _custom = TextEditingController();
   bool _busy = false;
@@ -70,11 +72,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   @override
   void dispose() {
+    _previewDebounce?.cancel();
     _custom.dispose();
     super.dispose();
   }
 
   Future<void> _loadPage() async {
+    _previewDebounce?.cancel();
+    ++_previewRequestId;
     setState(() {
       _loadingPage = true;
       _loadError = null;
@@ -118,7 +123,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Future<TopupPreview?> _refreshPreview() async {
     final page = _page;
     final amount = _amount;
-    if (page == null || amount == null || !_amountValid) {
+    if (page == null ||
+        !page.depositAllowed ||
+        amount == null ||
+        !_amountValid) {
+      ++_previewRequestId;
       if (mounted) {
         setState(() {
           _preview = null;
@@ -133,6 +142,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     if (mounted) {
       setState(() {
         _previewLoading = true;
+        _preview = null;
         _previewError = null;
       });
     }
@@ -140,7 +150,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       final preview =
           await ref.read(billingRepositoryProvider).previewTopup(amount);
       if (!mounted || requestId != _previewRequestId) {
-        return preview;
+        return null;
       }
       setState(() {
         _preview = preview;
@@ -163,8 +173,16 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Future<void> _submit() async {
     final page = _page!;
     final amount = _amount;
+    final reviewedFingerprint = _preview?.previewFingerprint;
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
+    if (!page.depositAllowed ||
+        reviewedFingerprint == null ||
+        reviewedFingerprint.isEmpty ||
+        _previewLoading ||
+        _previewError != null) {
+      return;
+    }
     if (amount == null || amount < page.minAmount || amount > page.maxAmount) {
       messenger.showSnackBar(
         SnackBar(
@@ -200,6 +218,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
 
     setState(() => _busy = true);
+    _previewDebounce?.cancel();
     try {
       final preview = await _refreshPreview();
       if (!mounted) {
@@ -211,6 +230,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             content: Text(
               'Review the latest allocation preview before checkout.',
             ),
+          ),
+        );
+        return;
+      }
+      if (preview.previewFingerprint != reviewedFingerprint) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Allocation changed. Review the updated preview.'),
           ),
         );
         return;
@@ -350,6 +377,30 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   Widget _form(TopupPage page) {
     final theme = Theme.of(context);
+    if (!page.depositAllowed) {
+      final active = page.activeDepositRequest;
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Top-up in progress', style: theme.textTheme.titleLarge),
+          const SizedBox(height: 12),
+          Text(active?.message ?? 'A top-up is already in progress.'),
+          if (active != null) ...[
+            const SizedBox(height: 12),
+            Text('Amount: ${Fmt.money(active.amount, active.currency)}'),
+            Text('Reference: ${active.reference}'),
+            if (active.rejectionReason != null)
+              Text('Reason: ${active.rejectionReason}'),
+          ],
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _loadPage,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh status'),
+          ),
+        ],
+      );
+    }
     final savedCards =
         ref.watch(paymentMethodsProvider).asData?.value ?? const <SavedCard>[];
     return ListView(
@@ -382,11 +433,22 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         TextField(
           controller: _custom,
           autofocus: true,
+          readOnly: _busy,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           onChanged: (_) {
-            setState(() {});
-            _refreshPreview();
+            _previewDebounce?.cancel();
+            ++_previewRequestId;
+            setState(() {
+              _preview = null;
+              _previewError = null;
+              _previewLoading = false;
+            });
+            if (_amountValid) {
+              _previewDebounce = Timer(const Duration(milliseconds: 350), () {
+                _refreshPreview();
+              });
+            }
           },
           decoration: InputDecoration(
             labelText: 'Amount',
@@ -458,11 +520,23 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         ],
         if (_previewError != null) ...[
           const SizedBox(height: 16),
-          Text(
-            'Could not load the latest allocation preview. Try again.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.error,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _previewError is ApiException
+                    ? (_previewError as ApiException).message
+                    : 'Could not load the latest allocation preview.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _refreshPreview,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry preview'),
+              ),
+            ],
           ),
         ],
         // Pay with: saved card (one-tap), an online gateway, or transfer.
@@ -502,8 +576,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed:
-              _busy || !_amountValid || _selection == null ? null : _submit,
+          onPressed: _busy ||
+                  !_amountValid ||
+                  _selection == null ||
+                  _preview == null ||
+                  _previewLoading ||
+                  _previewError != null
+              ? null
+              : _submit,
           icon: _busy
               ? const SizedBox(
                   height: 18,

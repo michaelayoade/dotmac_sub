@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.services import ticket_sla_reports, web_reports_extended
+from app.services.billing import reporting
 
 REPORT_TEMPLATES = Path("templates/admin/reports")
 
@@ -95,6 +96,7 @@ def test_upcoming_charges_export_preserves_the_redesigned_report_filters(
             state="upcoming",
             band="high",
             include_funded=True,
+            period=reporting.UpcomingChargePeriod(year=2026, month=9),
         ),
     )
 
@@ -103,6 +105,7 @@ def test_upcoming_charges_export_preserves_the_redesigned_report_filters(
         "state": "upcoming",
         "band": "high",
         "include_funded": True,
+        "period": reporting.UpcomingChargePeriod(year=2026, month=9),
         "page": 1,
         "per_page": 50,
     }

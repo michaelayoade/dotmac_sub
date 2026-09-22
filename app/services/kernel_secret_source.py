@@ -7,7 +7,7 @@ and installed at boot; the kernel ships no client and never fetches.
 
 This is that product half, over the OpenBao client Sub already has.
 
-## Why these five
+## Why the required five
 
 Per the classification ruled on 2026-08-09, five specs stop being settings:
 
@@ -119,12 +119,21 @@ SECRET_REFS: Mapping[str, str] = {
 #: FIELD on an existing path as configuration drift and raises. Co-locating this
 #: field with the required `settings/auth` payload would therefore make its
 #: documented legitimate absence fail every application boot.
+#:
+#: **`conversion_ingest_api_key`** is stable HMAC material for the optional
+#: Fiber marketing conversion projection. A deployment without Fiber
+#: acquisition may omit its entire path. Once provisioned, a missing field or
+#: unreachable store remains a boot failure rather than silently changing the
+#: derived subject identity.
 OPTIONAL_SECRET_REFS: Mapping[str, str] = {
     "machine_credential_hmac_key": (
         "bao://secret/settings/machine_auth#machine_credential_hmac_key"
     ),
     "prepaid_attestation_public_key": (
         "bao://secret/settings/billing#prepaid_reconstruction_attestation_public_key"
+    ),
+    "conversion_ingest_api_key": (
+        "bao://secret/settings/marketing#conversion_ingest_api_key"
     ),
 }
 

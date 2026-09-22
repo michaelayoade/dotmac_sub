@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
@@ -377,3 +378,11 @@ def test_trim_redis_stream_closes_read_session_before_redis_write(monkeypatch):
     result = bandwidth_tasks.trim_redis_stream()
 
     assert result == {"trimmed": 3}
+
+
+def test_process_bandwidth_stream_retries_transient_database_failures():
+    assert OperationalError in bandwidth_tasks.process_bandwidth_stream.autoretry_for
+    assert bandwidth_tasks.process_bandwidth_stream.retry_kwargs == {"max_retries": 3}
+    assert bandwidth_tasks.process_bandwidth_stream.retry_backoff is True
+    assert bandwidth_tasks.process_bandwidth_stream.retry_backoff_max == 60
+    assert bandwidth_tasks.process_bandwidth_stream.retry_jitter is True

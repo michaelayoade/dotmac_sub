@@ -42,6 +42,7 @@ from app.schemas.billing import (
     MyPaymentMethodRead,
     PaymentProviderOption,
     PaymentRead,
+    TopupActiveRequestResponse,
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
@@ -681,10 +682,9 @@ def my_plan_change_options(
         ),
         available_offers=[o for o in available if o is not None],
         prepaid_funding=ctx.get("prepaid_funding"),
-        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
-        collection_blocking_balance=ctx.get(
-            "collection_blocking_balance", Decimal("0.00")
-        ),
+        postpaid_receivables=ctx.get("postpaid_receivables"),
+        collection_blocking_balance=ctx.get("collection_blocking_balance"),
+        financial_position_unavailable=ctx.get("financial_position_unavailable", False),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
         service_addresses=ctx.get("service_addresses", []),
@@ -938,6 +938,11 @@ def my_topup_page(
         prepaid_balance=ctx.get("prepaid_balance"),
         account_credit=ctx.get("account_credit"),
         deposit_allowed=ctx.get("deposit_allowed", True),
+        active_deposit_request=(
+            TopupActiveRequestResponse.model_validate(ctx["active_deposit_request"])
+            if ctx.get("active_deposit_request") is not None
+            else None
+        ),
         eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
         eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
