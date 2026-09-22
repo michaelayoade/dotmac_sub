@@ -309,13 +309,18 @@ def _setting_value(db: Session | None, key: str) -> str | None:
 
 
 def _secret_setting_value(db: Session | None, key: str) -> str | None:
-    """A secret notification setting, read through the resolver that decrypts it.
+    """A secret notification setting, decrypted before it reaches a provider.
 
     `_setting_value` reads `DomainSetting.value_text` straight off the row, and
     a secret setting's column now holds `enc:<key_id>:<token>`. Only the kernel
-    resolver decrypts — it is the one reader that knows the row is secret and
-    holds the key — so a direct row read would hand SMTP a ciphertext string
-    and authentication would fail with a password-shaped error.
+    crypto boundary decrypts it, so a direct row read would hand SMTP a
+    ciphertext string and authentication would fail with a password-shaped
+    error.
+
+    Registered settings resolve through the settings kernel. SMTP sender
+    profiles use dynamic keys (`smtp_sender.<sender_key>.password`) that are not
+    registered specs, so resolve their stored row with the same kernel crypto
+    primitive instead of returning the raw ciphertext.
 
     `resolve_secret` afterwards is the transition tolerance, not the mechanism:
     a row the conversion script has not reached still holds a `bao://` reference,
@@ -329,6 +334,19 @@ def _secret_setting_value(db: Session | None, key: str) -> str | None:
     if db is None:
         return None
     resolved = resolve_value(db, _Domain.notification, key)
+    if resolved is None:
+        setting = (
+            db.query(DomainSetting)
+            .filter(DomainSetting.domain == _Domain.notification)
+            .filter(DomainSetting.key == key)
+            .filter(DomainSetting.is_active.is_(True))
+            .first()
+        )
+        if not setting or not setting.is_secret or not setting.value_text:
+            return None
+        from dotmac_kernel.settings_crypto import decrypt_value
+
+        resolved = decrypt_value(setting.value_text, tenant_id=setting.tenant_id)
     if not isinstance(resolved, str) or not resolved.strip():
         return None
     return _resolve_secret_value(resolved)
@@ -699,9 +717,11 @@ def _resolve_smtp_sender_config(
 
     selected = dict(available[selected_key])
     if selected.get("has_password"):
-        password = _setting_value(db, _sender_setting_key(selected_key, "password"))
+        password = _secret_setting_value(
+            db, _sender_setting_key(selected_key, "password")
+        )
         if password:
-            selected["password"] = _resolve_secret_value(password)
+            selected["password"] = password
     selected["user"] = selected.get("username")
     selected["from_addr"] = selected.get("from_email")
     selected["sender_key"] = selected_key
