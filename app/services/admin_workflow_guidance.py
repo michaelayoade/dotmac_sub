@@ -909,6 +909,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "Choose the report that matches the business question you need to answer.",
         "Set the date range, team, status, or other scope before reviewing totals and rows.",
+        "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
         route_templates=("/admin/reports",),
