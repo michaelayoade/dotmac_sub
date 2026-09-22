@@ -1594,7 +1594,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     ),
     "reports-overview": (
         _action("choose-report", "Choose a report", 0),
-        _action("filter-report", "Filter report results", 1),
+        _action("filter-report", "Filter report results", 1, 4),
         _action("investigate-report", "Investigate a report item", 2),
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"
