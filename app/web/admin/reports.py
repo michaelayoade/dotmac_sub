@@ -2203,6 +2203,7 @@ def reports_upcoming_charges(
         period=_upcoming_charges_period(month, year),
         page=page,
         per_page=per_page,
+        include_summary=True,
     )
     ctx = _base_context(
         request,

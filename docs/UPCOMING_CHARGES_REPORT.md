@@ -41,8 +41,11 @@ Tabs, pagination, and CSV export retain the selected period.
 1. An indexed SQL query selects and paginates bounded candidates.
 2. Postpaid rows use persisted invoice facts directly.
 3. Only the visible prepaid candidate page is passed to
-   `resolve_prepaid_monthly_charges` and `prepaid_available_balances`; both are
-   set-based owners. No per-row pricing or wallet query is performed.
+   `resolve_prepaid_monthly_charges` and `prepaid_available_balances` for row
+   display. The page summary walks the entire filtered cohort in bounded
+   keyset batches and calls those same set-based owners once per batch. CSV
+   pagination does not rerun summary work. No per-row pricing or wallet query
+   is performed.
 4. The page size is capped at 50 (25 by default). The query requests one extra
    candidate to determine whether a next page exists; it does not run an
    unbounded total-count aggregate or load the full result set into Python.
@@ -50,6 +53,19 @@ Tabs, pagination, and CSV export retain the selected period.
 Already-funded prepaid rows can be hidden after enrichment, so a page can
 contain fewer visible rows than its candidate page. Pagination still advances
 the stable candidate ordering and never repeats a record.
+
+The three summary cards cover all currently matching rows, not just the page.
+Postpaid **Expected payments** is confirmed invoice payment allocations plus
+remaining collectible balances. **Payments received** counts active allocations
+from successful payments; **Not yet received** is the open invoice balance.
+Credits are not misreported as received payments. Prepaid **Expected renewals**
+uses the exact canonical renewal charge; **Already funded** is the verified
+available account funding applied once to that account's matching charges;
+**Funding still needed** is the difference. Available funding may include
+credits, so it is not labelled as a payment received for a specific renewal.
+Unpriced prepaid candidates are excluded from money totals and counted in a
+visible notice. Currencies are never added together; each currency is shown
+separately in a card.
 
 ## Configuration
 

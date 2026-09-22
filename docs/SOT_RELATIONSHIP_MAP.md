@@ -1782,6 +1782,13 @@ detailed security and delivery boundary is
    `customer.financial_position` funding resolver. Optional UTC calendar
    periods filter verified invoice due dates or entitlement endings; without a
    period the configured lead window applies. This projection is
+   `customer.financial_position` funding resolver. Optional UTC calendar
+   periods filter verified invoice due dates or entitlement endings; without a
+   period the configured lead window applies. Filtered summary cards use
+   confirmed payment allocations for postpaid receipts and bounded exact-charge
+   batches with account-deduplicated verified funding for prepaid. Missing
+   prepaid charge evidence is counted separately rather than treated as zero.
+   This projection is
    read-only and never changes billing, collection, or access state.
 11. `financial.prepaid_enforcement` owns the account-scoped warn, suspend, and
    restore decision. Every scheduled pass consumes the live currency-bound

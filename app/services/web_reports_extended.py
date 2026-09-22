@@ -172,6 +172,7 @@ def get_upcoming_charges_data(
     period: billing_reporting.UpcomingChargePeriod | None = None,
     page: int = 1,
     per_page: int = 25,
+    include_summary: bool = False,
 ) -> dict:
     """Present one lazy page from the registered billing reporting owner."""
     from app.services import display_format
@@ -196,6 +197,7 @@ def get_upcoming_charges_data(
             page=page,
             per_page=per_page,
             period=period,
+            include_summary=include_summary,
         ),
     )
     prepaid_currency = resolve_prepaid_enforcement_currency(db)
@@ -247,6 +249,27 @@ def get_upcoming_charges_data(
         if include_funded is None
         else include_funded
     )
+    summary = result.summary
+    if include_summary and summary is None:
+        raise RuntimeError("Upcoming Charges summary was not returned")
+    summary_amounts = (
+        tuple(
+            {
+                "expected": display_format.format_money(
+                    item.expected, currency=item.currency
+                ),
+                "received": display_format.format_money(
+                    item.received, currency=item.currency
+                ),
+                "not_received": display_format.format_money(
+                    item.not_received, currency=item.currency
+                ),
+            }
+            for item in summary.amounts
+        )
+        if summary is not None
+        else ()
+    )
     return {
         "charges": charges,
         "candidate_count": result.candidate_count,
@@ -266,6 +289,8 @@ def get_upcoming_charges_data(
         "month_options": tuple(
             (month, calendar.month_name[month]) for month in range(1, 13)
         ),
+        "summary_amounts": summary_amounts,
+        "summary_unpriced_count": summary.unpriced_count if summary is not None else 0,
     }
 
 

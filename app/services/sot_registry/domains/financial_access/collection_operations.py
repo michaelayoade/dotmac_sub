@@ -998,6 +998,7 @@ SERVICES: tuple[SOTService, ...] = (
             "payments-basis revenue definitions",
             "subscription movement and per-offer report counts",
             "upcoming charge reminder candidate selection and read model",
+            "upcoming charge payment and funding summaries",
         ),
         depends_on=(
             "financial.invoices",
@@ -1011,7 +1012,9 @@ SERVICES: tuple[SOTService, ...] = (
             "selects bounded candidates before composing exact prepaid charge "
             "and funding owners for one page. Optional UTC calendar periods "
             "filter verified due or coverage-end facts. It decides no financial "
-            "consequences."
+            "consequences. Optional summary batches cover "
+            "the filtered cohort using confirmed invoice allocations or "
+            "verified account funding. It decides no financial consequences."
         ),
     ),
     SOTService(
