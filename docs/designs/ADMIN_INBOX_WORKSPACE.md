@@ -155,7 +155,7 @@ the inbox behind it.
 Search remains a server-owned list query. The browser waits 300ms after input,
 updates only the `search` URL parameter, resets pagination, preserves the other
 active filters and selected conversation, and refreshes the authoritative
-sidebar projection. Without an explicit lifecycle filter, a non-empty search
+queue projection. Without an explicit lifecycle filter, a non-empty search
 includes active and resolved history. Explicit Active or status choices still
 narrow search results. Historical search is demand-loaded after the debounced
 input and retrieves one bounded page plus next-page evidence. Until the final
@@ -251,9 +251,20 @@ the deterministic rebuild path for those projections.
 
 Queue-only refreshes use a distinct typed projection composition. They compute
 only filtered rows, owner-selected exact or lazy pagination evidence, and row
-display facts; sidebar metrics, agent presence, selector options, labels, and
-saved views are not queried or rendered merely to be discarded by the HTMX
-queue selector.
+display facts. Sidebar metrics, agent presence, and saved views are not queried.
+The queue fragment still needs the bounded service-team and label choices for
+its bulk-action toolbar. Assigned-agent display names come from the row
+projection, not the sidebar's agent selector. Queue requests render the queue
+template directly and skip full-page route context.
+
+Operator filters, search, history navigation, and background activity refreshes
+target the queue-only fragment directly. This keeps assignment changes such as
+“Assigned to me” on the queue projection instead of recomputing the full
+sidebar composition for every click or poll. Controls reflect the last
+successfully rendered canonical filter state. A deliberate full-page
+refresh remains the path for refreshing sidebar metrics and options; those
+counts otherwise retain their last observed values. The control labels this
+freshness limit and offers an explicit full-page refresh for current counts.
 
 Each queue row displays only projected facts. Contact display identity resolves
 in this order: the linked canonical Party name, the linked legacy Subscriber

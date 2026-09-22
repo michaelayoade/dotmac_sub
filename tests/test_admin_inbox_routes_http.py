@@ -302,6 +302,26 @@ def test_queue_requests_pagination_count_evidence(captured_request):
     assert captured_request("?page=7").include_total_count is True
 
 
+def test_queue_target_renders_only_queue_without_full_sidebar_context(db_session):
+    client = _client(db_session)
+    with (
+        patch("app.services.web_admin.get_actor_id", return_value=None),
+        patch(
+            "app.web.admin.inbox._ctx",
+            side_effect=AssertionError("queue fragment built full-page context"),
+        ),
+    ):
+        response = client.get(
+            "/inbox", headers={"HX-Target": "inbox-conversation-queue"}
+        )
+
+    assert response.status_code == 200
+    assert 'id="inbox-conversation-queue"' in response.text
+    assert 'data-inbox-applied-url="' in response.text
+    assert "data-inbox-sidebar-content" not in response.text
+    assert 'id="inbox-bulk-form"' in response.text
+
+
 def test_mark_read_returns_typed_browser_result_without_redirect(db_session):
     conversation_id = uuid.uuid4()
     actor_id = uuid.uuid4()

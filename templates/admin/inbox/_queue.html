@@ -1,0 +1,97 @@
+{% from "admin/inbox/_queue_macros.html" import conversation_queue_item, inbox_pagination %}
+<div id="inbox-conversation-queue" data-inbox-applied-url="{{ list_query.url('/admin/inbox') }}{% if selected_id %}&amp;conversation_id={{ selected_id }}{% endif %}" data-inbox-result-count="{{ count }}" data-inbox-total-is-exact="{{ 'true' if page_meta.total_is_exact else 'false' }}" class="flex min-h-0 flex-1 flex-col">
+    <div x-show="newListActivityAvailable" x-cloak class="px-4 py-2">
+        <div class="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+            <span>New activity in the inbox.</span>
+            <button type="button"
+                    @click="refreshConversationList()"
+                    class="min-h-8 shrink-0 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2">
+                Refresh list
+            </button>
+        </div>
+    </div>
+
+    <form id="inbox-bulk-form" method="post" action="/admin/inbox/bulk" class="contents" x-data="{ bulkStatus: 'open' }">
+        {% include "components/forms/csrf_input.html" %}
+        <div x-show="selectedIds.length" x-cloak class="shrink-0 border-b border-slate-200/60 bg-white/80 px-3 py-2 backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-900/70">
+            <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+                <span class="shrink-0 text-xs font-semibold text-slate-700 dark:text-slate-200"><span x-text="selectedIds.length"></span> selected</span>
+                <select name="action"
+                        x-model="bulkAction"
+                        class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    <option value="status">Change status</option>
+                    <option value="priority">Change priority</option>
+                    <option value="escalate">Change assignment</option>
+                    <option value="label">Apply label</option>
+                </select>
+                <select x-show="bulkAction === 'status'"
+                        :disabled="bulkAction !== 'status'"
+                        x-model="bulkStatus"
+                        name="status_value"
+                        class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    {% for option in status_options %}<option value="{{ option }}">{{ option | title }}</option>{% endfor %}
+                </select>
+                <select x-show="bulkAction === 'status' && bulkStatus === 'resolved'"
+                        :disabled="bulkAction !== 'status' || bulkStatus !== 'resolved'"
+                        name="resolution_reason"
+                        aria-label="Resolution reason"
+                        class="h-9 max-w-56 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    <option value="no_further_action_required">No further action required</option>
+                    <option value="customer_stopped_responding">Customer stopped responding</option>
+                    <option value="whatsapp_window_expired">WhatsApp window expired</option>
+                    <option value="issue_completed_before_expiry">Issue completed before expiry</option>
+                    <option value="duplicate_conversation">Duplicate conversation</option>
+                    <option value="spam_irrelevant">Spam/irrelevant</option>
+                    <option value="other">Other</option>
+                </select>
+                <select x-show="bulkAction === 'priority'"
+                        :disabled="bulkAction !== 'priority'"
+                        name="priority"
+                        class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    <option value="75">Low</option><option value="50">Medium</option><option value="25">High</option><option value="0">Urgent</option><option value="100">None</option>
+                </select>
+                <select x-show="bulkAction === 'escalate'"
+                        :disabled="bulkAction !== 'escalate'"
+                        name="service_team_id"
+                        class="h-9 max-w-40 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}
+                </select>
+                <select x-show="bulkAction === 'label'"
+                        :disabled="bulkAction !== 'label'"
+                        name="label_id"
+                        aria-label="Label"
+                        class="h-9 max-w-40 shrink-0 rounded-lg border border-slate-200 bg-white py-1 pl-2 pr-7 text-xs text-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    {% for label in label_options %}<option value="{{ label.id }}">{{ label.name }}</option>{% endfor %}
+                </select>
+                <button type="submit"
+                        :disabled="selectedIds.length === 0"
+                        class="min-h-9 shrink-0 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-400">
+                    Apply
+                </button>
+                <button type="button"
+                        @click="clearSelection()"
+                        class="min-h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Clear
+                </button>
+            </div>
+        </div>
+
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain" data-conversation-list aria-label="Conversations">
+            {% if rows %}
+                {% for row in rows %}{{ conversation_queue_item(row, list_query, active_id=selected_id, agent_options=agent_options) }}{% endfor %}
+            {% else %}
+                <div class="flex min-h-64 flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+                    <div class="flex h-16 w-16 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800">
+                        <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+                    </div>
+                    <p class="mt-4 text-sm font-semibold text-slate-700 dark:text-slate-200">No conversations.</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {% if search %}No results for &lsquo;{{ search }}&rsquo;{% else %}All caught up!{% endif %}
+                    </p>
+                </div>
+            {% endif %}
+        </div>
+    </form>
+
+    {{ inbox_pagination(list_query, page_meta, '/admin/inbox', active_id=selected_id) }}
+</div>

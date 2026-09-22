@@ -90,11 +90,11 @@
         values: Array.isArray(rawValue) ? rawValue.map(String) : [],
       };
     };
-    const parseConditions = () => {
-      if (!initialJson) return [];
+    const parseConditions = (rawJson) => {
+      if (!rawJson) return [];
       try {
         const parsed =
-          typeof initialJson === "string" ? JSON.parse(initialJson) : initialJson;
+          typeof rawJson === "string" ? JSON.parse(rawJson) : rawJson;
         const entries = Array.isArray(parsed) ? parsed : [];
         const conditions = [];
         entries.forEach((entry) => {
@@ -115,10 +115,15 @@
         return [];
       }
     };
-    const initialConditions = parseConditions();
+    const initialConditions = parseConditions(initialJson);
     return {
       conditions: initialConditions,
       filtersJson: typeof initialJson === "string" ? initialJson : "",
+
+      setAppliedFilters(rawJson) {
+        this.filtersJson = String(rawJson || "");
+        this.conditions = parseConditions(this.filtersJson);
+      },
 
       usesMany(condition) {
         return ["in", "not in"].includes(condition.operator);
@@ -282,6 +287,7 @@
       pendingListRequest: null,
       listRequestError: "",
       lastSuccessfulListUrl: window.location.href,
+      filteredCountLabel: "—",
       /** @type {InboxListNavigation|null} */
       failedListNavigation: null,
       detailRequestSequence: 0,
@@ -333,6 +339,7 @@
           `${this.sidebarWidth}px`,
         );
         this.bindHtmx();
+        this.syncQueueCount();
         this.connectRealtime();
         this.startFallbackPolling();
         this.startPresenceHeartbeat();
@@ -498,6 +505,41 @@
 
       activeFilterCount() {
         return this.activeFilterChips().length;
+      },
+
+      filterValue(key) {
+        return new URL(this.lastSuccessfulListUrl).searchParams.get(key)
+          || (key === "view" ? "all" : "");
+      },
+
+      syncQueueCount() {
+        const queue = document.querySelector("#inbox-conversation-queue");
+        const count = queue?.dataset.inboxResultCount;
+        this.filteredCountLabel = count === undefined
+          ? "—"
+          : `${count}${queue.dataset.inboxTotalIsExact === "true" ? "" : "+"}`;
+      },
+
+      syncFilterControls() {
+        const search = document.querySelector("#inbox-conversation-search");
+        if (search) search.value = this.filterValue("search");
+        const form = document.querySelector("#inbox-filter-form");
+        form?.querySelectorAll("[name]").forEach((control) => {
+          if (control.name === "filters") return;
+          if (control.type === "checkbox") {
+            control.checked = this.filterValue(control.name) === "true";
+          } else if (control.type !== "submit" && control.type !== "button") {
+            control.value = this.filterValue(control.name);
+          }
+        });
+        window.dispatchEvent?.(new CustomEvent("inbox-filters-applied", {
+          detail: { filtersJson: this.filterValue("filters") },
+        }));
+      },
+
+      applyAdvancedFilters(form) {
+        const filters = form.querySelector('[name="filters"]')?.value || "";
+        this.navigateFilter({ filters });
       },
 
       removeActiveFilter(chip) {
@@ -826,7 +868,9 @@
               request.settled
             ) return;
             request.applied = true;
-            const url = new URL(request.navigation.url);
+            const appliedUrl = document.querySelector("#inbox-conversation-queue")
+              ?.dataset.inboxAppliedUrl;
+            const url = new URL(appliedUrl || request.navigation.url, window.location.origin);
             if (request.intent === "history") {
               const selected =
                 url.searchParams.get("conversation_id") || url.searchParams.get("c");
@@ -854,6 +898,8 @@
             }
             this.lastSuccessfulListUrl = url.href;
             window.__inboxReturnUrl = `${url.pathname}${url.search}`;
+            this.syncQueueCount();
+            if (request.operator) this.syncFilterControls();
             this.finishListRequest(request);
             this.syncSelectedCheckboxes();
             this.updateSelectedHighlight();
@@ -873,6 +919,7 @@
             event.button !== 0 ||
             link.closest(".conversation-item") ||
             link.hasAttribute("hx-get") ||
+            link.hasAttribute("data-inbox-full-reload") ||
             event.metaKey ||
             event.ctrlKey ||
             event.shiftKey ||
@@ -969,6 +1016,7 @@
         this.listRequestError = failed
           ? "Could not update conversations. Try again." : "";
         this.failedListNavigation = failed ? request.navigation : null;
+        if (failed && request.operator) this.syncFilterControls();
         if (failed && request.intent === "history") {
           history.replaceState({}, "", this.lastSuccessfulListUrl);
         }
@@ -998,6 +1046,13 @@
             : new URL(urlValue, window.location.origin);
         const intent = options.intent || "operator_filter";
         const backgroundIntents = ["poll", "read_state", "realtime"];
+        const queueOnlyIntents = [
+          "operator_filter",
+          "search",
+          "history",
+          ...backgroundIntents,
+        ];
+        const queueOnly = queueOnlyIntents.includes(intent);
         const operator = !backgroundIntents.includes(intent);
         const failedOperator =
           this.failedListNavigation &&
@@ -1012,9 +1067,11 @@
           url: url.href,
           intent,
           historyMode: options.historyMode || "none",
-          target: options.target || "#inbox-sidebar-content",
-          select: options.select,
-          swap: options.swap || "innerHTML",
+          target: options.target || (
+            queueOnly ? "#inbox-conversation-queue" : "#inbox-sidebar-content"
+          ),
+          select: options.select || (queueOnly ? "#inbox-conversation-queue" : undefined),
+          swap: options.swap || (queueOnly ? "outerHTML" : "innerHTML"),
         };
         try {
           const source = document.querySelector("#inbox-sidebar-content");

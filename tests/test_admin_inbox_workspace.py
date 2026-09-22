@@ -134,6 +134,7 @@ def test_inbox_workspace_templates_compile():
     for template_name in (
         "admin/inbox/index.html",
         "admin/inbox/_sidebar.html",
+        "admin/inbox/_queue.html",
         "admin/inbox/_conversation.html",
         "admin/inbox/_message.html",
         "admin/inbox/_queue_row.html",
@@ -410,7 +411,7 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "setInterval" in javascript
     assert "5000" in javascript
     assert "handleShortcut" in javascript
-    assert 'hx-sync="this:replace"' in sidebar
+    assert '@submit.prevent="applyAdvancedFilters($el)"' in sidebar
     assert ':aria-busy="filterLoading.toString()"' in sidebar
     assert "stale.xhr.abort()" in javascript
     assert "event.detail.shouldSwap = false" in javascript
@@ -470,7 +471,7 @@ def test_projection_supplies_live_agent_and_assignment_options(db_session):
     assert projection.assignment_counts.unassigned == 1
 
 
-def test_queue_only_projection_skips_sidebar_queries(db_session, monkeypatch):
+def test_queue_only_projection_skips_sidebar_metrics(db_session, monkeypatch):
     _conversation(db_session)
     db_session.commit()
 
@@ -478,7 +479,6 @@ def test_queue_only_projection_skips_sidebar_queries(db_session, monkeypatch):
         raise AssertionError("queue-only projection queried sidebar data")
 
     monkeypatch.setattr(team_inbox_operations, "queue_metrics", unexpected)
-    monkeypatch.setattr(team_inbox_operations, "list_labels", unexpected)
     monkeypatch.setattr(team_inbox_operations, "list_saved_filters", unexpected)
     monkeypatch.setattr(team_inbox_projection, "list_agent_options", unexpected)
     monkeypatch.setattr(team_inbox_projection, "get_agent_presence", unexpected)
@@ -495,10 +495,43 @@ def test_queue_only_projection_skips_sidebar_queries(db_session, monkeypatch):
 
     assert len(projection.rows) == 1
     assert projection.queue_metrics.total_open == 0
-    assert projection.service_team_options == ()
     assert projection.agent_options == ()
-    assert projection.label_options == ()
     assert projection.saved_filters == ()
+
+
+def test_queue_only_row_keeps_assignee_name_without_sidebar_agents(db_session):
+    user, person = add_bound_staff_user(db_session)
+    user.display_name = "Ada Agent"
+    team = ServiceTeam(name="Support", team_type=ServiceTeamType.support.value)
+    db_session.add(team)
+    db_session.flush()
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=person.id))
+    conversation_id = _conversation(db_session)
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=conversation_id,
+            service_team_id=team.id,
+            person_id=user.id,
+        )
+    )
+    db_session.commit()
+
+    projection = team_inbox_projection.build_queue_projection(
+        db_session,
+        team_inbox_projection.InboxQueueRequest(
+            assigned_person_id=str(user.id),
+            composition=team_inbox_projection.InboxQueueComposition.queue_only,
+            include_total_count=False,
+        ),
+    )
+
+    assert projection.agent_options == ()
+    assert projection.rows[0].active_assigned_person_name == "Ada Agent"
+    macro = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    rendered = macro.get_template(
+        "admin/inbox/_queue_macros.html"
+    ).module.conversation_queue_item(projection.rows[0], projection.list_query)
+    assert "Ada Agent" in rendered
 
 
 def test_projection_reads_current_agent_presence(db_session):
