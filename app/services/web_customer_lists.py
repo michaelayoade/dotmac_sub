@@ -23,6 +23,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import (
+    BillingCycle,
     BillingMode,
     NasDevice,
     Subscription,
@@ -56,9 +57,13 @@ from app.schemas.infrastructure import (
 )
 from app.services import infrastructure_catalogue
 from app.services import support as support_service
-from app.services.billing_profile import effective_billing_mode_clause
+from app.services.billing_profile import (
+    effective_billing_mode_clause,
+    resolve_billing_profiles,
+)
 from app.services.customer_account_visibility import splynx_deleted_import_clause
 from app.services.customer_chargeability import (
+    ChargeabilityReason,
     CustomerChargeability,
     CustomerChargeabilityStatus,
     non_billable_section_customer_clause,
@@ -68,6 +73,7 @@ from app.services.customer_support_links import (
     ticket_customer_any_link_filter,
     ticket_customer_linked_ids,
 )
+from app.services.domain_errors import DomainError
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -76,6 +82,9 @@ from app.services.list_query import (
     SortDirection,
 )
 from app.services.status_presentation import account_status_presentation
+from app.services.subscription_billing_treatments import (
+    resolve_subscription_reference_price,
+)
 
 _SUBSCRIBER_CATEGORY_COL: Any = Subscriber.metadata_["subscriber_category"].as_string()
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -204,6 +213,14 @@ class CustomerExportErrorCode(StrEnum):
     EMPTY_TARGET = "ui.customer_list_projection.empty_target"
 
 
+class CustomerExportBillingCategory(StrEnum):
+    PREPAID = "prepaid"
+    POSTPAID = "postpaid"
+    NON_BILLABLE = "non_billable"
+    REVIEW_REQUIRED = "review_required"
+    NO_CURRENT_SERVICE = "no_current_service"
+
+
 class CustomerExportQueryError(Exception):
     """Stable validation error for the customer-export query boundary."""
 
@@ -248,6 +265,10 @@ class CustomerExportRow:
     open_ticket_ids: str
     total_payment: str
     last_billing_date: str
+    billing_category: str
+    expected_monthly_charge: str
+    expected_annual_charge: str
+    recurring_charge_currency: str
 
     def values(self) -> tuple[str, ...]:
         return (
@@ -270,6 +291,10 @@ class CustomerExportRow:
             self.open_ticket_ids,
             self.total_payment,
             self.last_billing_date,
+            self.billing_category,
+            self.expected_monthly_charge,
+            self.expected_annual_charge,
+            self.recurring_charge_currency,
         )
 
 
@@ -286,6 +311,14 @@ class CustomerExportFacts:
     open_ticket_ids: tuple[str, ...]
     total_payment: Decimal
     last_billing_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRecurringExportFacts:
+    billing_category: CustomerExportBillingCategory
+    monthly_charge: Decimal | None
+    annual_charge: Decimal | None
+    currency: str
 
 
 CUSTOMER_EXPORT_HEADERS: tuple[str, ...] = (
@@ -308,6 +341,10 @@ CUSTOMER_EXPORT_HEADERS: tuple[str, ...] = (
     "open_ticket_ids",
     "total_payment",
     "last_billing_date",
+    "billing_category",
+    "expected_monthly_charge",
+    "expected_annual_charge",
+    "recurring_charge_currency",
 )
 
 
@@ -1353,11 +1390,96 @@ def _customer_export_facts(
     }
 
 
+def _customer_recurring_export_facts(
+    db: Session,
+    *,
+    customers: list[Subscriber],
+    as_of: datetime,
+) -> dict[UUID, CustomerRecurringExportFacts]:
+    """Project current base-service contract charges without guessing at drift."""
+    account_ids = tuple(customer.id for customer in customers)
+    chargeability = resolve_customer_chargeability(db, account_ids)
+    profiles = resolve_billing_profiles(db, customers)
+    outcomes: dict[UUID, CustomerRecurringExportFacts] = {}
+    for customer in customers:
+        assessment = chargeability[customer.id]
+        profile = profiles[customer.id]
+        if assessment.status is CustomerChargeabilityStatus.confirmed_non_billable:
+            outcomes[customer.id] = CustomerRecurringExportFacts(
+                CustomerExportBillingCategory.NON_BILLABLE,
+                Decimal("0.00"),
+                Decimal("0.00"),
+                "",
+            )
+            continue
+        if assessment.status is CustomerChargeabilityStatus.no_current_service:
+            outcomes[customer.id] = CustomerRecurringExportFacts(
+                CustomerExportBillingCategory.NO_CURRENT_SERVICE, None, None, ""
+            )
+            continue
+        if (
+            assessment.status is CustomerChargeabilityStatus.review_required
+            or not profile.automation_safe
+            or profile.effective_mode is None
+        ):
+            outcomes[customer.id] = CustomerRecurringExportFacts(
+                CustomerExportBillingCategory.REVIEW_REQUIRED, None, None, ""
+            )
+            continue
+
+        reasons = {
+            item.subscription_id: item.reason for item in assessment.subscriptions
+        }
+        totals = {
+            BillingCycle.monthly: Decimal("0.00"),
+            BillingCycle.annual: Decimal("0.00"),
+        }
+        currencies: set[str] = set()
+        unresolved = False
+        has_active_service = False
+        for subscription in customer.subscriptions or ():
+            if subscription.status is not SubscriptionStatus.active:
+                continue
+            has_active_service = True
+            if reasons.get(subscription.id) in {
+                ChargeabilityReason.active_billing_treatment,
+                ChargeabilityReason.explicit_zero_price,
+            }:
+                continue
+            try:
+                reference = resolve_subscription_reference_price(
+                    db, subscription, effective_at=as_of
+                )
+            except DomainError:
+                unresolved = True
+                break
+            currencies.add(reference.currency)
+            if reference.billing_cycle in totals:
+                totals[reference.billing_cycle] += reference.amount
+
+        if unresolved or len(currencies) > 1:
+            outcomes[customer.id] = CustomerRecurringExportFacts(
+                CustomerExportBillingCategory(profile.effective_mode.value),
+                None,
+                None,
+                "",
+            )
+            continue
+        outcomes[customer.id] = CustomerRecurringExportFacts(
+            CustomerExportBillingCategory(profile.effective_mode.value),
+            totals[BillingCycle.monthly] if has_active_service else None,
+            totals[BillingCycle.annual] if has_active_service else None,
+            next(iter(currencies), ""),
+        )
+    return outcomes
+
+
 def _customer_export_row(
     customer: Subscriber,
     *,
     customer_location: str | None,
     facts: CustomerExportFacts,
+    recurring: CustomerRecurringExportFacts,
 ) -> CustomerExportRow:
     subscriptions = sorted(
         customer.subscriptions or (),
@@ -1443,6 +1565,18 @@ def _customer_export_row(
         last_billing_date=(
             facts.last_billing_at.date().isoformat() if facts.last_billing_at else ""
         ),
+        billing_category=recurring.billing_category.value,
+        expected_monthly_charge=(
+            f"{recurring.monthly_charge:.2f}"
+            if recurring.monthly_charge is not None
+            else ""
+        ),
+        expected_annual_charge=(
+            f"{recurring.annual_charge:.2f}"
+            if recurring.annual_charge is not None
+            else ""
+        ),
+        recurring_charge_currency=recurring.currency,
     )
 
 
@@ -1501,11 +1635,15 @@ def build_customer_csv_export(
     )
     customer_ids = tuple(customer.id for customer in customers)
     export_facts = _customer_export_facts(db, customer_ids=customer_ids)
+    recurring_facts = _customer_recurring_export_facts(
+        db, customers=customers, as_of=datetime.now(UTC)
+    )
     rows = tuple(
         _customer_export_row(
             customer,
             customer_location=location_names.get(customer.pop_site_id),
             facts=export_facts[customer.id],
+            recurring=recurring_facts[customer.id],
         )
         for customer in customers
     )

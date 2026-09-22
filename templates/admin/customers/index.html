@@ -978,6 +978,30 @@ function customersPage(bulkContract) {
                 csvHeader: 'total_payment'
             },
             {
+                sourceColumn: 'billing_category',
+                label: 'Billing category',
+                description: 'Prepaid, postpaid, non-billable, or review state',
+                csvHeader: 'billing_category'
+            },
+            {
+                sourceColumn: 'expected_monthly_charge',
+                label: 'Expected monthly charge',
+                description: 'Current monthly base-service contract charge',
+                csvHeader: 'expected_monthly_charge'
+            },
+            {
+                sourceColumn: 'expected_annual_charge',
+                label: 'Expected annual charge',
+                description: 'Current annual base-service contract charge',
+                csvHeader: 'expected_annual_charge'
+            },
+            {
+                sourceColumn: 'recurring_charge_currency',
+                label: 'Recurring charge currency',
+                description: 'Currency of the expected recurring charges',
+                csvHeader: 'recurring_charge_currency'
+            },
+            {
                 sourceColumn: 'last_billing_date',
                 label: 'Last billing date',
                 description: 'Most recent invoice billing date',

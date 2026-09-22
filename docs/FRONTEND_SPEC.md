@@ -97,6 +97,21 @@ fallback. The admin export menu may project any selected subset of those columns
 in the browser, but it must not scrape the paginated table or derive additional
 domain state.
 
+The full export also carries `billing_category`, `expected_monthly_charge`,
+`expected_annual_charge`, and `recurring_charge_currency`. Category is
+`prepaid`, `postpaid`, `non_billable`, `review_required`, or
+`no_current_service`, resolved from the canonical chargeability and billing
+profile owners. Expected amounts sum the current, active subscriptions' base
+recurring contract price after a currently effective discount, grouped by the
+subscription's monthly or annual billing cycle. A complimentary or sponsored
+treatment suppresses that subscription's customer charge. Annual charges are
+the full annual amount, never divided by twelve. Daily, weekly, and quarterly
+subscriptions are excluded from these two cadence-specific amounts. These
+figures exclude tax, add-ons, usage, account credit, and invoice settlement;
+they describe recurring base charges rather than cash still owed. Unresolved
+price, account-mode drift, or mixed currency leaves amounts blank instead of
+publishing a misleading sum. Confirmed non-billable accounts show zero.
+
 ### Portal Account Health contract
 
 Customer dashboard, customer service detail, reseller account detail, and the

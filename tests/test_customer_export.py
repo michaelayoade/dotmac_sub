@@ -8,7 +8,15 @@ from decimal import Decimal
 import pytest
 
 from app.models.billing import Invoice, Payment, PaymentStatus
-from app.models.catalog import NasDevice, SubscriptionStatus
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    NasDevice,
+    OfferPrice,
+    PriceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.support import Ticket, TicketStatus
 from app.services import web_customer_lists
@@ -117,6 +125,94 @@ def test_complete_customer_csv_projects_advanced_analytical_fields(
     assert row["last_billing_date"] == ""
     assert exported.filename.startswith("customers_export_")
     assert exported.filename.endswith(".csv")
+
+
+@pytest.mark.parametrize("mode", [BillingMode.prepaid, BillingMode.postpaid])
+def test_customer_csv_separates_monthly_and_annual_contract_charges(
+    db_session, subscriber, subscription, mode
+):
+    subscriber.user_type = UserType.customer
+    subscriber.billing_mode = mode
+    subscription.billing_mode = mode
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_cycle = BillingCycle.monthly
+    subscription.unit_price = Decimal("125.00")
+    db_session.add(
+        OfferPrice(
+            offer_id=subscription.offer_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=subscription.offer_id,
+            billing_mode=mode,
+            billing_cycle=BillingCycle.annual,
+            unit_price=Decimal("1200.00"),
+            status=SubscriptionStatus.active,
+        )
+    )
+    db_session.commit()
+
+    exported = web_customer_lists.build_customer_csv_export(
+        db_session, export_query=_export_query(ids=f"person:{subscriber.id}")
+    )
+    row = next(csv.DictReader(io.StringIO(exported.content)))
+
+    assert row["billing_category"] == mode.value
+    assert row["expected_monthly_charge"] == "125.00"
+    assert row["expected_annual_charge"] == "1200.00"
+    assert row["recurring_charge_currency"] == "NGN"
+
+
+def test_customer_csv_marks_genuinely_free_service_non_billable(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.active
+    subscription.unit_price = None
+    db_session.add(
+        OfferPrice(
+            offer_id=subscription.offer_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("0.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    exported = web_customer_lists.build_customer_csv_export(
+        db_session, export_query=_export_query(ids=f"person:{subscriber.id}")
+    )
+    row = next(csv.DictReader(io.StringIO(exported.content)))
+
+    assert row["billing_category"] == "non_billable"
+    assert row["expected_monthly_charge"] == "0.00"
+    assert row["expected_annual_charge"] == "0.00"
+
+
+def test_customer_csv_leaves_unresolved_charge_blank(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    exported = web_customer_lists.build_customer_csv_export(
+        db_session, export_query=_export_query(ids=f"person:{subscriber.id}")
+    )
+    row = next(csv.DictReader(io.StringIO(exported.content)))
+
+    assert row["billing_category"] == "review_required"
+    assert row["expected_monthly_charge"] == ""
+    assert row["expected_annual_charge"] == ""
 
 
 def test_customer_csv_projects_open_tickets_payments_and_last_billing_date(

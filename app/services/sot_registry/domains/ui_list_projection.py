@@ -777,7 +777,10 @@ DOMAIN = DomainSOT(
                 "customer-chargeability resolver. The non-billable work section "
                 "contains confirmed free/treated service and separately labeled "
                 "missing or contradictory pricing review; offer names and billing "
-                "activation flags never classify free service."
+                "activation flags never classify free service. CSV recurring base "
+                "charges use current active subscription contracts, grouped by "
+                "monthly and annual cadence; ambiguous pricing or currency stays "
+                "blank rather than becoming an invented customer charge."
             ),
             contract=ServiceContract(
                 concerns=tuple(
@@ -979,6 +982,7 @@ DOMAIN = DomainSOT(
                     "tests/test_web_customer_lists.py",
                     "tests/test_customer_list_ui_contract.py",
                     "tests/test_customer_export.py",
+                    "tests/architecture/test_customer_recurring_export_boundary.py",
                     "tests/test_sot_relationships.py",
                 ),
             ),
