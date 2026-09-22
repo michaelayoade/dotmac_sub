@@ -3500,3 +3500,83 @@ def test_bulk_tariff_change_refuses_a_cohort_changed_after_preview(
         )
 
     assert exc_info.value.status_code == 409
+
+
+def test_create_subscription_blocks_pending_plan_change_duplicate(
+    db_session,
+    subscriber,
+    subscription,
+):
+    from datetime import date
+
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.models.subscription_change import (
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.schemas.catalog import CatalogOfferCreate
+
+    target_offer = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Target Upgrade Plan",
+            code=f"TARGET-UPGRADE-{uuid4().hex[:8]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        ),
+    )
+    subscription.status = SubscriptionStatus.disabled
+    db_session.add(
+        SubscriptionChangeRequest(
+            subscription_id=subscription.id,
+            current_offer_id=subscription.offer_id,
+            requested_offer_id=target_offer.id,
+            effective_date=date.today(),
+            status=SubscriptionChangeStatus.pending,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="pending plan change"):
+        web_catalog_subscriptions_service.create_subscription_with_audit(
+            db_session,
+            {"account_id": subscriber.id, "offer_id": target_offer.id},
+            FormData([]),
+            None,
+            None,
+        )
+
+    assert (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .count()
+        == 1
+    )
+
+
+def test_create_subscription_blocks_prepaid_initial_invoice(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    before = db_session.query(Subscription).filter(
+        Subscription.subscriber_id == subscriber.id
+    ).count()
+
+    with pytest.raises(ValueError, match="prepaid subscription"):
+        web_catalog_subscriptions_service.create_subscription_with_audit(
+            db_session,
+            {
+                "account_id": subscriber.id,
+                "offer_id": catalog_offer.id,
+                "billing_mode": BillingMode.prepaid,
+            },
+            FormData([("generate_invoice", "1")]),
+            None,
+            None,
+        )
+
+    assert db_session.query(Subscription).filter(
+        Subscription.subscriber_id == subscriber.id
+    ).count() == before

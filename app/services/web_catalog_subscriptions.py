@@ -58,6 +58,10 @@ from app.models.radius import (
 )
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
+from app.models.subscription_change import (
+    SubscriptionChangeRequest,
+    SubscriptionChangeStatus,
+)
 from app.schemas.catalog import (
     SubscriptionCreate,
     SubscriptionTechnicalUpdate,
@@ -83,6 +87,7 @@ from app.services.billing_adapter import (
     InvoiceLineIntent,
     billing_adapter,
 )
+from app.services.billing_profile import resolve_subscription_billing_mode_for_write
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.billing_tax_resolution import resolve_subscription_tax
 from app.services.credential_crypto import decrypt_credential
@@ -4543,6 +4548,61 @@ def create_subscription_with_audit(
     _, generate_invoice, send_welcome_email = apply_create_quick_options(
         payload_data, form
     )
+
+    subscriber_id = payload_data.get("subscriber_id") or payload_data.get(
+        "account_id"
+    )
+    offer_id = payload_data.get("offer_id")
+    subscriber_uuid = UUID(str(subscriber_id)) if subscriber_id else None
+    offer_uuid = UUID(str(offer_id)) if offer_id else None
+    if subscriber_uuid and offer_uuid:
+        pending_plan_change = db.scalar(
+            select(SubscriptionChangeRequest.id)
+            .join(
+                Subscription,
+                Subscription.id == SubscriptionChangeRequest.subscription_id,
+            )
+            .where(Subscription.subscriber_id == subscriber_uuid)
+            .where(SubscriptionChangeRequest.requested_offer_id == offer_uuid)
+            .where(
+                SubscriptionChangeRequest.status.in_(
+                    (
+                        SubscriptionChangeStatus.pending,
+                        SubscriptionChangeStatus.approved,
+                    )
+                )
+            )
+            .where(SubscriptionChangeRequest.applied_at.is_(None))
+            .where(SubscriptionChangeRequest.is_active.is_(True))
+            .limit(1)
+        )
+        if pending_plan_change is not None:
+            raise ValueError(
+                "This customer has a pending plan change for the selected plan. "
+                "Use the plan-change workflow instead of creating a new subscription."
+            )
+
+    if generate_invoice:
+        requested_billing_mode = payload_data.get("billing_mode")
+        requested_billing_mode = (
+            requested_billing_mode
+            if isinstance(requested_billing_mode, BillingMode)
+            else BillingMode(str(requested_billing_mode))
+            if requested_billing_mode
+            else None
+        )
+        effective_billing_mode = resolve_subscription_billing_mode_for_write(
+            db,
+            account_id=subscriber_uuid,
+            offer_id=offer_uuid,
+            requested_mode=requested_billing_mode,
+        )
+        if effective_billing_mode is BillingMode.prepaid:
+            raise ValueError(
+                "A prepaid subscription cannot receive an initial invoice. "
+                "Use the prepaid funding or plan-change workflow instead."
+            )
+
     created = create_subscription(db, payload_data)
 
     subscriber = db.get(Subscriber, created.subscriber_id)
