@@ -55,6 +55,7 @@ def _fiber_origin(db_session) -> tuple[UUID, UUID]:
         capture_reason="signed Fiber inquiry fixture",
     )
     db_session.add(origin)
+    db_session.flush()
     lead_id = lead.id
     origin_id = origin.id
     db_session.commit()
