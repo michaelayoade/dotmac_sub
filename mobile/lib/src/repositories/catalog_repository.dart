@@ -105,7 +105,8 @@ class CatalogRepository {
       ),
     );
     return (data as List)
-        .map((item) => PlanOffer.fromJson((item as Map).cast<String, dynamic>()))
+        .map(
+            (item) => PlanOffer.fromJson((item as Map).cast<String, dynamic>()))
         .toList();
   }
 

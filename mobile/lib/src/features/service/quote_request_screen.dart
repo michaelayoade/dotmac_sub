@@ -153,7 +153,8 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
           );
       ref.invalidate(quotesProvider);
       if (!mounted) return;
-      _snack('Request sent. Check your coverage result while staff review the quote.');
+      _snack(
+          'Request sent. Check your coverage result while staff review the quote.');
       context.pop();
     } on ApiException catch (e) {
       _snack(e.message);

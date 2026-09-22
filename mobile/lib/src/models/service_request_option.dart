@@ -53,15 +53,19 @@ enum ServiceRequestOption {
   final String description;
 
   String get destinationAccessType => switch (this) {
-        fiberInstallation || fiberToFiberRelocation ||
-        airfiberToFiberRelocation => 'fiber',
+        fiberInstallation ||
+        fiberToFiberRelocation ||
+        airfiberToFiberRelocation =>
+          'fiber',
         _ => 'fixed_wireless',
       };
 
   String? get sourceAccessType => switch (this) {
         fiberToFiberRelocation || fiberToAirfiberRelocation => 'fiber',
-        airfiberToFiberRelocation || airfiberToAirfiberNoCable ||
-        airfiberToAirfiberWithCable => 'fixed_wireless',
+        airfiberToFiberRelocation ||
+        airfiberToAirfiberNoCable ||
+        airfiberToAirfiberWithCable =>
+          'fixed_wireless',
         _ => null,
       };
 

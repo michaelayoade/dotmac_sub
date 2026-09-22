@@ -157,9 +157,11 @@ class _ServiceRequestSheetState extends ConsumerState<ServiceRequestSheet> {
                   if (planOptions == null || planOptions.isLoading)
                     const LinearProgressIndicator()
                   else if (planOptions.hasError)
-                    const Text('Could not load destination plans. Please try again.')
+                    const Text(
+                        'Could not load destination plans. Please try again.')
                   else if (planOptions.value!.isEmpty)
-                    const Text('No destination plans are available for this move.')
+                    const Text(
+                        'No destination plans are available for this move.')
                   else
                     DropdownButtonFormField<String>(
                       key: const ValueKey('relocation-destination-plan'),

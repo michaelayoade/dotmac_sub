@@ -80,12 +80,13 @@ void main() {
     );
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        subscriptionsProvider.overrideWith((_) async => model.Page<Subscription>(
-              items: [service],
-              count: 1,
-              limit: 1,
-              offset: 0,
-            )),
+        subscriptionsProvider
+            .overrideWith((_) async => model.Page<Subscription>(
+                  items: [service],
+                  count: 1,
+                  limit: 1,
+                  offset: 0,
+                )),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -111,10 +112,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('cable replacement'), findsWidgets);
     expect(
-      tester.widget<FilledButton>(find.widgetWithText(
-        FilledButton,
-        'Continue to location',
-      )).onPressed,
+      tester
+          .widget<FilledButton>(find.widgetWithText(
+            FilledButton,
+            'Continue to location',
+          ))
+          .onPressed,
       isNull,
     );
     await tester.tap(find.text('Service to relocate'));
@@ -137,22 +140,23 @@ void main() {
     ServiceRequestSelection? selected;
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        subscriptionsProvider.overrideWith((_) async => model.Page<Subscription>(
-              items: [
-                Subscription(
-                  id: 'service-1',
-                  accountId: 'customer-1',
-                  offerId: 'fiber-plan',
-                  status: 'active',
-                  billingMode: 'prepaid',
-                  offerName: 'Current fiber plan',
-                  offerAccessType: 'fiber',
-                ),
-              ],
-              count: 1,
-              limit: 1,
-              offset: 0,
-            )),
+        subscriptionsProvider
+            .overrideWith((_) async => model.Page<Subscription>(
+                  items: [
+                    Subscription(
+                      id: 'service-1',
+                      accountId: 'customer-1',
+                      offerId: 'fiber-plan',
+                      status: 'active',
+                      billingMode: 'prepaid',
+                      offerName: 'Current fiber plan',
+                      offerAccessType: 'fiber',
+                    ),
+                  ],
+                  count: 1,
+                  limit: 1,
+                  offset: 0,
+                )),
         relocationPlansProvider.overrideWith((_, __) async => [
               PlanOffer(
                 id: 'airfiber-plan',
@@ -194,10 +198,12 @@ void main() {
     await tester.tap(find.text('Fiber to Airfiber Relocation').last);
     await tester.pumpAndSettle();
     expect(
-      tester.widget<FilledButton>(find.widgetWithText(
-        FilledButton,
-        'Continue to location',
-      )).onPressed,
+      tester
+          .widget<FilledButton>(find.widgetWithText(
+            FilledButton,
+            'Continue to location',
+          ))
+          .onPressed,
       isNull,
     );
     await tester.ensureVisible(find.text('Plan at your new address'));
