@@ -1193,7 +1193,8 @@ def test_operator_filters_and_background_refreshes_use_the_queue_only_projection
     assert '"operator_filter"' in body
     assert '"search"' in body
     assert '"history"' in body
-    assert '"poll"' in body
+    assert 'const backgroundIntents = ["poll", "read_state", "realtime"]' in JAVASCRIPT
+    assert "...backgroundIntents" in body
     assert "target: options.target || (" in body
     assert '"#inbox-conversation-queue"' in body
     assert 'select: options.select || (queueOnly ? "#inbox-conversation-queue"' in body

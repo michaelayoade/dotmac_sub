@@ -127,7 +127,9 @@ class TestQueueFiltersRoundTrip:
         admin_page.get_by_role(
             "button", name=re.compile("Inbox Stats & Filters")
         ).click()
-        admin_page.get_by_text("Assignment", exact=True).click()
+        admin_page.locator("#inbox-stats-filters summary").filter(
+            has_text="Assignment"
+        ).click()
 
         with admin_page.expect_response(
             lambda response: (
