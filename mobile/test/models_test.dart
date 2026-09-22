@@ -658,6 +658,35 @@ void main() {
       },
     );
 
+    test('TopupPage parses the active deposit projection', () {
+      final page = TopupPage.fromJson({
+        'provider_type': 'paystack',
+        'min_amount': 1000,
+        'max_amount': 500000,
+        'deposit_allowed': false,
+        'active_deposit_request': {
+          'intent_id': 'intent-1',
+          'phase': 'under_review',
+          'next_action': 'wait_for_review',
+          'provider_type': 'direct_bank_transfer',
+          'reference': 'TRF-PENDING',
+          'amount': '20000.00',
+          'currency': 'NGN',
+          'created_at': '2026-09-22T10:00:00Z',
+          'observed_at': '2026-09-22T11:00:00Z',
+          'message': 'Your transfer receipt is under review.',
+          'can_cancel': false,
+        },
+      });
+
+      expect(page.depositAllowed, isFalse);
+      expect(page.activeDepositRequest?.phase, TopupRequestPhase.underReview);
+      expect(page.activeDepositRequest?.nextAction,
+          TopupRequestAction.waitForReview);
+      expect(page.activeDepositRequest?.amount, 20000.0);
+      expect(page.activeDepositRequest?.reference, 'TRF-PENDING');
+    });
+
     test(
       'TopupPreview parses invoice application breakdown and fingerprint',
       () {

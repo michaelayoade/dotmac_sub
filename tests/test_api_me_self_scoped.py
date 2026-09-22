@@ -7,6 +7,7 @@ the scope passed to the underlying list services.
 
 import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -491,6 +492,63 @@ def test_topup_initiate_403_for_non_subscriber():
             principal=_system_user_principal(),
         )
     assert exc.value.status_code == 403
+
+
+def test_topup_page_exposes_owner_active_request(monkeypatch):
+    intent_id = uuid.uuid4()
+    observed_at = datetime.now(UTC)
+    active_request = {
+        "intent_id": str(intent_id),
+        "phase": "under_review",
+        "next_action": "wait_for_review",
+        "provider_type": "direct_bank_transfer",
+        "reference": "TRF-PENDING",
+        "amount": Decimal("20000.00"),
+        "currency": "NGN",
+        "created_at": observed_at - timedelta(hours=1),
+        "expires_at": observed_at + timedelta(days=1),
+        "observed_at": observed_at,
+        "message": "Your transfer receipt is under review.",
+        "rejection_reason": None,
+        "can_cancel": False,
+    }
+    monkeypatch.setattr(me_api, "_customer", lambda db, principal: {"account_id": "x"})
+    monkeypatch.setattr(
+        me_api.customer_payments,
+        "get_topup_page",
+        lambda db, customer: {
+            "provider_type": "paystack",
+            "min_amount": 1000,
+            "max_amount": 500000,
+            "deposit_allowed": False,
+            "active_deposit_request": active_request,
+        },
+    )
+    monkeypatch.setattr(
+        me_api.customer_payments,
+        "enabled_direct_bank_transfer_accounts",
+        lambda db: [],
+    )
+    monkeypatch.setattr(
+        me_api.customer_payments,
+        "direct_bank_transfer_settings",
+        lambda db: {},
+    )
+    monkeypatch.setattr(
+        me_api.customer_payments,
+        "customer_direct_bank_transfer_enabled",
+        lambda db: False,
+    )
+
+    response = me_api.my_topup_page(db=None, principal=_subscriber_principal())
+
+    assert response.deposit_allowed is False
+    assert response.active_deposit_request is not None
+    assert response.active_deposit_request.intent_id == intent_id
+    assert response.active_deposit_request.next_action == "wait_for_review"
+    assert response.model_dump(mode="json")["active_deposit_request"]["message"] == (
+        "Your transfer receipt is under review."
+    )
 
 
 def test_plan_change_submit_403_for_non_subscriber():

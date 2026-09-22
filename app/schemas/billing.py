@@ -1353,6 +1353,33 @@ class TopupPreviewResponse(BaseModel):
     preview_fingerprint: str = Field(min_length=64, max_length=64)
 
 
+class TopupActiveRequestResponse(BaseModel):
+    """Owner-projected deposit that currently blocks a replacement checkout."""
+
+    intent_id: UUID
+    phase: Literal[
+        "awaiting_receipt",
+        "awaiting_provider_confirmation",
+        "processing",
+        "confirmation_unavailable",
+        "under_review",
+        "receipt_rejected",
+    ]
+    next_action: Literal[
+        "upload_receipt", "wait_for_provider", "wait_for_review", "contact_support"
+    ]
+    provider_type: str
+    reference: str
+    amount: Decimal
+    currency: str
+    created_at: datetime
+    expires_at: datetime | None = None
+    observed_at: datetime
+    message: str
+    rejection_reason: str | None = None
+    can_cancel: bool = False
+
+
 class TopupPageResponse(BaseModel):
     provider_type: str
     provider_public_key: str | None = None
@@ -1360,6 +1387,7 @@ class TopupPageResponse(BaseModel):
     prepaid_balance: Decimal | None = None
     account_credit: Decimal | None = None
     deposit_allowed: bool = True
+    active_deposit_request: TopupActiveRequestResponse | None = None
     eligible_unpaid_total: Decimal = Decimal("0.00")
     eligible_unpaid_invoices: list[TopupEligibleInvoice] = Field(default_factory=list)
     min_amount: int
