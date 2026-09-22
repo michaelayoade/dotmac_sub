@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -185,9 +186,21 @@ class ChatController extends FamilyNotifier<ChatState, String>
     if (session == null) return;
     try {
       final history = await _repo.history(session);
-      final grew = history.length != state.messages.length;
+      final historyKeys = {
+        for (final message in history)
+          if (message.clientMessageId != null) message.clientMessageId,
+      };
+      final pending = state.messages
+          .where((message) =>
+              message.status != MessageStatus.sent &&
+              !historyKeys.contains(message.clientMessageId))
+          .toList();
+      final grew = history.length !=
+          state.messages
+              .where((message) => message.status == MessageStatus.sent)
+              .length;
       state = state.copyWith(
-        messages: history,
+        messages: [...history, ...pending],
         agentReadAt: _laterReadAt(state.agentReadAt, _readWatermark(history)),
       );
       if (grew) unawaited(_repo.markRead(session));
@@ -339,27 +352,39 @@ class ChatController extends FamilyNotifier<ChatState, String>
     return a.isAfter(b) ? a : b;
   }
 
-  Future<void> send(String text) async {
+  Future<void> send(String text,
+      {List<ChatUpload> uploads = const [], String? clientMessageId}) async {
     final session = state.session;
     final body = text.trim();
-    if (session == null || body.isEmpty) return;
+    if (session == null || (body.isEmpty && uploads.isEmpty) || state.sending) {
+      return;
+    }
     _stopTyping();
     // Optimistic: show the message immediately as "sending", then flip to sent
     // on ACK or failed on error (a failed bubble can be tapped to retry).
     final tempId = 'temp-${++_tempSeq}';
+    final messageKey = clientMessageId ??
+        '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(0x7fffffff)}';
     final optimistic = ChatMessage(
       id: tempId,
       body: body,
+      uploads: uploads,
+      attachments: [
+        for (final upload in uploads)
+          ChatAttachment(id: '', name: upload.name, localPath: upload.path),
+      ],
       fromAgent: false,
       createdAt: DateTime.now(),
       status: MessageStatus.sending,
+      clientMessageId: messageKey,
     );
     state = state.copyWith(
       messages: [...state.messages, optimistic],
       sending: true,
     );
     try {
-      final result = await _repo.send(session, body);
+      final result = await _repo.send(session, body,
+          uploads: uploads, clientMessageId: messageKey);
       final seen = <String>{};
       final msgs = <ChatMessage>[];
       for (final m in state.messages) {
@@ -388,10 +413,12 @@ class ChatController extends FamilyNotifier<ChatState, String>
 
   /// Re-send a previously failed message (tapped in the log).
   Future<void> retryFailed(ChatMessage failed) async {
+    if (state.sending) return;
     state = state.copyWith(
       messages: state.messages.where((m) => m.id != failed.id).toList(),
     );
-    await send(failed.body);
+    await send(failed.body,
+        uploads: failed.uploads, clientMessageId: failed.clientMessageId);
   }
 }
 

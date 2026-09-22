@@ -4,16 +4,31 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TypeVar
 from urllib.parse import urlsplit
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.responses import StreamingResponse
 
 from app.config import settings
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.request_meta import client_ip
 from app.schemas.chat import FiberChatSessionCreate, FiberChatSessionResponse
-from app.services import team_inbox_widget
+from app.services import team_inbox_media, team_inbox_widget
+from app.services.file_storage import (
+    build_content_disposition,
+    build_inline_content_disposition,
+)
 from app.services.rate_limiter_adapter import allow_operation
 
 router = APIRouter(prefix="/widget", tags=["chat-widget"])
@@ -34,6 +49,12 @@ def _widget_call(action: Callable[[], ResultT]) -> ResultT:
             "reseller_not_found": 404,
             "conversation_not_found": 404,
             "message_required": 400,
+            "message_too_long": 400,
+            "too_many_photos": 400,
+            "invalid_photo": 400,
+            "media_not_found": 404,
+            "invalid_message_id": 400,
+            "message_id_conflict": 409,
         }.get(suffix, 400)
         raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
@@ -138,13 +159,16 @@ def widget_session_messages(
     principal = _principal(db, x_visitor_token)
     if principal.session_id != session_id:
         raise HTTPException(status_code=403, detail="Session mismatch")
-    return _widget_call(
+    history = _widget_call(
         lambda: team_inbox_widget.list_session_messages(
             db,
-            principal=principal,
-            limit=limit,
+            query=team_inbox_widget.WidgetMessageHistoryQuery(
+                principal=principal,
+                limit=limit,
+            ),
         )
     )
+    return history.as_response()
 
 
 @router.post("/session/{session_id}/message")
@@ -156,6 +180,25 @@ def widget_session_message_create(
     db: Session = Depends(get_db),
 ) -> dict:
     principal = _principal(db, x_visitor_token)
+    _require_message_rate(principal, request)
+    finish_read_transaction(db)
+    outcome = _widget_call(
+        lambda: team_inbox_widget.add_visitor_message_committed(
+            db,
+            session_id=session_id,
+            principal=principal,
+            command=team_inbox_widget.VisitorMessageCommand(
+                body=payload.body,
+                client_message_id=payload.client_message_id,
+            ),
+        )
+    )
+    return outcome.as_response()
+
+
+def _require_message_rate(
+    principal: team_inbox_widget.WidgetPrincipal, request: Request
+) -> None:
     decision = allow_operation(
         f"chat-widget-message:{principal.session_id}:{client_ip(request)}",
         limit=30,
@@ -169,14 +212,89 @@ def widget_session_message_create(
                 "Retry-After": str(decision.retry_after_seconds or 60),
             },
         )
-    return _widget_call(
+
+
+@router.post("/session/{session_id}/message/media")
+async def widget_session_media_message_create(
+    session_id: str,
+    request: Request,
+    body: str = Form(default="", max_length=2000),
+    client_message_id: str | None = Form(default=None, max_length=100),
+    attachments: list[UploadFile] = File(default=[]),
+    x_visitor_token: str | None = Header(default=None, alias="X-Visitor-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    principal = _principal(db, x_visitor_token)
+    if principal.session_id != session_id:
+        raise HTTPException(status_code=403, detail="Session mismatch")
+    _require_message_rate(principal, request)
+    finish_read_transaction(db)
+    if len(attachments) > team_inbox_widget.MAX_VISITOR_PHOTOS:
+        raise HTTPException(status_code=400, detail="You can attach up to five photos.")
+    photo_rows: list[team_inbox_widget.VisitorPhoto] = []
+    for file in attachments:
+        photo_rows.append(
+            team_inbox_widget.VisitorPhoto(
+                file_name=file.filename or "photo",
+                content_type=file.content_type or "",
+                data=await file.read(team_inbox_widget.MAX_VISITOR_PHOTO_BYTES + 1),
+            )
+        )
+    photos = tuple(photo_rows)
+    outcome = _widget_call(
         lambda: team_inbox_widget.add_visitor_message_committed(
             db,
             session_id=session_id,
             principal=principal,
-            body=payload.body,
-            client_message_id=payload.client_message_id,
+            command=team_inbox_widget.VisitorMessageCommand(
+                body=body,
+                client_message_id=client_message_id,
+                photos=photos,
+            ),
         )
+    )
+    return outcome.as_response()
+
+
+@router.get("/session/{session_id}/media/{asset_id}")
+def widget_session_media_content(
+    session_id: str,
+    asset_id: UUID,
+    x_visitor_token: str | None = Header(default=None, alias="X-Visitor-Token"),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    from app.services import team_inbox_projection
+
+    principal = _principal(db, x_visitor_token)
+    if principal.session_id != session_id:
+        raise HTTPException(status_code=403, detail="Session mismatch")
+    authorized_id = _widget_call(
+        lambda: team_inbox_widget.resolve_visitor_media(
+            db, principal=principal, asset_id=asset_id
+        )
+    )
+    try:
+        projection = team_inbox_projection.get_media_content_projection(
+            db, asset_id=authorized_id
+        )
+    except team_inbox_media.MediaContentError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    headers = {
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": (
+            build_inline_content_disposition(projection.file_name)
+            if projection.presentation
+            is team_inbox_projection.InboxMediaBrowserPresentation.inline
+            else build_content_disposition(projection.file_name)
+        ),
+        "X-Content-Type-Options": "nosniff",
+    }
+    if projection.content_length is not None:
+        headers["Content-Length"] = str(projection.content_length)
+    return StreamingResponse(
+        projection.chunks,
+        media_type=projection.content_type,
+        headers=headers,
     )
 
 
