@@ -1779,7 +1779,11 @@ detailed security and delivery boundary is
    facts and exact prepaid entitlement endings are selected as bounded,
    indexed pages; visible prepaid candidates compose the canonical
    `financial.prepaid_service_renewals` charge resolver and
-   `customer.financial_position` funding resolver. This projection is
+   `customer.financial_position` funding resolver. Filtered summary cards use
+   confirmed payment allocations for postpaid receipts and bounded exact-charge
+   batches with account-deduplicated verified funding for prepaid. Missing
+   prepaid charge evidence is counted separately rather than treated as zero.
+   This projection is
    read-only and never changes billing, collection, or access state.
 11. `financial.prepaid_enforcement` owns the account-scoped warn, suspend, and
    restore decision. Every scheduled pass consumes the live currency-bound

@@ -2170,6 +2170,7 @@ def reports_upcoming_charges(
         include_funded=include_funded,
         page=page,
         per_page=per_page,
+        include_summary=True,
     )
     ctx = _base_context(
         request,

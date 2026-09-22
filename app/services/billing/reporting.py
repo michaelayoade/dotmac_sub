@@ -16,8 +16,20 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    false,
+    func,
+    or_,
+    select,
+    tuple_,
+)
 from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.sql import Select
 
 from app.models.billing import (
     CreditNote,
@@ -25,6 +37,7 @@ from app.models.billing import (
     Invoice,
     InvoiceStatus,
     Payment,
+    PaymentAllocation,
     PaymentChannel,
     PaymentMethod,
     PaymentStatus,
@@ -84,6 +97,21 @@ class UpcomingChargesQuery:
     page: int = 1
     per_page: int = 25
     as_of: datetime | None = None
+    include_summary: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargeCurrencySummary:
+    currency: str
+    expected: Decimal
+    received: Decimal
+    not_received: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargesSummary:
+    amounts: tuple[UpcomingChargeCurrencySummary, ...]
+    unpriced_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +143,7 @@ class UpcomingChargesPage:
     per_page: int
     has_previous: bool
     has_next: bool
+    summary: UpcomingChargesSummary | None = None
 
 
 def _parse_nonnegative_decimal(raw: str, *, label: str) -> Decimal:
@@ -237,6 +266,7 @@ def _postpaid_upcoming_charges(
     state: UpcomingChargeState,
     page: int,
     per_page: int,
+    include_summary: bool,
 ) -> UpcomingChargesPage:
     from app.models.billing import InvoiceDueDateBasis
     from app.models.catalog import BillingMode, SubscriptionStatus
@@ -292,6 +322,40 @@ def _postpaid_upcoming_charges(
         .join(Subscriber, Subscriber.id == Invoice.account_id)
         .where(*filters)
     )
+    summary = None
+    if include_summary:
+        allocated_payment = (
+            select(func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")))
+            .join(Payment, Payment.id == PaymentAllocation.payment_id)
+            .where(
+                PaymentAllocation.invoice_id == Invoice.id,
+                PaymentAllocation.is_active.is_(True),
+                Payment.is_active.is_(True),
+                Payment.status == PaymentStatus.succeeded,
+                Payment.currency == Invoice.currency,
+            )
+            .correlate(Invoice)
+            .scalar_subquery()
+        )
+        summary_rows = db.execute(
+            base.with_only_columns(
+                Invoice.currency,
+                func.sum(Invoice.balance_due),
+                func.sum(allocated_payment),
+                maintain_column_froms=True,
+            ).group_by(Invoice.currency)
+        ).all()
+        summary = UpcomingChargesSummary(
+            amounts=tuple(
+                UpcomingChargeCurrencySummary(
+                    currency=currency,
+                    expected=Decimal(balance) + Decimal(received),
+                    received=Decimal(received),
+                    not_received=Decimal(balance),
+                )
+                for currency, balance, received in summary_rows
+            )
+        )
     records = db.execute(
         base.order_by(Invoice.due_at.asc(), Invoice.id.asc())
         .offset((page - 1) * per_page)
@@ -339,6 +403,7 @@ def _postpaid_upcoming_charges(
         per_page=per_page,
         has_previous=page > 1,
         has_next=has_next,
+        summary=summary,
     )
 
 
@@ -352,6 +417,7 @@ def _prepaid_upcoming_charges(
     include_funded: bool,
     page: int,
     per_page: int,
+    include_summary: bool,
 ) -> UpcomingChargesPage:
     from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
     from app.models.catalog import (
@@ -417,6 +483,17 @@ def _prepaid_upcoming_charges(
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
         .where(*filters)
+    )
+    summary = (
+        _prepaid_upcoming_summary(
+            db,
+            base=base,
+            now=now,
+            state=state,
+            include_funded=include_funded,
+        )
+        if include_summary
+        else None
     )
     records = db.execute(
         base.order_by(ServiceEntitlement.ends_at.asc(), Subscription.id.asc())
@@ -496,6 +573,101 @@ def _prepaid_upcoming_charges(
         per_page=per_page,
         has_previous=page > 1,
         has_next=has_next,
+        summary=summary,
+    )
+
+
+def _prepaid_upcoming_summary(
+    db: Session,
+    *,
+    base: Select[tuple[Subscription, datetime, Subscriber, str, bool]],
+    now: datetime,
+    state: UpcomingChargeState,
+    include_funded: bool,
+) -> UpcomingChargesSummary:
+    from app.models.billing import ServiceEntitlement
+    from app.services.customer_financial_position import prepaid_available_balances
+    from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charges
+
+    batch_size = 100
+    totals: dict[str, list[Decimal]] = {}
+    account_expected: dict[str, Decimal] = {}
+    account_id: UUID | None = None
+    account_funding = Decimal("0.00")
+    unpriced_count = 0
+    last_key: tuple[UUID, UUID, UUID] | None = None
+
+    def finish_account() -> None:
+        for currency, expected in account_expected.items():
+            funded = min(max(account_funding, Decimal("0.00")), expected)
+            totals[currency][1] += funded
+            totals[currency][2] += expected - funded
+
+    # Keyset batches keep pricing and wallet resolution bounded while covering
+    # the complete filtered cohort, including records beyond the current page.
+    while True:
+        stmt = base.add_columns(ServiceEntitlement.id)
+        if last_key is not None:
+            stmt = stmt.where(
+                tuple_(
+                    Subscription.subscriber_id,
+                    Subscription.id,
+                    ServiceEntitlement.id,
+                )
+                > last_key
+            )
+        batch = db.execute(
+            stmt.order_by(
+                Subscription.subscriber_id,
+                Subscription.id,
+                ServiceEntitlement.id,
+            ).limit(batch_size)
+        ).all()
+        if not batch:
+            break
+        subscriptions = [record[0] for record in batch]
+        charges = resolve_prepaid_monthly_charges(db, subscriptions, now)
+        balances = prepaid_available_balances(
+            db, (subscription.subscriber_id for subscription in subscriptions)
+        )
+        for subscription, _ends_at, _subscriber, _plan, lock, _entitlement_id in batch:
+            if account_id != subscription.subscriber_id:
+                finish_account()
+                account_expected = {}
+                account_id = subscription.subscriber_id
+                account_funding = balances.get(account_id, Decimal("0.00"))
+            charge = charges.get(subscription.id)
+            if charge is None:
+                if state is not UpcomingChargeState.needs_review:
+                    unpriced_count += 1
+                continue
+            amount, currency, _cycle = charge
+            funded = account_funding >= amount
+            needs_review = bool(lock) and funded
+            if state is UpcomingChargeState.needs_review and not needs_review:
+                continue
+            if funded and not include_funded and not needs_review:
+                continue
+            totals.setdefault(currency, [Decimal("0.00")] * 3)[0] += amount
+            account_expected[currency] = (
+                account_expected.get(currency, Decimal("0.00")) + amount
+            )
+        last_subscription = batch[-1][0]
+        last_key = (last_subscription.subscriber_id, last_subscription.id, batch[-1][5])
+        if len(batch) < batch_size:
+            break
+    finish_account()
+    return UpcomingChargesSummary(
+        amounts=tuple(
+            UpcomingChargeCurrencySummary(
+                currency=currency,
+                expected=values[0],
+                received=values[1],
+                not_received=values[2],
+            )
+            for currency, values in sorted(totals.items())
+        ),
+        unpriced_count=unpriced_count,
     )
 
 
@@ -504,10 +676,11 @@ def get_upcoming_charges_page(
     *,
     query: UpcomingChargesQuery,
 ) -> tuple[UpcomingChargesConfig, UpcomingChargesPage]:
-    """Return one bounded Upcoming Charges page.
+    """Return one bounded Upcoming Charges page and optional cohort summary.
 
-    Only the selected billing mode is queried. Expensive canonical prepaid
-    charge and funding owners receive at most one UI page of subscriptions.
+    Only the selected billing mode is queried. Without a summary, canonical
+    prepaid charge and funding owners receive at most one UI page. When the
+    report requests totals, additional candidate batches remain bounded.
     """
 
     effective_at = (
@@ -524,6 +697,7 @@ def get_upcoming_charges_page(
             state=query.state,
             page=page,
             per_page=per_page,
+            include_summary=query.include_summary,
         )
     selected_band = next(
         (item for item in config.prepaid_amount_bands if item.key == query.band_key),
@@ -544,6 +718,7 @@ def get_upcoming_charges_page(
         ),
         page=page,
         per_page=per_page,
+        include_summary=query.include_summary,
     )
 
 

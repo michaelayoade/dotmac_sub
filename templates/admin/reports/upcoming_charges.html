@@ -1,6 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles, icon_chart_bar %}
 {% block title %}Upcoming Charges - Admin{% endblock %}
+{% block content_container_class %}!max-w-none{% endblock %}
 {% block content %}
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-6">
@@ -14,6 +15,26 @@
         </div>
         <a href="/admin/system/config/billing#upcoming-charges-settings" class="px-3 py-2 text-sm font-medium text-teal-700 hover:text-teal-800 dark:text-teal-300">Configure report defaults</a>
     </div>
+
+    <section class="grid w-full min-w-0 grid-cols-1 gap-4 xl:grid-cols-3" aria-label="Charge totals">
+        <div class="min-w-0 min-h-36 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800 sm:p-6">
+            <h2 class="text-sm font-semibold text-slate-600 dark:text-slate-300">{{ 'Expected payments' if mode == 'postpaid' else 'Expected renewals' }}</h2>
+            {% for amount in summary_amounts %}<p class="mt-3 break-words text-2xl font-semibold tabular-nums text-slate-900 dark:text-white sm:text-3xl">{{ amount.expected }}</p>{% else %}<p class="mt-3 text-2xl font-semibold tabular-nums text-slate-900 dark:text-white sm:text-3xl">0.00</p>{% endfor %}
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ 'Collectible invoice value' if mode == 'postpaid' else 'Priced renewal charges' }}</p>
+        </div>
+        <div class="min-w-0 min-h-36 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800 sm:p-6">
+            <h2 class="text-sm font-semibold text-slate-600 dark:text-slate-300">{{ 'Payments received' if mode == 'postpaid' else 'Already funded' }}</h2>
+            {% for amount in summary_amounts %}<p class="mt-3 break-words text-2xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300 sm:text-3xl">{{ amount.received }}</p>{% else %}<p class="mt-3 text-2xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300 sm:text-3xl">0.00</p>{% endfor %}
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ 'Applied successful payments' if mode == 'postpaid' else 'Available account funds, including credits' }}</p>
+        </div>
+        <div class="min-w-0 min-h-36 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800 sm:p-6">
+            <h2 class="text-sm font-semibold text-slate-600 dark:text-slate-300">{{ 'Not yet received' if mode == 'postpaid' else 'Funding still needed' }}</h2>
+            {% for amount in summary_amounts %}<p class="mt-3 break-words text-2xl font-semibold tabular-nums text-amber-700 dark:text-amber-300 sm:text-3xl">{{ amount.not_received }}</p>{% else %}<p class="mt-3 text-2xl font-semibold tabular-nums text-amber-700 dark:text-amber-300 sm:text-3xl">0.00</p>{% endfor %}
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ 'Open invoice balances' if mode == 'postpaid' else 'Unfunded renewal charges' }}</p>
+        </div>
+    </section>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Totals cover all matching reminders.</p>
+    {% if summary_unpriced_count %}<p class="text-sm text-amber-800 dark:text-amber-300">{{ summary_unpriced_count }} renewal{{ '' if summary_unpriced_count == 1 else 's' }} have no verified amount and are excluded from these totals.</p>{% endif %}
 
     <form method="GET" class="grid gap-4 rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 sm:grid-cols-2 lg:grid-cols-4">
         <input type="hidden" name="mode" value="{{ mode }}">

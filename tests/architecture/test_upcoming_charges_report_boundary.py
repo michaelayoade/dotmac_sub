@@ -47,6 +47,19 @@ def test_owner_bounds_candidates_before_prepaid_enrichment() -> None:
     assert "prepaid_available_balances(" in prepaid
 
 
+def test_summary_stays_in_owner_and_export_skips_it() -> None:
+    owner = OWNER.read_text(encoding="utf-8")
+    presenter = _function_source(PRESENTER, "get_upcoming_charges_data")
+    route = _function_source(ROUTE, "reports_upcoming_charges")
+
+    assert "class UpcomingChargesSummary" in owner
+    assert "PaymentAllocation.is_active.is_(True)" in owner
+    assert "Payment.status == PaymentStatus.succeeded" in owner
+    assert "_prepaid_upcoming_summary(" in owner
+    assert "include_summary: bool = False" in presenter
+    assert "include_summary=True" in route
+
+
 def test_route_keeps_billing_modes_lazy_and_preserves_report_name() -> None:
     route = _function_source(ROUTE, "reports_upcoming_charges")
 
