@@ -32,7 +32,7 @@ def _valid_record() -> dict[str, str]:
         "Email": "ada@example.com",
         "Age": "34",
         "Gender": "Female",
-        "created date time": "01/07/2026 09:00:00",
+        "created date time": "01-07-2026 09:00:00",
         "Subject": "Unexplained deduction",
         "Category": "Billing",
         "category code (auto)": "A",
@@ -279,21 +279,27 @@ def test_validation_reports_the_excel_column_letter():
     assert f"(col {ncc_workbook._COLUMN_LETTERS['Gender']})" in status
 
 
-def test_validation_rejects_msisdn_not_in_national_format():
-    assert "MSISDN must start with 234" in ncc_workbook.validation_status(
-        dict(_valid_record(), MSISDN="08031234567")
+def test_validation_accepts_msisdn_or_device_id_between_three_and_fifteen_chars():
+    assert (
+        ncc_workbook.validation_status(dict(_valid_record(), MSISDN="08031234567"))
+        == "[OK] All validations passed"
     )
-    assert "MSISDN must be 13 digits including 234" in ncc_workbook.validation_status(
-        dict(_valid_record(), MSISDN="23480312345")
+    assert (
+        ncc_workbook.validation_status(dict(_valid_record(), MSISDN="CPE-12345"))
+        == "[OK] All validations passed"
+    )
+    assert (
+        ncc_workbook.validation_status(dict(_valid_record(), MSISDN="N/A"))
+        == "[OK] All validations passed"
     )
 
 
-def test_validation_rejects_non_numeric_msisdn():
+def test_validation_rejects_msisdn_or_device_id_outside_cab_length_bounds():
     status = ncc_workbook.validation_status(
-        dict(_valid_record(), MSISDN="not-a-number")
+        dict(_valid_record(), MSISDN="23470351339280802289199008033115591")
     )
     assert status.startswith("[FAIL]")
-    assert "MSISDN" in status
+    assert "MSISDN must be between 3 and 15 characters" in status
 
 
 def test_blank_names_report_only_the_required_error():
@@ -323,16 +329,23 @@ def test_validation_rejects_test_data_in_names():
     assert "First Name must not contain test data" in status
 
 
-def test_validation_rejects_na_placeholders_for_age_and_gender():
+def test_validation_accepts_ncc_na_placeholders_for_age_and_gender():
     record = dict(_valid_record(), Age="N/A", Gender="N/A")
-    status = ncc_workbook.validation_status(record)
-    assert "Age must be a whole number from 13 to 150" in status
-    assert "Gender must be Female or Male" in status
+    assert ncc_workbook.validation_status(record) == "[OK] All validations passed"
+
+
+def test_validation_accepts_unknown_gender_but_rejects_other():
+    assert (
+        ncc_workbook.validation_status(dict(_valid_record(), Gender="Unknown"))
+        == "[OK] All validations passed"
+    )
+    status = ncc_workbook.validation_status(dict(_valid_record(), Gender="Other"))
+    assert "Gender must be Female, Male, Unknown or N/A" in status
 
 
 def test_validation_rejects_out_of_range_age():
     assert (
-        "Age must be a whole number from 13 to 150"
+        "Age must be a whole number from 13 to 150 or N/A"
         in ncc_workbook.validation_status(dict(_valid_record(), Age="9"))
     )
 
@@ -389,9 +402,33 @@ def test_template_export_rows_uses_the_validated_template_headers():
 
     assert list(rows[0]) == ncc_workbook.TEMPLATE_COLUMNS
     assert rows[0]["MSISDN *"] == "2348031234567"
-    assert rows[0]["created_date_time *"] == "01/07/2026 09:00:00"
+    assert rows[0]["created_date_time *"] == "01-07-2026 09:00:00"
     assert rows[0]["Ticket_ID *"] == "DOTMAC-20260701-1234"
     assert "_status_variant" not in rows[0]
+
+
+def test_template_export_rows_normalises_observed_cab_failures():
+    rows = ncc_workbook.template_export_rows(
+        [
+            dict(
+                _valid_record(),
+                MSISDN="23470351339280802289199008033115591",
+                Age="0",
+                Gender="Other",
+                State="",
+                LGA="",
+                **{"VALIDATION STATUS": "[FAIL] stale raw status"},
+            )
+        ]
+    )
+
+    assert rows[0]["MSISDN *"] == "N/A"
+    assert rows[0]["Age *"] == "N/A"
+    assert rows[0]["Gender *"] == "Unknown"
+    assert rows[0]["State *"] == "N/A"
+    assert rows[0]["LGA *"] == "N/A"
+    assert rows[0]["VALIDATION STATUS"] == ""
+    assert ncc_workbook.validation_status(rows[0]) == "[OK] All validations passed"
 
 
 def test_build_csv_emits_one_provider_file_with_template_headers():
@@ -422,7 +459,11 @@ def test_excel_column_letters_roll_over_past_z():
 
 
 def test_excel_serial_matches_the_1899_epoch():
-    serial = ncc_workbook.excel_serial_from_display_timestamp("01/07/2026 00:00:00")
+    serial = ncc_workbook.excel_serial_from_display_timestamp("01-07-2026 00:00:00")
     assert serial == 46204.0
+    assert (
+        ncc_workbook.excel_serial_from_display_timestamp("01/07/2026 00:00:00")
+        == 46204.0
+    )
     assert ncc_workbook.excel_serial_from_display_timestamp("not a date") is None
     assert ncc_workbook.excel_serial_from_display_timestamp("") is None

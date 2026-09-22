@@ -778,17 +778,16 @@ def run_due_delivery(
                 ),
             )
             records = snapshot.record_mappings()
-            rows = ncc_workbook.export_rows(records)
+            csv_rows = ncc_workbook.template_export_rows(records)
             not_filable_count = sum(
                 1
-                for row in rows
+                for row in csv_rows
                 if not ncc_workbook.validation_status(row).startswith("[OK]")
             )
             _raise_if_report_not_filable(
                 row_count=snapshot.total_complaints,
                 not_filable_count=not_filable_count,
             )
-            csv_rows = ncc_workbook.template_export_rows(records)
             artifact = ncc_workbook.build_csv(
                 csv_rows, list(ncc_workbook.TEMPLATE_COLUMNS)
             )
