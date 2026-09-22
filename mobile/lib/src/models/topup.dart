@@ -166,6 +166,7 @@ class TopupPage {
     this.eligibleUnpaidTotal = 0,
     this.eligibleUnpaidInvoices = const [],
     BankTransferConfig? bankTransfer,
+    this.activeDepositRequest,
   }) : bankTransfer = bankTransfer ?? BankTransferConfig();
 
   final String providerType;
@@ -188,6 +189,8 @@ class TopupPage {
 
   /// Direct bank-transfer option (admin bank account + receipt upload).
   final BankTransferConfig bankTransfer;
+
+  final ActiveDepositRequest? activeDepositRequest;
 
   factory TopupPage.fromJson(Map<String, dynamic> json) => TopupPage(
         providerType: json['provider_type'] as String? ?? 'paystack',
@@ -217,7 +220,61 @@ class TopupPage {
                 .toList(),
         bankTransfer: BankTransferConfig.fromJson(
             json['direct_bank_transfer'] as Map<String, dynamic>?),
+        activeDepositRequest: ActiveDepositRequest.maybeFromJson(
+          json['active_deposit_request'] as Map<String, dynamic>?,
+        ),
       );
+}
+
+class ActiveDepositRequest {
+  ActiveDepositRequest({
+    required this.intentId,
+    required this.phase,
+    required this.nextAction,
+    required this.providerType,
+    required this.reference,
+    required this.amount,
+    required this.currency,
+    required this.createdAt,
+    this.expiresAt,
+    this.message,
+    this.rejectionReason,
+    this.canCancel = false,
+  });
+
+  final String intentId;
+  final String phase;
+  final String nextAction;
+  final String providerType;
+  final String reference;
+  final double amount;
+  final String currency;
+  final DateTime createdAt;
+  final DateTime? expiresAt;
+  final String? message;
+  final String? rejectionReason;
+  final bool canCancel;
+
+  bool get isAwaitingReceipt => nextAction == 'upload_receipt';
+
+  static ActiveDepositRequest? maybeFromJson(Map<String, dynamic>? json) {
+    if (json == null) return null;
+    return ActiveDepositRequest(
+      intentId: json['intent_id'].toString(),
+      phase: json['phase'] as String? ?? '',
+      nextAction: json['next_action'] as String? ?? '',
+      providerType: json['provider_type'] as String? ?? '',
+      reference: json['reference'] as String? ?? '',
+      amount: asDouble(json['amount']),
+      currency: json['currency'] as String? ?? 'NGN',
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+      expiresAt: DateTime.tryParse(json['expires_at']?.toString() ?? ''),
+      message: json['message'] as String?,
+      rejectionReason: json['rejection_reason'] as String?,
+      canCancel: json['can_cancel'] as bool? ?? false,
+    );
+  }
 }
 
 class TopupPreviewInvoiceApplication {

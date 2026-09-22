@@ -366,8 +366,9 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'prepaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(soon.expiresSoon, isTrue);
       final postpaid = Subscription.fromJson({
@@ -376,19 +377,20 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'postpaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(postpaid.expiresSoon, isFalse);
     });
 
     Subscription withStatus(String status) => Subscription(
-          id: 's',
-          accountId: 'a',
-          offerId: 'o',
-          status: status,
-          billingMode: 'prepaid',
-        );
+      id: 's',
+      accountId: 'a',
+      offerId: 'o',
+      status: status,
+      billingMode: 'prepaid',
+    );
 
     test('isCurrent excludes terminal/historical statuses', () {
       for (final status in [
@@ -447,17 +449,14 @@ void main() {
 
     test('parses the closed ticket-comment author vocabulary', () {
       TicketComment comment(String authorType) => TicketComment.fromJson({
-            'id': 'comment-$authorType',
-            'ticket_id': 'ticket-1',
-            'author_type': authorType,
-            'body': 'Reply',
-            'is_internal': false,
-          });
+        'id': 'comment-$authorType',
+        'ticket_id': 'ticket-1',
+        'author_type': authorType,
+        'body': 'Reply',
+        'is_internal': false,
+      });
 
-      expect(
-        comment('customer').authorType,
-        TicketCommentAuthorType.customer,
-      );
+      expect(comment('customer').authorType, TicketCommentAuthorType.customer);
       expect(comment('staff').authorType, TicketCommentAuthorType.staff);
       expect(comment('system').authorType, TicketCommentAuthorType.system);
     });
@@ -649,7 +648,7 @@ void main() {
           'deposit_allowed': true,
           'eligible_unpaid_total': '18000.00',
           'eligible_unpaid_invoices': [
-            {'invoice_id': 'inv-1', 'invoice_number': 'INV-1'}
+            {'invoice_id': 'inv-1', 'invoice_number': 'INV-1'},
           ],
         });
         expect(page.depositAllowed, isTrue);
@@ -661,6 +660,7 @@ void main() {
     test('TopupPage parses the active deposit projection', () {
       final page = TopupPage.fromJson({
         'provider_type': 'paystack',
+        'currency': 'NGN',
         'min_amount': 1000,
         'max_amount': 500000,
         'deposit_allowed': false,
@@ -681,10 +681,44 @@ void main() {
 
       expect(page.depositAllowed, isFalse);
       expect(page.activeDepositRequest?.phase, TopupRequestPhase.underReview);
-      expect(page.activeDepositRequest?.nextAction,
-          TopupRequestAction.waitForReview);
+      expect(
+        page.activeDepositRequest?.nextAction,
+        TopupRequestAction.waitForReview,
+      );
       expect(page.activeDepositRequest?.amount, 20000.0);
       expect(page.activeDepositRequest?.reference, 'TRF-PENDING');
+    });
+
+    test('TopupPage parses an active pending bank-transfer deposit', () {
+      final page = TopupPage.fromJson({
+        'provider_type': 'paystack',
+        'currency': 'NGN',
+        'min_amount': 1000,
+        'max_amount': 500000,
+        'deposit_allowed': false,
+        'active_deposit_request': {
+          'intent_id': 'intent-1',
+          'phase': 'awaiting_receipt',
+          'next_action': 'upload_receipt',
+          'provider_type': 'direct_bank_transfer',
+          'reference': 'TRF-123',
+          'amount': '1000.00',
+          'currency': 'NGN',
+          'created_at': '2026-09-23T10:16:20Z',
+          'expires_at': '2026-09-30T10:16:20Z',
+          'observed_at': '2026-09-23T11:20:00Z',
+          'message': 'Upload your receipt to continue.',
+          'can_cancel': true,
+        },
+      });
+
+      final deposit = page.activeDepositRequest!;
+      expect(page.depositAllowed, isFalse);
+      expect(deposit.intentId, 'intent-1');
+      expect(deposit.reference, 'TRF-123');
+      expect(deposit.amount, 1000.0);
+      expect(deposit.isAwaitingReceipt, isTrue);
+      expect(deposit.canCancel, isTrue);
     });
 
     test(
@@ -703,7 +737,7 @@ void main() {
               'currency': 'NGN',
               'amount_applied': '10000.00',
               'outstanding_after_application': '8000.00',
-            }
+            },
           ],
           'total_applied_to_invoices': '10000.00',
           'total_outstanding_after_application': '8000.00',
@@ -848,7 +882,7 @@ void main() {
         'status': 'active',
         'user_agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120 Safari/537.36',
+            '(KHTML, like Gecko) Chrome/120 Safari/537.36',
       });
       expect(s.isCurrent, isFalse);
       expect(s.deviceLabel, contains('Macintosh'));

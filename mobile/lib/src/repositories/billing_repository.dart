@@ -263,6 +263,10 @@ class BillingRepository {
     return TopupResult.fromJson(data as Map<String, dynamic>);
   }
 
+  Future<void> cancelTopupIntent(String intentId) async {
+    await guard(() => dio.post('/me/topup/intents/$intentId/cancel'));
+  }
+
   Future<BillingDocument> _downloadPdf(
     String path, {
     required String fallbackFilename,
