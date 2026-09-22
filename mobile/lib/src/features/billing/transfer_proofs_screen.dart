@@ -19,6 +19,7 @@ Future<bool?> showSubmitProofSheet(
   String? initialAmount,
   List<BankAccount> accounts = const [],
   String? instructions,
+  String? intentId,
 }) {
   return showModalBottomSheet<bool>(
     context: context,
@@ -27,6 +28,7 @@ Future<bool?> showSubmitProofSheet(
       initialAmount: initialAmount,
       accounts: accounts,
       instructions: instructions,
+      intentId: intentId,
     ),
   );
 }
@@ -208,11 +210,13 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
     this.initialAmount,
     this.accounts = const [],
     this.instructions,
+    this.intentId,
   });
 
   final String? initialAmount;
   final List<BankAccount> accounts;
   final String? instructions;
+  final String? intentId;
 
   @override
   ConsumerState<SubmitProofSheet> createState() => _SubmitProofSheetState();
@@ -258,6 +262,7 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
             reference: _reference.text.trim(),
             filePath: _file!.path,
             fileName: _file!.name,
+            intentId: widget.intentId,
           );
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {

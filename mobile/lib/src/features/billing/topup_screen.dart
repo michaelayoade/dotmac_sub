@@ -64,6 +64,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   bool get _isTransfer => _selection == 'transfer';
 
+  String _topupAttemptKey(String prefix) =>
+      '$prefix-${DateTime.now().microsecondsSinceEpoch}-'
+      '${Random().nextInt(0x7fffffff)}';
+
   @override
   void initState() {
     super.initState();
@@ -198,21 +202,58 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     // Bank transfer: show the account(s) + collect the receipt; staff verify
     // and credit the account. No gateway / verify round-trip here.
     if (_isTransfer) {
-      final ok = await showSubmitProofSheet(
-        context,
-        initialAmount: amount.toString(),
-        accounts: page.bankTransfer.accounts,
-        instructions: page.bankTransfer.instructions,
-      );
-      if (ok == true && mounted) {
-        ref.invalidate(paymentProofsProvider);
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Receipt submitted - we will verify it and credit your account.',
-            ),
-          ),
+      setState(() => _busy = true);
+      try {
+        final preview = await _refreshPreview();
+        if (!mounted) {
+          return;
+        }
+        if (preview == null || preview.previewFingerprint.isEmpty) {
+          messenger.showSnackBar(
+            SnackBar(content: Text(_previewFailureMessage())),
+          );
+          return;
+        }
+        final initiation =
+            await ref.read(billingRepositoryProvider).initiateTopup(
+                  amount,
+                  previewFingerprint: preview.previewFingerprint,
+                  provider: 'bank_transfer',
+                  idempotencyKey: _topupAttemptKey('transfer'),
+                );
+        if (!mounted) {
+          return;
+        }
+        final ok = await showSubmitProofSheet(
+          context,
+          initialAmount: amount.toString(),
+          accounts: page.bankTransfer.accounts,
+          instructions: page.bankTransfer.instructions,
+          intentId: initiation.intentId,
         );
+        if (ok == true && mounted) {
+          ref.invalidate(paymentProofsProvider);
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Receipt submitted - we will verify it and credit your account.',
+              ),
+            ),
+          );
+          await _loadPage();
+        }
+      } on ApiException catch (e) {
+        if (mounted) {
+          showPaymentError(context, e, onRetry: _submit);
+        }
+      } catch (e) {
+        if (mounted) {
+          showPaymentError(context, e, onRetry: _submit);
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _busy = false);
+        }
       }
       return;
     }
@@ -226,11 +267,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       }
       if (preview == null || preview.previewFingerprint.isEmpty) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Review the latest allocation preview before checkout.',
-            ),
-          ),
+          SnackBar(content: Text(_previewFailureMessage())),
         );
         return;
       }
@@ -243,19 +280,17 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         return;
       }
       final cardId = _selectedCardId;
-      final initiation =
-          await ref.read(billingRepositoryProvider).initiateTopup(
-                amount,
-                previewFingerprint: preview.previewFingerprint,
-                provider: cardId == null ? _selectedGateway : null,
-                paymentMethodId: cardId,
-                // One key per attempt makes a saved-card charge safe against a
-                // Dio retry; the button busy-guard covers double-taps.
-                idempotencyKey: cardId == null
-                    ? null
-                    : 'topup-${DateTime.now().microsecondsSinceEpoch}-'
-                        '${Random().nextInt(0x7fffffff)}',
-              );
+      final initiation = await ref
+          .read(billingRepositoryProvider)
+          .initiateTopup(
+            amount,
+            previewFingerprint: preview.previewFingerprint,
+            provider: cardId == null ? _selectedGateway : null,
+            paymentMethodId: cardId,
+            // One key per attempt makes a saved-card charge safe against a
+            // Dio retry; the button busy-guard covers double-taps.
+            idempotencyKey: cardId == null ? null : _topupAttemptKey('topup'),
+          );
       if (!mounted) {
         return;
       }
@@ -311,6 +346,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  String _previewFailureMessage() {
+    final error = _previewError;
+    if (error is ApiException) {
+      return error.message;
+    }
+    return 'Could not load the latest allocation preview. Try again.';
   }
 
   @override
@@ -524,9 +567,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _previewError is ApiException
-                    ? (_previewError as ApiException).message
-                    : 'Could not load the latest allocation preview.',
+                _previewFailureMessage(),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.error,
                 ),

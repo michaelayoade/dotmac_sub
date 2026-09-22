@@ -27,6 +27,8 @@ class BillingRepository {
     DateTime? paidAt,
     required String filePath,
     required String fileName,
+    String? intentId,
+    String? selectedAccountId,
   }) async {
     final uploadFilename = paymentProofUploadFilename(
       filePath: filePath,
@@ -37,6 +39,9 @@ class BillingRepository {
       if (bankName != null && bankName.isNotEmpty) 'bank_name': bankName,
       if (reference != null && reference.isNotEmpty) 'reference': reference,
       if (paidAt != null) 'paid_at': paidAt.toIso8601String(),
+      if (intentId != null && intentId.isNotEmpty) 'intent_id': intentId,
+      if (selectedAccountId != null && selectedAccountId.isNotEmpty)
+        'selected_account_id': selectedAccountId,
       'file': await MultipartFile.fromFile(
         filePath,
         filename: uploadFilename,
