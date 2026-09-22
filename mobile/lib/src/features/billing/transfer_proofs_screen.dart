@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../../models/payment_proof.dart';
@@ -259,10 +260,12 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
             fileName: _file!.name,
           );
       if (mounted) Navigator.of(context).pop(true);
-    } catch (_) {
+    } catch (error) {
       setState(() {
         _busy = false;
-        _error = 'Could not submit — check the details and try again.';
+        _error = error is ApiException
+            ? error.message
+            : 'Could not submit — check the details and try again.';
       });
     }
   }

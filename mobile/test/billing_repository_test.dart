@@ -79,4 +79,35 @@ void main() {
       throwsA(isA<ApiException>()),
     );
   });
+
+  test('payment proof upload filename preserves supported picker name', () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/scaled_image.jpg',
+        fileName: 'receipt.PNG',
+      ),
+      'receipt.PNG',
+    );
+  });
+
+  test('payment proof upload filename borrows supported path extension', () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/scaled_image.png',
+        fileName: 'image_picker_12345',
+      ),
+      'image_picker_12345.png',
+    );
+  });
+
+  test('payment proof upload filename defaults extensionless images to jpg',
+      () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/image_picker_12345',
+        fileName: '',
+      ),
+      'receipt.jpg',
+    );
+  });
 }

@@ -28,14 +28,25 @@ class BillingRepository {
     required String filePath,
     required String fileName,
   }) async {
+    final uploadFilename = paymentProofUploadFilename(
+      filePath: filePath,
+      fileName: fileName,
+    );
     final form = FormData.fromMap({
       'amount': amount,
       if (bankName != null && bankName.isNotEmpty) 'bank_name': bankName,
       if (reference != null && reference.isNotEmpty) 'reference': reference,
       if (paidAt != null) 'paid_at': paidAt.toIso8601String(),
-      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+      'file': await MultipartFile.fromFile(
+        filePath,
+        filename: uploadFilename,
+      ),
     });
-    final data = await guard(() => dio.post('/payment-proofs/me', data: form));
+    final data = await guard(() => dio.post(
+          '/payment-proofs/me',
+          data: form,
+          options: Options(contentType: 'multipart/form-data'),
+        ));
     return PaymentProofItem.fromJson(data as Map<String, dynamic>);
   }
 
@@ -310,4 +321,40 @@ class BillingRepository {
         ? candidate
         : '$candidate.pdf';
   }
+}
+
+const _paymentProofExtensions = {'.jpg', '.jpeg', '.png', '.webp', '.pdf'};
+
+String paymentProofUploadFilename({
+  required String filePath,
+  required String fileName,
+}) {
+  final trimmedName = fileName.trim();
+  final baseName = trimmedName.split(RegExp(r'[/\\]')).last;
+  if (_paymentProofExtensions.contains(_extensionOf(baseName))) {
+    return baseName;
+  }
+
+  final pathName = filePath.split(RegExp(r'[/\\]')).last.trim();
+  final pathExtension = _extensionOf(pathName);
+  if (_paymentProofExtensions.contains(pathExtension)) {
+    final stem = baseName.isNotEmpty ? _withoutExtension(baseName) : 'receipt';
+    return '${stem.isEmpty ? 'receipt' : stem}$pathExtension';
+  }
+
+  final fallbackStem =
+      baseName.isNotEmpty ? _withoutExtension(baseName) : 'receipt';
+  return '${fallbackStem.isEmpty ? 'receipt' : fallbackStem}.jpg';
+}
+
+String _extensionOf(String value) {
+  final lastDot = value.lastIndexOf('.');
+  if (lastDot <= 0 || lastDot == value.length - 1) return '';
+  return value.substring(lastDot).toLowerCase();
+}
+
+String _withoutExtension(String value) {
+  final lastDot = value.lastIndexOf('.');
+  if (lastDot <= 0) return value;
+  return value.substring(0, lastDot);
 }
