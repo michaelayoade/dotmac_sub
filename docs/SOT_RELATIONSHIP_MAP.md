@@ -1779,7 +1779,9 @@ detailed security and delivery boundary is
    facts and exact prepaid entitlement endings are selected as bounded,
    indexed pages; visible prepaid candidates compose the canonical
    `financial.prepaid_service_renewals` charge resolver and
-   `customer.financial_position` funding resolver. This projection is
+   `customer.financial_position` funding resolver. Optional UTC calendar
+   periods filter verified invoice due dates or entitlement endings; without a
+   period the configured lead window applies. This projection is
    read-only and never changes billing, collection, or access state.
 11. `financial.prepaid_enforcement` owns the account-scoped warn, suspend, and
    restore decision. Every scheduled pass consumes the live currency-bound

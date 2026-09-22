@@ -41,6 +41,8 @@ def test_owner_bounds_candidates_before_prepaid_enrichment() -> None:
     assert ".limit(per_page + 1)" in prepaid
     assert "records = records[:per_page]" in prepaid
     assert "filters.append(or_(*band_filters))" in prepaid
+    assert "ServiceEntitlement.ends_at >= start" in prepaid
+    assert "ServiceEntitlement.ends_at < end" in prepaid
     assert prepaid.index("records = records[:per_page]") < prepaid.index(
         "resolve_prepaid_monthly_charges("
     )
@@ -53,6 +55,7 @@ def test_route_keeps_billing_modes_lazy_and_preserves_report_name() -> None:
     assert '"Upcoming Charges"' in route
     assert "mode=mode" in route
     assert "get_upcoming_charges_data(" in route
+    assert "_upcoming_charges_period(month, year)" in route
 
 
 def test_migration_adds_both_candidate_window_indexes() -> None:

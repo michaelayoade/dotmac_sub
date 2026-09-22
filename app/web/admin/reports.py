@@ -46,6 +46,7 @@ from app.services.auth_dependencies import (
     require_any_permission,
     require_permission,
 )
+from app.services.billing import reporting as billing_reporting
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.sales import reports as sales_reports_service
@@ -2063,6 +2064,24 @@ _EXTENDED_EXPORT_PERMISSIONS = {
 }
 
 
+def _upcoming_charges_period(
+    month: str | None, year: str | None
+) -> billing_reporting.UpcomingChargePeriod | None:
+    month_value = month.strip() if month else ""
+    year_value = year.strip() if year else ""
+    if not month_value and not year_value:
+        return None
+    try:
+        return billing_reporting.UpcomingChargePeriod(
+            year=int(year_value) if year_value else None,
+            month=int(month_value) if month_value else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="Select a valid month or year."
+        ) from exc
+
+
 @router.get(
     "/extended-export/{report_kind}",
     dependencies=[
@@ -2075,7 +2094,8 @@ def reports_extended_export(
     date_from: str | None = None,
     date_to: str | None = None,
     status: str | None = None,
-    year: int | None = None,
+    year: str | None = None,
+    month: str | None = None,
     days: int = Query(default=30, ge=1, le=3660),
     mode: str = "postpaid",
     state: str = "all",
@@ -2085,6 +2105,10 @@ def reports_extended_export(
 ):
     if not can(request, _EXTENDED_EXPORT_PERMISSIONS[report_kind]):
         raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        export_year = int(year) if year else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Select a valid year.") from exc
     export = web_reports_ext_service.build_extended_report_export(
         db=db,
         query=web_reports_ext_service.ExtendedReportExportQuery(
@@ -2092,12 +2116,18 @@ def reports_extended_export(
             date_from=date_from,
             date_to=date_to,
             status=status,
-            year=year,
+            year=export_year,
             days=days,
             mode=mode,
             state=state,
             band=band,
             include_funded=include_funded,
+            period=(
+                _upcoming_charges_period(month, year)
+                if report_kind
+                is web_reports_ext_service.ExtendedReportExportKind.upcoming_charges
+                else None
+            ),
         ),
     )
     return Response(
@@ -2158,6 +2188,8 @@ def reports_upcoming_charges(
     state: str = "all",
     band: str | None = None,
     include_funded: bool | None = None,
+    month: str | None = None,
+    year: str | None = None,
     page: int = 1,
     per_page: int = 25,
     db: Session = Depends(get_db),
@@ -2168,6 +2200,7 @@ def reports_upcoming_charges(
         state=state,
         band=band,
         include_funded=include_funded,
+        period=_upcoming_charges_period(month, year),
         page=page,
         per_page=per_page,
     )

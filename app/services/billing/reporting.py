@@ -76,6 +76,31 @@ class UpcomingChargesConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class UpcomingChargePeriod:
+    year: int | None = None
+    month: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.year is None and self.month is None:
+            raise ValueError("Select a month or year.")
+        if (self.year is not None and not 1 <= self.year <= 9998) or (
+            self.month is not None and not 1 <= self.month <= 12
+        ):
+            raise ValueError("Select a valid month and year.")
+
+    def window(self, now: datetime) -> tuple[datetime, datetime]:
+        year = self.year if self.year is not None else now.year
+        month = self.month if self.month is not None else 1
+        start = datetime(year, month, 1, tzinfo=UTC)
+        end = (
+            _next_month_start(start)
+            if self.month is not None
+            else datetime(year + 1, 1, 1, tzinfo=UTC)
+        )
+        return start, end
+
+
+@dataclass(frozen=True, slots=True)
 class UpcomingChargesQuery:
     mode: UpcomingChargeMode
     state: UpcomingChargeState = UpcomingChargeState.all
@@ -84,6 +109,7 @@ class UpcomingChargesQuery:
     page: int = 1
     per_page: int = 25
     as_of: datetime | None = None
+    period: UpcomingChargePeriod | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +261,7 @@ def _postpaid_upcoming_charges(
     now: datetime,
     lead_days: int,
     state: UpcomingChargeState,
+    period: UpcomingChargePeriod | None,
     page: int,
     per_page: int,
 ) -> UpcomingChargesPage:
@@ -270,12 +297,16 @@ def _postpaid_upcoming_charges(
         ),
         Invoice.balance_due > 0,
         Invoice.due_at.is_not(None),
-        Invoice.due_at <= horizon,
         Invoice.due_date_basis.is_not(None),
         Invoice.due_date_basis != InvoiceDueDateBasis.unknown_unverified,
         collectible_ar_invoice_filter(),
         collectible_postpaid_account,
     ]
+    if period is None:
+        filters.append(Invoice.due_at <= horizon)
+    else:
+        start, end = period.window(now)
+        filters.extend((Invoice.due_at >= start, Invoice.due_at < end))
     if state is UpcomingChargeState.upcoming:
         filters.append(Invoice.due_at >= now)
     elif state is UpcomingChargeState.payment_required:
@@ -349,6 +380,7 @@ def _prepaid_upcoming_charges(
     lead_days: int,
     bands: tuple[UpcomingChargeAmountBand, ...],
     state: UpcomingChargeState,
+    period: UpcomingChargePeriod | None,
     include_funded: bool,
     page: int,
     per_page: int,
@@ -379,7 +411,6 @@ def _prepaid_upcoming_charges(
     filters = [
         ServiceEntitlement.status == ServiceEntitlementStatus.active,
         ServiceEntitlement.starts_at <= now,
-        ServiceEntitlement.ends_at <= horizon,
         Subscription.billing_mode == BillingMode.prepaid,
         recoverable_status,
         or_(ServiceEntitlement.ends_at >= now, financial_lock),
@@ -393,6 +424,13 @@ def _prepaid_upcoming_charges(
         Subscription.unit_price.is_not(None),
         Subscription.unit_price > 0,
     ]
+    if period is None:
+        filters.append(ServiceEntitlement.ends_at <= horizon)
+    else:
+        start, end = period.window(now)
+        filters.extend(
+            (ServiceEntitlement.ends_at >= start, ServiceEntitlement.ends_at < end)
+        )
     band_filters = []
     for band in bands:
         predicates = [Subscription.unit_price >= band.minimum]
@@ -522,6 +560,7 @@ def get_upcoming_charges_page(
             now=effective_at,
             lead_days=config.postpaid_lead_days,
             state=query.state,
+            period=query.period,
             page=page,
             per_page=per_page,
         )
@@ -537,6 +576,7 @@ def get_upcoming_charges_page(
         if selected_band is not None
         else config.prepaid_amount_bands,
         state=query.state,
+        period=query.period,
         include_funded=(
             config.include_funded_prepaid_default
             if query.include_funded is None

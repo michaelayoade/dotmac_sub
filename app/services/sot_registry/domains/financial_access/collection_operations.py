@@ -1009,7 +1009,9 @@ SERVICES: tuple[SOTService, ...] = (
             "Read owner only: aggregates invoice/payment/subscription "
             "facts for dashboards and the admin reports. Upcoming Charges "
             "selects bounded candidates before composing exact prepaid charge "
-            "and funding owners for one page. It decides no financial consequences."
+            "and funding owners for one page. Optional UTC calendar periods "
+            "filter verified due or coverage-end facts. It decides no financial "
+            "consequences."
         ),
     ),
     SOTService(

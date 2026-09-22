@@ -1,10 +1,41 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from app.services.billing import reporting
+
+
+@pytest.mark.parametrize(
+    ("year", "month", "expected_start", "expected_end"),
+    (
+        (2026, 12, datetime(2026, 12, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)),
+        (
+            2025,
+            None,
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+        (None, 3, datetime(2026, 3, 1, tzinfo=UTC), datetime(2026, 4, 1, tzinfo=UTC)),
+    ),
+)
+def test_upcoming_charge_period_windows(
+    year, month, expected_start, expected_end
+) -> None:
+    period = reporting.UpcomingChargePeriod(year=year, month=month)
+
+    assert period.window(datetime(2026, 9, 22, tzinfo=UTC)) == (
+        expected_start,
+        expected_end,
+    )
+
+
+@pytest.mark.parametrize(("year", "month"), ((None, None), (2026, 13), (0, 1)))
+def test_upcoming_charge_period_rejects_invalid_values(year, month) -> None:
+    with pytest.raises(ValueError):
+        reporting.UpcomingChargePeriod(year=year, month=month)
 
 
 def test_amount_bands_are_typed_and_open_ended() -> None:
