@@ -53,8 +53,9 @@ class PlanChangeOptions {
     this.currentOffer,
     this.availableOffers = const [],
     this.prepaidFunding,
-    this.postpaidReceivables = 0,
-    this.collectionBlockingBalance = 0,
+    this.postpaidReceivables,
+    this.collectionBlockingBalance,
+    this.financialPositionUnavailable = false,
     this.nextBillingDate,
     this.billingMessage,
     this.serviceAddresses = const [],
@@ -64,8 +65,9 @@ class PlanChangeOptions {
   final PlanOffer? currentOffer;
   final List<PlanOffer> availableOffers;
   final double? prepaidFunding;
-  final double postpaidReceivables;
-  final double collectionBlockingBalance;
+  final double? postpaidReceivables;
+  final double? collectionBlockingBalance;
+  final bool financialPositionUnavailable;
   final DateTime? nextBillingDate;
   final String? billingMessage;
   final List<ServiceAddressOption> serviceAddresses;
@@ -80,8 +82,11 @@ class PlanChangeOptions {
           .map(PlanOffer.fromJson)
           .toList(),
       prepaidFunding: asDoubleOrNull(json['prepaid_funding']),
-      postpaidReceivables: asDouble(json['postpaid_receivables']),
-      collectionBlockingBalance: asDouble(json['collection_blocking_balance']),
+      postpaidReceivables: asDoubleOrNull(json['postpaid_receivables']),
+      collectionBlockingBalance:
+          asDoubleOrNull(json['collection_blocking_balance']),
+      financialPositionUnavailable:
+          json['financial_position_unavailable'] as bool? ?? false,
       nextBillingDate:
           DateTime.tryParse(json['next_billing_date']?.toString() ?? '')
               ?.toLocal(),

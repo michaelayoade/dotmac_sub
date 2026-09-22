@@ -171,6 +171,16 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                   style: theme.textTheme.bodySmall,
                 ),
               ),
+            if (opts.financialPositionUnavailable)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Your verified billing position is still under review. '
+                    'Contact support before changing this service.',
+                  ),
+                ),
+              ),
             const SizedBox(height: 8),
             if (opts.serviceAddresses.isNotEmpty) ...[
               DropdownButtonFormField<String>(
@@ -220,7 +230,9 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                   subtitle: Text(
                       '${Fmt.money(o.amount, o.currency)} ${o.periodLabel}'),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: _busy ? null : () => _confirm(o),
+                  onTap: _busy || opts.financialPositionUnavailable
+                      ? null
+                      : () => _confirm(o),
                 ),
               ),
           ],
