@@ -50,9 +50,14 @@ def test_the_optional_set_holds_only_approved_feature_scoped_material() -> None:
     to the legacy `api_keys` verifier and a deployment without the key has a
     dormant feature rather than a broken one. That premise is enforced by
     `test_machine_key_is_optional_only_while_the_legacy_verifier_exists`.
+
+    `conversion_ingest_api_key` belongs only to the optional Fiber acquisition
+    projection, and `prepaid_attestation_public_key` belongs only to prepaid
+    reconstruction.
     """
 
     assert set(kss.OPTIONAL_SECRET_REFS) == {
+        "conversion_ingest_api_key",
         "machine_credential_hmac_key",
         "prepaid_attestation_public_key",
     }
