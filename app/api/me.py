@@ -681,10 +681,9 @@ def my_plan_change_options(
         ),
         available_offers=[o for o in available if o is not None],
         prepaid_funding=ctx.get("prepaid_funding"),
-        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
-        collection_blocking_balance=ctx.get(
-            "collection_blocking_balance", Decimal("0.00")
-        ),
+        postpaid_receivables=ctx.get("postpaid_receivables"),
+        collection_blocking_balance=ctx.get("collection_blocking_balance"),
+        financial_position_unavailable=ctx.get("financial_position_unavailable", False),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
         service_addresses=ctx.get("service_addresses", []),

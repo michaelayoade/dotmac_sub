@@ -33,6 +33,44 @@ def test_customer_service_change_routes_are_canonical_without_plan_change_alias(
     assert "/me/subscriptions/{subscription_id}/plan-change/quote" not in paths
 
 
+def test_service_change_options_preserve_unverified_financial_position(monkeypatch):
+    from app.services import customer_portal_flow_changes as changes
+
+    principal = _subscriber_principal()
+    subscription_id = str(uuid.uuid4())
+    page = {
+        "current_offer": None,
+        "available_offers": [],
+        "prepaid_funding": None,
+        "postpaid_receivables": None,
+        "collection_blocking_balance": None,
+        "financial_position_unavailable": True,
+    }
+    monkeypatch.setattr(me_api, "_customer", lambda db, caller: caller)
+    monkeypatch.setattr(changes, "get_change_plan_page", lambda db, customer, sid: page)
+
+    response = me_api.my_plan_change_options(
+        subscription_id, db=object(), principal=principal
+    )
+
+    assert response.model_dump(mode="json")["postpaid_receivables"] is None
+    assert response.model_dump(mode="json")["collection_blocking_balance"] is None
+    assert response.financial_position_unavailable is True
+
+    page.update(
+        prepaid_funding=Decimal("25.00"),
+        postpaid_receivables=Decimal("10.00"),
+        collection_blocking_balance=Decimal("0.00"),
+        financial_position_unavailable=False,
+    )
+    verified = me_api.my_plan_change_options(
+        subscription_id, db=object(), principal=principal
+    )
+    assert verified.postpaid_receivables == Decimal("10.00")
+    assert verified.collection_blocking_balance == Decimal("0.00")
+    assert verified.financial_position_unavailable is False
+
+
 def test_customer_device_command_routes_are_self_scoped():
     paths = {getattr(route, "path", "") for route in me_api.router.routes}
     assert "/me/subscriptions/{subscription_id}/device/reboot" in paths

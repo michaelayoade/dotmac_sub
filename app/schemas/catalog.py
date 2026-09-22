@@ -1248,8 +1248,9 @@ class PlanChangePageResponse(BaseModel):
     current_offer: PlanOfferSummary | None = None
     available_offers: list[PlanOfferSummary] = Field(default_factory=list)
     prepaid_funding: Decimal | None = None
-    postpaid_receivables: Decimal = Decimal("0.00")
-    collection_blocking_balance: Decimal = Decimal("0.00")
+    postpaid_receivables: Decimal | None = None
+    collection_blocking_balance: Decimal | None = None
+    financial_position_unavailable: bool = False
     next_billing_date: datetime | None = None
     billing_message: str | None = None
     service_addresses: list[ServiceAddressOption] = Field(default_factory=list)
