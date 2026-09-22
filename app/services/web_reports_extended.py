@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import csv
 import io
 import logging
@@ -14,6 +15,7 @@ from enum import StrEnum
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.services.billing import reporting as billing_reporting
 from app.services.common import parse_date_filter as _parse_date
 from app.services.status_presentation import invoice_status_presentation
 from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
@@ -47,6 +49,7 @@ class ExtendedReportExportQuery:
     state: str = "all"
     band: str | None = None
     include_funded: bool | None = None
+    period: billing_reporting.UpcomingChargePeriod | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,12 +169,12 @@ def get_upcoming_charges_data(
     state: str = "all",
     band: str | None = None,
     include_funded: bool | None = None,
+    period: billing_reporting.UpcomingChargePeriod | None = None,
     page: int = 1,
     per_page: int = 25,
 ) -> dict:
     """Present one lazy page from the registered billing reporting owner."""
     from app.services import display_format
-    from app.services.billing import reporting as billing_reporting
     from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
 
     try:
@@ -192,6 +195,7 @@ def get_upcoming_charges_data(
             include_funded=include_funded,
             page=page,
             per_page=per_page,
+            period=period,
         ),
     )
     prepaid_currency = resolve_prepaid_enforcement_currency(db)
@@ -257,6 +261,11 @@ def get_upcoming_charges_data(
         "amount_bands": bands,
         "postpaid_lead_days": config.postpaid_lead_days,
         "prepaid_lead_days": config.prepaid_lead_days,
+        "selected_month": period.month if period else None,
+        "selected_year": period.year if period else None,
+        "month_options": tuple(
+            (month, calendar.month_name[month]) for month in range(1, 13)
+        ),
     }
 
 
@@ -785,6 +794,7 @@ def build_extended_report_export(
                 state=query.state,
                 band=query.band,
                 include_funded=query.include_funded,
+                period=query.period,
                 page=page,
                 per_page=50,
             )

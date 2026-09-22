@@ -28,6 +28,16 @@ not reminder candidates.
 The page deliberately has separate Postpaid and Prepaid tabs. A request runs
 only the selected mode's query.
 
+The optional Due month and Year controls filter the authoritative due date:
+invoice `due_at` for postpaid and the latest active entitlement `ends_at` for
+prepaid. With neither selected, the configured lead window remains in effect.
+A year alone covers that calendar year; a month alone covers that month in the
+current UTC year; both select the exact calendar month. Calendar periods use
+inclusive starts and exclusive ends. The report remains a live reminder
+worklist, so historical periods show only currently eligible candidates and
+future prepaid periods show only entitlement boundaries already recorded.
+Tabs, pagination, and CSV export retain the selected period.
+
 1. An indexed SQL query selects and paginates bounded candidates.
 2. Postpaid rows use persisted invoice facts directly.
 3. Only the visible prepaid candidate page is passed to
