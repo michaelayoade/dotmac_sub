@@ -38,6 +38,31 @@ class TestServices:
             "element => element.scrollWidth <= element.clientWidth"
         )
 
+    def test_search_keeps_focus_and_value_across_result_refreshes(
+        self, admin_page: Page, settings
+    ) -> None:
+        page = OffersPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+        search = admin_page.get_by_placeholder("Search tariffs...")
+        admin_page.evaluate(
+            """() => {
+                window.catalogSearchInput = document.querySelector('[name="search"]');
+                window.catalogResultSwaps = 0;
+                document.body.addEventListener('htmx:afterSwap', event => {
+                    if (event.detail.target.id === 'catalog-grid-results') {
+                        window.catalogResultSwaps += 1;
+                    }
+                });
+            }"""
+        )
+        search.focus()
+        search.type("internet", delay=400)
+        admin_page.wait_for_function("window.catalogResultSwaps > 0")
+        expect(search).to_be_focused()
+        expect(search).to_have_value("internet")
+        assert search.evaluate("element => element === window.catalogSearchInput")
+
 
 class TestCatalogAPI:
     """API-level tests for catalog."""

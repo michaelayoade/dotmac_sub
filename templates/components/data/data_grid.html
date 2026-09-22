@@ -82,6 +82,7 @@
     htmx_url="",
     htmx_target="",
     searchable=true,
+    stable_search=false,
     search_placeholder="Search...",
     search_value="",
     create_url="",
@@ -111,10 +112,13 @@
     {% endif %}
 {% endfor %}
 {% set hx_tgt = htmx_target or (table_id ~ "-wrapper") %}
+{% set results_tgt = table_id ~ "-results" %}
+{% set swap_tgt = results_tgt if stable_search else hx_tgt %}
 {% set items_list = items or [] %}
 {% set col_count = columns|length + (1 if selectable else 0) %}
 
 <div id="{{ hx_tgt }}"
+     {% if stable_search %}hx-sync="#{{ hx_tgt }}:replace"{% endif %}
      x-data='{
          visibleCols: JSON.parse(localStorage.getItem("dg_{{ table_id }}")) || {{ ns.visible | tojson }},
          showPicker: false,
@@ -139,8 +143,9 @@
                        placeholder="{{ search_placeholder }}"
                        hx-get="{{ htmx_url }}"
                        hx-trigger="input changed delay:300ms, search"
-                       hx-target="#{{ hx_tgt }}"
+                       hx-target="#{{ swap_tgt }}"
                        hx-swap="outerHTML"
+                       {% if stable_search %}hx-select="#{{ results_tgt }}"{% endif %}
                        hx-include="#{{ hx_tgt }} [name]:not([name='search'])"
                        class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm placeholder-slate-400 shadow-sm transition-all focus:border-{{ color }}-400 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-{{ color }}-500 sm:w-72" />
                 <svg class="absolute left-3 top-3 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,7 +158,7 @@
             {% if filters %}{{ filters | safe }}{% endif %}
 
             {# Count badge #}
-            {% if show_count and total %}
+            {% if not stable_search and show_count and total %}
             <span class="text-sm text-slate-500 dark:text-slate-400">
                 <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
             </span>
@@ -214,6 +219,13 @@
     <input type="hidden" name="sort" value="{{ current_sort }}" />
     <input type="hidden" name="dir" value="{{ current_dir }}" />
 
+    {% if stable_search %}<div id="{{ results_tgt }}" class="space-y-4">{% endif %}
+    {% if stable_search and show_count and total %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">
+        <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
+    </p>
+    {% endif %}
+
     {# ──── Table ──── #}
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="overflow-x-auto">
@@ -238,8 +250,9 @@
                             {% if col.get("sortable", false) and htmx_url %}
                             <button class="group inline-flex items-center gap-1.5 transition-colors hover:text-slate-700 dark:hover:text-slate-200"
                                     hx-get="{{ htmx_url }}?sort={{ col.key }}&dir={{ 'desc' if current_sort == col.key and current_dir == 'asc' else 'asc' }}"
-                                    hx-target="#{{ hx_tgt }}"
+                                    hx-target="#{{ swap_tgt }}"
                                     hx-swap="outerHTML"
+                                    {% if stable_search %}hx-select="#{{ results_tgt }}"{% endif %}
                                     hx-include="#{{ hx_tgt }} [name]:not([name='sort']):not([name='dir'])">
                                 {{ col.label }}
                                 {% if current_sort == col.key %}
@@ -332,8 +345,9 @@
                     {# Previous #}
                     {% if page > 1 %}
                     <button hx-get="{{ htmx_url }}?page={{ page - 1 }}"
-                            hx-target="#{{ hx_tgt }}"
+                            hx-target="#{{ swap_tgt }}"
                             hx-swap="outerHTML"
+                            {% if stable_search %}hx-select="#{{ results_tgt }}"{% endif %}
                             hx-include="#{{ hx_tgt }} [name]"
                             class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200"
                             aria-label="Previous page">
@@ -348,8 +362,9 @@
                               aria-current="page">{{ p }}</span>
                         {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
                         <button hx-get="{{ htmx_url }}?page={{ p }}"
-                                hx-target="#{{ hx_tgt }}"
+                                hx-target="#{{ swap_tgt }}"
                                 hx-swap="outerHTML"
+                                {% if stable_search %}hx-select="#{{ results_tgt }}"{% endif %}
                                 hx-include="#{{ hx_tgt }} [name]"
                                 class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                             {{ p }}
@@ -362,8 +377,9 @@
                     {# Next #}
                     {% if page < total_pages %}
                     <button hx-get="{{ htmx_url }}?page={{ page + 1 }}"
-                            hx-target="#{{ hx_tgt }}"
+                            hx-target="#{{ swap_tgt }}"
                             hx-swap="outerHTML"
+                            {% if stable_search %}hx-select="#{{ results_tgt }}"{% endif %}
                             hx-include="#{{ hx_tgt }} [name]"
                             class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200"
                             aria-label="Next page">
@@ -375,6 +391,7 @@
         </div>
         {% endif %}
     </div>
+    {% if stable_search %}</div>{% endif %}
 </div>
 {% endmacro %}
 

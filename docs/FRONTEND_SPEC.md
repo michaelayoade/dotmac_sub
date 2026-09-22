@@ -2034,7 +2034,7 @@ These are the ORM objects your templates receive. Access fields with dot notatio
 | Customers | `GET /admin/customers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Subscribers | `GET /admin/subscribers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Invoices | `GET /admin/billing?search=...` | `keyup changed delay:300ms` | `#data-table` |
-| Offers | `GET /admin/catalog/offers?search=...` | `keyup changed delay:300ms` | `#data-table` |
+| Offers | `GET /admin/catalog?search=...` | `input changed delay:300ms` | `#catalog-grid-results` (search field remains mounted) |
 
 ### Dynamic Form Fields
 
