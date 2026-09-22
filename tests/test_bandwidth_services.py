@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
