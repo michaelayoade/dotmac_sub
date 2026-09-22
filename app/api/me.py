@@ -42,6 +42,7 @@ from app.schemas.billing import (
     MyPaymentMethodRead,
     PaymentProviderOption,
     PaymentRead,
+    TopupActiveRequestResponse,
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
@@ -938,6 +939,11 @@ def my_topup_page(
         prepaid_balance=ctx.get("prepaid_balance"),
         account_credit=ctx.get("account_credit"),
         deposit_allowed=ctx.get("deposit_allowed", True),
+        active_deposit_request=(
+            TopupActiveRequestResponse.model_validate(ctx["active_deposit_request"])
+            if ctx.get("active_deposit_request") is not None
+            else None
+        ),
         eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
         eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
