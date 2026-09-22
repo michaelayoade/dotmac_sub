@@ -302,6 +302,17 @@ seed_optional_group settings/billing \
     "PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY" \
     "prepaid_reconstruction_attestation_public_key=${PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY:-}"
 
+# Fiber acquisition is optional at the deployment level. The webhook secret is
+# resolved by its Integration Platform binding; the conversion key is held at
+# process boot for stable, PII-free marketing subject derivation.
+seed_optional_group integrations/fiber_inquiry \
+    "FIBER_INQUIRY_WEBHOOK_SIGNING_SECRET" \
+    "webhook_signing_secret=${FIBER_INQUIRY_WEBHOOK_SIGNING_SECRET:-}"
+
+seed_optional_group settings/marketing \
+    "CONVERSION_INGEST_API_KEY" \
+    "conversion_ingest_api_key=${CONVERSION_INGEST_API_KEY:-}"
+
 # The settings-encryption keyring, in the same JSON shape the kernel's
 # SETTINGS_ENCRYPTION_KEYS variable accepts:
 #   [{"key_id": "k1", "key": "<Fernet.generate_key()>", "status": "active"}]

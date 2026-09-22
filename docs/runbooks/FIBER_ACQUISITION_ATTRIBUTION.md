@@ -16,6 +16,13 @@ smoke test have passed.
   installation as secret `authorization`; configure `authorization_scheme` as
   `Bearer`.
 
+The repository's OpenBao bootstrap accepts the two Sub-owned values through
+`FIBER_INQUIRY_WEBHOOK_SIGNING_SECRET` and `CONVERSION_INGEST_API_KEY`. It
+stores them at `secret/integrations/fiber_inquiry` and
+`secret/settings/marketing`; neither value belongs in Git, connector config,
+or operator output. The application OpenBao token is read-only, so secret
+provisioning must use the operator bootstrap token.
+
 ## Capability bindings
 
 Create and enable `communications.fiber_inquiry.receive.v1` with:
@@ -26,11 +33,46 @@ Create and enable `communications.fiber_inquiry.receive.v1` with:
 }
 ```
 
+After provisioning the secret, configure the receiver through the checked-in,
+idempotent adapter:
+
+```bash
+python -m scripts.one_off.bootstrap_fiber_inquiry_integration \
+  --apply \
+  --environment sandbox
+```
+
+Use `--environment production` only for the production installation. The
+command prints the binding UUID and callback path but never the secret. Run
+without `--apply` first for a no-write preview, or use `--prepare` to create a
+disabled binding before the secret exists.
+
 The omitted values intentionally use these defaults:
 
 - signature header: `X-Dotmac-Fiber-Signature`
 - delivery header: `X-Dotmac-Fiber-Delivery`
 - signature prefix: `sha256=`
+
+## What the availability result means
+
+This deployment work does not introduce a new coverage algorithm. It exposes
+the existing `sales.selfserve.compute_feasibility` rule to the Fiber website:
+
+- The website must submit a latitude and longitude. An address without a map
+  pin creates the Lead but returns no automatic coverage result, so staff can
+  arrange a survey.
+- PostGIS measures the straight-line map distance from that pin to the nearest
+  active Fiber Access Point with recorded geometry.
+- `covered` means the distance is within
+  `selfserve_quote_feasibility_radius_meters` (2,000 metres by default).
+- No active Fiber Access Point produces `out_of_area`; a point beyond the
+  configured radius produces `survey_required`.
+
+This is an initial feasibility indication, not an installation guarantee. It
+does not currently prove available splitter/OLT ports, route continuity,
+building access, or construction readiness. The public response deliberately
+omits the internal access-point identity and measured distance, and tells the
+customer that Dotmac will confirm the installation details.
 
 Create and enable an `events.deliver.v1` `webhook.http` binding with URL
 `${MARKETING_BASE_URL}/api/v1/conversions/events`, method `POST`, and
@@ -57,3 +99,14 @@ Record only the base URL, binding UUID, header names/prefix, migration revision,
 test results, and a redacted response. Hand the website administrator a secret
 manager reference or approved one-time secure exchange; never return the secret
 itself.
+
+## Repository versus external configuration
+
+- This repository owns the signed receiver, the Integration Platform bootstrap,
+  lead/origin persistence, coverage evaluation, and the Selfcare callback path.
+- The `fiber.dotmac.ng` WordPress deployment owns its upstream callback URL,
+  binding UUID, and matching HMAC secret. Those settings cannot be committed to
+  this repository and must be applied on the website host after staging
+  acceptance.
+- A deployment is incomplete until both sides use the same secret and the
+  WordPress callback URL includes the enabled binding UUID.

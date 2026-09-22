@@ -12,6 +12,7 @@ from app.services.events.types import Event, EventType
 from app.services.marketing_conversion_projection import (
     ConversionStage,
     _stages_for_event,
+    _subject_key,
     project_conversion_event,
 )
 from app.services.owner_commands import CommandContext
@@ -126,3 +127,21 @@ def test_projection_is_idempotent_and_emits_no_pii(db_session, monkeypatch) -> N
     forbidden = {"full_name", "name", "phone", "email", "address"}
     assert all(forbidden.isdisjoint(item) for item in emitted)
     assert all(len(str(item["subject_key"])) == 64 for item in emitted)
+
+
+def test_subject_key_uses_boot_held_conversion_key(db_session, monkeypatch) -> None:
+    _lead_id, origin_id = _fiber_origin(db_session)
+    origin = db_session.get(LeadOriginCapture, origin_id)
+    assert origin is not None
+    monkeypatch.setattr(
+        "app.services.marketing_conversion_projection.settings",
+        SimpleNamespace(conversion_ingest_api_key=""),
+    )
+    monkeypatch.setattr(
+        "app.services.marketing_conversion_projection.held_secret",
+        lambda name: (
+            "held-conversion-key" if name == "conversion_ingest_api_key" else None
+        ),
+    )
+
+    assert len(_subject_key(origin)) == 64
