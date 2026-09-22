@@ -3,6 +3,9 @@
 import smtplib
 from email import message_from_string
 
+from cryptography.fernet import Fernet
+from dotmac_kernel.settings_crypto import is_encrypted
+
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
@@ -510,8 +513,9 @@ def test_smtp_connection_auth_failure_logs(monkeypatch, caplog):
     assert "SMTP authentication failed during connection test" in caplog.text
 
 
-def test_get_smtp_config_uses_activity_mapped_sender(db_session):
-    """Sender config should be selected from activity mapping when present."""
+def test_get_smtp_config_uses_activity_mapped_sender(db_session, monkeypatch):
+    """Sender config should select the mapped sender and decrypt its password."""
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode())
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.host",
@@ -567,10 +571,21 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
 
     config = email_service._get_smtp_config(db_session, activity="billing_invoice")
 
+    stored_password = (
+        db_session.query(DomainSetting)
+        .filter(
+            DomainSetting.domain == SettingDomain.notification,
+            DomainSetting.key == "smtp_sender.billing.password",
+        )
+        .one()
+        .value_text
+    )
+
     assert config["sender_key"] == "billing"
     assert config["host"] == "smtp.billing.local"
     assert config["port"] == 2525
     assert config["username"] == "billing-user"
+    assert is_encrypted(stored_password)
     assert config["password"] == "billing-pass"
     assert config["from_email"] == "billing@example.com"
 

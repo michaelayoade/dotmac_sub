@@ -113,8 +113,8 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_ai_gateway.py` | `<module>` | `outbound_transport` | `8592de9de918a715812dd3b241f2f00930b30bc617bdf2674fdfc16abb797399` |
 | `tests/test_crm_client_resilience.py` | `<module>` | `outbound_transport` | `58bc472074bb7bec95639e2575065066c05d8043983fa49bb10f3858d29320b0` |
 | `tests/test_crm_ticket_pull.py` | `test_latest_crm_updated_at_watermark` | `sync_checkpoint` | `03c45fad7c1a26e5c6ade4222d19ad0190ce37795403d89308d1c3fd23143aeb` |
-| `tests/test_email_services.py` | `test_send_email_auth_failure_logs` | `outbound_transport` | `d04fece5c83bd35cca1931fa0675b17849f4e0d8a0a67fe652d5586269c45b31` |
-| `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d04fece5c83bd35cca1931fa0675b17849f4e0d8a0a67fe652d5586269c45b31` |
+| `tests/test_email_services.py` | `test_send_email_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
+| `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |
 | `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
