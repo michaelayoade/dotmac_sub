@@ -1,0 +1,158 @@
+name: Validate legacy ERP material observations
+on:
+  push:
+    branches: ['fix/erp-material-partial-issue-projection']
+    paths: ['.github/workflows/material-legacy-validation.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'michaelayoade/dotmac_sub' && github.ref == 'refs/heads/fix/erp-material-partial-issue-projection'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      DATABASE_URL: sqlite:///./test.db
+      REDIS_URL: redis://127.0.0.1:9/0
+      CELERY_BROKER_URL: memory://
+      CELERY_RESULT_BACKEND: cache+memory://
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - name: Apply the bounded legacy observation rule and tests
+        id: apply
+        run: |
+          python - <<'PY'
+          import ast, hashlib, pathlib
+          p = pathlib.Path('app/services/field/material_requests.py')
+          data = p.read_bytes()
+          assert hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest() == 'af5b96a09508429ab25c7604596aec627a2e71d3'
+          text = data.decode()
+          start = text.index('def observe_erp_material_status(')
+          end = text.index('\ndef serialize_material_request(', start)
+          part = text[start:end]
+          old = '        if request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value:'
+          assert part.count(old) == 1
+          new = '''        # Older rows retained the migration's manual default despite an
+                  # already-bound ERP request. Accept observations only for that
+                  # exact existing binding; never enroll a genuinely manual request.
+                  legacy_erp_binding = (
+                      request.support_system == "dotmac_erp"
+                      and bool(request.support_reference)
+                      and request.support_reference
+                      in {command.provider_request_id, command.provider_request_number}
+                  )
+                  if (
+                      request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value
+                      and not legacy_erp_binding
+                  ):'''
+          # Dedent continuation lines to the operation body's eight spaces.
+          lines = new.splitlines()
+          new = lines[0] + '\n' + '\n'.join(line[10:] for line in lines[1:])
+          text = text[:start] + part.replace(old, new, 1) + text[end:]
+          ast.parse(text)
+          p.write_text(text)
+          test = pathlib.Path('tests/test_material_legacy_erp_observation.py')
+          assert not test.exists()
+          test.write_text('''"""Legacy bound ERP observations do not enroll genuine manual requests."""
+          from datetime import UTC, datetime
+          from types import SimpleNamespace
+          from uuid import uuid4
+          from unittest.mock import MagicMock
+          import pytest
+          from app.services.field import material_requests as owner
+          from app.services.owner_commands import CommandContext
+
+          @pytest.mark.parametrize(("system", "reference", "allowed"), [
+              ("dotmac_erp", "erp-id", True),
+              ("dotmac_erp", "MR-001", True),
+              ("dotmac_erp", None, False),
+              ("dotmac_erp", "another-request", False),
+              ("other-provider", "erp-id", False),
+              (None, None, False),
+          ])
+          def test_manual_default_requires_an_existing_exact_erp_binding(monkeypatch, system, reference, allowed):
+              request = SimpleNamespace(fulfillment_channel="manual", support_system=system, support_reference=reference)
+              command_id = uuid4()
+              command = owner.ObserveErpMaterialStatus(
+                  context=CommandContext(command_id=command_id, correlation_id=command_id, actor="test", scope="test", reason="legacy observation", idempotency_key=str(command_id)),
+                  request_id=uuid4(), provider_request_id="erp-id", provider_request_number="MR-001",
+                  provider_status="PARTIALLY_ISSUED", observed_at=datetime.now(UTC),
+              )
+              applied = MagicMock()
+              monkeypatch.setattr(owner, "_locked_request", lambda *_args: request)
+              monkeypatch.setattr(owner, "_request_view", lambda row: row)
+              monkeypatch.setattr(owner, "execute_owner_command", lambda _db, **kw: kw["operation"]())
+              monkeypatch.setattr(owner.field_material_requests, "apply_backoffice_outcome", applied)
+              db = MagicMock()
+              if allowed:
+                  assert owner.observe_erp_material_status(db, command) is request
+                  applied.assert_called_once()
+                  assert request.fulfillment_channel == "manual"
+              else:
+                  with pytest.raises(owner.MaterialRequestError, match="manual"):
+                      owner.observe_erp_material_status(db, command)
+                  applied.assert_not_called()
+          '''.replace('\n          ', '\n'))
+          ast.parse(test.read_text())
+          doc = pathlib.Path('docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md')
+          doc.write_text(doc.read_text() + '\nLegacy rows retaining the migration-time manual channel default may receive ERP\nobservations only when their existing dotmac_erp support reference matches the\nverified ERP ID or request number. This does not rewrite fulfillment-channel\nintent or enroll unlinked manual requests. Identity and complete quantity-snapshot\nvalidation still run in the same material owner.\n')
+          PY
+      - uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263
+        with:
+          version: '2.4.1'
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-3.12.13-${{ hashFiles('poetry.lock') }}
+      - name: Install repository-locked dependencies
+        env:
+          POETRY_HTTP_BASIC_FORGEJO_USERNAME: ci-reader
+          POETRY_HTTP_BASIC_FORGEJO_PASSWORD: ${{ secrets.FORGEJO_READ_TOKEN }}
+        run: poetry install --no-interaction
+      - name: Lint and format
+        id: lint
+        run: |
+          poetry run ruff format app/services/field/material_requests.py tests/test_material_legacy_erp_observation.py
+          poetry run ruff check --fix app/services/field/material_requests.py tests/test_material_legacy_erp_observation.py
+      - name: Focused material observation regressions
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          poetry run pytest -q tests/test_material_legacy_erp_observation.py tests/test_material_partial_fulfillment.py tests/test_dotmac_erp_material_sync.py tests/test_erp_material_webhook.py tests/test_field_material_requests.py 2>&1 | tee "$RUNNER_TEMP/material-legacy-tests.txt"
+      - name: Publish bounded changes and remove temporary workflow
+        id: publish
+        if: always() && steps.apply.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess
+          branch = 'fix/erp-material-partial-issue-projection'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/' + branch
+          names = ['app/services/field/material_requests.py', 'tests/test_material_legacy_erp_observation.py', 'docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md', '.github/workflows/material-legacy-validation.yml']
+          pathlib.Path(names[-1]).unlink()
+          dirty = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert dirty <= set(names)
+          subprocess.run(['git', 'fetch', 'origin', branch], check=True)
+          assert subprocess.check_output(['git', 'rev-parse', 'FETCH_HEAD'], text=True).strip() == os.environ['GITHUB_SHA']
+          subprocess.run(['git', 'add', '--', *names], check=True)
+          subprocess.run(['git', '-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com', 'commit', '-m', 'fix(materials): retain exact ERP observations for legacy bound requests'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/' + branch], check=True)
+          subprocess.run(['git', 'rev-parse', 'HEAD'], check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: material-legacy-validation
+          path: ${{ runner.temp }}/material-legacy-tests.txt
+          retention-days: 2
+      - name: Require passing checks
+        if: always()
+        env:
+          OK: ${{ steps.lint.outcome == 'success' && steps.tests.outcome == 'success' && steps.publish.outcome == 'success' }}
+        run: test "$OK" = 'true'
