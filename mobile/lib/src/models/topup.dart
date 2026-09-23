@@ -19,19 +19,25 @@ class PaymentProviderOption {
 /// One admin-configured bank account shown under the bank-transfer option.
 class BankAccount {
   BankAccount({
+    this.id,
     required this.bankName,
     required this.accountName,
     required this.accountNumber,
+    this.sortCode,
   });
 
+  final String? id;
   final String bankName;
   final String accountName;
   final String accountNumber;
+  final String? sortCode;
 
   factory BankAccount.fromJson(Map<String, dynamic> json) => BankAccount(
+        id: json['id'] as String?,
         bankName: json['bank_name'] as String? ?? '',
         accountName: json['account_name'] as String? ?? '',
         accountNumber: json['account_number'] as String? ?? '',
+        sortCode: json['sort_code'] as String?,
       );
 }
 
@@ -129,6 +135,8 @@ class TopupActiveRequest {
   final String message;
   final String? rejectionReason;
   final bool canCancel;
+
+  bool get isAwaitingReceipt => nextAction == TopupRequestAction.uploadReceipt;
 
   factory TopupActiveRequest.fromJson(Map<String, dynamic> json) =>
       TopupActiveRequest(

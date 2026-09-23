@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../../models/payment_proof.dart';
@@ -18,6 +19,7 @@ Future<bool?> showSubmitProofSheet(
   String? initialAmount,
   List<BankAccount> accounts = const [],
   String? instructions,
+  String? intentId,
 }) {
   return showModalBottomSheet<bool>(
     context: context,
@@ -26,6 +28,7 @@ Future<bool?> showSubmitProofSheet(
       initialAmount: initialAmount,
       accounts: accounts,
       instructions: instructions,
+      intentId: intentId,
     ),
   );
 }
@@ -207,11 +210,13 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
     this.initialAmount,
     this.accounts = const [],
     this.instructions,
+    this.intentId,
   });
 
   final String? initialAmount;
   final List<BankAccount> accounts;
   final String? instructions;
+  final String? intentId;
 
   @override
   ConsumerState<SubmitProofSheet> createState() => _SubmitProofSheetState();
@@ -219,8 +224,9 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
 
 class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   late final _amount = TextEditingController(text: widget.initialAmount ?? '');
-  final _bank = TextEditingController();
   final _reference = TextEditingController();
+  late String? _selectedAccountId =
+      widget.accounts.length == 1 ? widget.accounts.first.id : null;
   XFile? _file;
   bool _busy = false;
   String? _error;
@@ -228,7 +234,6 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   @override
   void dispose() {
     _amount.dispose();
-    _bank.dispose();
     _reference.dispose();
     super.dispose();
   }
@@ -246,6 +251,10 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
       setState(() => _error = 'Amount and a receipt image are both required.');
       return;
     }
+    if (widget.accounts.length > 1 && _selectedAccountId == null) {
+      setState(() => _error = 'Choose the Dotmac account you transferred to.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -253,16 +262,19 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
     try {
       await ref.read(billingRepositoryProvider).submitPaymentProof(
             amount: _amount.text.trim(),
-            bankName: _bank.text.trim(),
             reference: _reference.text.trim(),
             filePath: _file!.path,
             fileName: _file!.name,
+            intentId: widget.intentId,
+            selectedAccountId: _selectedAccountId,
           );
       if (mounted) Navigator.of(context).pop(true);
-    } catch (_) {
+    } catch (error) {
       setState(() {
         _busy = false;
-        _error = 'Could not submit — check the details and try again.';
+        _error = error is ApiException
+            ? error.message
+            : 'Could not submit — check the details and try again.';
       });
     }
   }
@@ -288,12 +300,34 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
             if (widget.accounts.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
-                'Transfer to',
+                widget.accounts.length > 1
+                    ? 'Choose the Dotmac account you transferred to'
+                    : 'Transfer to',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 6),
-              for (final acct in widget.accounts)
-                _BankAccountCard(account: acct),
+              if (widget.accounts.length > 1)
+                RadioGroup<String>(
+                  groupValue: _selectedAccountId,
+                  onChanged: (value) {
+                    if (_busy) return;
+                    setState(() => _selectedAccountId = value);
+                  },
+                  child: Column(
+                    children: [
+                      for (final acct in widget.accounts)
+                        RadioListTile<String>(
+                          contentPadding: EdgeInsets.zero,
+                          value: acct.id ?? acct.accountNumber,
+                          title: Text('${acct.bankName} ${acct.accountNumber}'),
+                          subtitle: Text(acct.accountName),
+                        ),
+                    ],
+                  ),
+                )
+              else
+                for (final acct in widget.accounts)
+                  _BankAccountCard(account: acct),
               if (widget.instructions != null &&
                   widget.instructions!.trim().isNotEmpty)
                 Padding(
@@ -317,14 +351,6 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               ),
               decoration: const InputDecoration(
                 labelText: 'Amount (NGN) *',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _bank,
-              decoration: const InputDecoration(
-                labelText: 'Bank',
                 border: OutlineInputBorder(),
               ),
             ),

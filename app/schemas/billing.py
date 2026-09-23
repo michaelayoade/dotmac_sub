@@ -1305,6 +1305,7 @@ class PaymentProviderOption(BaseModel):
 
 
 class BankTransferAccount(BaseModel):
+    id: str | None = None
     bank_name: str
     account_name: str
     account_number: str
@@ -1317,6 +1318,22 @@ class DirectBankTransferConfig(BaseModel):
     enabled: bool = False
     instructions: str | None = None
     accounts: list[BankTransferAccount] = Field(default_factory=list)
+
+
+class ActiveDepositRequestResponse(BaseModel):
+    intent_id: UUID
+    phase: str
+    next_action: str
+    provider_type: str
+    reference: str
+    amount: Decimal
+    currency: str
+    created_at: datetime
+    expires_at: datetime | None = None
+    observed_at: datetime
+    message: str
+    rejection_reason: str | None = None
+    can_cancel: bool = False
 
 
 class TopupEligibleInvoice(BaseModel):
@@ -1398,6 +1415,7 @@ class TopupPageResponse(BaseModel):
     # saved-card flows, and configured direct bank transfer.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
+    active_deposit_request: ActiveDepositRequestResponse | None = None
 
 
 class TopupPreviewRequest(BaseModel):
