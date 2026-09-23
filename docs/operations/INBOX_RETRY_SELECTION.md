@@ -24,11 +24,17 @@ cast cannot turn them into a fresh retry budget or abort the whole sweep.
 exhausted and malformed rows remain failed, visible, and auditable. The task's
 `retried` and `skipped` values describe its selected eligible cohort, not every
 failed message in the database. A policy rejection remains skipped/failed, not
-successful delivery. No automatic reset or historical resend is introduced.
+successful delivery. No automatic retry-budget reset or bulk repair is introduced.
 
 Tests in `tests/test_inbox_retry_eligible_batching.py` exercise the real typed
 maintenance command and outbound retry evidence, mocking only delivery. They
 cover a full exhausted page, repeat sweeps, limits, counter validation, failure
-visibility and rejected-delivery accounting. The integration-marked case must
-run on the repository's migration-prepared PostgreSQL fixture, never SQLite.
-All other cases are fast unit coverage and are not database-parity acceptance.
+visibility and rejected-delivery accounting. These are fast unit tests, not
+database-parity acceptance.
+
+`tests/integration/test_inbox_retry_selection_pg.py` reuses the exhausted-page
+scenario under the integration suite's migration-prepared PostgreSQL fixtures.
+The repository selects this lane by directory, not an `integration` marker.
+The test retains its explicit PostgreSQL assertion, and integration conftest
+refuses SQLite rather than skipping the test or accepting a metadata-only schema.
+Run it through the existing `make test-integration` or hosted PostgreSQL shards.

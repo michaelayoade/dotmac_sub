@@ -1,7 +1,7 @@
-"""Retry selection regressions through the typed maintenance command.
+"""Fast unit retry selection regressions through the typed maintenance command.
 
-The normal db_session lane is fast unit coverage. The integration case uses
-only the repository's migration-prepared PostgreSQL target.
+PostgreSQL acceptance lives in tests/integration/test_inbox_retry_selection_pg.py
+and reuses the exhausted-page scenario without weakening its database guard.
 """
 
 from __future__ import annotations
@@ -137,14 +137,6 @@ def _assert_exhausted_batch_does_not_starve(
 def test_exhausted_newest_batch_does_not_starve_older_work(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _assert_exhausted_batch_does_not_starve(db_session, monkeypatch)
-
-
-@pytest.mark.integration
-def test_postgresql_exhausted_batch_reaches_eligible_work(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert db_session.get_bind().dialect.name == "postgresql"
     _assert_exhausted_batch_does_not_starve(db_session, monkeypatch)
 
 
