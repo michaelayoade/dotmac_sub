@@ -950,10 +950,35 @@ def ensure_radius_users_for_subscription(
     if subscription.status != SubscriptionStatus.active:
         return 0
 
+    stale_users = list(
+        db.scalars(
+            select(RadiusUser)
+            .join(
+                AccessCredential,
+                RadiusUser.access_credential_id == AccessCredential.id,
+            )
+            .where(RadiusUser.subscriber_id == subscription.subscriber_id)
+            .where(RadiusUser.subscription_id == subscription.id)
+            .where(RadiusUser.is_active.is_(True))
+            .where(
+                or_(
+                    AccessCredential.subscription_id.is_(None),
+                    AccessCredential.subscription_id != subscription.id,
+                )
+            )
+        ).all()
+    )
+    changed = 0
+    for stale_user in stale_users:
+        stale_user.is_active = False
+        stale_user.last_sync_at = datetime.now(UTC)
+        changed += 1
+
     credentials = list(
         db.scalars(
             select(AccessCredential)
             .where(AccessCredential.subscriber_id == subscription.subscriber_id)
+            .where(AccessCredential.subscription_id == subscription.id)
             .where(AccessCredential.is_active.is_(True))
             .order_by(
                 AccessCredential.updated_at.desc(),
@@ -962,9 +987,8 @@ def ensure_radius_users_for_subscription(
         ).all()
     )
     if not credentials:
-        return 0
+        return changed
 
-    changed = 0
     for credential in credentials:
         existing_user = db.scalars(
             select(RadiusUser).where(RadiusUser.access_credential_id == credential.id)

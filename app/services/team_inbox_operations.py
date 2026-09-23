@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, func, literal_column, or_, select
+from sqlalchemy import BigInteger, String, case, cast, func, literal_column, or_, select
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -1141,6 +1141,41 @@ def list_failed_outbound_messages(
     )
 
 
+def _list_retryable_outbound_messages(
+    db: Session, *, limit: int, max_retry_count: int
+) -> list[InboxMessage]:
+    """Apply the retry budget before limiting the automatic work cohort."""
+
+    retry_text = func.trim(
+        func.coalesce(
+            cast(InboxMessage.metadata_["retry_count"].as_string(), String), "0"
+        )
+    )
+    # Guard the cast itself: a malformed or oversized persisted counter must
+    # stay visible as failed work, not crash the sweep or reset its budget.
+    # Eighteen decimal digits fit safely in PostgreSQL's signed BIGINT.
+    retry_count = case(
+        (
+            retry_text.regexp_match(r"^[0-9]{1,18}$"),
+            cast(retry_text, BigInteger),
+        ),
+        else_=None,
+    )
+    query = _failed_outbound_query(db).filter(retry_count < max_retry_count)
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite JSON extraction represents booleans as 0/1; do not let that
+        # make malformed boolean counters eligible only in the fast unit lane.
+        json_kind = func.json_type(InboxMessage.metadata_, "$.retry_count")
+        query = query.filter(
+            or_(json_kind.is_(None), json_kind.in_(("null", "integer", "text")))
+        )
+    return list(
+        query.order_by(InboxMessage.created_at.desc(), InboxMessage.id.desc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+
+
 def retry_failed_outbound_batch(
     db: Session,
     *,
@@ -1149,7 +1184,9 @@ def retry_failed_outbound_batch(
 ) -> dict[str, object]:
     retried: list[str] = []
     skipped: list[dict[str, str]] = []
-    for message in list_failed_outbound_messages(db, limit=max(1, int(limit))):
+    for message in _list_retryable_outbound_messages(
+        db, limit=limit, max_retry_count=max_retry_count
+    ):
         metadata = dict(message.metadata_ or {})
         retry_count = int(metadata.get("retry_count") or 0)
         if retry_count >= max_retry_count:

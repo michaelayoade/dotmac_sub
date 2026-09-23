@@ -15948,6 +15948,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/me/topup/intents/{intent_id}/cancel": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:intent_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "ef3baaf811cd",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/me/topup/preview": {
    "params": [
     "header:authorization",
@@ -19367,7 +19379,7 @@
   "BankAccountRead": "9a9818c5b222",
   "BankAccountType": "6e5f8b5516f2",
   "BankAccountUpdate": "9b4a7f6b07e0",
-  "BankTransferAccount": "a2e9dc6a108e",
+  "BankTransferAccount": "ee98fb65ba6a",
   "BillingAccountCreate": "dcfcb9a07aa6",
   "BillingAccountCreditAllocationConfirm": "dd5cac4fa213",
   "BillingAccountCreditAllocationPreviewRead": "00d620f43bcf",
@@ -20702,6 +20714,7 @@
   "TokenResponse": "b55a164b5612",
   "TopUserEntry": "a8f50c81e200",
   "TopupActiveRequestResponse": "4e23fb9c979e",
+  "TopupCancelResponse": "62e318933b22",
   "TopupEligibleInvoice": "f867f52b262b",
   "TopupInitiateRequest": "7a3f8d729837",
   "TopupInitiateResponse": "7c8ce7063dd5",

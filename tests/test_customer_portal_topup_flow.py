@@ -1379,7 +1379,15 @@ def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
                 "account_name": "Dotmac Payments",
                 "account_number": "0123456789",
                 "sort_code": "",
-            }
+            },
+            {
+                "id": "bank-secondary",
+                "enabled": "true",
+                "bank_name": "Dotmac Backup Bank",
+                "account_name": "Dotmac Payments",
+                "account_number": "9876543210",
+                "sort_code": "",
+            },
         ],
     )
 
@@ -1394,6 +1402,7 @@ def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
             _invoice_customer(subscriber),
             made_payment=True,
             file=SimpleNamespace(filename="portal-atomic.png"),
+            selected_account_id="0123456789",
         )
     )
 
@@ -1402,6 +1411,7 @@ def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
     assert proof is not None
     assert proof.status is PaymentProofStatus.submitted
     assert persisted_intent is not None
+    assert persisted_intent.metadata_["selected_bank_account"]["id"] == "bank-primary"
     assert persisted_intent.status == TopupIntentStatus.submitted.value
     assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 

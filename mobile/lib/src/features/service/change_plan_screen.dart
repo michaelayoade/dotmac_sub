@@ -147,6 +147,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
 
   Widget _list(PlanChangeOptions opts) {
     final theme = Theme.of(context);
+    final selectedAddressId = _selectedAddressId(opts);
     return Stack(
       children: [
         ListView(
@@ -184,7 +185,8 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
             const SizedBox(height: 8),
             if (opts.serviceAddresses.isNotEmpty) ...[
               DropdownButtonFormField<String>(
-                initialValue: _targetServiceAddressId,
+                key: ValueKey(selectedAddressId),
+                initialValue: selectedAddressId,
                 decoration: const InputDecoration(
                   labelText: 'Service address',
                   helperText:
@@ -246,6 +248,14 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
           ),
       ],
     );
+  }
+
+  String? _selectedAddressId(PlanChangeOptions opts) {
+    final selected = _targetServiceAddressId;
+    if (selected == null) return null;
+    final matches =
+        opts.serviceAddresses.where((address) => address.id == selected);
+    return matches.length == 1 ? selected : null;
   }
 }
 

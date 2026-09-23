@@ -1305,6 +1305,7 @@ class PaymentProviderOption(BaseModel):
 
 
 class BankTransferAccount(BaseModel):
+    id: str | None = None
     bank_name: str
     account_name: str
     account_number: str
@@ -1378,6 +1379,14 @@ class TopupActiveRequestResponse(BaseModel):
     message: str
     rejection_reason: str | None = None
     can_cancel: bool = False
+
+
+class TopupCancelResponse(BaseModel):
+    """Customer-visible result of canceling an unsubmitted transfer intent."""
+
+    intent_id: UUID
+    status: Literal["canceled"]
+    changed: bool
 
 
 class TopupPageResponse(BaseModel):

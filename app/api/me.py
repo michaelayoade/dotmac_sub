@@ -43,6 +43,7 @@ from app.schemas.billing import (
     PaymentProviderOption,
     PaymentRead,
     TopupActiveRequestResponse,
+    TopupCancelResponse,
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
@@ -141,6 +142,7 @@ from app.services import (
     customer_experience_lifecycle,
     customer_field_job_chat,
     customer_work_order_selfcare,
+    payment_intent_management,
     quote_deposits,
     quotes_mirror,
     team_inbox_widget,
@@ -178,6 +180,7 @@ from app.services.file_storage import build_content_disposition
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
+from app.services.topup_intents import DirectTransferCancellationSource
 
 router = APIRouter(prefix="/me", tags=["me"])
 logger = logging.getLogger(__name__)
@@ -1009,6 +1012,46 @@ def my_topup_initiate(
         checkout_url=result.get("checkout_url"),
         redirect_url=result.get("redirect_url"),
         preview_fingerprint=result["preview_fingerprint"],
+    )
+
+
+@router.post(
+    "/topup/intents/{intent_id}/cancel",
+    response_model=TopupCancelResponse,
+)
+def my_cancel_topup_intent(
+    intent_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> TopupCancelResponse:
+    """Cancel the caller's unsubmitted direct-bank-transfer top-up intent."""
+    customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
+    command_id = uuid4()
+    try:
+        db_session_adapter.release_read_transaction(db)
+        outcome = payment_intent_management.cancel_unsubmitted_direct_transfer(
+            db,
+            payment_intent_management.CancelPaymentIntentCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"customer:{account_id}",
+                    scope=payment_intent_management.CUSTOMER_CANCEL_SCOPE,
+                    reason="Customer canceled an unsubmitted bank-transfer request",
+                    idempotency_key=f"customer-cancel-payment-intent:{intent_id}",
+                ),
+                account_id=UUID(str(account_id)),
+                intent_id=intent_id,
+                source=DirectTransferCancellationSource.customer_selfcare,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TopupCancelResponse(
+        intent_id=outcome.intent_id,
+        status="canceled",
+        changed=outcome.changed,
     )
 
 
