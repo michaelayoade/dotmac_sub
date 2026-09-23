@@ -214,13 +214,19 @@ def test_limit_and_newest_eligible_order_remain_bounded(
     db_session.commit()
     attempts = _mock_delivery(monkeypatch)
 
-    assert team_inbox_maintenance.retry_failed_outbound(
-        db_session, _command(limit=1)
-    ).changed == 1
+    assert (
+        team_inbox_maintenance.retry_failed_outbound(
+            db_session, _command(limit=1)
+        ).changed
+        == 1
+    )
     assert attempts == [newest]
-    assert team_inbox_maintenance.retry_failed_outbound(
-        db_session, _command(limit=1)
-    ).changed == 1
+    assert (
+        team_inbox_maintenance.retry_failed_outbound(
+            db_session, _command(limit=1)
+        ).changed
+        == 1
+    )
     assert attempts == [newest, older]
 
 
