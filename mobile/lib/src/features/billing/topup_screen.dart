@@ -53,14 +53,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   /// Pull the saved-card id out of a `card:<id>` selection (else null).
   String? get _selectedCardId =>
       _selection != null && _selection!.startsWith('card:')
-      ? _selection!.substring('card:'.length)
-      : null;
+          ? _selection!.substring('card:'.length)
+          : null;
 
   /// The gateway type for a `gw:<type>` selection (else null).
   String? get _selectedGateway =>
       _selection != null && _selection!.startsWith('gw:')
-      ? _selection!.substring('gw:'.length)
-      : null;
+          ? _selection!.substring('gw:'.length)
+          : null;
 
   bool get _isTransfer => _selection == 'transfer';
 
@@ -151,9 +151,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       });
     }
     try {
-      final preview = await ref
-          .read(billingRepositoryProvider)
-          .previewTopup(amount);
+      final preview =
+          await ref.read(billingRepositoryProvider).previewTopup(amount);
       if (!mounted || requestId != _previewRequestId) {
         return null;
       }
@@ -184,7 +183,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     final activeDeposit = page.activeDepositRequest;
     if (!page.depositAllowed && activeDeposit != null) {
       messenger.showSnackBar(
-        SnackBar(content: Text(activeDeposit.message ?? 'Payment is pending.')),
+        SnackBar(content: Text(activeDeposit.message)),
       );
       return;
     }
@@ -222,14 +221,13 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           );
           return;
         }
-        final initiation = await ref
-            .read(billingRepositoryProvider)
-            .initiateTopup(
-              amount,
-              previewFingerprint: preview.previewFingerprint,
-              provider: 'bank_transfer',
-              idempotencyKey: _topupAttemptKey('transfer'),
-            );
+        final initiation =
+            await ref.read(billingRepositoryProvider).initiateTopup(
+                  amount,
+                  previewFingerprint: preview.previewFingerprint,
+                  provider: 'bank_transfer',
+                  idempotencyKey: _topupAttemptKey('transfer'),
+                );
         if (!mounted) {
           return;
         }
@@ -319,9 +317,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         reference = ref0;
       }
 
-      final result = await ref
-          .read(billingRepositoryProvider)
-          .verifyTopup(
+      final result = await ref.read(billingRepositoryProvider).verifyTopup(
             reference,
             // "Save this card" only applies to a brand-new Paystack card.
             saveCard:
@@ -337,9 +333,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           content: Text(
             result.availableBalance != null
                 ? 'Topped up - balance '
-                      '${Fmt.money(result.availableBalance!, page.currency)}'
+                    '${Fmt.money(result.availableBalance!, page.currency)}'
                 : 'Top-up of ${Fmt.money(result.amount, page.currency)} '
-                      'received',
+                    'received',
           ),
         ),
       );
@@ -359,7 +355,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
   }
 
-  Future<void> _submitActiveDepositProof(ActiveDepositRequest deposit) async {
+  Future<void> _submitActiveDepositProof(TopupActiveRequest deposit) async {
     final page = _page;
     if (page == null) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -383,7 +379,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
   }
 
-  Future<void> _cancelActiveDeposit(ActiveDepositRequest deposit) async {
+  Future<void> _cancelActiveDeposit(TopupActiveRequest deposit) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -462,15 +458,15 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       body: _loadingPage
           ? const Center(child: CircularProgressIndicator())
           : _page == null
-          ? AsyncValueView(
-              value: AsyncValue<void>.error(
-                _loadError ?? 'error',
-                StackTrace.empty,
-              ),
-              data: (_) => const SizedBox.shrink(),
-              onRetry: _loadPage,
-            )
-          : _form(_page!),
+              ? AsyncValueView(
+                  value: AsyncValue<void>.error(
+                    _loadError ?? 'error',
+                    StackTrace.empty,
+                  ),
+                  data: (_) => const SizedBox.shrink(),
+                  onRetry: _loadPage,
+                )
+              : _form(_page!),
     );
   }
 
@@ -597,8 +593,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           decoration: InputDecoration(
             labelText: 'Amount',
             prefixText: '${page.currency} ',
-            helperText:
-                '${Fmt.money(page.minAmount, page.currency)} - '
+            helperText: '${Fmt.money(page.minAmount, page.currency)} - '
                 '${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
@@ -692,7 +687,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             title: c.label ?? '${c.brand ?? 'Card'} .... ${c.last4 ?? ''}',
             subtitle: (c.expiresMonth != null && c.expiresYear != null)
                 ? 'Expires '
-                      '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}'
+                    '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}'
                 : null,
           ),
         for (final p in page.providers)
@@ -719,8 +714,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed:
-              _busy ||
+          onPressed: _busy ||
                   !_amountValid ||
                   _selection == null ||
                   _preview == null ||
@@ -739,8 +733,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                   _isTransfer
                       ? Icons.account_balance_outlined
                       : _selectedCardId == null
-                      ? Icons.add_card_outlined
-                      : Icons.bolt_outlined,
+                          ? Icons.add_card_outlined
+                          : Icons.bolt_outlined,
                 ),
           label: Text(_payLabel(page)),
         ),
@@ -756,7 +750,7 @@ class _ActiveDepositCard extends StatelessWidget {
     this.onCancel,
   });
 
-  final ActiveDepositRequest deposit;
+  final TopupActiveRequest deposit;
   final VoidCallback? onUploadReceipt;
   final VoidCallback? onCancel;
 
@@ -784,7 +778,7 @@ class _ActiveDepositCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(deposit.message ?? 'Waiting for your transfer receipt.'),
+            Text(deposit.message),
             const SizedBox(height: 8),
             Text('Reference: ${deposit.reference}'),
             Text('Amount: ${Fmt.money(deposit.amount, deposit.currency)}'),

@@ -953,7 +953,6 @@ def my_topup_page(
         customer_email=ctx.get("customer_email"),
         payment_options=options,
         direct_bank_transfer=direct_transfer,
-        active_deposit_request=ctx.get("active_deposit_request"),
     )
 
 
