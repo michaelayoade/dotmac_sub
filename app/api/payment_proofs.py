@@ -107,6 +107,7 @@ async def submit_my_payment_proof(
                 account
                 for account in accounts
                 if str(account.get("id")) == supplied_account_id
+                or str(account.get("account_number")) == supplied_account_id
             ),
             None,
         )
