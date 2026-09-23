@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from celery.exceptions import Retry
+
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
 
@@ -225,6 +227,10 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
 
         return result
 
+    except Retry:
+        # Retry is Celery control flow, not a business failure. Let the worker
+        # record RETRY instead of returning a misleading successful result.
+        raise
     except Exception as e:
         result["error"] = str(e)
         logger.error(
