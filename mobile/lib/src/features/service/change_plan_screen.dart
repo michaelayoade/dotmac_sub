@@ -187,6 +187,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
               DropdownButtonFormField<String>(
                 key: ValueKey(selectedAddressId),
                 initialValue: selectedAddressId,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Service address',
                   helperText:
@@ -283,7 +284,7 @@ class _ConfirmSheet extends StatelessWidget {
     final q = quote;
     final cur = offer.currency;
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -466,10 +467,19 @@ class _ConfirmSheet extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Flexible(child: Text(label, style: style)),
-          Text(value, style: style),
+          Expanded(
+            child: Text(label, style: style),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: style,
+            ),
+          ),
         ],
       ),
     );

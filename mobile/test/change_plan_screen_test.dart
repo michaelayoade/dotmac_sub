@@ -10,7 +10,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _CatalogRepository extends CatalogRepository {
-  _CatalogRepository() : super(Dio());
+  _CatalogRepository({
+    this.currentAddressLabel = 'Current address',
+    this.quote,
+  }) : super(Dio());
+
+  final String currentAddressLabel;
+  final PlanChangeQuote? quote;
 
   String? quotedAddressId;
 
@@ -33,14 +39,14 @@ class _CatalogRepository extends CatalogRepository {
           periodLabel: '/month',
         ),
       ],
-      serviceAddresses: const [
+      serviceAddresses: [
         ServiceAddressOption(
           id: 'addr-current',
-          label: 'Current address',
+          label: currentAddressLabel,
           hasCoordinates: true,
           isCurrent: true,
         ),
-        ServiceAddressOption(
+        const ServiceAddressOption(
           id: 'addr-new',
           label: 'New address',
           hasCoordinates: true,
@@ -57,11 +63,12 @@ class _CatalogRepository extends CatalogRepository {
     String? targetServiceAddressId,
   }) async {
     quotedAddressId = targetServiceAddressId;
-    return PlanChangeQuote(
-      hasProration: false,
-      previewFingerprint: List.filled(64, 'q').join(),
-      previewEffectiveAt: DateTime.utc(2026, 9, 23),
-    );
+    return quote ??
+        PlanChangeQuote(
+          hasProration: false,
+          previewFingerprint: List.filled(64, 'q').join(),
+          previewEffectiveAt: DateTime.utc(2026, 9, 23),
+        );
   }
 
   @override
@@ -109,5 +116,79 @@ void main() {
 
     expect(repository.quotedAddressId, 'addr-new');
     expect(find.text('Switch to Home 50'), findsOneWidget);
+  });
+
+  testWidgets('long service address fits a narrow viewport', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _CatalogRepository(
+      currentAddressLabel:
+          '17 Admiralty Way, Lekki Phase One, Lagos, Lagos State, Nigeria',
+    );
+    await tester.pumpWidget(_app(repository));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
+  });
+
+  testWidgets('detailed confirmation is scrollable without overflow',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _CatalogRepository(
+      quote: PlanChangeQuote(
+        hasProration: true,
+        chargeAmount: 12500,
+        netAmount: 12500,
+        prepaidFundingBefore: 3000,
+        prepaidFundingAfter: -9500,
+        postpaidReceivables: 2500,
+        collectionBlockingBalance: 2500,
+        shortfall: 9500,
+        daysRemaining: 24,
+        isUpgrade: true,
+        previewFingerprint: List.filled(64, 'q').join(),
+        previewEffectiveAt: DateTime.utc(2026, 9, 23),
+        hasFinancialEffect: true,
+        ledgerEntryType: 'plan_change_prorated_debit_adjustment',
+        ledgerSource: 'subscription_plan_change_preview',
+        ledgerAmount: 12500,
+        accessConsequence: 'service_continues_after_verified_funding',
+        deliveryMode: 'field_migration',
+        fieldDeliveryQuote: const FieldDeliveryQuote(
+          targetServiceAddressId: 'addr-current',
+          targetAddressLabel:
+              '17 Admiralty Way, Lekki Phase One, Lagos, Lagos State, Nigeria',
+          qualificationStatus: 'qualified_for_field_delivery',
+          eligible: true,
+          previewFingerprint: 'field-preview',
+          feeAmount: 5000,
+        ),
+      ),
+    );
+    await tester.pumpWidget(_app(repository));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Home 50'));
+    await tester.tap(find.text('Home 50'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Switch to Home 50'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Confirm'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Confirm'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
