@@ -1410,8 +1410,8 @@ def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
     persisted_intent = db_session.get(TopupIntent, intent.id)
     assert proof is not None
     assert proof.status is PaymentProofStatus.submitted
-    assert proof.details["selected_bank_account"]["id"] == "bank-primary"
     assert persisted_intent is not None
+    assert persisted_intent.metadata_["selected_bank_account"]["id"] == "bank-primary"
     assert persisted_intent.status == TopupIntentStatus.submitted.value
     assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 

@@ -43,6 +43,7 @@ from app.schemas.billing import (
     PaymentProviderOption,
     PaymentRead,
     TopupActiveRequestResponse,
+    TopupCancelResponse,
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
@@ -1014,12 +1015,15 @@ def my_topup_initiate(
     )
 
 
-@router.post("/topup/intents/{intent_id}/cancel")
+@router.post(
+    "/topup/intents/{intent_id}/cancel",
+    response_model=TopupCancelResponse,
+)
 def my_cancel_topup_intent(
     intent_id: UUID,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-) -> dict:
+) -> TopupCancelResponse:
     """Cancel the caller's unsubmitted direct-bank-transfer top-up intent."""
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
@@ -1044,11 +1048,11 @@ def my_cancel_topup_intent(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "intent_id": str(outcome.intent_id),
-        "status": outcome.status.value,
-        "changed": outcome.changed,
-    }
+    return TopupCancelResponse(
+        intent_id=outcome.intent_id,
+        status="canceled",
+        changed=outcome.changed,
+    )
 
 
 @router.post("/topup/verify", response_model=TopupVerifyResponse)

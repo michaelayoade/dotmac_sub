@@ -684,7 +684,10 @@ def _serialize_project(
             }
             for event in sorted(
                 getattr(row, "lifecycle_events", ()),
-                key=lambda item: (item.occurred_at, str(item.id)),
+                key=lambda item: (
+                    _as_utc(item.occurred_at) or datetime.min.replace(tzinfo=UTC),
+                    str(item.id),
+                ),
             )
         ],
         "as_built_submissions": [

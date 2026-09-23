@@ -133,6 +133,7 @@ def test_configure_procurement_can_unassign_direct_assignment(db_session):
     installation.status = InstallationProjectStatus.assigned.value
     installation.assignment_type = VendorAssignmentType.direct.value
     installation_id = str(installation.id)
+    user_id = str(user.id)
     db_session.commit()
     db_session_adapter.release_read_transaction(db_session)
 
@@ -140,7 +141,7 @@ def test_configure_procurement_can_unassign_direct_assignment(db_session):
         db_session,
         ConfigureVendorProcurementCommand(
             context=_context(
-                actor=str(user.id),
+                actor=user_id,
                 scope=installation_id,
                 reason="test vendor unassignment",
             ),
@@ -176,6 +177,7 @@ def test_configure_procurement_can_cancel_award_before_field_work(db_session):
     installation.assignment_type = VendorAssignmentType.direct.value
     installation.approved_quote_id = quote.id
     installation_id = str(installation.id)
+    user_id = str(user.id)
     db_session.commit()
     db_session_adapter.release_read_transaction(db_session)
 
@@ -183,7 +185,7 @@ def test_configure_procurement_can_cancel_award_before_field_work(db_session):
         db_session,
         ConfigureVendorProcurementCommand(
             context=_context(
-                actor=str(user.id),
+                actor=user_id,
                 scope=installation_id,
                 reason="test award cancellation",
             ),
