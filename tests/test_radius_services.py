@@ -501,6 +501,68 @@ def test_reconcile_subscription_connectivity_creates_internal_radius_state(
     assert client.description == "Edge NAS"
 
 
+def test_radius_user_projection_uses_only_exact_subscription_credentials(
+    db_session, subscriber, catalog_offer
+):
+    old_subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.disabled,
+        login="100016344",
+    )
+    active_subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        login="105000064",
+    )
+    db_session.add_all([old_subscription, active_subscription])
+    db_session.flush()
+    old_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=old_subscription.id,
+        username="100016344",
+        secret_hash="old-secret",
+        is_active=True,
+    )
+    active_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=active_subscription.id,
+        username="105000064",
+        secret_hash="new-secret",
+        is_active=True,
+    )
+    db_session.add_all([old_credential, active_credential])
+    db_session.flush()
+    stale_user = RadiusUser(
+        subscriber_id=subscriber.id,
+        subscription_id=active_subscription.id,
+        access_credential_id=old_credential.id,
+        username="100016344",
+        secret_hash="old-secret",
+        is_active=True,
+    )
+    db_session.add(stale_user)
+    db_session.commit()
+
+    changed = radius_service.ensure_radius_users_for_subscription(
+        db_session, active_subscription
+    )
+    db_session.flush()
+
+    db_session.refresh(stale_user)
+    assert changed == 2
+    assert stale_user.is_active is False
+    active_user = (
+        db_session.query(RadiusUser)
+        .filter(RadiusUser.access_credential_id == active_credential.id)
+        .one()
+    )
+    assert active_user.is_active is True
+    assert active_user.subscription_id == active_subscription.id
+    assert active_user.username == "105000064"
+
+
 # =============================================================================
 # Radius Auth Tests
 # =============================================================================

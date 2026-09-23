@@ -15,6 +15,7 @@ from app.services import catalog as catalog_service
 from app.services.pppoe_credentials import (
     SEQUENCE_KEY,
     EnsurePppoeCredentialCommand,
+    PppoeCredentialDisposition,
     PppoeCredentialError,
     _generate_random_password,
     ensure_pppoe_credential,
@@ -98,6 +99,52 @@ class TestAutoGeneratePppoeCredential:
         assert str(result.subscriber_id) == str(subscriber.id)
         assert result.is_active is True
         assert result.secret_hash is not None
+
+    def test_rebinds_disabled_service_credential_to_replacement_subscription(
+        self, db_session, subscriber, catalog_offer
+    ):
+        _seed_pppoe_settings(db_session, start=64000)
+        _set_subscriber_number(db_session, subscriber, "SUB-064000")
+        old_subscription = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.disabled,
+            login="10064000",
+        )
+        new_subscription = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        )
+        db_session.add_all([old_subscription, new_subscription])
+        db_session.flush()
+        credential = AccessCredential(
+            subscriber_id=subscriber.id,
+            subscription_id=old_subscription.id,
+            username="10064000",
+            secret_hash="plain:existing-secret",
+            is_active=True,
+        )
+        db_session.add(credential)
+        db_session.commit()
+
+        outcome = ensure_pppoe_credential(
+            db_session,
+            EnsurePppoeCredentialCommand(
+                subscriber_id=subscriber.id,
+                subscription_id=new_subscription.id,
+            ),
+        )
+
+        db_session.refresh(credential)
+        db_session.refresh(new_subscription)
+        assert outcome.credential_id == credential.id
+        assert outcome.username == "10064000"
+        assert outcome.disposition is PppoeCredentialDisposition.rebound_replacement
+        assert credential.subscription_id == new_subscription.id
+        assert credential.secret_hash == "plain:existing-secret"
+        assert new_subscription.login == "10064000"
+        assert db_session.query(AccessCredential).count() == 1
 
     def test_multi_service_credentials_bind_to_exact_subscription(
         self, db_session, subscriber, catalog_offer

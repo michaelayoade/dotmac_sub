@@ -23,6 +23,7 @@ from app.models.catalog import (
     ConnectionType,
     RadiusProfile,
     Subscription,
+    SubscriptionStatus,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
@@ -50,6 +51,7 @@ class PppoeCredentialDisposition(StrEnum):
     created = "created"
     reused = "reused"
     rebound_legacy = "rebound_legacy"
+    rebound_replacement = "rebound_replacement"
     reactivated = "reactivated"
 
 
@@ -274,6 +276,34 @@ def ensure_pppoe_credential(
                         credential_id=existing.id,
                         username=existing.username,
                         disposition=PppoeCredentialDisposition.rebound_legacy,
+                        changed=True,
+                    ),
+                )
+
+            replacement = (
+                existing_query.join(
+                    Subscription,
+                    AccessCredential.subscription_id == Subscription.id,
+                )
+                .filter(Subscription.status == SubscriptionStatus.disabled)
+                .with_for_update()
+                .all()
+            )
+            if len(replacement) == 1:
+                existing = replacement[0]
+                existing.subscription_id = command.subscription_id
+                existing.radius_profile_id = command.radius_profile_id
+                existing.connection_type = ConnectionType.pppoe
+                if subscription is not None:
+                    subscription.login = existing.username
+                db.flush()
+                return _stage_credential_event(
+                    db,
+                    command=command,
+                    outcome=EnsurePppoeCredentialOutcome(
+                        credential_id=existing.id,
+                        username=existing.username,
+                        disposition=PppoeCredentialDisposition.rebound_replacement,
                         changed=True,
                     ),
                 )
