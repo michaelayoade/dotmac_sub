@@ -141,6 +141,7 @@ from app.services import (
     customer_experience_lifecycle,
     customer_field_job_chat,
     customer_work_order_selfcare,
+    payment_intent_management,
     quote_deposits,
     quotes_mirror,
     team_inbox_widget,
@@ -153,7 +154,6 @@ from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import customer_portal_notifications as customer_notifications_service
-from app.services import payment_intent_management
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
