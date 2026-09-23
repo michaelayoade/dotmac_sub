@@ -59,6 +59,7 @@ def _material_outcome(outcome: MaterialRequestView) -> FieldMaterialRequestRead:
         requested_by_person_id=outcome.requested_by_person_id,
         requested_by_system_user_id=outcome.requested_by_system_user_id,
         status=outcome.status.value,
+        fulfillment_status=outcome.fulfillment_status,
         priority=outcome.priority.value,
         notes=outcome.notes,
         source_warehouse_code=outcome.source_warehouse_code,
@@ -83,6 +84,9 @@ def _material_outcome(outcome: MaterialRequestView) -> FieldMaterialRequestRead:
                 name=item.name,
                 unit=item.unit,
                 quantity=item.quantity,
+                issued_quantity=item.issued_quantity,
+                outstanding_quantity=item.outstanding_quantity,
+                out_of_stock=item.out_of_stock,
                 notes=item.notes,
                 serial_numbers=list(item.serial_numbers),
             )

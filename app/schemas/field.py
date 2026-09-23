@@ -418,6 +418,10 @@ class FieldMaterialRequestItemRead(BaseModel):
     notes: str | None = None
     serial_numbers: list[str] = Field(default_factory=list)
 
+    issued_quantity: Decimal | None = Field(default=None, ge=0)
+    outstanding_quantity: Decimal | None = Field(default=None, ge=0)
+    out_of_stock: bool = False
+
 
 class FieldMaterialRequestRead(BaseModel):
     id: UUID
@@ -444,6 +448,7 @@ class FieldMaterialRequestRead(BaseModel):
         "cancellation_pending",
         "sync_failed",
     ]
+    fulfillment_status: str | None = None
     priority: str
     notes: str | None = None
     source_warehouse_code: str | None = None

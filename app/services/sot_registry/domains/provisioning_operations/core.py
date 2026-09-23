@@ -1521,7 +1521,10 @@ SERVICES: tuple[SOTService, ...] = (
             "never posts inventory. Backoffice unavailability never "
             "reverses a valid Sub approval. Local "
             "issue/fulfil transitions are compatibility-only and fail "
-            "closed after the material flow is cut over to Sub."
+            "closed after the material flow is cut over to Sub. Versioned ERP "
+            "line snapshots are matched by immutable SKU, retain cumulative "
+            "issued quantities in request-line metadata, reject regression, and "
+            "keep partial fulfillment in pending_stock without a fulfilled event."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1682,7 +1685,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 idempotency=(
                     "Stable request identity plus normalized ERP identity/status "
-                    "makes repeated delivery and scheduled reconciliation converge."
+                    "makes repeated delivery and scheduled reconciliation converge. Source "
+                    "timestamps reject older snapshots; issued quantities never decrease. "
+                    "A partial issue blocks cancellation and full allocation until all "
+                    "original quantities are observed as issued."
                 ),
                 retries=(
                     "Transport failures retry outside the owner transaction; "

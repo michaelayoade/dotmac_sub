@@ -193,7 +193,9 @@ class _MaterialRequestTile extends StatelessWidget {
           runSpacing: 4,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _MaterialStatusChip(status: request.status),
+            _MaterialStatusChip(
+              status: request.fulfillmentStatus ?? request.status,
+            ),
             if (request.supportStatus != null)
               Text('ERP ${request.supportStatus}'),
             if (request.priority != null) Text(request.priority!),
@@ -307,7 +309,9 @@ class _MaterialRequestDetailScreenState
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _MaterialStatusChip(status: data.status),
+                  _MaterialStatusChip(
+                    status: data.fulfillmentStatus ?? data.status,
+                  ),
                   if (data.priority != null) Chip(label: Text(data.priority!)),
                 ],
               ),
@@ -525,6 +529,10 @@ class _StatusNote extends StatelessWidget {
   }
 }
 
+String _materialQuantity(num value) => value == value.roundToDouble()
+    ? value.toInt().toString()
+    : value.toString();
+
 class _MaterialRequestItemTile extends StatelessWidget {
   const _MaterialRequestItemTile({required this.item});
 
@@ -533,7 +541,9 @@ class _MaterialRequestItemTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final issued = item.issuedQuantity ?? item.fulfilledQuantity;
-    final progress = issued == null ? null : '$issued/${item.quantity} issued';
+    final progress = issued == null
+        ? null
+        : '${_materialQuantity(issued)}/${item.quantity} issued';
     return ListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(item.itemName ?? item.itemId),
@@ -542,6 +552,9 @@ class _MaterialRequestItemTile extends StatelessWidget {
           if (item.approvedQuantity != null)
             '${item.approvedQuantity}/${item.quantity} approved',
           ?progress,
+          if (item.outstandingQuantity != null)
+            '${_materialQuantity(item.outstandingQuantity!)} outstanding',
+          if (item.outOfStock) 'Out of stock',
           if (item.notes != null && item.notes!.isNotEmpty) item.notes!,
         ].join(' · '),
       ),

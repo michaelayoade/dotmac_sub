@@ -7,6 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -116,6 +117,18 @@ class ReviewMaterialRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class MaterialLineFulfillment:
+    """Cumulative ERP observation, never an instruction to deduct stock."""
+
+    sequence: int
+    item_code: str
+    requested_qty: Decimal
+    issued_qty: Decimal
+    out_of_stock: bool = False
+    serial_numbers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ObserveErpMaterialStatus:
     context: CommandContext
     request_id: UUID
@@ -123,6 +136,8 @@ class ObserveErpMaterialStatus:
     provider_status: str
     observed_at: datetime
     serial_numbers_by_sequence: tuple[tuple[int, tuple[str, ...]], ...] = ()
+    line_progress: tuple[MaterialLineFulfillment, ...] | None = None
+    provider_request_number: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +150,9 @@ class MaterialRequestItemView:
     quantity: int
     notes: str | None
     serial_numbers: tuple[str, ...]
+    issued_quantity: Decimal | None = None
+    outstanding_quantity: Decimal | None = None
+    out_of_stock: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +185,15 @@ class MaterialRequestView:
     rejection_reason: str | None
     can_cancel: bool
     items: tuple[MaterialRequestItemView, ...]
+
+    @property
+    def fulfillment_status(self) -> str:
+        if (
+            self.status == MaterialRequestStatus.PENDING_STOCK
+            and self.support_status == "partially_issued"
+        ):
+            return "partially_issued"
+        return self.status.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +327,39 @@ def _context_label(request: FieldMaterialRequest) -> str:
     return "Material request"
 
 
+def _issued_quantity(line: FieldMaterialRequestItem) -> Decimal | None:
+    metadata = line.metadata_ or {}
+    progress = metadata.get("erp_fulfillment")
+    if progress is None:
+        return None
+    try:
+        quantity = Decimal(str(progress["issued_qty"]))
+        if not quantity.is_finite() or not 0 <= quantity <= line.quantity:
+            raise ValueError("Invalid issued quantity")
+        return quantity
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise _material_error(
+            "invalid_request", "Recorded ERP quantities require reconciliation."
+        ) from exc
+
+
+def _outstanding_quantity(line: FieldMaterialRequestItem) -> Decimal | None:
+    issued = _issued_quantity(line)
+    return Decimal(line.quantity) - issued if issued is not None else None
+
+
+def _line_out_of_stock(line: FieldMaterialRequestItem) -> bool:
+    progress = (line.metadata_ or {}).get("erp_fulfillment") or {}
+    return progress.get("out_of_stock") is True
+
+
+def _has_issued_material(request: FieldMaterialRequest) -> bool:
+    return any((_issued_quantity(line) or Decimal("0")) > 0 for line in request.items)
+
+
 def _can_cancel_request(request: FieldMaterialRequest) -> bool:
+    if request.support_status == "partially_issued" or _has_issued_material(request):
+        return False
     return request.status in {
         MaterialRequestStatus.DRAFT.value,
         MaterialRequestStatus.SUBMITTED.value,
@@ -362,6 +421,9 @@ def _request_view(request: FieldMaterialRequest) -> MaterialRequestView:
                 serial_numbers=tuple(
                     str(value) for value in (line.serial_numbers or ())
                 ),
+                issued_quantity=_issued_quantity(line),
+                outstanding_quantity=_outstanding_quantity(line),
+                out_of_stock=_line_out_of_stock(line),
             )
             for line in request.items
         ),
@@ -983,6 +1045,7 @@ def _locked_request(db: Session, request_id: UUID) -> FieldMaterialRequest:
             ),
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if request is None:
         raise _material_error("request_not_found", "Material request was not found.")
@@ -1208,18 +1271,18 @@ def observe_erp_material_status(
                 "manual_delivery_conflict",
                 "A manual material request cannot accept an ERP issuance outcome.",
             )
-        serials = dict(command.serial_numbers_by_sequence)
-        for sequence, line in enumerate(request.items, start=1):
-            if sequence in serials:
-                line.serial_numbers = list(serials[sequence])
         field_material_requests.apply_backoffice_outcome(
             db,
             request,
             support_system="dotmac_erp",
             support_reference=command.provider_request_id,
             support_status=command.provider_status,
+            support_request_number=command.provider_request_number,
+            line_progress=command.line_progress,
+            source_updated_at=command.observed_at,
+            serial_numbers_by_sequence=command.serial_numbers_by_sequence,
         )
-        request.last_reconciled_at = command.observed_at
+        request.last_reconciled_at = datetime.now(UTC)
         db.flush()
         return _request_view(request)
 
@@ -1246,6 +1309,10 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "requested_by_person_id": request.requested_by_person_id,
         "requested_by_system_user_id": request.requested_by_system_user_id,
         "status": request.status,
+        "fulfillment_status": "partially_issued"
+        if request.status == "pending_stock"
+        and request.support_status == "partially_issued"
+        else request.status,
         "priority": request.priority,
         "notes": request.notes,
         "source_warehouse_code": request.source_warehouse_code,
@@ -1271,6 +1338,13 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
                 "name": item.item.name if item.item else None,
                 "unit": item.item.unit if item.item else None,
                 "quantity": item.quantity,
+                "issued_quantity": str(_issued_quantity(item))
+                if _issued_quantity(item) is not None
+                else None,
+                "outstanding_quantity": str(_outstanding_quantity(item))
+                if _outstanding_quantity(item) is not None
+                else None,
+                "out_of_stock": _line_out_of_stock(item),
                 "notes": item.notes,
                 "serial_numbers": item.serial_numbers or [],
             }
@@ -1517,6 +1591,10 @@ class FieldMaterialRequests:
         support_system: str,
         support_reference: str | None,
         support_status: str | None,
+        support_request_number: str | None = None,
+        line_progress: tuple[MaterialLineFulfillment, ...] | None = None,
+        source_updated_at: datetime | None = None,
+        serial_numbers_by_sequence: tuple[tuple[int, tuple[str, ...]], ...] = (),
     ) -> bool:
         """Project one back-office material outcome into the service workflow.
 
@@ -1524,37 +1602,93 @@ class FieldMaterialRequests:
         issue, and cancellation. This resolver is Sub's only writer for the
         resulting material-dependency state.
         """
+        request = _locked_request(db, request.id)
         changed = False
         normalized_status = _normalize_backoffice_status(support_status)
         normalized_system = str(support_system or "").strip().lower()[:40]
         if not normalized_system:
-            raise ValueError("Back-office support outcome requires a source system")
-
-        if request.support_system not in {None, normalized_system}:
-            raise ValueError(
-                "Back-office support system changed for "
-                f"{request.id}: {request.support_system} -> {normalized_system}"
+            raise _material_error(
+                "invalid_request", "Back-office outcome requires a source system."
             )
+        if (
+            support_reference
+            and request.support_reference
+            and request.support_reference
+            not in {support_reference, support_request_number}
+        ):
+            raise _material_error(
+                "erp_identity_conflict",
+                "Back-office material request identity changed.",
+            )
+        if request.support_system not in {None, normalized_system}:
+            raise _material_error(
+                "erp_identity_conflict", "Back-office support system changed."
+            )
+        # Preserve the already-bound ID/number alias; a verified pair is not a new request.
+        support_reference = request.support_reference or support_reference
+        plan = _fulfillment_plan(
+            request, normalized_status, line_progress, source_updated_at
+        )
+        if plan is None:
+            return False
+        for line, progress in plan:
+            metadata = dict(line.metadata_ or {})
+            observed = {
+                "item_code": progress.item_code,
+                "requested_qty": str(progress.requested_qty),
+                "issued_qty": str(progress.issued_qty),
+                "out_of_stock": progress.out_of_stock,
+            }
+            changed = changed or metadata.get("erp_fulfillment") != observed
+            metadata["erp_fulfillment"] = observed
+            line.metadata_ = metadata
+            # Serial selections belong to the immutable request body. They are
+            # not replaced with a partial prefix or matched by relationship order.
+            if progress.serial_numbers:
+                saved = tuple(str(value) for value in (line.serial_numbers or ()))
+                if saved and saved != progress.serial_numbers:
+                    raise _material_error(
+                        "invalid_request",
+                        "ERP serial selections changed; reconcile the request.",
+                    )
+                line.serial_numbers = list(progress.serial_numbers)
+        if line_progress is not None and source_updated_at is not None:
+            metadata = dict(request.metadata_ or {})
+            changed = (
+                changed
+                or metadata.get("erp_fulfillment_source_at")
+                != source_updated_at.isoformat()
+            )
+            metadata["erp_fulfillment_source_at"] = source_updated_at.isoformat()
+            request.metadata_ = metadata
+        elif not _has_issued_material(request):
+            serials = dict(serial_numbers_by_sequence)
+            for sequence, line in enumerate(request.items, start=1):
+                if sequence in serials:
+                    line.serial_numbers = list(serials[sequence])
         if request.support_system != normalized_system:
             request.support_system = normalized_system
             changed = True
-
-        if support_reference:
-            normalized_id = str(support_reference)[:120]
-            if request.support_reference not in {None, normalized_id}:
-                raise ValueError(
-                    "Back-office material request identity changed for "
-                    f"{request.id}: {request.support_reference} -> {normalized_id}"
-                )
-            if request.support_reference != normalized_id:
-                request.support_reference = normalized_id
-                changed = True
+        if support_reference and request.support_reference != support_reference:
+            request.support_reference = support_reference
+            changed = True
 
         if normalized_status and request.support_status != normalized_status:
             request.support_status = normalized_status
             changed = True
 
-        if (
+        if normalized_status == "partially_issued" and request.status in {
+            "submitted",
+            "approved",
+            "accepted_by_erp",
+            "pending_stock",
+            "cancellation_pending",
+        }:
+            # Compatible local lifecycle: still waiting for the outstanding material.
+            # No allocation or fulfilled event is produced until ERP confirms every line.
+            request.status = MaterialRequestStatus.PENDING_STOCK.value
+            changed = True
+        elif (
             normalized_status in {"draft", "submitted", "accepted"}
             and request.status == "submitted"
         ):
@@ -1620,6 +1754,137 @@ class FieldMaterialRequests:
         return changed
 
 
+def _fulfillment_plan(
+    request: FieldMaterialRequest,
+    status: str | None,
+    progress: tuple[MaterialLineFulfillment, ...] | None,
+    source_updated_at: datetime | None,
+) -> list[tuple[FieldMaterialRequestItem, MaterialLineFulfillment]] | None:
+    """Validate one complete cumulative snapshot; None means stale observation.
+
+    Match by the submitted SKU snapshot, never the ORM relationship's row order.
+    Existing requests without the new projection remain unknown until observed.
+    """
+    if progress is not None and any(
+        not row.requested_qty.is_finite() or not row.issued_qty.is_finite()
+        for row in progress
+    ):
+        raise _material_error(
+            "invalid_request", "ERP material quantities must be finite."
+        )
+    if (
+        request.status in {"canceled", "rejected"}
+        and progress is not None
+        and any(row.issued_qty > 0 for row in progress)
+    ):
+        raise _material_error(
+            "invalid_transition",
+            "ERP issued stock conflicts with a terminal request; reconcile it.",
+        )
+    if (
+        request.status in {"issued", "fulfilled"}
+        and status not in _BACKOFFICE_ISSUED_STATUSES
+    ):
+        return None
+    if source_updated_at is not None and source_updated_at.tzinfo is None:
+        raise _material_error(
+            "invalid_request", "ERP observation time must include a timezone."
+        )
+    previous_time = (request.metadata_ or {}).get("erp_fulfillment_source_at")
+    if previous_time and source_updated_at:
+        try:
+            previous = datetime.fromisoformat(str(previous_time))
+            if previous.tzinfo is None:
+                raise ValueError("Missing timezone")
+        except ValueError as exc:
+            raise _material_error(
+                "invalid_request", "ERP observation history requires reconciliation."
+            ) from exc
+        if source_updated_at < previous:
+            return None
+    if progress is None:
+        if status == "partially_issued" or _has_issued_material(request):
+            # Status-only delivery responses must not undo a newer quantity snapshot.
+            return None
+        return []
+    if not source_updated_at or not progress or len(progress) != len(request.items):
+        raise _material_error(
+            "invalid_request",
+            "ERP must provide a dated quantity snapshot for every request line.",
+        )
+    by_code: dict[str, FieldMaterialRequestItem] = {}
+    for line in request.items:
+        code = line.sku_snapshot or (line.item.sku if line.item else None)
+        if not code or code in by_code:
+            raise _material_error(
+                "invalid_request",
+                "Request item identity is ambiguous; reconcile its SKU mapping.",
+            )
+        by_code[code] = line
+    seen_codes: set[str] = set()
+    seen_sequences: set[int] = set()
+    plan: list[tuple[FieldMaterialRequestItem, MaterialLineFulfillment]] = []
+    for observed in progress:
+        line = by_code.get(observed.item_code)
+        if (
+            line is None
+            or observed.item_code in seen_codes
+            or observed.sequence < 1
+            or observed.sequence in seen_sequences
+        ):
+            raise _material_error(
+                "invalid_request",
+                "ERP quantity snapshot has unknown or repeated lines.",
+            )
+        seen_codes.add(observed.item_code)
+        seen_sequences.add(observed.sequence)
+        if (
+            not observed.requested_qty.is_finite()
+            or not observed.issued_qty.is_finite()
+            or observed.requested_qty != Decimal(line.quantity)
+            or not 0 <= observed.issued_qty <= observed.requested_qty
+        ):
+            raise _material_error(
+                "invalid_request",
+                "ERP quantities do not match the original material request.",
+            )
+        previous_qty = _issued_quantity(line)
+        if previous_qty is not None and observed.issued_qty < previous_qty:
+            raise _material_error(
+                "invalid_request",
+                "ERP issued quantities regressed; reconcile before applying this observation.",
+            )
+        if observed.out_of_stock and observed.issued_qty == observed.requested_qty:
+            raise _material_error(
+                "invalid_request", "A completed line cannot be marked out of stock."
+            )
+        saved_serials = tuple(str(value) for value in (line.serial_numbers or ()))
+        if (
+            saved_serials
+            and observed.serial_numbers
+            and saved_serials != observed.serial_numbers
+        ):
+            raise _material_error(
+                "invalid_request",
+                "ERP serial selections changed; reconcile the request.",
+            )
+        plan.append((line, observed))
+    any_issued = any(row.issued_qty > 0 for row in progress)
+    all_issued = all(row.issued_qty == row.requested_qty for row in progress)
+    if status == "partially_issued":
+        valid = any_issued and not all_issued
+    elif status in _BACKOFFICE_ISSUED_STATUSES:
+        valid = all_issued
+    else:
+        valid = not any_issued
+    if not valid:
+        raise _material_error(
+            "invalid_request",
+            "ERP status disagrees with the issued and outstanding quantities.",
+        )
+    return plan
+
+
 def _get_scoped_request(
     db: Session,
     principal: dict[str, Any],
@@ -1677,6 +1942,7 @@ def _legacy_material_request_view(view: MaterialRequestView) -> dict[str, object
         "requested_by_person_id": view.requested_by_person_id,
         "requested_by_system_user_id": view.requested_by_system_user_id,
         "status": view.status.value,
+        "fulfillment_status": view.fulfillment_status,
         "priority": view.priority.value,
         "notes": view.notes,
         "source_warehouse_code": view.source_warehouse_code,
@@ -1700,6 +1966,13 @@ def _legacy_material_request_view(view: MaterialRequestView) -> dict[str, object
                 "name": item.name,
                 "unit": item.unit,
                 "quantity": item.quantity,
+                "issued_quantity": str(item.issued_quantity)
+                if item.issued_quantity is not None
+                else None,
+                "outstanding_quantity": str(item.outstanding_quantity)
+                if item.outstanding_quantity is not None
+                else None,
+                "out_of_stock": item.out_of_stock,
                 "notes": item.notes,
                 "serial_numbers": list(item.serial_numbers),
             }
