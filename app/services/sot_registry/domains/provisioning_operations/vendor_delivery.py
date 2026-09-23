@@ -498,7 +498,8 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "vendor start/complete and staff verify/rework "
             "installation-project transitions",
-            "staff bidding publication and direct vendor assignment",
+            "staff bidding publication, direct vendor assignment, and "
+            "pre-field-work vendor unassignment or award cancellation",
             "durable vendor lifecycle actor/time/reason/event evidence",
             "typed vendor project lifecycle outbox events",
         ),
@@ -532,7 +533,10 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="operations.vendor_project_lifecycle",
                 ),
                 ConcernContract(
-                    name=("staff bidding publication and direct vendor assignment"),
+                    name=(
+                        "staff bidding publication, direct vendor assignment, "
+                        "and pre-field-work vendor unassignment or award cancellation"
+                    ),
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical installation-project lifecycle state",
@@ -594,8 +598,9 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
                         "approved-to-in-progress start, in-progress-to-completed "
-                        "completion, completed-to-verified acceptance, and "
-                        "completed-to-in-progress rework transitions"
+                        "completion, completed-to-verified acceptance, "
+                        "completed-to-in-progress rework, and "
+                        "assigned-to-draft unassignment and approved-to-draft award-cancellation transitions"
                     ),
                 ),
             ),
@@ -646,6 +651,7 @@ SERVICES: tuple[SOTService, ...] = (
                 event_types=(
                     "vendor_project.started",
                     "vendor_project.completed",
+                    "vendor_project.unassigned",
                     "vendor_project.verified",
                     "vendor_project.rework_requested",
                 ),

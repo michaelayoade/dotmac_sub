@@ -251,6 +251,7 @@ class EventType(enum.Enum):
     vendor_advance_settled = "vendor_advance.settled"
     vendor_project_published = "vendor_project.published"
     vendor_project_assigned = "vendor_project.assigned"
+    vendor_project_unassigned = "vendor_project.unassigned"
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
     vendor_quote_changed = "vendor_quote.changed"

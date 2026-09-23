@@ -23,6 +23,8 @@ from app.models.vendor_routes import (
     InstallationProject,
     InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
+    ProjectQuote,
+    ProjectQuoteStatus,
     Vendor,
     VendorAssignmentType,
 )
@@ -257,6 +259,126 @@ def test_direct_assignment_rejects_an_inactive_vendor(db_session):
         )
 
     assert exc.value.code.endswith(".vendor_not_found")
+
+
+def test_direct_assignment_can_be_unassigned_before_award(db_session):
+    installation = _scoped(db_session)
+    vendor = Vendor(name="Undo Vendor", code=f"UV-{uuid4().hex[:8]}")
+    db_session.add(vendor)
+    db_session.commit()
+    vendor_project_lifecycle.stage_assign_vendor_directly(
+        db_session,
+        vendor_project_lifecycle.StageAssignVendorDirectly(
+            project_id=str(installation.id),
+            vendor_id=str(vendor.id),
+            actor_id=ACTOR,
+        ),
+    )
+    db_session.commit()
+
+    result = vendor_project_lifecycle.stage_unassign_vendor(
+        db_session,
+        vendor_project_lifecycle.StageUnassignVendor(
+            project_id=str(installation.id),
+            actor_id=ACTOR,
+            reason="Wrong vendor selected",
+        ),
+    )
+    db_session.commit()
+
+    db_session.refresh(installation)
+    assert result["status"] == InstallationProjectStatus.draft.value
+    assert installation.status == InstallationProjectStatus.draft.value
+    assert installation.assigned_vendor_id is None
+    assert installation.assignment_type is None
+    evidence = (
+        db_session.query(InstallationProjectLifecycleEvent)
+        .filter(
+            InstallationProjectLifecycleEvent.event_type == "vendor_project.unassigned"
+        )
+        .one()
+    )
+    assert evidence.from_status == InstallationProjectStatus.assigned.value
+    assert evidence.to_status == InstallationProjectStatus.draft.value
+    assert evidence.vendor_id == vendor.id
+    assert evidence.reason == "Wrong vendor selected"
+
+
+def test_awarded_direct_assignment_can_be_canceled_before_field_work(db_session):
+    installation = _scoped(db_session)
+    vendor = Vendor(name="Awarded Vendor", code=f"AV-{uuid4().hex[:8]}")
+    db_session.add(vendor)
+    db_session.flush()
+    quote = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.approved.value,
+    )
+    db_session.add(quote)
+    db_session.flush()
+    installation.assigned_vendor_id = vendor.id
+    installation.assignment_type = VendorAssignmentType.direct.value
+    installation.status = InstallationProjectStatus.approved.value
+    installation.approved_quote_id = quote.id
+    db_session.commit()
+
+    result = vendor_project_lifecycle.stage_unassign_vendor(
+        db_session,
+        vendor_project_lifecycle.StageUnassignVendor(
+            project_id=str(installation.id),
+            actor_id=ACTOR,
+            reason="Customer canceled the award",
+        ),
+    )
+    db_session.commit()
+
+    db_session.refresh(installation)
+    db_session.refresh(quote)
+    assert result["status"] == InstallationProjectStatus.draft.value
+    assert installation.status == InstallationProjectStatus.draft.value
+    assert installation.assigned_vendor_id is None
+    assert installation.assignment_type is None
+    assert installation.approved_quote_id is None
+    assert quote.status == ProjectQuoteStatus.rejected.value
+    assert quote.review_notes == "Customer canceled the award"
+    lifecycle_event = (
+        db_session.query(InstallationProjectLifecycleEvent)
+        .filter(
+            InstallationProjectLifecycleEvent.event_type == "vendor_project.unassigned"
+        )
+        .one()
+    )
+    assert lifecycle_event.from_status == InstallationProjectStatus.approved.value
+    assert lifecycle_event.to_status == InstallationProjectStatus.draft.value
+    assert lifecycle_event.decision_context["canceled_quote_id"] == str(quote.id)
+    quote_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "vendor_quote.changed")
+        .one()
+    )
+    assert quote_event.payload["action"] == "award_canceled"
+
+
+def test_unassignment_refuses_project_after_field_work_starts(db_session):
+    installation = _scoped(db_session)
+    vendor = Vendor(name="Started Vendor", code=f"SV-{uuid4().hex[:8]}")
+    db_session.add(vendor)
+    db_session.commit()
+    installation.assigned_vendor_id = vendor.id
+    installation.assignment_type = VendorAssignmentType.direct.value
+    installation.status = InstallationProjectStatus.in_progress.value
+    db_session.commit()
+
+    with pytest.raises(VendorProjectLifecycleError) as exc:
+        vendor_project_lifecycle.stage_unassign_vendor(
+            db_session,
+            vendor_project_lifecycle.StageUnassignVendor(
+                project_id=str(installation.id),
+                actor_id=ACTOR,
+            ),
+        )
+
+    assert exc.value.code.endswith(".invalid_transition")
 
 
 # ---------------------------------------------------------------------------
