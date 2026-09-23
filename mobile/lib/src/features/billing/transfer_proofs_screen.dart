@@ -252,7 +252,7 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
       return;
     }
     if (widget.accounts.length > 1 && _selectedAccountId == null) {
-      setState(() => _error = 'Choose the bank account you paid into.');
+      setState(() => _error = 'Choose the Dotmac account you transferred to.');
       return;
     }
     setState(() {
@@ -301,7 +301,7 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               const SizedBox(height: 12),
               Text(
                 widget.accounts.length > 1
-                    ? 'Which account did you pay?'
+                    ? 'Choose the Dotmac account you transferred to'
                     : 'Transfer to',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
