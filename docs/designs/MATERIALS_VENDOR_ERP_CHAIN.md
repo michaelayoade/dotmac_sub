@@ -197,3 +197,9 @@ quantities and out-of-stock state. They never post stock. Deploy this accepting
 consumer before the companion ERP producer because the legacy webhook rejects
 unknown fields. Existing already-terminal requests with inconsistent stock
 history require separate authorized reconciliation; do not reopen or recreate them.
+
+Legacy rows retaining the migration-time manual channel default may receive ERP
+observations only when their existing dotmac_erp support reference matches the
+verified ERP ID or request number. This does not rewrite fulfillment-channel
+intent or enroll unlinked manual requests. Identity and complete quantity-snapshot
+validation still run in the same material owner.

@@ -1266,7 +1266,18 @@ def observe_erp_material_status(
 ) -> MaterialRequestView:
     def operation() -> MaterialRequestView:
         request = _locked_request(db, command.request_id)
-        if request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value:
+        # Retain observations for an exact existing ERP binding on
+        # legacy rows with a manual default; never enroll manual work.
+        legacy_erp_binding = (
+            request.support_system == "dotmac_erp"
+            and bool(request.support_reference)
+            and request.support_reference
+            in {command.provider_request_id, command.provider_request_number}
+        )
+        if (
+            request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value
+            and not legacy_erp_binding
+        ):
             raise _material_error(
                 "manual_delivery_conflict",
                 "A manual material request cannot accept an ERP issuance outcome.",
