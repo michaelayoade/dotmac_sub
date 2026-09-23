@@ -12,6 +12,7 @@ from app.models.vendor_routes import (
     InstallationProject,
     InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
+    ProjectQuoteStatus,
     Vendor,
     VendorAssignmentType,
 )
@@ -65,6 +66,13 @@ class StagePublishForBidding:
 class StageAssignVendorDirectly:
     project_id: str
     vendor_id: str
+    actor_id: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StageUnassignVendor:
+    project_id: str
     actor_id: str
     reason: str | None = None
 
@@ -378,7 +386,9 @@ def stage_publish_for_bidding(
             "invalid_transition",
             "Only a draft project can be published for bidding.",
         )
-    if project.assigned_vendor_id is not None:
+    if project.assigned_vendor_id is not None and (
+        project.assignment_type == VendorAssignmentType.direct.value
+    ):
         raise _error(
             "already_assigned",
             "A directly assigned project cannot be opened for bidding.",
@@ -390,6 +400,7 @@ def stage_publish_for_bidding(
             "invalid_bidding_window",
             "Bidding must close after it opens.",
         )
+    project.assigned_vendor_id = None
     project.bidding_open_at = opens_at
     project.bidding_close_at = closes_at
     project.assignment_type = VendorAssignmentType.bidding.value
@@ -446,3 +457,108 @@ def stage_assign_vendor_directly(
             "vendor_name": vendor.name,
         },
     )
+
+
+def stage_unassign_vendor(
+    db: Session,
+    command: StageUnassignVendor,
+) -> dict:
+    """Return a directly assigned intake project to draft vendor procurement."""
+
+    actor = str(command.actor_id or "").strip()
+    if not actor:
+        raise _error("actor_required", "Lifecycle transition actor is required.")
+    project = _project(db, command.project_id, for_update=True)
+    if project.status not in {
+        InstallationProjectStatus.assigned.value,
+        InstallationProjectStatus.approved.value,
+    } or (
+        project.assigned_vendor_id is None
+        or project.assignment_type != VendorAssignmentType.direct.value
+    ):
+        raise _error(
+            "invalid_transition",
+            "Only a directly assigned project can be unassigned before field work starts.",
+        )
+    previous_vendor_id = project.assigned_vendor_id
+    previous_vendor_name = getattr(project.assigned_vendor, "name", None)
+    previous = project.status
+    canceled_quote = project.approved_quote
+    canceled_quote_id = project.approved_quote_id
+    if canceled_quote is not None:
+        canceled_quote.status = ProjectQuoteStatus.rejected.value
+        canceled_quote.review_notes = (
+            command.reason or ""
+        ).strip() or "Award canceled before field work."
+        canceled_quote.reviewed_at = datetime.now(UTC)
+    project.assigned_vendor_id = None
+    project.assignment_type = None
+    project.status = InstallationProjectStatus.draft.value
+    project.bidding_open_at = None
+    project.bidding_close_at = None
+    project.approved_quote_id = None
+    normalized_reason = (command.reason or "").strip() or None
+    domain_event = emit_event(
+        db,
+        EventType.vendor_project_unassigned,
+        {
+            "schema_version": 1,
+            "project_id": str(project.id),
+            "native_project_id": str(project.project_id),
+            "vendor_id": str(previous_vendor_id),
+            "vendor_name": previous_vendor_name,
+            "canceled_quote_id": str(canceled_quote_id) if canceled_quote_id else None,
+            "from_status": previous,
+            "to_status": project.status,
+            "actor_type": "staff_user",
+            "actor_id": actor,
+            "reason": normalized_reason,
+        },
+        actor=actor,
+        subscriber_id=project.subscriber_id,
+        account_id=project.subscriber_id,
+    )
+    evidence = InstallationProjectLifecycleEvent(
+        event_id=domain_event.event_id,
+        project_id=project.id,
+        vendor_id=previous_vendor_id,
+        event_type=domain_event.event_type.value,
+        from_status=previous,
+        to_status=project.status,
+        actor_type="staff_user",
+        actor_id=actor,
+        reason=normalized_reason,
+        decision_context={
+            "assignment_type": VendorAssignmentType.direct.value,
+            "vendor_name": previous_vendor_name,
+            "canceled_quote_id": str(canceled_quote_id) if canceled_quote_id else None,
+        },
+        occurred_at=domain_event.occurred_at,
+    )
+    db.add(evidence)
+    if canceled_quote is not None:
+        emit_event(
+            db,
+            EventType.vendor_quote_changed,
+            {
+                "schema_version": 1,
+                "action": "award_canceled",
+                "quote_id": str(canceled_quote.id),
+                "project_id": str(project.id),
+                "vendor_id": str(previous_vendor_id),
+                "status": canceled_quote.status,
+                "actor_id": actor,
+                "reason": normalized_reason,
+            },
+            actor=actor,
+            subscriber_id=project.subscriber_id,
+            account_id=project.subscriber_id,
+        )
+    db.flush()
+    from app.services.vendor_portal_operations import _serialize_project
+
+    result = _serialize_project(project)
+    result["lifecycle_event_id"] = str(evidence.id)
+    result["domain_event_id"] = str(domain_event.event_id)
+    result["transitioned_at"] = domain_event.occurred_at
+    return result
