@@ -36,28 +36,25 @@ jobs:
           part = text[start:end]
           old = '        if request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value:'
           assert part.count(old) == 1
-          new = '''        # Older rows retained the migration's manual default despite an
-                  # already-bound ERP request. Accept observations only for that
-                  # exact existing binding; never enroll a genuinely manual request.
-                  legacy_erp_binding = (
-                      request.support_system == "dotmac_erp"
-                      and bool(request.support_reference)
-                      and request.support_reference
-                      in {command.provider_request_id, command.provider_request_number}
-                  )
-                  if (
-                      request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value
-                      and not legacy_erp_binding
-                  ):'''
-          # Dedent continuation lines to the operation body's eight spaces.
-          lines = new.splitlines()
-          new = lines[0] + '\n' + '\n'.join(line[10:] for line in lines[1:])
+          new = '\n'.join([
+              '        # Retain observations for an exact existing ERP binding on',
+              '        # legacy rows with a manual default; never enroll manual work.',
+              '        legacy_erp_binding = (',
+              '            request.support_system == "dotmac_erp"',
+              '            and bool(request.support_reference)',
+              '            and request.support_reference',
+              '            in {command.provider_request_id, command.provider_request_number}',
+              '        )',
+              '        if (',
+              '            request.fulfillment_channel != MaterialRequestFulfillmentChannel.ERP.value',
+              '            and not legacy_erp_binding',
+              '        ):',
+          ])
           text = text[:start] + part.replace(old, new, 1) + text[end:]
           ast.parse(text)
-          p.write_text(text)
           test = pathlib.Path('tests/test_material_legacy_erp_observation.py')
           assert not test.exists()
-          test.write_text('''"""Legacy bound ERP observations do not enroll genuine manual requests."""
+          test_text = '''"""Legacy bound ERP observations do not enroll genuine manual requests."""
           from datetime import UTC, datetime
           from types import SimpleNamespace
           from uuid import uuid4
@@ -96,8 +93,10 @@ jobs:
                   with pytest.raises(owner.MaterialRequestError, match="manual"):
                       owner.observe_erp_material_status(db, command)
                   applied.assert_not_called()
-          '''.replace('\n          ', '\n'))
-          ast.parse(test.read_text())
+          '''
+          ast.parse(test_text)
+          p.write_text(text)
+          test.write_text(test_text)
           doc = pathlib.Path('docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md')
           doc.write_text(doc.read_text() + '\nLegacy rows retaining the migration-time manual channel default may receive ERP\nobservations only when their existing dotmac_erp support reference matches the\nverified ERP ID or request number. This does not rewrite fulfillment-channel\nintent or enroll unlinked manual requests. Identity and complete quantity-snapshot\nvalidation still run in the same material owner.\n')
           PY
@@ -133,6 +132,7 @@ jobs:
           python - <<'PY'
           import os, pathlib, subprocess
           branch = 'fix/erp-material-partial-issue-projection'
+          assert os.environ['GITHUB_REPOSITORY'] == 'michaelayoade/dotmac_sub'
           assert os.environ['GITHUB_REF'] == 'refs/heads/' + branch
           names = ['app/services/field/material_requests.py', 'tests/test_material_legacy_erp_observation.py', 'docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md', '.github/workflows/material-legacy-validation.yml']
           pathlib.Path(names[-1]).unlink()
