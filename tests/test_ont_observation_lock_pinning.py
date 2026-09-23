@@ -27,9 +27,7 @@ def _install_lock(
         finally:
             events.append("unlock")
 
-    monkeypatch.setattr(
-        ont_signal_observations, "postgres_session_advisory_lock", lock
-    )
+    monkeypatch.setattr(ont_signal_observations, "postgres_session_advisory_lock", lock)
 
 
 def test_snapshot_uses_shared_pinned_lock_implementation() -> None:
@@ -137,9 +135,7 @@ def test_shared_helper_pins_backend_and_discards_unreleased_connection(
     db.execute.side_effect = [MagicMock(), acquired_result, unlock_result]
     session_factory = MagicMock(return_value=db)
     monkeypatch.setattr(_postgres_lock, "Session", session_factory)
-    monkeypatch.setattr(
-        _postgres_lock, "SessionLocal", MagicMock(kw={"bind": engine})
-    )
+    monkeypatch.setattr(_postgres_lock, "SessionLocal", MagicMock(kw={"bind": engine}))
 
     with _postgres_lock.postgres_session_advisory_lock(
         ont_signal_observations._OBS_LOCK_KEY
