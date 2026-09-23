@@ -11,9 +11,9 @@
     {
       "id": "dependency-manifest",
       "source_path": "pyproject.toml",
-      "source_blob_sha256": "e387199694ab55f57429d3a4dfc46cd3ec389c3e18b9ddebc183bdb210c90044",
+      "source_blob_sha256": "6bed0e5837b5769eadf68b29d66a046b5b54f7426e3e7e1269f57fc52b1b4ffb",
       "selector": "whole-file.v1",
-      "extract_sha256": "e387199694ab55f57429d3a4dfc46cd3ec389c3e18b9ddebc183bdb210c90044"
+      "extract_sha256": "6bed0e5837b5769eadf68b29d66a046b5b54f7426e3e7e1269f57fc52b1b4ffb"
     },
     {
       "id": "dependency-lock",
