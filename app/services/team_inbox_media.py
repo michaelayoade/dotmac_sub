@@ -12,7 +12,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
-from app.models.team_inbox import InboxMediaAsset, InboxMessage
+from app.models.team_inbox import InboxConversation, InboxMediaAsset, InboxMessage
 from app.services.file_storage import (
     FileValidationError,
     ObjectNotFoundError,
@@ -544,7 +544,7 @@ def _outbound_asset_type(mime_type: str) -> str:
 def stage_outbound_attachment(
     db: Session,
     *,
-    conversation,
+    conversation: InboxConversation,
     file_name: str,
     content_type: str | None,
     data: bytes,
@@ -603,6 +603,34 @@ def stage_outbound_attachment(
         },
     )
     db.add(asset)
+    db.flush()
+    return asset
+
+
+def stage_visitor_attachment(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    file_name: str,
+    content_type: str,
+    data: bytes,
+) -> InboxMediaAsset:
+    """Stage an authenticated visitor photo in the current owner transaction."""
+    try:
+        asset = stage_outbound_attachment(
+            db,
+            conversation=conversation,
+            file_name=file_name,
+            content_type=content_type,
+            data=data,
+        )
+    except FileValidationError as exc:
+        raise MediaUploadError("The selected photo is invalid.") from exc
+    asset.direction = "inbound"
+    asset.metadata_ = {
+        **(asset.metadata_ or {}),
+        "source": "widget_visitor_upload",
+    }
     db.flush()
     return asset
 

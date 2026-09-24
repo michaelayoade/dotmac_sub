@@ -84,6 +84,18 @@ RETIRED_CHAT_NAMES = frozenset(
 HISTORICAL_CHAT_PIN = ("dotmac.crm", "1.1.0")
 
 
+def test_visitor_photo_route_keeps_the_native_owner_and_session_scope() -> None:
+    adapter = (PROJECT_ROOT / "app/api/chat_widget.py").read_text(encoding="utf-8")
+    owner = (PROJECT_ROOT / "app/services/team_inbox_widget.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"/session/{session_id}/message/media"' in adapter
+    assert "team_inbox_widget.add_visitor_message_committed(" in adapter
+    assert "team_inbox_widget.resolve_visitor_media(" in adapter
+    assert "asset.conversation_id != principal.conversation_id" in owner
+    assert "message.direction == InboxMessageDirection.internal.value" in owner
+
+
 def _searched_sources() -> list[Path]:
     return sorted(
         path

@@ -16,6 +16,7 @@ from app.models.team_inbox import (
     InboxConversationAssignment,
     InboxConversationLeadLink,
     InboxConversationStatus,
+    InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
@@ -85,18 +86,141 @@ def test_widget_token_lists_and_sends_messages(db_session):
         sent = team_inbox_widget.add_visitor_message(
             db_session,
             principal=principal,
-            body="My router is down",
-            client_message_id="client-1",
+            command=team_inbox_widget.VisitorMessageCommand(
+                body="My router is down",
+                client_message_id="client-1",
+            ),
         )
         messages = team_inbox_widget.list_session_messages(
             db_session,
-            principal=principal,
-        )
+            query=team_inbox_widget.WidgetMessageHistoryQuery(principal=principal),
+        ).as_response()
 
-    assert sent["client_message_id"] == "client-1"
-    assert sent["direction"] == InboxMessageDirection.inbound.value
+    assert sent.client_message_id == "client-1"
+    assert sent.as_response()["direction"] == InboxMessageDirection.inbound.value
+    assert sent.as_response()["from_customer"] is True
+    assert sent.as_response()["channel_type"] == InboxChannelType.chat_widget.value
     assert messages["messages"][0]["body"] == "My router is down"
     assert messages["messages"][0]["sender_type"] == "visitor"
+
+
+def test_visitor_photo_message_is_bound_and_scoped(db_session, monkeypatch):
+    sub = _subscriber(db_session)
+
+    def stage_photo(db, *, conversation, file_name, content_type, data):
+        assert data == b"photo-bytes"
+        asset = InboxMediaAsset(
+            conversation_id=conversation.id,
+            channel_type=InboxChannelType.chat_widget.value,
+            direction="inbound",
+            asset_type="image",
+            file_name=file_name,
+            mime_type=content_type,
+            file_size=len(data),
+            download_status="stored",
+        )
+        db.add(asset)
+        db.flush()
+        return asset
+
+    monkeypatch.setattr(
+        team_inbox_widget.team_inbox_media, "stage_visitor_attachment", stage_photo
+    )
+    with _chat_enabled():
+        session = team_inbox_widget.broker_customer_session(db_session, str(sub.id))
+        principal = team_inbox_widget.decode_widget_token(
+            db_session, str(session["visitor_token"])
+        )
+        sent = team_inbox_widget.add_visitor_message(
+            db_session,
+            principal=principal,
+            command=team_inbox_widget.VisitorMessageCommand(
+                body="",
+                client_message_id="photo-1",
+                photos=(
+                    team_inbox_widget.VisitorPhoto(
+                        file_name="router.jpg",
+                        content_type="image/jpeg",
+                        data=b"photo-bytes",
+                    ),
+                ),
+            ),
+        )
+        history = team_inbox_widget.list_session_messages(
+            db_session,
+            query=team_inbox_widget.WidgetMessageHistoryQuery(principal=principal),
+        ).as_response()
+        replay = team_inbox_widget.add_visitor_message(
+            db_session,
+            principal=principal,
+            command=team_inbox_widget.VisitorMessageCommand(
+                body="",
+                client_message_id="photo-1",
+                photos=(
+                    team_inbox_widget.VisitorPhoto(
+                        file_name="router.jpg",
+                        content_type="image/jpeg",
+                        data=b"photo-bytes",
+                    ),
+                ),
+            ),
+        )
+        with pytest.raises(team_inbox_widget.TeamInboxWidgetError):
+            team_inbox_widget.add_visitor_message(
+                db_session,
+                principal=principal,
+                command=team_inbox_widget.VisitorMessageCommand(
+                    body="changed",
+                    client_message_id="photo-1",
+                ),
+            )
+
+    asset_id = sent.attachments[0].asset_id
+    assert replay.message_id == sent.message_id
+    assert db_session.query(InboxMessage).count() == 1
+    assert history["messages"][0]["attachments"] == [
+        {"id": str(asset_id), "file_name": "router.jpg"}
+    ]
+    assert (
+        team_inbox_widget.resolve_visitor_media(
+            db_session, principal=principal, asset_id=asset_id
+        )
+        == asset_id
+    )
+    other = team_inbox_widget.WidgetPrincipal(
+        conversation_id=uuid4(), session_id="other", surface="mobile"
+    )
+    with pytest.raises(team_inbox_widget.TeamInboxWidgetError):
+        team_inbox_widget.resolve_visitor_media(
+            db_session, principal=other, asset_id=asset_id
+        )
+
+
+def test_visitor_photo_rejects_unsupported_type_before_writing(db_session):
+    principal = team_inbox_widget.WidgetPrincipal(
+        conversation_id=uuid4(), session_id="test", surface="mobile"
+    )
+    with (
+        _chat_enabled(),
+        pytest.raises(
+            team_inbox_widget.TeamInboxWidgetError,
+            match="JPEG, PNG, GIF, or WebP",
+        ),
+    ):
+        team_inbox_widget.add_visitor_message(
+            db_session,
+            principal=principal,
+            command=team_inbox_widget.VisitorMessageCommand(
+                body="",
+                photos=(
+                    team_inbox_widget.VisitorPhoto(
+                        file_name="invalid.svg",
+                        content_type="image/svg+xml",
+                        data=b"<svg></svg>",
+                    ),
+                ),
+            ),
+        )
 
 
 def test_widget_delivers_and_labels_ai_intake_messages(db_session):
@@ -120,8 +244,8 @@ def test_widget_delivers_and_labels_ai_intake_messages(db_session):
         )
         messages = team_inbox_widget.list_session_messages(
             db_session,
-            principal=principal,
-        )
+            query=team_inbox_widget.WidgetMessageHistoryQuery(principal=principal),
+        ).as_response()
 
     assert result.kind == "queued"
     assert messages["messages"][0]["sender_type"] == "ai"
@@ -378,7 +502,9 @@ def test_customer_widget_first_message_enters_ai_intake_admission(
         team_inbox_widget.add_visitor_message(
             db_session,
             principal=principal,
-            body="My internet is not browsing.",
+            command=team_inbox_widget.VisitorMessageCommand(
+                body="My internet is not browsing."
+            ),
         )
 
     assert len(observed) == 1
@@ -484,8 +610,8 @@ def test_agent_reply_reaches_fiber_widget_session_history(db_session):
         )
         history = team_inbox_widget.list_session_messages(
             db_session,
-            principal=principal,
-        )
+            query=team_inbox_widget.WidgetMessageHistoryQuery(principal=principal),
+        ).as_response()
 
     assert reply.kind == "queued"
     assert [message["direction"] for message in history["messages"]] == [

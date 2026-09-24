@@ -81,13 +81,36 @@ class ChatRepository {
   /// Returns the sent message plus the (possibly newly created) conversation id,
   /// so the caller can subscribe a brand-new conversation over the WebSocket.
   Future<({ChatMessage message, String? conversationId})> send(
-    ChatSession s,
-    String body,
-  ) async {
+      ChatSession s, String body,
+      {List<ChatUpload> uploads = const [], String? clientMessageId}) async {
+    final FormData? form;
+    if (uploads.isEmpty) {
+      form = null;
+    } else {
+      form = FormData();
+      form.fields.add(MapEntry('body', body));
+      if (clientMessageId != null) {
+        form.fields.add(MapEntry('client_message_id', clientMessageId));
+      }
+      for (final upload in uploads) {
+        form.files.add(MapEntry(
+          'attachments',
+          await MultipartFile.fromFile(
+            upload.path,
+            filename: upload.name,
+            contentType: DioMediaType.parse(upload.mimeType),
+          ),
+        ));
+      }
+    }
     final data = await guard(
       () => _visitorClient.post(
-        '/session/${s.sessionId}/message',
-        data: {'body': body},
+        '/session/${s.sessionId}/${form == null ? 'message' : 'message/media'}',
+        data: form ??
+            {
+              'body': body,
+              if (clientMessageId != null) 'client_message_id': clientMessageId
+            },
       ),
     ) as Map<String, dynamic>;
     return (
@@ -95,6 +118,10 @@ class ChatRepository {
       conversationId: data['conversation_id']?.toString(),
     );
   }
+
+  Uri attachmentUri(ChatSession session, ChatAttachment attachment) => session
+      .apiBase
+      .resolve('/widget/session/${session.sessionId}/media/${attachment.id}');
 
   Future<void> markRead(ChatSession s) async {
     await guard(() => _visitorClient.post('/session/${s.sessionId}/read'));

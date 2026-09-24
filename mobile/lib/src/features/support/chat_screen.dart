@@ -1,9 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../core/api_exception.dart';
 import '../../models/chat.dart';
 import '../../providers/chat_controller.dart';
+import '../../providers/data_providers.dart';
+import '../../widgets/attachment_picker.dart';
 
 /// Standalone live-chat screen (its own Scaffold + back) — used for deep links
 /// / push-notification taps (`/chat`, `/reseller/chat`). In-app, the Support
@@ -54,6 +60,9 @@ class ChatView extends ConsumerStatefulWidget {
 class _ChatViewState extends ConsumerState<ChatView> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  final _picker = ImagePicker();
+  List<PickedAttachment> _photos = [];
+  bool _picking = false;
 
   String get _endpoint => widget.sessionEndpoint;
 
@@ -85,20 +94,134 @@ class _ChatViewState extends ConsumerState<ChatView> {
 
   Future<void> _send() async {
     final text = _input.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _photos.isEmpty) return;
+    final uploads = [
+      for (final photo in _photos)
+        ChatUpload(
+          path: photo.path,
+          name: photo.name,
+          mimeType: _photoMimeType(photo.name),
+        ),
+    ];
     _input.clear();
+    setState(() => _photos = []);
     try {
-      await ref.read(chatControllerProvider(_endpoint).notifier).send(text);
+      await ref.read(chatControllerProvider(_endpoint).notifier).send(
+            text,
+            uploads: uploads,
+          );
       _scrollToBottom();
-    } catch (_) {
+    } catch (error) {
       // The message stays in the log as a tappable "failed" bubble, so the
       // draft isn't restored (that would duplicate it). A brief snackbar nudges.
+      _showSendError(error);
+    }
+  }
+
+  void _showSendError(Object error) {
+    if (!mounted) return;
+    final detail =
+        error is ApiException ? error.message : 'Could not send this message.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$detail Tap the failed message to retry.')),
+    );
+  }
+
+  Future<void> _retryFailed(ChatMessage message) async {
+    try {
+      await ref
+          .read(chatControllerProvider(_endpoint).notifier)
+          .retryFailed(message);
+    } catch (error) {
+      _showSendError(error);
+    }
+  }
+
+  static String _photoMimeType(String name) =>
+      switch (name.toLowerCase().split('.').last) {
+        'jpg' || 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        _ => '',
+      };
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    if (_picking) return;
+    if (_photos.length >= kMaxAttachments) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You can attach up to 5 photos.')),
+      );
+      return;
+    }
+    setState(() => _picking = true);
+    try {
+      final List<XFile> selected;
+      if (source == ImageSource.gallery) {
+        selected = await _picker.pickMultiImage(
+          imageQuality: 85,
+          limit: kMaxAttachments - _photos.length,
+        );
+      } else {
+        final photo = await _picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 85,
+        );
+        selected = photo == null ? [] : [photo];
+      }
+      if (selected.isEmpty || !mounted) return;
+      if (selected.length + _photos.length > kMaxAttachments) {
+        throw const FormatException('You can attach up to 5 photos.');
+      }
+      final additions = <PickedAttachment>[];
+      for (final photo in selected) {
+        if (_photoMimeType(photo.name).isEmpty) {
+          throw const FormatException('Choose JPEG, PNG, GIF, or WebP photos.');
+        }
+        final size = await photo.length();
+        if (size > kMaxAttachmentBytes) {
+          throw const FormatException('Each photo must be 5 MB or smaller.');
+        }
+        additions.add(PickedAttachment(file: photo, bytes: size));
+      }
+      if (!mounted) return;
+      setState(() => _photos = [..._photos, ...additions]);
+    } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Message failed to send — tap it to retry.')),
+        SnackBar(
+            content: Text(error is FormatException
+                ? error.message
+                : 'Could not open photos or camera.')),
       );
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
+  }
+
+  Future<void> _showAttachmentChoices() async {
+    FocusScope.of(context).unfocus();
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Gallery'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source != null && mounted) await _pickPhoto(source);
   }
 
   @override
@@ -191,14 +314,26 @@ class _ChatViewState extends ConsumerState<ChatView> {
             Text(m.authorName!,
                 style: theme.textTheme.labelSmall
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          Text(
-            m.body,
-            style: TextStyle(
-              color: mine
-                  ? theme.colorScheme.onPrimary
-                  : theme.colorScheme.onSurface,
+          if (m.body.isNotEmpty)
+            Text(
+              m.body,
+              style: TextStyle(
+                color: mine
+                    ? theme.colorScheme.onPrimary
+                    : theme.colorScheme.onSurface,
+              ),
             ),
-          ),
+          for (final attachment in m.attachments)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: attachment.localPath != null
+                    ? Image.file(File(attachment.localPath!),
+                        width: 180, height: 150, fit: BoxFit.cover)
+                    : _messagePhoto(attachment),
+              ),
+            ),
         ],
       ),
     );
@@ -257,9 +392,7 @@ class _ChatViewState extends ConsumerState<ChatView> {
       final aligned = Align(alignment: Alignment.centerRight, child: column);
       if (m.status == MessageStatus.failed) {
         return GestureDetector(
-          onTap: () => ref
-              .read(chatControllerProvider(_endpoint).notifier)
-              .retryFailed(m),
+          onTap: () => _retryFailed(m),
           child: aligned,
         );
       }
@@ -276,39 +409,100 @@ class _ChatViewState extends ConsumerState<ChatView> {
     );
   }
 
+  Widget _messagePhoto(ChatAttachment attachment) {
+    final session = ref.read(chatControllerProvider(_endpoint)).session;
+    if (session == null) return const Icon(Icons.image_not_supported_outlined);
+    final url =
+        ref.read(chatRepositoryProvider).attachmentUri(session, attachment);
+    return Image.network(
+      url.toString(),
+      headers: {'X-Visitor-Token': session.visitorToken},
+      width: 180,
+      height: 150,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => const SizedBox(
+        width: 180,
+        height: 80,
+        child: Center(child: Icon(Icons.image_not_supported_outlined)),
+      ),
+    );
+  }
+
   Widget _buildComposer(ChatState state) {
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.all(8),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _input,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onChanged: (v) {
-                  if (v.trim().isNotEmpty) {
-                    ref
-                        .read(chatControllerProvider(_endpoint).notifier)
-                        .notifyTyping();
-                  }
-                },
-                onSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
-                  hintText: 'Type a message…',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+            if (_photos.isNotEmpty)
+              SizedBox(
+                height: 68,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photos.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) => Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(File(_photos[index].path),
+                            width: 64, height: 64, fit: BoxFit.cover),
+                      ),
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        child: IconButton.filledTonal(
+                          icon: const Icon(Icons.close, size: 16),
+                          tooltip: 'Remove photo',
+                          constraints:
+                              const BoxConstraints(minWidth: 28, minHeight: 28),
+                          padding: EdgeInsets.zero,
+                          onPressed: () => setState(
+                              () => _photos = [..._photos]..removeAt(index)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: state.sending ? null : _send,
-              icon: const Icon(Icons.send),
-            ),
+            Row(children: [
+              FloatingActionButton.small(
+                heroTag: null,
+                tooltip: 'Add attachment',
+                onPressed:
+                    state.sending || _picking ? null : _showAttachmentChoices,
+                child: const Icon(Icons.add),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  minLines: 1,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.send,
+                  onChanged: (v) {
+                    if (v.trim().isNotEmpty) {
+                      ref
+                          .read(chatControllerProvider(_endpoint).notifier)
+                          .notifyTyping();
+                    }
+                  },
+                  onSubmitted: (_) => _send(),
+                  decoration: const InputDecoration(
+                    hintText: 'Type a message…',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                onPressed: state.sending ? null : _send,
+                icon: const Icon(Icons.send),
+              ),
+            ]),
           ],
         ),
       ),
