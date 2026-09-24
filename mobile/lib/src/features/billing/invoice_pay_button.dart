@@ -61,25 +61,6 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
       );
       if (selection == null || !mounted) return; // dismissed
 
-      // Bank transfer: show the account + collect the receipt (staff verify
-      // credits the account and auto-allocates to open invoices).
-      if (selection == 'transfer') {
-        final ok = await showSubmitProofSheet(
-          context,
-          initialAmount: inv.balanceDue.toStringAsFixed(2),
-          accounts: page.bankTransfer.accounts,
-          instructions: page.bankTransfer.instructions,
-        );
-        if (ok == true && mounted) {
-          ref.invalidate(paymentProofsProvider);
-          messenger.showSnackBar(const SnackBar(
-            content: Text(
-                'Receipt submitted — we will verify it and apply it to your invoice.'),
-          ));
-        }
-        return;
-      }
-
       setState(() => _busy = true);
       final cardId =
           selection.startsWith('card:') ? selection.substring(5) : null;
@@ -88,7 +69,7 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
 
       final initiation = await repo.initiatePayment(
         inv.id,
-        provider: provider,
+        provider: selection == 'transfer' ? 'direct_bank_transfer' : provider,
         paymentMethodId: cardId,
         idempotencyKey: cardId == null
             ? null
@@ -96,6 +77,36 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
                 '${Random().nextInt(0x7fffffff)}',
       );
       if (!mounted) return;
+
+      if (selection == 'transfer') {
+        final intentId = initiation.intentId;
+        if (intentId == null) {
+          throw StateError(
+              'The transfer intent was not returned by the server.');
+        }
+        final outcome = await showSubmitProofSheet(
+          context,
+          intentId: intentId,
+          initialAmount: inv.balanceDue.toStringAsFixed(2),
+          accounts: page.bankTransfer.accounts,
+          instructions: page.bankTransfer.instructions,
+        );
+        if (!mounted) return;
+        if (outcome == TransferProofOutcome.submitted) {
+          ref.invalidate(paymentProofsProvider);
+          messenger.showSnackBar(const SnackBar(
+            content: Text(
+              'Receipt submitted — we will verify it and apply it to your invoice.',
+            ),
+          ));
+        } else {
+          await repo.cancelTopupIntent(intentId);
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Bank transfer canceled.')),
+          );
+        }
+        return;
+      }
 
       String reference;
       if (initiation.charged) {
@@ -205,7 +216,8 @@ class _PayMethodSheet extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.add_card_outlined),
                 title: Text(p.label),
-                onTap: () => Navigator.of(context).pop('gw:${p.providerType}'),
+                onTap: () =>
+                    Navigator.of(context).pop('gw:${p.providerType.wireValue}'),
               ),
             if (page.bankTransfer.hasAccounts)
               ListTile(

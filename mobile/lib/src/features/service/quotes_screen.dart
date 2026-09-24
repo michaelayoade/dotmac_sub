@@ -4,12 +4,13 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../models/quote.dart';
+import '../../models/service_request_option.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../billing/payment_webview_screen.dart';
+import 'service_request_sheet.dart';
 
-/// The customer's self-serve installation quotes — feasibility, estimate, and
-/// deposit. Request a new one via the map, then pay the deposit to book it.
+/// Customer installation and relocation quotes, coverage, and approved payment.
 class QuotesScreen extends ConsumerStatefulWidget {
   const QuotesScreen({super.key});
 
@@ -20,6 +21,18 @@ class QuotesScreen extends ConsumerStatefulWidget {
 class _QuotesScreenState extends ConsumerState<QuotesScreen> {
   String? _payingId;
 
+  Future<void> _requestService() async {
+    final selection = await showModalBottomSheet<ServiceRequestSelection>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const ServiceRequestSheet(),
+    );
+    if (selection != null && mounted) {
+      context.push('/quotes/request', extra: selection);
+    }
+  }
+
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -29,6 +42,35 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
     setState(() => _payingId = quote.id);
     try {
       final repo = ref.read(quotesRepositoryProvider);
+      if (quote.isRelocation) {
+        final prepared = await repo.prepareRelocation(quote.id);
+        final billing = ref.read(billingRepositoryProvider);
+        final initiation = await billing.initiatePayment(
+          prepared.invoiceId,
+          provider: 'paystack',
+        );
+        var reference = initiation.paymentReference;
+        if (!initiation.charged) {
+          if (!mounted) return;
+          final returned = await context.push<String>(
+            '/pay',
+            extra: CheckoutArgs.invoice(initiation),
+          );
+          if (returned == null) return;
+          reference = returned;
+        }
+        final result = await billing.verifyPayment(
+          reference,
+          provider: initiation.providerType,
+        );
+        ref.invalidate(quotesProvider);
+        ref.invalidate(workOrdersProvider);
+        ref.invalidate(invoicesProvider);
+        _snack(result.succeeded
+            ? 'Full charge received — your relocation is being scheduled.'
+            : 'Payment is pending confirmation.');
+        return;
+      }
       final init = await repo.initiateDeposit(quote.id);
 
       var reference = init.paymentReference;
@@ -40,6 +82,7 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
           currency: init.currency,
           publicKey: init.providerPublicKey,
           email: init.customerEmail,
+          checkoutUrl: CheckoutArgs.secureCheckoutUrl(init.checkoutUrl),
           metadata: {
             'payment_flow': 'quote_deposit',
             'invoice_id': init.invoiceId,
@@ -55,7 +98,7 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
       ref.invalidate(quotesProvider);
       _snack(
         outcome.paid
-            ? 'Deposit received — your installation is being scheduled.'
+            ? 'Deposit received — your service is being scheduled.'
             : 'Payment is pending confirmation.',
       );
     } on ApiException catch (e) {
@@ -73,9 +116,9 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
       appBar: AppBar(title: const Text('Get a quote')),
       floatingActionButton: canRequest
           ? FloatingActionButton.extended(
-              onPressed: () => context.push('/quotes/request'),
+              onPressed: _requestService,
               icon: const Icon(Icons.add_location_alt_outlined),
-              label: const Text('Request installation'),
+              label: const Text('Request service'),
             )
           : null,
       body: RefreshIndicator(
@@ -133,7 +176,7 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 32),
             child: Text(
-              'Pin your installation address to get an instant feasibility check and estimate.',
+              'Pin your service address to check coverage and request staff review.',
               textAlign: TextAlign.center,
             ),
           ),
@@ -192,7 +235,7 @@ class _QuoteCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    quote.address ?? 'Installation quote',
+                    quote.address ?? 'Service request',
                     style: text.titleMedium,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -202,6 +245,10 @@ class _QuoteCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
+            if (quote.serviceOption != null) ...[
+              Text(quote.serviceOption!.label, style: text.bodyMedium),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Icon(
@@ -220,13 +267,14 @@ class _QuoteCard extends StatelessWidget {
               ],
             ),
             const Divider(height: 24),
-            _row(
-              context,
-              'Estimate',
-              naira(quote.total) +
-                  (quote.estimateProvisional ? ' (provisional)' : ''),
-            ),
-            _row(context, 'Deposit', naira(quote.depositAmount)),
+            if (quote.pricingVisible) ...[
+              _row(context, 'Cost', naira(quote.total)),
+              _row(
+                context,
+                quote.isRelocation ? 'Full relocation charge' : 'Deposit',
+                naira(quote.depositAmount),
+              ),
+            ],
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
@@ -273,15 +321,21 @@ class _QuoteCard extends StatelessWidget {
                   label: Text(
                     paying
                         ? 'Processing…'
-                        : 'Pay deposit ${naira(quote.depositAmount)}',
+                        : quote.isRelocation
+                            ? 'Pay relocation charge ${naira(quote.depositAmount)}'
+                            : 'Pay deposit ${naira(quote.depositAmount)}',
                   ),
                 ),
               ),
             ],
-            if (quote.isAccepted && quote.projectId != null) ...[
+            if (quote.isAccepted &&
+                (quote.projectId != null ||
+                    quote.relocationWorkOrderId != null)) ...[
               const SizedBox(height: 8),
               Text(
-                'Installation booked — track it under Service.',
+                quote.isRelocation
+                    ? 'Relocation booked — track it on Home.'
+                    : 'Installation booked — track it on Home.',
                 style: text.bodySmall,
               ),
             ],

@@ -97,7 +97,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           _previewError = null;
           // Default to the configured online gateway (listed first by the API).
           _selection ??= page.providers.isNotEmpty
-              ? 'gw:${page.providers.first.providerType}'
+              ? 'gw:${page.providers.first.providerType.wireValue}'
               : 'gw:${page.providerType}';
         });
         await _refreshPreview();
@@ -206,65 +206,6 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       return;
     }
 
-    // Bank transfer: show the account(s) + collect the receipt; staff verify
-    // and credit the account. No gateway / verify round-trip here.
-    if (_isTransfer) {
-      setState(() => _busy = true);
-      try {
-        final preview = await _refreshPreview();
-        if (!mounted) {
-          return;
-        }
-        if (preview == null || preview.previewFingerprint.isEmpty) {
-          messenger.showSnackBar(
-            SnackBar(content: Text(_previewFailureMessage())),
-          );
-          return;
-        }
-        final initiation =
-            await ref.read(billingRepositoryProvider).initiateTopup(
-                  amount,
-                  previewFingerprint: preview.previewFingerprint,
-                  provider: 'bank_transfer',
-                  idempotencyKey: _topupAttemptKey('transfer'),
-                );
-        if (!mounted) {
-          return;
-        }
-        final ok = await showSubmitProofSheet(
-          context,
-          initialAmount: amount.toString(),
-          accounts: page.bankTransfer.accounts,
-          instructions: page.bankTransfer.instructions,
-          intentId: initiation.intentId,
-        );
-        if (ok == true && mounted) {
-          ref.invalidate(paymentProofsProvider);
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Receipt submitted - we will verify it and credit your account.',
-              ),
-            ),
-          );
-          await _loadPage();
-        }
-      } on ApiException catch (e) {
-        if (mounted) {
-          showPaymentError(context, e, onRetry: _submit);
-        }
-      } catch (e) {
-        if (mounted) {
-          showPaymentError(context, e, onRetry: _submit);
-        }
-      } finally {
-        if (mounted) {
-          setState(() => _busy = false);
-        }
-      }
-      return;
-    }
-
     setState(() => _busy = true);
     _previewDebounce?.cancel();
     try {
@@ -287,18 +228,55 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         return;
       }
       final cardId = _selectedCardId;
-      final initiation = await ref
-          .read(billingRepositoryProvider)
-          .initiateTopup(
-            amount,
-            previewFingerprint: preview.previewFingerprint,
-            provider: cardId == null ? _selectedGateway : null,
-            paymentMethodId: cardId,
-            // One key per attempt makes a saved-card charge safe against a
-            // Dio retry; the button busy-guard covers double-taps.
-            idempotencyKey: cardId == null ? null : _topupAttemptKey('topup'),
-          );
+      final initiation =
+          await ref.read(billingRepositoryProvider).initiateTopup(
+                amount,
+                previewFingerprint: preview.previewFingerprint,
+                provider: _isTransfer
+                    ? 'direct_bank_transfer'
+                    : cardId == null
+                        ? _selectedGateway
+                        : null,
+                paymentMethodId: cardId,
+                // One key per attempt makes a saved-card charge safe against a
+                // Dio retry; the button busy-guard covers double-taps.
+                idempotencyKey: _isTransfer
+                    ? _topupAttemptKey('transfer')
+                    : cardId == null
+                        ? null
+                        : _topupAttemptKey('topup'),
+              );
       if (!mounted) {
+        return;
+      }
+
+      if (_isTransfer) {
+        final outcome = await showSubmitProofSheet(
+          context,
+          intentId: initiation.intentId,
+          initialAmount: amount.toString(),
+          accounts: page.bankTransfer.accounts,
+          instructions: page.bankTransfer.instructions,
+        );
+        if (!mounted) return;
+        if (outcome == TransferProofOutcome.submitted) {
+          ref.invalidate(paymentProofsProvider);
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Receipt submitted - we will verify it and credit your account.',
+              ),
+            ),
+          );
+          await _loadPage();
+        } else {
+          await ref
+              .read(billingRepositoryProvider)
+              .cancelTopupIntent(initiation.intentId);
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Bank transfer canceled.')),
+          );
+        }
         return;
       }
 
@@ -359,14 +337,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     final page = _page;
     if (page == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final ok = await showSubmitProofSheet(
+    final outcome = await showSubmitProofSheet(
       context,
       initialAmount: deposit.amount.toStringAsFixed(2),
       accounts: page.bankTransfer.accounts,
       instructions: page.bankTransfer.instructions,
       intentId: deposit.intentId,
     );
-    if (ok == true && mounted) {
+    if (outcome == TransferProofOutcome.submitted && mounted) {
       ref.invalidate(paymentProofsProvider);
       messenger.showSnackBar(
         const SnackBar(
@@ -683,7 +661,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         for (final p in page.providers)
           _methodTile(
-            value: 'gw:${p.providerType}',
+            value: 'gw:${p.providerType.wireValue}',
             icon: Icons.add_card_outlined,
             title: p.label,
           ),

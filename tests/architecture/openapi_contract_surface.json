@@ -6049,6 +6049,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/me/subscriptions/{subscription_id}/relocation-plans": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!",
+    "query:access_type!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "f22cf13c6355",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/me/subscriptions/{subscription_id}/service-change": {
    "params": [
     "header:authorization",
@@ -15819,6 +15832,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/me/quotes/{quote_id}/relocation/prepare": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:quote_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2a62a7c22e5e",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/me/referrals": {
    "params": [
     "header:authorization",
@@ -20324,7 +20349,7 @@
   "PaymentCreationAllocationEffectRead": "0a67d93a8b24",
   "PaymentCreationPreviewRead": "b79bae168af8",
   "PaymentInitiateRequest": "e559675b8226",
-  "PaymentInitiateResponse": "a174d4f35569",
+  "PaymentInitiateResponse": "ec8f57961cbd",
   "PaymentMethodCreate": "2bfc785da28d",
   "PaymentMethodRead": "79a083174c04",
   "PaymentMethodType": "b0c210102540",
@@ -20472,13 +20497,13 @@
   "QuoteDepositVerifyResponse": "5300be93edda",
   "QuoteDiscountType": "33882226f0db",
   "QuoteFeasibility": "76535422c34b",
-  "QuoteItem": "d8b460559e46",
+  "QuoteItem": "81f0accd5304",
   "QuoteLineItem": "b665cdd08dac",
   "QuoteLineItemCreate": "ef183023a2dc",
   "QuoteLineItemRead": "4b18876d8e37",
   "QuoteLineItemUpdate": "0100c6777de1",
   "QuoteRead": "7ab8c1255ca6",
-  "QuoteRequestCreate": "162e1e5d1fd3",
+  "QuoteRequestCreate": "366a6373d9b0",
   "QuoteStatus": "62c779ee038e",
   "QuoteUpdate": "d59ce59d151b",
   "RadiusAccountingSessionCreate": "bd7f8b12df68",
@@ -20512,6 +20537,7 @@
   "RegionZoneCreate": "cceb7e1541b2",
   "RegionZoneRead": "e15adfa11f2a",
   "RegionZoneUpdate": "468a00a54a8c",
+  "RelocationQuotePrepareResponse": "c250d0421380",
   "ResellerCreate": "cb6783563989",
   "ResellerProfileUpdate": "9021c76df1e0",
   "ResellerQuoteRequest": "5ab28ff46b5a",
@@ -20563,6 +20589,7 @@
   "ServiceQualificationRead": "d37809c76348",
   "ServiceQualificationRequest": "80672e742fbe",
   "ServiceRequestCreate": "0fdc40f240eb",
+  "ServiceRequestOption": "4fbffcc12b4f",
   "ServiceRequestStatusUpdate": "6b8d192fc527",
   "ServiceState": "8dacc76c5ad7",
   "ServiceStateTransitionCreate": "1cf319d3093d",

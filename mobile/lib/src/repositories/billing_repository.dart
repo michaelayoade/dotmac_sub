@@ -21,25 +21,19 @@ class BillingRepository {
 
   /// POST /payment-proofs/me — upload a bank-transfer receipt (multipart).
   Future<PaymentProofItem> submitPaymentProof({
-    required String amount,
-    String? bankName,
-    String? reference,
+    required String intentId,
+    String? selectedAccountId,
     DateTime? paidAt,
     required String filePath,
     required String fileName,
-    String? intentId,
-    String? selectedAccountId,
   }) async {
     final uploadFilename = paymentProofUploadFilename(
       filePath: filePath,
       fileName: fileName,
     );
     final form = FormData.fromMap({
-      'amount': amount,
-      if (bankName != null && bankName.isNotEmpty) 'bank_name': bankName,
-      if (reference != null && reference.isNotEmpty) 'reference': reference,
+      'intent_id': intentId,
       if (paidAt != null) 'paid_at': paidAt.toIso8601String(),
-      if (intentId != null && intentId.isNotEmpty) 'intent_id': intentId,
       if (selectedAccountId != null && selectedAccountId.isNotEmpty)
         'selected_account_id': selectedAccountId,
       'file': await MultipartFile.fromFile(
@@ -263,6 +257,7 @@ class BillingRepository {
     return TopupResult.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Abandon an unsubmitted bank-transfer intent.
   Future<void> cancelTopupIntent(String intentId) async {
     await guard(() => dio.post('/me/topup/intents/$intentId/cancel'));
   }

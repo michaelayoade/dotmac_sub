@@ -90,6 +90,37 @@ class ChatSession {
 /// Delivery state of one of OUR messages (agent messages are always [sent]).
 enum MessageStatus { sending, sent, failed }
 
+/// One photo selected for a visitor message before it reaches the server.
+class ChatUpload {
+  const ChatUpload(
+      {required this.path, required this.name, required this.mimeType});
+
+  final String path;
+  final String name;
+  final String mimeType;
+}
+
+/// Private Team Inbox media reference returned with a chat message.
+class ChatAttachment {
+  const ChatAttachment({required this.id, required this.name, this.localPath});
+
+  final String id;
+  final String name;
+  final String? localPath;
+
+  static List<ChatAttachment> fromJson(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<Map<String, dynamic>>()
+        .map((item) => ChatAttachment(
+              id: (item['id'] ?? '').toString(),
+              name: (item['file_name'] ?? 'Photo').toString(),
+            ))
+        .where((item) => item.id.isNotEmpty)
+        .toList();
+  }
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -100,6 +131,9 @@ class ChatMessage {
     this.createdAt,
     this.readAt,
     this.status = MessageStatus.sent,
+    this.attachments = const [],
+    this.uploads = const [],
+    this.clientMessageId,
   });
 
   final String id;
@@ -107,6 +141,9 @@ class ChatMessage {
 
   /// Delivery state — drives the "sending…/failed" indicator on our bubbles.
   final MessageStatus status;
+  final List<ChatAttachment> attachments;
+  final List<ChatUpload> uploads;
+  final String? clientMessageId;
 
   /// True when the message came from a support agent (CRM "outbound"); false
   /// for the subscriber's own messages.
@@ -126,6 +163,7 @@ class ChatMessage {
     String? id,
     MessageStatus? status,
     DateTime? createdAt,
+    List<ChatAttachment>? attachments,
   }) =>
       ChatMessage(
         id: id ?? this.id,
@@ -136,6 +174,9 @@ class ChatMessage {
         createdAt: createdAt ?? this.createdAt,
         readAt: readAt,
         status: status ?? this.status,
+        attachments: attachments ?? this.attachments,
+        uploads: uploads,
+        clientMessageId: clientMessageId,
       );
 
   static DateTime? _parseDate(Object? v) =>
@@ -155,6 +196,8 @@ class ChatMessage {
         authorAvatar: _str(j['author_avatar']),
         createdAt: _parseDate(j['created_at']),
         readAt: _parseDate(j['read_at']),
+        attachments: ChatAttachment.fromJson(j['attachments']),
+        clientMessageId: _str(j['client_message_id']),
       );
 
   /// From POST /session/{id}/message (WidgetMessageResponse) — our own message.
@@ -163,6 +206,8 @@ class ChatMessage {
         body: (j['body'] ?? '').toString(),
         fromAgent: false,
         createdAt: _parseDate(j['created_at']),
+        attachments: ChatAttachment.fromJson(j['attachments']),
+        clientMessageId: _str(j['client_message_id']),
       );
 
   /// From a `message_new` WebSocket event (broadcast_to_widget_visitor).
@@ -173,5 +218,7 @@ class ChatMessage {
         authorName: _str(j['author_name']),
         authorAvatar: _str(j['author_avatar']),
         createdAt: _parseDate(j['created_at']),
+        attachments: ChatAttachment.fromJson(j['attachments']),
+        clientMessageId: _str(j['client_message_id']),
       );
 }

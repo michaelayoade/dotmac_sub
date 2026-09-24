@@ -3722,7 +3722,9 @@ DOMAIN = DomainSOT(
                 "Party-first prospect capture only for unmatched identity, and "
                 "retain ambiguous identity for human review. The first persisted "
                 "widget visitor message requests optional, exact-scope AI intake; "
-                "missing or inactive policy leaves the human Inbox path unchanged."
+                "missing or inactive policy leaves the human Inbox path unchanged. "
+                "Visitor photo messages are stored by the same owner with "
+                "bounded image uploads and session-scoped private media reads."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_widget",
@@ -3749,6 +3751,15 @@ DOMAIN = DomainSOT(
                         source=(
                             "Exact-origin typed name, email, optional phone, first "
                             "message, page provenance, client session id, and spam evidence."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="typed visitor message and photo command",
+                        owner="communications.team_inbox_widget",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Session-scoped text and up to five validated private "
+                            "image uploads bound to one native Inbox message."
                         ),
                     ),
                     AuthorityInput(
@@ -3784,6 +3795,16 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
+                domain_error_codes=(
+                    "communications.team_inbox_widget.message_required",
+                    "communications.team_inbox_widget.message_too_long",
+                    "communications.team_inbox_widget.too_many_photos",
+                    "communications.team_inbox_widget.invalid_photo",
+                    "communications.team_inbox_widget.invalid_message_id",
+                    "communications.team_inbox_widget.message_id_conflict",
+                    "communications.team_inbox_widget.media_not_found",
+                    "communications.team_inbox_widget.session_mismatch",
+                ),
                 event_types=(
                     "team_inbox.widget_message_recorded.v1",
                     "team_inbox.widget_read_state_changed.v1",

@@ -867,6 +867,19 @@ def _change_discount_operation(
     ).one_or_none()
     if quote is None or not quote.is_active:
         raise _error("quote_not_found", "Select a valid active Quote.")
+    from app.models.subscription_change import SubscriptionChangeRequest
+
+    booked = db.scalar(
+        select(SubscriptionChangeRequest.id).where(
+            SubscriptionChangeRequest.confirmation_idempotency_key
+            == f"customer-relocation-quote:{quote.id}"
+        )
+    )
+    if booked is not None:
+        raise _error(
+            "accepted_quote_immutable",
+            "A booked relocation Quote cannot be discounted; create a new Quote.",
+        )
     if quote.status == QuoteStatus.accepted.value:
         raise _error(
             "accepted_quote_immutable",

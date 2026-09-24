@@ -15,6 +15,16 @@ Authenticated customer and reseller sessions use Sub's native Team Inbox:
 - authoritative conversation/message state: `InboxConversation` and
   `InboxMessage`.
 
+Mobile Help chat can send up to five JPEG, PNG, GIF, or WebP photos per message,
+each at most 5 MB. The composer plus button opens Camera and Gallery; selections
+submit through
+`POST /widget/session/{id}/message/media`; visitor history includes bound image
+references, and private image bytes are read through
+`GET /widget/session/{id}/media/{asset_id}` with the same visitor token. The
+Team Inbox visitor command owns the message and attachment transaction.
+The widget adapter finishes any clean token-decoding read transaction before
+entering the visitor message command.
+
 The public fiber website uses the same native transport through
 `POST /widget/fiber/session`. Its adapter accepts only the exact
 `FIBER_CHAT_ALLOWED_ORIGIN` (default `https://fiber.dotmac.ng`), applies a

@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -18,6 +20,7 @@ class _FakeAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     calls.add(options);
+    await requestStream?.drain<void>();
     return onFetch(options);
   }
 
@@ -42,6 +45,56 @@ ResponseBody _pdf({String filename = 'invoice-INV-42.pdf'}) =>
     );
 
 void main() {
+  test('payment proof submission carries intent and collection account IDs',
+      () async {
+    final receipt = File(
+      '${Directory.systemTemp.path}/dotmac-payment-proof-${DateTime.now().microsecondsSinceEpoch}.jpg',
+    );
+    await receipt.writeAsBytes([1, 2, 3]);
+    late FormData submitted;
+    final adapter = _FakeAdapter((options) {
+      submitted = options.data as FormData;
+      return ResponseBody.fromString(
+        jsonEncode({
+          'id': 'proof-1',
+          'amount': '5000.00',
+          'currency': 'NGN',
+          'status': 'submitted',
+        }),
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      );
+    });
+
+    try {
+      await BillingRepository(_dio(adapter)).submitPaymentProof(
+        intentId: 'intent-1',
+        selectedAccountId: 'collection-account-1',
+        filePath: receipt.path,
+        fileName: 'receipt.jpg',
+      );
+    } finally {
+      await receipt.delete();
+    }
+
+    expect(Map.fromEntries(submitted.fields)['intent_id'], 'intent-1');
+    expect(
+      Map.fromEntries(submitted.fields)['selected_account_id'],
+      'collection-account-1',
+    );
+  });
+
+  test('cancel direct transfer uses the self-scoped intent endpoint', () async {
+    final adapter = _FakeAdapter((_) => ResponseBody.fromString('', 204));
+
+    await BillingRepository(_dio(adapter)).cancelTopupIntent('intent-2');
+
+    expect(adapter.calls.single.method, 'POST');
+    expect(adapter.calls.single.path, '/me/topup/intents/intent-2/cancel');
+  });
+
   test('invoice PDF uses authenticated API path and server filename', () async {
     final adapter = _FakeAdapter((_) => _pdf());
 

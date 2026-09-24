@@ -8,12 +8,15 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/api_exception.dart';
+import '../../models/service_request_option.dart';
 import '../../providers/data_providers.dart';
 
-/// Drop a map pin for a new installation; the active quote owner returns
-/// feasibility, an estimate, and the required deposit.
+/// Drop a map pin for a service request; the owner returns coverage while
+/// staff review pricing before the customer can see or pay it.
 class QuoteRequestScreen extends ConsumerStatefulWidget {
-  const QuoteRequestScreen({super.key});
+  const QuoteRequestScreen({super.key, required this.selection});
+
+  final ServiceRequestSelection selection;
 
   @override
   ConsumerState<QuoteRequestScreen> createState() => _QuoteRequestScreenState();
@@ -130,12 +133,19 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
     FocusScope.of(context).unfocus();
     final selected = _selected;
     if (selected == null) {
-      _snack('Drop a pin on your installation address first.');
+      _snack('Drop a pin on the service address first.');
+      return;
+    }
+    if (_address.text.trim().isEmpty) {
+      _snack('Enter or confirm the service address.');
       return;
     }
     setState(() => _submitting = true);
     try {
       await ref.read(quotesRepositoryProvider).requestQuote(
+            serviceOption: widget.selection.option,
+            subscriptionId: widget.selection.subscriptionId,
+            destinationOfferId: widget.selection.destinationOfferId,
             latitude: selected.latitude,
             longitude: selected.longitude,
             address: _address.text.trim(),
@@ -143,7 +153,8 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
           );
       ref.invalidate(quotesProvider);
       if (!mounted) return;
-      _snack('Estimate ready — see your quote.');
+      _snack(
+          'Request sent. Check your coverage result while staff review the quote.');
       context.pop();
     } on ApiException catch (e) {
       _snack(e.message);
@@ -157,11 +168,11 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
     final quotesPage = ref.watch(quotesProvider);
     return quotesPage.when(
       loading: () => Scaffold(
-        appBar: AppBar(title: const Text('Request installation')),
+        appBar: AppBar(title: const Text('Request service')),
         body: const Center(child: CircularProgressIndicator()),
       ),
       error: (_, __) => Scaffold(
-        appBar: AppBar(title: const Text('Request installation')),
+        appBar: AppBar(title: const Text('Request service')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -190,7 +201,7 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
 
   Widget _unavailable(BuildContext context, String? ownerMessage) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Request installation')),
+      appBar: AppBar(title: const Text('Request service')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -220,7 +231,7 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
     final scheme = Theme.of(context).colorScheme;
     final center = _selected ?? _fallbackCenter;
     return Scaffold(
-      appBar: AppBar(title: const Text('Request installation')),
+      appBar: AppBar(title: const Text('Request service')),
       body: Column(
         children: [
           Expanded(
@@ -298,7 +309,7 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
                 children: [
                   Text(
                     _selected == null
-                        ? 'Tap the map (or use GPS) to pin your installation address.'
+                        ? 'Tap the map (or use GPS) to pin the service address.'
                         : 'Pinned location selected. Confirm the address below.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -309,7 +320,7 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
                     textInputAction: TextInputAction.next,
                     onChanged: (_) => _addressEdited = true,
                     decoration: const InputDecoration(
-                      labelText: 'Installation address',
+                      labelText: 'Service address',
                       hintText: 'Enter or confirm the pinned address',
                       border: OutlineInputBorder(),
                     ),

@@ -635,6 +635,38 @@ void main() {
   });
 
   group('Topup', () {
+    test('TopupPage keeps direct transfer out of online gateway options', () {
+      final page = TopupPage.fromJson({
+        'provider_type': 'paystack',
+        'currency': 'NGN',
+        'min_amount': 1000,
+        'max_amount': 500000,
+        'payment_options': [
+          {'provider_type': 'paystack', 'label': 'Pay with Paystack'},
+          {
+            'provider_type': 'direct_bank_transfer',
+            'label': 'Direct bank transfer',
+          },
+        ],
+        'direct_bank_transfer': {
+          'enabled': true,
+          'accounts': [
+            {
+              'id': 'collection-account-1',
+              'bank_name': 'Example Bank',
+              'account_name': 'Dotmac',
+              'account_number': '0123456789',
+            },
+          ],
+        },
+      });
+
+      expect(page.providers, hasLength(1));
+      expect(
+          page.providers.single.providerType, OnlinePaymentProvider.paystack);
+      expect(page.bankTransfer.accounts.single.id, 'collection-account-1');
+    });
+
     test(
       'TopupPage keeps payable-invoice visibility while deposit stays allowed',
       () {

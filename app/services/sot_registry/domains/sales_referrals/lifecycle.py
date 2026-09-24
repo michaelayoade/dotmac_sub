@@ -215,9 +215,13 @@ SERVICES: tuple[SOTService, ...] = (
             "sales.service",
         ),
         notes=(
-            "A completed map-pinned estimate is created as payment-review pending, "
-            "then queues the authorized staff review alert and customer under-review "
-            "notification. It never exposes payment eligibility itself."
+            "A map-pinned installation or relocation request records the typed "
+            "service choice and is created as payment-review pending. Fiber "
+            "installation may have an internal preliminary estimate; other "
+            "choices require staff pricing. Customer reads hide prices until "
+            "the current commercial snapshot is approved. The owner queues "
+            "staff review and customer under-review notifications; payment "
+            "eligibility remains with the Quote review and deposit owners."
         ),
     ),
     SOTService(

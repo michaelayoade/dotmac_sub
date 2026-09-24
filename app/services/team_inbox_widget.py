@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
+    InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
@@ -34,6 +37,7 @@ from app.services import (
     team_inbox_automation,
     team_inbox_channel_receive,
     team_inbox_customer_completion_policy,
+    team_inbox_media,
     team_inbox_participants,
     team_inbox_realtime,
     team_inbox_routing,
@@ -94,6 +98,160 @@ class WidgetPrincipal:
     surface: str
     subscriber_id: str | None = None
     reseller_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VisitorPhoto:
+    file_name: str
+    content_type: str
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class VisitorMessageCommand:
+    body: str
+    client_message_id: str | None = None
+    photos: tuple[VisitorPhoto, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class VisitorAttachment:
+    asset_id: uuid.UUID
+    file_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class VisitorMessageOutcome:
+    message_id: uuid.UUID
+    conversation_id: uuid.UUID
+    body: str
+    created_at: datetime
+    client_message_id: str | None
+    attachments: tuple[VisitorAttachment, ...]
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "id": str(self.message_id),
+            "message_id": str(self.message_id),
+            "conversation_id": str(self.conversation_id),
+            "body": self.body,
+            "created_at": self.created_at.isoformat(),
+            "client_message_id": self.client_message_id,
+            "direction": InboxMessageDirection.inbound.value,
+            "channel_type": InboxChannelType.chat_widget.value,
+            "sender_type": "visitor",
+            "from_customer": True,
+            "attachments": [
+                {"id": str(attachment.asset_id), "file_name": attachment.file_name}
+                for attachment in self.attachments
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WidgetMessageHistoryQuery:
+    principal: WidgetPrincipal
+    limit: int = 50
+
+
+@dataclass(frozen=True, slots=True)
+class WidgetMessageRead:
+    message_id: uuid.UUID
+    conversation_id: uuid.UUID
+    body: str
+    direction: InboxMessageDirection
+    created_at: datetime | None
+    sender_type: str
+    author_name: str | None
+    client_message_id: str | None
+    attachments: tuple[VisitorAttachment, ...]
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "id": str(self.message_id),
+            "message_id": str(self.message_id),
+            "conversation_id": str(self.conversation_id),
+            "body": self.body,
+            "direction": self.direction.value,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "sender_type": self.sender_type,
+            "author_name": self.author_name,
+            "client_message_id": self.client_message_id,
+            "from_customer": self.direction is InboxMessageDirection.inbound,
+            "attachments": _serialize_visitor_attachments(self.attachments),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WidgetMessageHistory:
+    messages: tuple[WidgetMessageRead, ...]
+
+    def as_response(self) -> dict[str, object]:
+        return {"messages": [message.as_response() for message in self.messages]}
+
+
+MAX_VISITOR_PHOTOS = 5
+MAX_VISITOR_PHOTO_BYTES = 5 * 1024 * 1024
+VISITOR_PHOTO_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+
+def _visitor_attachments(message: InboxMessage) -> tuple[VisitorAttachment, ...]:
+    raw = (message.metadata_ or {}).get("attachments") or []
+    if not isinstance(raw, list):
+        return ()
+    attachments: list[VisitorAttachment] = []
+    for item in raw:
+        if not isinstance(item, dict) or item.get("type") != "image":
+            continue
+        try:
+            asset_id = uuid.UUID(str(item.get("id")))
+        except (TypeError, ValueError):
+            continue
+        attachments.append(
+            VisitorAttachment(
+                asset_id=asset_id,
+                file_name=str(item.get("file_name") or "Photo"),
+            )
+        )
+    return tuple(attachments)
+
+
+def _serialize_visitor_attachments(
+    attachments: tuple[VisitorAttachment, ...],
+) -> list[dict[str, str]]:
+    return [
+        {"id": str(item.asset_id), "file_name": item.file_name} for item in attachments
+    ]
+
+
+def _visitor_message_fingerprint(command: VisitorMessageCommand) -> str:
+    material = {
+        "body": command.body.strip(),
+        "photos": [
+            {
+                "name": photo.file_name,
+                "type": photo.content_type,
+                "sha256": hashlib.sha256(photo.data).hexdigest(),
+            }
+            for photo in command.photos
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _visitor_message_outcome(
+    message: InboxMessage, *, client_message_id: str | None
+) -> VisitorMessageOutcome:
+    return VisitorMessageOutcome(
+        message_id=message.id,
+        conversation_id=message.conversation_id,
+        body=message.body or "",
+        created_at=message.created_at,
+        client_message_id=client_message_id,
+        attachments=_visitor_attachments(message),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -855,52 +1013,56 @@ def broker_fiber_visitor_session_committed(
 def list_session_messages(
     db: Session,
     *,
-    principal: WidgetPrincipal,
-    limit: int = 50,
-) -> dict[str, list[dict[str, Any]]]:
+    query: WidgetMessageHistoryQuery,
+) -> WidgetMessageHistory:
     messages = (
         db.query(InboxMessage)
-        .filter(InboxMessage.conversation_id == principal.conversation_id)
+        .filter(InboxMessage.conversation_id == query.principal.conversation_id)
         .order_by(InboxMessage.created_at.desc())
-        .limit(max(1, min(int(limit), 100)))
+        .limit(max(1, min(query.limit, 100)))
         .all()
     )
     messages.reverse()
-    return {
-        "messages": [
-            {
-                "id": str(message.id),
-                "message_id": str(message.id),
-                "conversation_id": str(message.conversation_id),
-                "body": message.body,
-                "direction": message.direction,
-                "created_at": message.created_at.isoformat()
-                if message.created_at
-                else None,
-                "sender_type": "visitor"
+    return WidgetMessageHistory(
+        messages=tuple(
+            WidgetMessageRead(
+                message_id=message.id,
+                conversation_id=message.conversation_id,
+                body=message.body or "",
+                direction=InboxMessageDirection(message.direction),
+                created_at=message.created_at,
+                sender_type="visitor"
                 if message.direction == InboxMessageDirection.inbound.value
                 else str((message.metadata_ or {}).get("sender_type") or "agent"),
-                "author_name": (message.metadata_ or {}).get("author_name"),
-                "from_customer": message.direction
-                == InboxMessageDirection.inbound.value,
-            }
+                author_name=(message.metadata_ or {}).get("author_name"),
+                client_message_id=(message.metadata_ or {}).get("client_message_id"),
+                attachments=_visitor_attachments(message),
+            )
             for message in messages
             if message.direction != InboxMessageDirection.internal.value
-        ]
-    }
+        )
+    )
 
 
 def add_visitor_message(
     db: Session,
     *,
     principal: WidgetPrincipal,
-    body: str,
-    client_message_id: str | None = None,
-) -> dict[str, Any]:
+    command: VisitorMessageCommand,
+) -> VisitorMessageOutcome:
     _require_enabled()
-    clean_body = str(body or "").strip()
-    if not clean_body:
+    clean_body = command.body.strip()
+    if len(clean_body) > 2000:
+        raise _error("message_too_long", "Message is too long.")
+    if not clean_body and not command.photos:
         raise _error("message_required", "Message body is required.")
+    if len(command.photos) > MAX_VISITOR_PHOTOS:
+        raise _error("too_many_photos", "You can attach up to five photos.")
+    for photo in command.photos:
+        if photo.content_type not in VISITOR_PHOTO_TYPES:
+            raise _error("invalid_photo", "Choose a JPEG, PNG, GIF, or WebP photo.")
+        if not photo.data or len(photo.data) > MAX_VISITOR_PHOTO_BYTES:
+            raise _error("invalid_photo", "Each photo must be 5 MB or smaller.")
     conversation = (
         db.query(InboxConversation)
         .filter(InboxConversation.id == principal.conversation_id)
@@ -909,6 +1071,28 @@ def add_visitor_message(
     )
     if conversation is None or not conversation.is_active:
         raise _error("conversation_not_found", "Conversation not found.")
+    client_message_id = (command.client_message_id or "").strip() or None
+    if client_message_id is not None and len(client_message_id) > 100:
+        raise _error("invalid_message_id", "Message identity is invalid.")
+    fingerprint = _visitor_message_fingerprint(command)
+    if client_message_id is not None:
+        previous = (
+            db.query(InboxMessage)
+            .filter(InboxMessage.conversation_id == conversation.id)
+            .filter(
+                InboxMessage.metadata_["client_message_id"].as_string()
+                == client_message_id
+            )
+            .first()
+        )
+        if previous is not None:
+            if (previous.metadata_ or {}).get("client_fingerprint") != fingerprint:
+                raise _error(
+                    "message_id_conflict", "This message identity was already used."
+                )
+            return _visitor_message_outcome(
+                previous, client_message_id=client_message_id
+            )
     is_first_inbound_message = (
         db.query(InboxMessage.id)
         .filter(InboxMessage.conversation_id == conversation.id)
@@ -920,6 +1104,7 @@ def add_visitor_message(
     metadata = {
         "source": "native_chat_widget",
         "client_message_id": client_message_id,
+        "client_fingerprint": fingerprint,
         "session_id": principal.session_id,
         "surface": principal.surface,
     }
@@ -944,14 +1129,33 @@ def add_visitor_message(
             source_id=f"widget-reopen:{conversation.id}:{uuid.uuid4()}",
         )
     db.flush()
-    team_inbox_channel_receive.start_ai_intake_for_persisted_widget_message(
-        db,
-        command=team_inbox_channel_receive.PersistedWidgetAiIntakeCommand(
-            conversation_id=conversation.id,
-            message_id=message.id,
-            created_conversation=is_first_inbound_message,
-        ),
-    )
+    assets: list[InboxMediaAsset] = []
+    if command.photos:
+        try:
+            assets = [
+                team_inbox_media.stage_visitor_attachment(
+                    db,
+                    conversation=conversation,
+                    file_name=photo.file_name,
+                    content_type=photo.content_type,
+                    data=photo.data,
+                )
+                for photo in command.photos
+            ]
+        except team_inbox_media.MediaUploadError as exc:
+            raise _error("invalid_photo", str(exc)) from exc
+        team_inbox_media.bind_assets_to_message(
+            db, message=message, asset_ids=[str(asset.id) for asset in assets]
+        )
+    if clean_body:
+        team_inbox_channel_receive.start_ai_intake_for_persisted_widget_message(
+            db,
+            command=team_inbox_channel_receive.PersistedWidgetAiIntakeCommand(
+                conversation_id=conversation.id,
+                message_id=message.id,
+                created_conversation=is_first_inbound_message,
+            ),
+        )
     payload = team_inbox_realtime.message_event_payload(
         conversation_id=str(conversation.id),
         message_id=str(message.id),
@@ -963,6 +1167,9 @@ def add_visitor_message(
             "client_message_id": client_message_id,
             "sender_type": "visitor",
             "from_customer": True,
+            "attachments": _serialize_visitor_attachments(
+                _visitor_attachments(message)
+            ),
         },
     )
     team_inbox_realtime.publish_conversation_event(
@@ -971,7 +1178,7 @@ def add_visitor_message(
         event_type=EventType.MESSAGE_NEW,
         payload=payload,
     )
-    return payload
+    return _visitor_message_outcome(message, client_message_id=client_message_id)
 
 
 def _require_session_match(principal: WidgetPrincipal, session_id: str) -> None:
@@ -984,19 +1191,38 @@ def add_visitor_message_committed(
     *,
     session_id: str,
     principal: WidgetPrincipal,
-    body: str,
-    client_message_id: str | None = None,
-) -> dict[str, Any]:
+    command: VisitorMessageCommand,
+) -> VisitorMessageOutcome:
     _require_session_match(principal, session_id)
     return _commit(
         db,
         lambda: add_visitor_message(
             db,
             principal=principal,
-            body=body,
-            client_message_id=client_message_id,
+            command=command,
         ),
     )
+
+
+def resolve_visitor_media(
+    db: Session, *, principal: WidgetPrincipal, asset_id: uuid.UUID
+) -> uuid.UUID:
+    """Authorize one bound, visible media asset in this visitor's conversation."""
+    asset = db.get(InboxMediaAsset, asset_id)
+    if (
+        asset is None
+        or asset.conversation_id != principal.conversation_id
+        or asset.asset_type != "image"
+    ):
+        raise _error("media_not_found", "Photo not found.")
+    message = db.get(InboxMessage, asset.message_id) if asset.message_id else None
+    if (
+        message is None
+        or message.conversation_id != principal.conversation_id
+        or message.direction == InboxMessageDirection.internal.value
+    ):
+        raise _error("media_not_found", "Photo not found.")
+    return asset.id
 
 
 def mark_session_read(db: Session, *, principal: WidgetPrincipal) -> dict[str, bool]:

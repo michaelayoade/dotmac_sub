@@ -298,27 +298,56 @@ def _row_to_item(row: QuoteMirror) -> dict[str, object]:
     if isinstance(row.payload, dict) and row.payload:
         item = dict(row.payload)
         item["id"] = row.crm_quote_id
-        return item
+        return _customer_quote_view(item)
     # Fallback shape from columns if the full payload was never stored.
-    return {
-        "id": row.crm_quote_id,
-        "status": row.status,
-        "currency": row.currency,
-        "total": row.total,
-        "deposit_amount": row.deposit_amount,
-        "deposit_percent": row.deposit_percent,
-        "deposit_paid": row.deposit_paid,
-        "feasibility": {"coverage": row.feasibility_coverage},
-        "estimate_provisional": row.estimate_provisional,
-        "address": row.address,
-        "latitude": row.latitude,
-        "longitude": row.longitude,
-        "project_id": row.project_id,
-        "sales_order_id": row.sales_order_id,
-        "created_at": row.quote_created_at.isoformat()
-        if row.quote_created_at
-        else None,
-    }
+    return _customer_quote_view(
+        {
+            "id": row.crm_quote_id,
+            "status": row.status,
+            "currency": row.currency,
+            "total": row.total,
+            "deposit_amount": row.deposit_amount,
+            "deposit_percent": row.deposit_percent,
+            "deposit_paid": row.deposit_paid,
+            "feasibility": {"coverage": row.feasibility_coverage},
+            "estimate_provisional": row.estimate_provisional,
+            "address": row.address,
+            "latitude": row.latitude,
+            "longitude": row.longitude,
+            "project_id": row.project_id,
+            "sales_order_id": row.sales_order_id,
+            "created_at": row.quote_created_at.isoformat()
+            if row.quote_created_at
+            else None,
+        }
+    )
+
+
+def _customer_quote_view(item: dict[str, object]) -> dict[str, object]:
+    """Retired snapshots have no current approval evidence; hide pending prices."""
+    # The native read contract grew these optional relocation fields. Historical
+    # CRM snapshots predate the feature, so represent their absence explicitly
+    # rather than exposing a different mobile payload shape.
+    for key in (
+        "service_option",
+        "subscription_id",
+        "destination_offer_id",
+        "relocation_work_order_id",
+    ):
+        item.setdefault(key, None)
+    visible = item.get("status") == "accepted"
+    item["pricing_visible"] = visible
+    if not visible:
+        for key in (
+            "subtotal",
+            "tax_total",
+            "total",
+            "deposit_amount",
+            "deposit_percent",
+        ):
+            item[key] = None
+        item["line_items"] = []
+    return item
 
 
 def read_for_subscriber(

@@ -497,6 +497,7 @@ class ResellerPayIntent {
     required this.amount,
     required this.currency,
     this.publicKey,
+    this.checkoutUrl,
     this.metadata = const {},
   });
 
@@ -505,6 +506,7 @@ class ResellerPayIntent {
   final double amount;
   final String currency;
   final String? publicKey;
+  final String? checkoutUrl;
   final Map<String, String> metadata;
 
   factory ResellerPayIntent.fromJson(Map<String, dynamic> json) =>
@@ -514,6 +516,7 @@ class ResellerPayIntent {
         amount: asDouble(json['requested_amount']),
         currency: json['currency'] as String? ?? 'NGN',
         publicKey: json['provider_public_key'] as String?,
+        checkoutUrl: json['checkout_url'] as String?,
         metadata: ((json['checkout_metadata'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), v.toString())),
       );
