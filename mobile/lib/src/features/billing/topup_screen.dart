@@ -505,21 +505,24 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   Widget _form(TopupPage page) {
     final theme = Theme.of(context);
-    if (!page.depositAllowed) {
-      final active = page.activeDepositRequest;
+    final active = page.activeDepositRequest;
+    if (active != null || !page.depositAllowed) {
       return ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text('Top-up in progress', style: theme.textTheme.titleLarge),
           const SizedBox(height: 12),
-          Text(active?.message ?? 'A top-up is already in progress.'),
-          if (active != null) ...[
-            const SizedBox(height: 12),
-            Text('Amount: ${Fmt.money(active.amount, active.currency)}'),
-            Text('Reference: ${active.reference}'),
-            if (active.rejectionReason != null)
-              Text('Reason: ${active.rejectionReason}'),
-          ],
+          if (active != null)
+            _ActiveDepositCard(
+              deposit: active,
+              onUploadReceipt: active.isAwaitingReceipt
+                  ? () => _submitActiveDepositProof(active)
+                  : null,
+              onCancel:
+                  active.canCancel ? () => _cancelActiveDeposit(active) : null,
+            )
+          else
+            const Text('A top-up is already in progress.'),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: _loadPage,
@@ -555,18 +558,6 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               ),
             ),
           ),
-        if (page.activeDepositRequest != null) ...[
-          const SizedBox(height: 12),
-          _ActiveDepositCard(
-            deposit: page.activeDepositRequest!,
-            onUploadReceipt: page.activeDepositRequest!.isAwaitingReceipt
-                ? () => _submitActiveDepositProof(page.activeDepositRequest!)
-                : null,
-            onCancel: page.activeDepositRequest!.canCancel
-                ? () => _cancelActiveDeposit(page.activeDepositRequest!)
-                : null,
-          ),
-        ],
         const SizedBox(height: 24),
         Text('Enter an amount', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
