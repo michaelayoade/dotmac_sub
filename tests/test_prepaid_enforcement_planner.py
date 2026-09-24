@@ -230,16 +230,27 @@ def test_future_anchor_without_coverage_blocks_adverse_action(
     assert item.unresolved_projection_subscription_ids == (subscription.id,)
 
 
-def test_plan_classifies_financial_shield_without_mutation(
-    db_session, subscriber_account, subscription, monkeypatch
+def test_plan_classifies_active_payment_arrangement_shield_without_mutation(
+    db_session, subscriber_account, subscription
 ):
+    from datetime import date
+
+    from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
+
     _prepare(db_session, subscriber_account, subscription)
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
-    db_session.commit()
-    monkeypatch.setattr(
-        "app.services.prepaid_enforcement_planner._bulk_dunning_shield_reasons",
-        lambda db, ids: {subscriber_account.id: "payment proof pending review"},
+    db_session.add(
+        PaymentArrangement(
+            subscriber_id=subscriber_account.id,
+            status=ArrangementStatus.active,
+            is_active=True,
+            total_amount=Decimal("5000.00"),
+            installment_amount=Decimal("2500.00"),
+            installments_total=2,
+            start_date=date(2026, 7, 1),
+        )
     )
+    db_session.commit()
 
     item = plan_prepaid_enforcement(
         db_session,
@@ -248,10 +259,85 @@ def test_plan_classifies_financial_shield_without_mutation(
     ).items[0]
 
     assert item.action == PrepaidEnforcementAction.shielded
-    assert item.reason == "payment proof pending review"
+    assert item.reason.startswith("active payment arrangement ")
     assert item.reason_source is PrepaidEnforcementReasonSource.SHIELD
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_plan_does_not_shield_submitted_payment_proof(
+    db_session, subscriber_account, subscription
+):
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+
+    _prepare(db_session, subscriber_account, subscription)
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
+    db_session.add(
+        PaymentProof(
+            account_id=subscriber_account.id,
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            file_path="tests/fixtures/payment-proof.pdf",
+            status=PaymentProofStatus.submitted,
+        )
+    )
+    db_session.commit()
+
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+
+    assert item.action == PrepaidEnforcementAction.suspend
+    assert item.reason == "low_balance_deactivation_due"
+    assert item.reason_source is PrepaidEnforcementReasonSource.OWNER
+
+
+def test_plan_classifies_in_force_service_extension_shield(
+    db_session, subscriber_account, subscription
+):
+    from app.models.service_extension import (
+        ServiceExtension,
+        ServiceExtensionEntry,
+        ServiceExtensionScope,
+        ServiceExtensionStatus,
+    )
+
+    _prepare(db_session, subscriber_account, subscription)
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
+    extension = ServiceExtension(
+        reason="Planned network outage",
+        window_start=_MONDAY_NOON - timedelta(hours=2),
+        window_end=_MONDAY_NOON,
+        days=1,
+        scope_type=ServiceExtensionScope.subscribers,
+        scope_subscriber_ids=[str(subscriber_account.id)],
+        status=ServiceExtensionStatus.applied,
+        applied_at=datetime.now(UTC),
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=subscription.id,
+            subscriber_id=subscriber_account.id,
+            grant_starts_at=datetime.now(UTC) - timedelta(hours=1),
+            grant_ends_at=datetime.now(UTC) + timedelta(days=1),
+        )
+    )
+    db_session.commit()
+
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+
+    assert item.action == PrepaidEnforcementAction.shielded
+    assert item.reason.startswith("service extension ")
+    assert item.reason_source is PrepaidEnforcementReasonSource.SHIELD
 
 
 def test_missing_selected_account_is_a_stable_domain_failure(db_session):

@@ -2751,6 +2751,11 @@ evidenced owner contract:
   prepaid enforcement, payment settlement, and billing reconciliation.
   `financial.access_resolution`, payment arrangements/proofs/extensions, and
   billing health supply independent decision inputs; none writes access state.
+  A submitted payment proof is unverified evidence only: it provides neither
+  payment nor prepaid-coverage entitlement and cannot shield dunning or the
+  canonical prepaid balance sweep. Verification records the actual payment at
+  its paid-at date; the established funding and restoration lifecycle then
+  decides whether coverage permits access restoration.
 - Grace owner: `app.services.collections.grace_policy` resolves the effective
   duration and provenance once: explicit account override, then active policy
   set, then billing-mode default. Postpaid dunning steps count from the end of
