@@ -82,9 +82,20 @@ void main() {
       overrides: [
         subscriptionsProvider
             .overrideWith((_) async => model.Page<Subscription>(
-                  items: [service],
-                  count: 1,
-                  limit: 1,
+                  items: [
+                    service,
+                    Subscription(
+                      id: 'service-2',
+                      accountId: 'customer-1',
+                      offerId: 'airfiber-offer',
+                      status: 'active',
+                      billingMode: 'prepaid',
+                      offerName: 'My Airfiber service',
+                      offerAccessType: 'fixed_wireless',
+                    ),
+                  ],
+                  count: 2,
+                  limit: 2,
                   offset: 0,
                 )),
       ],
@@ -96,7 +107,9 @@ void main() {
                 selected = await showModalBottomSheet<ServiceRequestSelection>(
                   context: context,
                   isScrollControlled: true,
-                  builder: (_) => const ServiceRequestSheet(),
+                  builder: (_) => const ServiceRequestSheet(
+                    sourceSubscriptionId: 'service-1',
+                  ),
                 );
               },
               child: const Text('Open'),
@@ -110,7 +123,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Relocation'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('cable replacement'), findsWidgets);
+    expect(find.text('Service to relocate'), findsNothing);
+    expect(find.text('Relocating My fiber service'), findsOneWidget);
+    expect(find.textContaining('Fiber to Fiber Relocation'), findsWidgets);
+    expect(find.textContaining('Fiber to Airfiber Relocation'), findsWidgets);
+    expect(find.textContaining('Airfiber to Fiber Relocation'), findsNothing);
+    expect(find.textContaining('cable replacement'), findsNothing);
     expect(
       tester
           .widget<FilledButton>(find.widgetWithText(
@@ -120,10 +138,6 @@ void main() {
           .onPressed,
       isNull,
     );
-    await tester.tap(find.text('Service to relocate'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('My fiber service').last);
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Relocation type'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Fiber to Fiber Relocation').last);
@@ -175,7 +189,9 @@ void main() {
                 selected = await showModalBottomSheet<ServiceRequestSelection>(
                   context: context,
                   isScrollControlled: true,
-                  builder: (_) => const ServiceRequestSheet(),
+                  builder: (_) => const ServiceRequestSheet(
+                    sourceSubscriptionId: 'service-1',
+                  ),
                 );
               },
               child: const Text('Open'),
@@ -188,10 +204,6 @@ void main() {
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Relocation'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Service to relocate'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Current fiber plan').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Relocation type'));
     await tester.pumpAndSettle();
@@ -217,5 +229,128 @@ void main() {
 
     expect(selected?.destinationOfferId, 'airfiber-plan');
     expect(selected?.option, ServiceRequestOption.fiberToAirfiberRelocation);
+    expect(selected?.subscriptionId, 'service-1');
+  });
+
+  testWidgets('suspended selected service cannot start relocation',
+      (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        subscriptionsProvider
+            .overrideWith((_) async => model.Page<Subscription>(
+                  items: [
+                    Subscription(
+                      id: 'service-2',
+                      accountId: 'customer-1',
+                      offerId: 'fiber-plan',
+                      status: 'suspended',
+                      billingMode: 'prepaid',
+                      offerName: 'Suspended fiber service',
+                      offerAccessType: 'fiber',
+                    ),
+                  ],
+                  count: 1,
+                  limit: 1,
+                  offset: 0,
+                )),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => showModalBottomSheet<ServiceRequestSelection>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => const ServiceRequestSheet(
+                  sourceSubscriptionId: 'service-2',
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Relocation'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Service to relocate'), findsNothing);
+    expect(find.text('Relocating Suspended fiber service'), findsOneWidget);
+    expect(find.textContaining('not active'), findsOneWidget);
+    expect(find.text('Relocation type'), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(
+            FilledButton,
+            'Continue to location',
+          ))
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('airfiber service only offers airfiber source moves',
+      (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        subscriptionsProvider
+            .overrideWith((_) async => model.Page<Subscription>(
+                  items: [
+                    Subscription(
+                      id: 'service-3',
+                      accountId: 'customer-1',
+                      offerId: 'airfiber-plan',
+                      status: 'active',
+                      billingMode: 'prepaid',
+                      offerName: 'My Airfiber service',
+                      offerAccessType: 'fixed_wireless',
+                    ),
+                  ],
+                  count: 1,
+                  limit: 1,
+                  offset: 0,
+                )),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => showModalBottomSheet<ServiceRequestSelection>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => const ServiceRequestSheet(
+                  sourceSubscriptionId: 'service-3',
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Relocation'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Fiber to Fiber Relocation'), findsNothing);
+    expect(find.textContaining('Fiber to Airfiber Relocation'), findsNothing);
+    expect(find.textContaining('Airfiber to Fiber Relocation'), findsWidgets);
+    expect(
+      find.textContaining(
+        'Airfiber to Airfiber Relocation (No cable replacement)',
+      ),
+      findsWidgets,
+    );
+    expect(
+      find.textContaining(
+        'Airfiber to Airfiber Relocation (With cable replacement)',
+      ),
+      findsWidgets,
+    );
   });
 }
