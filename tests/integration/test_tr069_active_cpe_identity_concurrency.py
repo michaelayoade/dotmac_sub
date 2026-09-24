@@ -16,10 +16,14 @@ from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.tr069 import link_tr069_device_to_ont
 
 
+def _session_factory(engine):
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
 def test_concurrent_activation_yields_one_active_tr069_identity(engine) -> None:
     """The database, not a timing-sensitive read, closes the activation race."""
 
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    factory = _session_factory(engine)
     unique = uuid.uuid4().hex[:12]
     with factory() as setup:
         reseller = Reseller(name=f"Identity Race {unique}", code=f"RACE-{unique}")
@@ -107,7 +111,7 @@ def test_concurrent_activation_yields_one_active_tr069_identity(engine) -> None:
 def test_placeholder_handoff_releases_cpe_identity_before_transfer(engine) -> None:
     """A live ACS row may adopt identity only after the placeholder is inactive."""
 
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    factory = _session_factory(engine)
     unique = uuid.uuid4().hex[:12]
     base_device_int = uuid.uuid4().int & ~1
     registered_id = uuid.UUID(int=base_device_int)
