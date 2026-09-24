@@ -927,10 +927,11 @@ def _commit_charge_idempotency_ref(
         db.commit()
 
 
-def _init_flutterwave_checkout(
+def initialize_hosted_checkout(
     db: Session,
     customer: dict,
     *,
+    provider_type: str,
     amount: Decimal,
     reference: str,
     redirect_url: str | None,
@@ -939,17 +940,17 @@ def _init_flutterwave_checkout(
     capability_binding_id: uuid.UUID,
     currency: str | None = None,
 ) -> str:
-    """Start a Flutterwave hosted checkout and return its link.
+    """Start a provider-hosted checkout and return its secure URL.
 
-    Shared by the top-up and invoice-pay flows; they differ only in
+    Shared by the top-up, invoice-pay, and reseller flows; they differ only in
     ``default_callback_path`` (the verify route to return to).
     """
     from app.services.integrations import payment_capability
 
     callback_url = redirect_url or default_callback_path
     if callback_url.startswith("/"):
-        # Flutterwave requires an absolute redirect_url; a relative path breaks
-        # the hosted-checkout return leg (mobile hits this branch).
+        # Providers require an absolute redirect URL; a relative path breaks
+        # the hosted-checkout return leg.
         from app.services.email import _get_app_url
 
         base_url = _get_app_url(db) or ""
@@ -959,12 +960,18 @@ def _init_flutterwave_checkout(
     try:
         checkout = payment_capability.initialize_transaction(
             db,
-            provider_type="flutterwave",
+            provider_type=provider_type,
             email=_resolve_customer_email(db, customer),
             amount=amount,
+            amount_kobo=(
+                payment_capability.amount_to_kobo(amount)
+                if provider_type == "paystack"
+                else None
+            ),
             reference=reference,
             redirect_url=(
-                f"{callback_url}{separator}reference={reference}&provider=flutterwave"
+                f"{callback_url}{separator}reference={reference}"
+                f"&provider={provider_type}"
             ),
             metadata=metadata,
             currency=currency,
@@ -973,16 +980,23 @@ def _init_flutterwave_checkout(
     except ValueError:
         raise
     except Exception as exc:
-        logger.warning("Flutterwave checkout initialization failed", exc_info=True)
-        raise ValueError(
-            "Unable to start Flutterwave checkout. Check Flutterwave configuration and try again."
-        ) from exc
-    link = checkout.get("link")
-    if not link:
         logger.warning(
-            "Flutterwave checkout initialization returned no link: %s", checkout
+            "%s checkout initialization failed", provider_type, exc_info=True
         )
-        raise ValueError("Flutterwave did not return a checkout link")
+        raise ValueError(
+            f"Unable to start {provider_type.title()} checkout. "
+            f"Check {provider_type.title()} configuration and try again."
+        ) from exc
+    link = checkout.get("authorization_url" if provider_type == "paystack" else "link")
+    link = str(link or "").strip()
+    if link and not link.startswith("https://"):
+        logger.warning("%s checkout returned an insecure URL", provider_type)
+        raise ValueError(
+            f"{provider_type.title()} did not return a secure checkout link"
+        )
+    if not link:
+        logger.warning("%s checkout initialization returned no link", provider_type)
+        raise ValueError(f"{provider_type.title()} did not return a checkout link")
     return link
 
 
@@ -1118,8 +1132,8 @@ def create_invoice_payment_intent(
     Mirrors :func:`create_topup_intent` but settles a specific invoice:
 
     * a **saved card** is charged server-side (Paystack only);
-    * a **gateway** choice (Paystack inline / Flutterwave hosted) returns
-      checkout context for the client to open.
+    * a **gateway** choice returns a server-initialized hosted checkout URL for
+      mobile/API callers.
 
     The amount is the invoice balance (server-authoritative — the client cannot
     set it). The verified payment is allocated to ``invoice_id`` by
@@ -1194,8 +1208,8 @@ def create_invoice_payment_intent(
             idempotency_key=idempotency_key,
         )
 
-    # Gateway checkout (Paystack inline opened client-side, or Flutterwave
-    # hosted checkout we initialize here).
+    # Gateway checkout is initialized server-side so mobile opens the provider's
+    # first-party hosted page instead of embedding provider JavaScript.
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
@@ -1242,10 +1256,11 @@ def create_invoice_payment_intent(
         "charged": False,
         "checkout_url": None,
     }
-    if gateway_context.provider_type == "flutterwave":
-        result["checkout_url"] = _init_flutterwave_checkout(
+    if redirect_url is not None or gateway_context.provider_type == "flutterwave":
+        result["checkout_url"] = initialize_hosted_checkout(
             db,
             customer,
+            provider_type=gateway_context.provider_type,
             amount=intent_result.requested_amount,
             reference=gateway_context.reference,
             redirect_url=redirect_url,
@@ -1758,10 +1773,13 @@ def create_topup_intent(
         _commit_charge_idempotency_ref(db, reservation, str(intent_result.intent_id))
 
     checkout_url = None
-    if gateway_context.provider_type == "flutterwave":
-        checkout_url = _init_flutterwave_checkout(
+    if not charged and (
+        redirect_url is not None or gateway_context.provider_type == "flutterwave"
+    ):
+        checkout_url = initialize_hosted_checkout(
             db,
             customer,
+            provider_type=gateway_context.provider_type,
             amount=intent_result.requested_amount,
             reference=intent_result.reference,
             redirect_url=redirect_url,

@@ -14,6 +14,7 @@ class CheckoutArgs {
     required this.amount,
     required this.currency,
     required this.metadata,
+    required this.checkoutUrl,
     this.publicKey,
     this.email,
   });
@@ -23,6 +24,7 @@ class CheckoutArgs {
   final double amount;
   final String currency;
   final Map<String, String> metadata;
+  final String checkoutUrl;
   final String? publicKey;
   final String? email;
 
@@ -34,6 +36,7 @@ class CheckoutArgs {
         currency: i.currency,
         publicKey: i.providerPublicKey,
         email: i.customerEmail,
+        checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
         metadata: {'invoice_id': i.invoiceId},
       );
 
@@ -45,6 +48,7 @@ class CheckoutArgs {
         currency: t.currency,
         publicKey: t.providerPublicKey,
         email: t.customerEmail,
+        checkoutUrl: secureCheckoutUrl(t.checkoutUrl),
         metadata: {
           'payment_flow': 'account_topup',
           'topup_intent_id': t.intentId,
@@ -59,12 +63,22 @@ class CheckoutArgs {
         amount: i.amount,
         currency: i.currency,
         publicKey: i.publicKey,
+        checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
         metadata: i.metadata,
       );
+
+  static String secureCheckoutUrl(String? value) {
+    final uri = Uri.tryParse(value ?? '');
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+      throw StateError(
+          'The payment provider did not return a secure checkout.');
+    }
+    return uri.toString();
+  }
 }
 
-/// Hosts the payment provider's inline checkout (Paystack or Flutterwave) in a
-/// WebView. On a successful charge the provider callback redirects to a
+/// Hosts the payment provider's first-party checkout URL in a WebView. On a
+/// successful charge the provider callback redirects to a
 /// brand-specific `<scheme>://` sentinel (see [Brand.paymentScheme]) which we
 /// intercept; the screen then pops the reference back to the caller (which
 /// verifies it). Pops `null` on cancel.
@@ -80,6 +94,7 @@ class PaymentWebViewScreen extends StatefulWidget {
 class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
   late final WebViewController _controller;
   bool _loading = true;
+  String? _loadError;
 
   @override
   void initState() {
@@ -91,13 +106,18 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
           onPageFinished: (_) {
             if (mounted) setState(() => _loading = false);
           },
+          onWebResourceError: (error) {
+            if (error.isForMainFrame == true && mounted) {
+              setState(() {
+                _loading = false;
+                _loadError = 'The secure payment page could not be loaded.';
+              });
+            }
+          },
           onNavigationRequest: _handleNavigation,
         ),
       )
-      ..loadHtmlString(
-        _checkoutHtml(widget.args),
-        baseUrl: 'https://checkout.dotmac.local/',
-      );
+      ..loadRequest(Uri.parse(widget.args.checkoutUrl));
   }
 
   NavigationDecision _handleNavigation(NavigationRequest request) {
@@ -110,6 +130,22 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
     }
     if (url.startsWith('${Brand.paymentScheme}://cancel')) {
       Navigator.of(context).pop();
+      return NavigationDecision.prevent;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri != null &&
+        uri.host == 'standard.paystack.co' &&
+        uri.path == '/close') {
+      Navigator.of(context).pop();
+      return NavigationDecision.prevent;
+    }
+    final returnedReference = uri?.queryParameters['reference'];
+    if (uri != null &&
+        uri.scheme == 'https' &&
+        returnedReference != null &&
+        returnedReference == widget.args.reference &&
+        uri.path.endsWith('/verify')) {
+      Navigator.of(context).pop(returnedReference);
       return NavigationDecision.prevent;
     }
     return NavigationDecision.navigate;
@@ -153,64 +189,19 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
         appBar: AppBar(title: const Text('Complete payment')),
         body: Stack(
           children: [
-            WebViewWidget(controller: _controller),
+            if (_loadError == null)
+              WebViewWidget(controller: _controller)
+            else
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_loadError!, textAlign: TextAlign.center),
+                ),
+              ),
             if (_loading) const Center(child: CircularProgressIndicator()),
           ],
         ),
       ),
     );
   }
-}
-
-String _jsObject(Map<String, String> m) =>
-    '{${m.entries.map((e) => '"${e.key}":"${e.value}"').join(',')}}';
-
-String _checkoutHtml(CheckoutArgs a) {
-  final email = a.email ?? '';
-  final key = a.publicKey ?? '';
-  final ref = a.reference;
-  final currency = a.currency;
-  final meta = _jsObject(a.metadata);
-
-  if (a.providerType == 'flutterwave') {
-    final amount = a.amount.toStringAsFixed(2); // major units
-    return '''
-<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<script src="https://checkout.flutterwave.com/v3.js"></script></head>
-<body><script>
-  FlutterwaveCheckout({
-    public_key: "$key",
-    tx_ref: "$ref",
-    amount: $amount,
-    currency: "$currency",
-    customer: { email: "$email" },
-    meta: $meta,
-    callback: function(data){
-      window.location.href = "${Brand.paymentScheme}://success?reference=" + (data.tx_ref || "$ref");
-    },
-    onclose: function(){ window.location.href = "${Brand.paymentScheme}://cancel"; }
-  });
-</script></body></html>''';
-  }
-
-  // Default: Paystack. Amount is in the minor unit (kobo).
-  final amountMinor = (a.amount * 100).round();
-  return '''
-<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<script src="https://js.paystack.co/v1/inline.js"></script></head>
-<body><script>
-  var handler = PaystackPop.setup({
-    key: "$key",
-    email: "$email",
-    amount: $amountMinor,
-    ref: "$ref",
-    currency: "$currency",
-    metadata: $meta,
-    callback: function(response){
-      window.location.href = "${Brand.paymentScheme}://success?reference=" + response.reference;
-    },
-    onClose: function(){ window.location.href = "${Brand.paymentScheme}://cancel"; }
-  });
-  handler.openIframe();
-</script></body></html>''';
 }

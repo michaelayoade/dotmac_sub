@@ -17,7 +17,9 @@ TopupPage _page({TopupActiveRequest? activeRequest}) => TopupPage(
       maxAmount: 500000,
       providers: [
         PaymentProviderOption(
-            providerType: 'paystack', label: 'Pay with Paystack'),
+          providerType: OnlinePaymentProvider.paystack,
+          label: 'Pay with Paystack',
+        ),
       ],
       depositAllowed: activeRequest == null,
       activeDepositRequest: activeRequest,

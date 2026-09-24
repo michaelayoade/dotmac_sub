@@ -949,16 +949,19 @@ def my_topup_page(
 ):
     """Deposit Account Credit context, eligibility, limits, and payment options.
 
-    ``payment_options`` mirrors the customer web chooser, including configured
-    direct bank transfer when the collection-account owner enables it.
+    ``payment_options`` contains online gateways only. Direct transfer is a
+    separate typed config because it requires an intent and receipt evidence,
+    not a gateway checkout.
     """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
     options = [
         PaymentProviderOption(provider_type=opt["provider_type"], label=opt["label"])
         for opt in ctx.get("payment_options", [])
+        if opt["provider_type"] != "direct_bank_transfer"
     ]
     accounts = [
         BankTransferAccount(
+            id=str(account.get("id") or ""),
             bank_name=str(account.get("bank_name") or ""),
             account_name=str(account.get("account_name") or ""),
             account_number=str(account.get("account_number") or ""),
@@ -1014,6 +1017,7 @@ def my_topup_preview(
 @router.post("/topup/initiate", response_model=TopupInitiateResponse)
 def my_topup_initiate(
     payload: TopupInitiateRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
@@ -1029,6 +1033,7 @@ def my_topup_initiate(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
             preview_fingerprint=payload.preview_fingerprint,
+            redirect_url=(str(request.url_for("my_topup_verify")) if request else None),
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
@@ -1496,6 +1501,7 @@ def my_relocation_quote_prepare(
 def my_quote_deposit_initiate(
     quote_id: UUID,
     payload: QuoteDepositInitiateRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
@@ -1509,7 +1515,11 @@ def my_quote_deposit_initiate(
             quote_deposits.InitiateQuoteDepositCommand(
                 quote_id=quote_id,
                 idempotency_key=payload.idempotency_key,
-                redirect_url=payload.redirect_url or "dotmac://success",
+                redirect_url=(
+                    str(request.url_for("my_quote_deposit_verify"))
+                    if request
+                    else payload.redirect_url or "dotmac://success"
+                ),
             ),
         )
     except quote_deposits.QuoteDepositError as exc:

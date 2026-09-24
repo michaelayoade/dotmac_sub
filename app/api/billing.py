@@ -2204,6 +2204,7 @@ def _require_subscriber(principal: dict) -> dict:
 )
 def initiate_payment(
     payload: PaymentInitiateRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
@@ -2226,6 +2227,7 @@ def initiate_payment(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
             idempotency_key=payload.idempotency_key,
+            redirect_url=(str(request.url_for("verify_payment")) if request else None),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2236,9 +2238,12 @@ def initiate_payment(
             detail=PAYMENT_CHARGE_ERROR_MESSAGE,
         ) from exc
     return PaymentInitiateResponse(
+        intent_id=result.get("intent_id"),
         invoice_id=payload.invoice_id,
         invoice_number=result.get("invoice_number"),
-        amount=Decimal(str(result.get("amount") or 0)),
+        amount=Decimal(
+            str(result.get("amount") or result.get("requested_amount") or 0)
+        ),
         currency=result.get("currency", "NGN"),
         provider_type=result["provider_type"],
         provider_public_key=result.get("provider_public_key"),

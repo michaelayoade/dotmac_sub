@@ -40,7 +40,7 @@ dependencies:
   # Biometric app-lock (Face ID / fingerprint) gating the stored session
   local_auth: ^2.3.0
 
-  # In-app provider checkout (Paystack / Flutterwave inline)
+  # In-app provider-hosted checkout (server returns the first-party HTTPS URL)
   webview_flutter: ^4.8.0
 
   # OS-level deep links: catch the payment gateway's <scheme>://success|cancel

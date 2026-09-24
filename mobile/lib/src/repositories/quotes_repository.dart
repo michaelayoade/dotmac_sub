@@ -2,7 +2,6 @@ import 'dart:math';
 
 import 'package:dio/dio.dart';
 
-import '../config/env.dart';
 import '../core/http.dart';
 import '../models/quote.dart';
 import '../models/service_request_option.dart';
@@ -73,7 +72,6 @@ class QuotesRepository {
         '/me/quotes/$quoteId/deposit/initiate',
         data: {
           if (provider != null) 'provider': provider,
-          'redirect_url': '${Brand.paymentScheme}://success',
           'idempotency_key': idempotencyKey,
         },
       ),
