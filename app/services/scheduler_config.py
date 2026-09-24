@@ -1082,6 +1082,23 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=notification_queue_interval_seconds,
         )
+        zeptomail_tracking_enabled = _scheduler_setting_enabled(
+            session,
+            SettingDomain.notification,
+            "zeptomail_delivery_tracking_enabled",
+        )
+        zeptomail_tracking_interval_seconds = resolve_integer(
+            session,
+            SettingDomain.notification,
+            "zeptomail_delivery_tracking_interval_seconds",
+        )
+        _sync_scheduled_task(
+            session,
+            name="zeptomail_delivery_reconciliation",
+            task_name=("app.tasks.zeptomail_delivery.reconcile_submitted_email"),
+            enabled=zeptomail_tracking_enabled,
+            interval_seconds=max(zeptomail_tracking_interval_seconds, 30),
+        )
         campaign_processing_interval_seconds = max(
             resolve_integer(
                 session, SettingDomain.comms, "campaign_processing_interval_seconds"

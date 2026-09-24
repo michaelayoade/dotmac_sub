@@ -83,6 +83,7 @@ _CORE_ROUTER_SPECS = [
     ("app.api.crm_webhooks", "router", "api", "none"),
     ("app.api.inbox_webhooks", "router", "api", "none"),
     ("app.api.meta_inbox_webhooks", "router", "api", "none"),
+    ("app.api.zeptomail_webhooks", "router", "api", "none"),
     ("app.api.fiber_inquiry_webhooks", "router", "api", "none"),
     ("app.api.erp_material_webhooks", "router", "api", "none"),
     ("app.api.erp_staff_access_webhooks", "router", "api", "none"),

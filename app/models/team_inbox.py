@@ -1148,7 +1148,7 @@ class InboxMessage(Base):
             text("(metadata ->> 'delivery_status')"),
             text("created_at DESC"),
             postgresql_include=("id",),
-        ),
+        ).ddl_if(dialect="postgresql"),
         Index(
             "ix_inbox_messages_unread",
             "conversation_id",

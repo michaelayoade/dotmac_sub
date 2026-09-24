@@ -1024,6 +1024,11 @@ def _smtp_timeout_seconds(db: Session | None = None) -> int:
         return 10
 
 
+def _is_zeptomail_config(config: dict[str, Any]) -> bool:
+    host = str(config.get("host") or "").strip().lower().rstrip(".")
+    return host == "smtp.zeptomail.com" or host.endswith(".smtp.zeptomail.com")
+
+
 def send_email_with_config(
     config: dict,
     to_email: str,
@@ -1236,6 +1241,15 @@ def send_email(
             body=None if sensitive_content else tracked_body,
             commit=True,
         )
+        if _is_zeptomail_config(config):
+            client_reference = str(notification.id)
+            msg["X-TM-CLIENT-REF"] = client_reference
+            notification.metadata_ = {
+                **dict(notification.metadata_ or {}),
+                "delivery_provider": "zeptomail",
+                "provider_client_reference": client_reference,
+            }
+            db.commit()
 
     provider_name = f"smtp:{config.get('sender_key', 'default')}"
 
@@ -1260,7 +1274,12 @@ def send_email(
         server.quit()
 
         if notification and db is not None:
-            notification.status = NotificationStatus.delivered
+            is_zeptomail = _is_zeptomail_config(config)
+            notification.status = (
+                NotificationStatus.submitted
+                if is_zeptomail
+                else NotificationStatus.delivered
+            )
             notification.last_error = None
             notification.sent_at = datetime.now(UTC)
             db.add(
@@ -1268,9 +1287,17 @@ def send_email(
                     notification_id=notification.id,
                     provider=provider_name,
                     provider_message_id=None,
-                    status=DeliveryStatus.delivered,
-                    response_code="sent",
-                    response_body="SMTP send completed",
+                    status=(
+                        DeliveryStatus.accepted
+                        if is_zeptomail
+                        else DeliveryStatus.delivered
+                    ),
+                    response_code="accepted" if is_zeptomail else "sent",
+                    response_body=(
+                        "ZeptoMail accepted the SMTP submission"
+                        if is_zeptomail
+                        else "SMTP send completed"
+                    ),
                 )
             )
             db.commit()
