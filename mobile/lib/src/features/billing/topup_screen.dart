@@ -88,7 +88,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           _previewError = null;
           // Default to the configured online gateway (listed first by the API).
           _selection ??= page.providers.isNotEmpty
-              ? 'gw:${page.providers.first.providerType}'
+              ? 'gw:${page.providers.first.providerType.wireValue}'
               : 'gw:${page.providerType}';
         });
         await _refreshPreview();
@@ -177,28 +177,6 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       return;
     }
 
-    // Bank transfer: show the account(s) + collect the receipt; staff verify
-    // and credit the account. No gateway / verify round-trip here.
-    if (_isTransfer) {
-      final ok = await showSubmitProofSheet(
-        context,
-        initialAmount: amount.toString(),
-        accounts: page.bankTransfer.accounts,
-        instructions: page.bankTransfer.instructions,
-      );
-      if (ok == true && mounted) {
-        ref.invalidate(paymentProofsProvider);
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Receipt submitted - we will verify it and credit your account.',
-            ),
-          ),
-        );
-      }
-      return;
-    }
-
     setState(() => _busy = true);
     try {
       final preview = await _refreshPreview();
@@ -220,7 +198,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           await ref.read(billingRepositoryProvider).initiateTopup(
                 amount,
                 previewFingerprint: preview.previewFingerprint,
-                provider: cardId == null ? _selectedGateway : null,
+                provider: _isTransfer
+                    ? 'direct_bank_transfer'
+                    : cardId == null
+                        ? _selectedGateway
+                        : null,
                 paymentMethodId: cardId,
                 // One key per attempt makes a saved-card charge safe against a
                 // Dio retry; the button busy-guard covers double-taps.
@@ -230,6 +212,36 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                         '${Random().nextInt(0x7fffffff)}',
               );
       if (!mounted) {
+        return;
+      }
+
+      if (_isTransfer) {
+        final outcome = await showSubmitProofSheet(
+          context,
+          intentId: initiation.intentId,
+          initialAmount: amount.toString(),
+          accounts: page.bankTransfer.accounts,
+          instructions: page.bankTransfer.instructions,
+        );
+        if (!mounted) return;
+        if (outcome == TransferProofOutcome.submitted) {
+          ref.invalidate(paymentProofsProvider);
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Receipt submitted - we will verify it and credit your account.',
+              ),
+            ),
+          );
+          await _loadPage();
+        } else {
+          await ref
+              .read(billingRepositoryProvider)
+              .cancelDirectTransferIntent(initiation.intentId);
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Bank transfer canceled.')),
+          );
+        }
         return;
       }
 
@@ -480,7 +492,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         for (final p in page.providers)
           _methodTile(
-            value: 'gw:${p.providerType}',
+            value: 'gw:${p.providerType.wireValue}',
             icon: Icons.add_card_outlined,
             title: p.label,
           ),

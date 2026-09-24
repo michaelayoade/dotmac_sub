@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/formatters.dart';
@@ -10,19 +11,25 @@ import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 
-/// Open the "upload transfer receipt" sheet. Returns true when a receipt was
-/// submitted. [accounts]/[instructions] show where to transfer (top-up flow);
-/// [initialAmount] prefills the amount field.
-Future<bool?> showSubmitProofSheet(
+/// Open the receipt sheet for an already-created direct-transfer intent.
+/// [accounts]/[instructions] show where to transfer and [initialAmount]
+/// displays the server-owned amount.
+enum TransferProofOutcome { submitted, canceled }
+
+Future<TransferProofOutcome?> showSubmitProofSheet(
   BuildContext context, {
+  required String intentId,
   String? initialAmount,
   List<BankAccount> accounts = const [],
   String? instructions,
 }) {
-  return showModalBottomSheet<bool>(
+  return showModalBottomSheet<TransferProofOutcome>(
     context: context,
     isScrollControlled: true,
+    isDismissible: false,
+    enableDrag: false,
     builder: (_) => SubmitProofSheet(
+      intentId: intentId,
       initialAmount: initialAmount,
       accounts: accounts,
       instructions: instructions,
@@ -52,24 +59,9 @@ class TransferProofsScreen extends ConsumerWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final ok = await showSubmitProofSheet(context);
-          if (ok == true) {
-            ref.invalidate(paymentProofsProvider);
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Receipt submitted — we will verify it '
-                    'and credit your account.',
-                  ),
-                ),
-              );
-            }
-          }
-        },
-        icon: const Icon(Icons.upload_file),
-        label: const Text('Upload receipt'),
+        onPressed: () => context.push('/topup'),
+        icon: const Icon(Icons.account_balance_outlined),
+        label: const Text('Start transfer'),
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -157,44 +149,59 @@ class _ProofTile extends StatelessWidget {
 
 /// A copyable bank-account row (bank, account name, number) for transfers.
 class _BankAccountCard extends StatelessWidget {
-  const _BankAccountCard({required this.account});
+  const _BankAccountCard({
+    required this.account,
+    required this.selected,
+    required this.onSelected,
+  });
 
   final BankAccount account;
+  final bool selected;
+  final VoidCallback onSelected;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Card(
       margin: const EdgeInsets.only(bottom: 6),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(account.bankName,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
-                  Text(account.accountNumber,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
-                  Text(account.accountName, style: theme.textTheme.bodyMedium),
-                ],
+      child: InkWell(
+        onTap: onSelected,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+          child: Row(
+            children: [
+              Icon(
+                selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: selected ? theme.colorScheme.primary : null,
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy_outlined, size: 20),
-              tooltip: 'Copy account number',
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: account.accountNumber));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Account number copied')),
-                );
-              },
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(account.bankName,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.outline)),
+                    Text(account.accountNumber,
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(account.accountName,
+                        style: theme.textTheme.bodyMedium),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy_outlined, size: 20),
+                tooltip: 'Copy account number',
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: account.accountNumber));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Account number copied')),
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -204,11 +211,13 @@ class _BankAccountCard extends StatelessWidget {
 class SubmitProofSheet extends ConsumerStatefulWidget {
   const SubmitProofSheet({
     super.key,
+    required this.intentId,
     this.initialAmount,
     this.accounts = const [],
     this.instructions,
   });
 
+  final String intentId;
   final String? initialAmount;
   final List<BankAccount> accounts;
   final String? instructions;
@@ -218,19 +227,17 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
 }
 
 class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
-  late final _amount = TextEditingController(text: widget.initialAmount ?? '');
-  final _bank = TextEditingController();
-  final _reference = TextEditingController();
   XFile? _file;
   bool _busy = false;
   String? _error;
+  String? _selectedAccountId;
 
   @override
-  void dispose() {
-    _amount.dispose();
-    _bank.dispose();
-    _reference.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    if (widget.accounts.isNotEmpty) {
+      _selectedAccountId = widget.accounts.first.id;
+    }
   }
 
   Future<void> _pick() async {
@@ -242,8 +249,10 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   }
 
   Future<void> _submit() async {
-    if (_amount.text.trim().isEmpty || _file == null) {
-      setState(() => _error = 'Amount and a receipt image are both required.');
+    if (_selectedAccountId == null || _file == null) {
+      setState(() {
+        _error = 'Choose the account you paid and attach a receipt image.';
+      });
       return;
     }
     setState(() {
@@ -252,13 +261,14 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
     });
     try {
       await ref.read(billingRepositoryProvider).submitPaymentProof(
-            amount: _amount.text.trim(),
-            bankName: _bank.text.trim(),
-            reference: _reference.text.trim(),
+            intentId: widget.intentId,
+            selectedAccountId: _selectedAccountId!,
             filePath: _file!.path,
             fileName: _file!.name,
           );
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) {
+        Navigator.of(context).pop(TransferProofOutcome.submitted);
+      }
     } catch (_) {
       setState(() {
         _busy = false;
@@ -293,7 +303,13 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               ),
               const SizedBox(height: 6),
               for (final acct in widget.accounts)
-                _BankAccountCard(account: acct),
+                _BankAccountCard(
+                  account: acct,
+                  selected: acct.id == _selectedAccountId,
+                  onSelected: () => setState(
+                    () => _selectedAccountId = acct.id,
+                  ),
+                ),
               if (widget.instructions != null &&
                   widget.instructions!.trim().isNotEmpty)
                 Padding(
@@ -310,32 +326,8 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               ),
             ],
             const SizedBox(height: 12),
-            TextField(
-              controller: _amount,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Amount (NGN) *',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _bank,
-              decoration: const InputDecoration(
-                labelText: 'Bank',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _reference,
-              decoration: const InputDecoration(
-                labelText: 'Transfer reference',
-                border: OutlineInputBorder(),
-              ),
-            ),
+            if (widget.initialAmount != null)
+              Text('Amount: NGN ${widget.initialAmount}'),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _pick,
@@ -356,8 +348,11 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
-                  onPressed: _busy ? null : () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  onPressed: _busy
+                      ? null
+                      : () => Navigator.of(context)
+                          .pop(TransferProofOutcome.canceled),
+                  child: const Text('Cancel transfer'),
                 ),
                 const SizedBox(width: 8),
                 FilledButton(

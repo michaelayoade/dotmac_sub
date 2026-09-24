@@ -3,15 +3,32 @@
 import '../core/parsers.dart';
 
 /// An online checkout option (Paystack/Flutterwave) for the pay selector.
+enum OnlinePaymentProvider {
+  paystack('paystack'),
+  flutterwave('flutterwave');
+
+  const OnlinePaymentProvider(this.wireValue);
+  final String wireValue;
+
+  static OnlinePaymentProvider parse(String value) => values.firstWhere(
+        (provider) => provider.wireValue == value,
+        orElse: () => throw FormatException(
+          'Unsupported online payment provider: $value',
+        ),
+      );
+}
+
 class PaymentProviderOption {
   PaymentProviderOption({required this.providerType, required this.label});
 
-  final String providerType;
+  final OnlinePaymentProvider providerType;
   final String label;
 
   factory PaymentProviderOption.fromJson(Map<String, dynamic> json) =>
       PaymentProviderOption(
-        providerType: json['provider_type'] as String? ?? 'paystack',
+        providerType: OnlinePaymentProvider.parse(
+          json['provider_type'] as String? ?? 'paystack',
+        ),
         label: json['label'] as String? ?? 'Pay online',
       );
 }
@@ -19,19 +36,25 @@ class PaymentProviderOption {
 /// One admin-configured bank account shown under the bank-transfer option.
 class BankAccount {
   BankAccount({
+    required this.id,
     required this.bankName,
     required this.accountName,
     required this.accountNumber,
+    this.sortCode,
   });
 
+  final String id;
   final String bankName;
   final String accountName;
   final String accountNumber;
+  final String? sortCode;
 
   factory BankAccount.fromJson(Map<String, dynamic> json) => BankAccount(
+        id: json['id']?.toString() ?? '',
         bankName: json['bank_name'] as String? ?? '',
         accountName: json['account_name'] as String? ?? '',
         accountNumber: json['account_number'] as String? ?? '',
+        sortCode: json['sort_code'] as String?,
       );
 }
 
@@ -112,6 +135,9 @@ class TopupPage {
         customerEmail: json['customer_email'] as String?,
         providers: (json['payment_options'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
+            .where(
+              (option) => option['provider_type'] != 'direct_bank_transfer',
+            )
             .map(PaymentProviderOption.fromJson)
             .toList(),
         depositAllowed: json['deposit_allowed'] as bool? ?? true,

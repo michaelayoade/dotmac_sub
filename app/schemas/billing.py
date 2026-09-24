@@ -1262,6 +1262,7 @@ class PaymentInitiateRequest(BaseModel):
 
 
 class PaymentInitiateResponse(BaseModel):
+    intent_id: UUID | None = None
     invoice_id: UUID
     invoice_number: str | None = None
     amount: Decimal
@@ -1305,6 +1306,7 @@ class PaymentProviderOption(BaseModel):
 
 
 class BankTransferAccount(BaseModel):
+    id: str
     bank_name: str
     account_name: str
     account_number: str
@@ -1366,8 +1368,8 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
-    # The customer pay-with selector: online gateways (Paystack/Flutterwave),
-    # saved-card flows, and configured direct bank transfer.
+    # Online gateway options only. Saved cards are fetched separately and
+    # direct bank transfer has its own typed config below.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
 

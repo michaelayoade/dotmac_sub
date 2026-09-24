@@ -40,6 +40,7 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
           currency: init.currency,
           publicKey: init.providerPublicKey,
           email: init.customerEmail,
+          checkoutUrl: CheckoutArgs.secureCheckoutUrl(init.checkoutUrl),
           metadata: {
             'payment_flow': 'quote_deposit',
             'invoice_id': init.invoiceId,

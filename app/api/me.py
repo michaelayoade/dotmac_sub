@@ -907,16 +907,19 @@ def my_topup_page(
 ):
     """Deposit Account Credit context, eligibility, limits, and payment options.
 
-    ``payment_options`` mirrors the customer web chooser, including configured
-    direct bank transfer when the collection-account owner enables it.
+    ``payment_options`` contains online gateways only. Direct transfer is a
+    separate typed config because it requires an intent and receipt evidence,
+    not a gateway checkout.
     """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
     options = [
         PaymentProviderOption(provider_type=opt["provider_type"], label=opt["label"])
         for opt in ctx.get("payment_options", [])
+        if opt["provider_type"] != "direct_bank_transfer"
     ]
     accounts = [
         BankTransferAccount(
+            id=str(account.get("id") or ""),
             bank_name=str(account.get("bank_name") or ""),
             account_name=str(account.get("account_name") or ""),
             account_number=str(account.get("account_number") or ""),
@@ -967,6 +970,7 @@ def my_topup_preview(
 @router.post("/topup/initiate", response_model=TopupInitiateResponse)
 def my_topup_initiate(
     payload: TopupInitiateRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
@@ -982,6 +986,7 @@ def my_topup_initiate(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
             preview_fingerprint=payload.preview_fingerprint,
+            redirect_url=(str(request.url_for("my_topup_verify")) if request else None),
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
@@ -1005,6 +1010,44 @@ def my_topup_initiate(
         redirect_url=result.get("redirect_url"),
         preview_fingerprint=result["preview_fingerprint"],
     )
+
+
+@router.delete("/topup/intents/{intent_id}", status_code=status.HTTP_204_NO_CONTENT)
+def my_topup_cancel_direct_transfer(
+    intent_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Cancel the caller's unsubmitted direct-transfer intent."""
+    from app.services import payment_intent_management
+    from app.services.domain_errors import DomainError
+    from app.services.topup_intents import DirectTransferCancellationSource
+
+    customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
+    command_id = uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        payment_intent_management.cancel_unsubmitted_direct_transfer(
+            db,
+            payment_intent_management.CancelPaymentIntentCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"customer:{account_id}",
+                    scope=payment_intent_management.CUSTOMER_CANCEL_SCOPE,
+                    reason="Customer canceled an unsubmitted mobile bank transfer",
+                    idempotency_key=f"mobile-cancel-payment-intent:{intent_id}",
+                ),
+                account_id=UUID(str(account_id)),
+                intent_id=intent_id,
+                source=DirectTransferCancellationSource.customer_selfcare,
+            ),
+        )
+    except (ValueError, DomainError) as exc:
+        detail = exc.message if isinstance(exc, DomainError) else str(exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/topup/verify", response_model=TopupVerifyResponse)
@@ -1350,6 +1393,7 @@ def my_quote_request(
 def my_quote_deposit_initiate(
     quote_id: UUID,
     payload: QuoteDepositInitiateRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
@@ -1363,7 +1407,11 @@ def my_quote_deposit_initiate(
             quote_deposits.InitiateQuoteDepositCommand(
                 quote_id=quote_id,
                 idempotency_key=payload.idempotency_key,
-                redirect_url=payload.redirect_url or "dotmac://success",
+                redirect_url=(
+                    str(request.url_for("my_quote_deposit_verify"))
+                    if request
+                    else payload.redirect_url or "dotmac://success"
+                ),
             ),
         )
     except quote_deposits.QuoteDepositError as exc:

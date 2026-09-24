@@ -15,7 +15,7 @@ Mounted at ``/api/v1/reseller`` with router-level ``require_user_auth`` (main.py
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -508,6 +508,7 @@ def my_reseller_billing(
 @router.post("/billing/pay/intent")
 def my_reseller_pay_intent(
     payload: PayIntentRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
@@ -524,6 +525,9 @@ def my_reseller_pay_intent(
             payment_method_id=payload.payment_method_id,
             save_card=payload.save_card,
             login_subscriber_id=str(principal["subscriber_id"]),
+            redirect_url=(
+                str(request.url_for("my_reseller_pay_verify")) if request else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

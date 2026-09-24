@@ -8,6 +8,7 @@ class PaymentInitiation {
     required this.currency,
     required this.providerType,
     required this.paymentReference,
+    this.intentId,
     this.invoiceNumber,
     this.providerPublicKey,
     this.customerEmail,
@@ -20,6 +21,7 @@ class PaymentInitiation {
   final String currency;
   final String providerType; // 'paystack' | 'flutterwave'
   final String paymentReference;
+  final String? intentId;
   final String? invoiceNumber;
   final String? providerPublicKey;
   final String? customerEmail;
@@ -36,6 +38,7 @@ class PaymentInitiation {
         currency: json['currency'] as String? ?? 'NGN',
         providerType: json['provider_type'] as String? ?? 'paystack',
         paymentReference: json['payment_reference'].toString(),
+        intentId: json['intent_id']?.toString(),
         invoiceNumber: json['invoice_number'] as String?,
         providerPublicKey: json['provider_public_key'] as String?,
         customerEmail: json['customer_email'] as String?,

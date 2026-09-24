@@ -35,6 +35,7 @@ from app.services.billing.consolidated_payments import consolidated_settlement_k
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
     _provider_uuid,
+    initialize_hosted_checkout,
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
@@ -130,6 +131,7 @@ def start_consolidated_payment(
     payment_method_id: str | None = None,
     save_card: bool = False,
     login_subscriber_id: str | None = None,
+    redirect_url: str | None = None,
 ) -> dict:
     """Build a gateway context + TopupIntent scoped to the reseller's BillingAccount.
 
@@ -262,6 +264,30 @@ def start_consolidated_payment(
             raise
         charged = True
 
+    checkout_url = None
+    if not charged and redirect_url is not None:
+        checkout_email = (
+            _login_subscriber_email(db, login_subscriber_id)
+            if login_subscriber_id
+            else _reseller_charge_email(db, reseller_id)
+        )
+        if not checkout_email:
+            raise ValueError(
+                "A valid email address is required before starting card payment."
+            )
+        checkout_url = initialize_hosted_checkout(
+            db,
+            {"email": checkout_email},
+            provider_type=intent_result.provider_type,
+            amount=intent_result.requested_amount,
+            reference=intent_result.reference,
+            redirect_url=redirect_url,
+            metadata=checkout_metadata,
+            default_callback_path="/api/v1/reseller/billing/pay/verify",
+            capability_binding_id=route.capability_binding_id,
+            currency=intent_result.currency,
+        )
+
     return {
         "intent_id": str(intent_result.intent_id),
         "provider_type": intent_result.provider_type,
@@ -271,6 +297,7 @@ def start_consolidated_payment(
         "currency": intent_result.currency,
         "checkout_metadata": checkout_metadata,
         "charged": charged,
+        "checkout_url": checkout_url,
     }
 
 
