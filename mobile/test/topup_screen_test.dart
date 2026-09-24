@@ -31,6 +31,7 @@ class _BillingRepository extends BillingRepository {
   final previewFingerprints = <String>[];
   bool failNextPreview = false;
   int initiateCalls = 0;
+  String? canceledIntentId;
 
   @override
   Future<TopupPage> topupPage() async => page;
@@ -63,6 +64,12 @@ class _BillingRepository extends BillingRepository {
   }) async {
     initiateCalls++;
     throw StateError('Checkout should not start for a changed preview');
+  }
+
+  @override
+  Future<void> cancelTopupIntent(String intentId) async {
+    canceledIntentId = intentId;
+    page = _page();
   }
 }
 
@@ -110,6 +117,8 @@ void main() {
 
     expect(find.text('Your transfer receipt is under review.'), findsOneWidget);
     expect(find.text('Reference: TRF-PENDING'), findsOneWidget);
+    expect(find.text('Upload receipt'), findsNothing);
+    expect(find.text('Cancel'), findsNothing);
     expect(find.text('Pay with'), findsNothing);
     expect(find.byType(TextField), findsNothing);
     expect(repository.previewAmounts, isEmpty);
@@ -117,6 +126,43 @@ void main() {
     repository.page = _page();
     await tester.tap(find.text('Refresh status'));
     await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
+  });
+
+  testWidgets('pending direct bank transfer exposes upload and cancel actions',
+      (tester) async {
+    final active = TopupActiveRequest.fromJson({
+      'intent_id': 'intent-2',
+      'phase': 'awaiting_receipt',
+      'next_action': 'upload_receipt',
+      'provider_type': 'direct_bank_transfer',
+      'reference': 'TRF-CANCEL',
+      'amount': '15000.00',
+      'currency': 'NGN',
+      'created_at': '2026-09-24T10:00:00Z',
+      'observed_at': '2026-09-24T10:05:00Z',
+      'message': 'Upload your receipt or cancel this transfer.',
+      'can_cancel': true,
+    });
+    final repository = _BillingRepository(_page(activeRequest: active));
+
+    await tester.pumpWidget(_app(repository));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Bank transfer pending'), findsOneWidget);
+    expect(find.text('Upload receipt'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cancel bank transfer?'), findsOneWidget);
+
+    await tester.tap(find.text('Cancel transfer'));
+    await tester.pumpAndSettle();
+
+    expect(repository.canceledIntentId, 'intent-2');
+    expect(find.text('Bank transfer canceled.'), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
   });
 
