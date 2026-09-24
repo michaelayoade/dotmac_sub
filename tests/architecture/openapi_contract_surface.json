@@ -18877,7 +18877,7 @@
    "params": [],
    "request": null,
    "responses": {
-    "200": "56aca63bfb03"
+    "200": "d17815b9f4dc"
    }
   },
   "POST /api/v1/wireguard-provision/register": {
