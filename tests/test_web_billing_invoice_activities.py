@@ -96,8 +96,8 @@ def test_invoice_closure_web_records_only_the_attributed_audit_event(
         request=object(),
         actor_id="staff-user-id",
         invoice_id=str(uuid4()),
-        preview_fingerprint="preview",
-        idempotency_key="request-key",
+        preview_fingerprint="a" * 64,
+        idempotency_key="request-key-0001",
         memo=None,
     )
 
