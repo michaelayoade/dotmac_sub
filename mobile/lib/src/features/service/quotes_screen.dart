@@ -12,7 +12,12 @@ import 'service_request_sheet.dart';
 
 /// Customer installation and relocation quotes, coverage, and approved payment.
 class QuotesScreen extends ConsumerStatefulWidget {
-  const QuotesScreen({super.key});
+  const QuotesScreen({
+    super.key,
+    this.sourceSubscriptionId,
+  });
+
+  final String? sourceSubscriptionId;
 
   @override
   ConsumerState<QuotesScreen> createState() => _QuotesScreenState();
@@ -26,7 +31,9 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => const ServiceRequestSheet(),
+      builder: (_) => ServiceRequestSheet(
+        sourceSubscriptionId: widget.sourceSubscriptionId,
+      ),
     );
     if (selection != null && mounted) {
       context.push('/quotes/request', extra: selection);

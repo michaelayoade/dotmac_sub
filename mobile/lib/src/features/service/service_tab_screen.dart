@@ -149,10 +149,10 @@ class ServiceTabScreen extends ConsumerWidget {
                 leading: const Icon(Icons.add_location_alt_outlined),
                 title: const Text('Get a quote'),
                 subtitle: const Text(
-                  'Pin a new installation address for an instant estimate',
+                  'Request an installation or relocate your current service',
                 ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/quotes'),
+                onTap: () => context.push('/quotes', extra: service),
               ),
             ),
             const SizedBox(height: 12),
