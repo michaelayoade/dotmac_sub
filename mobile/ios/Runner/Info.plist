@@ -56,6 +56,12 @@
 		</array>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
+		<!-- Paystack can hand an OPay authorization step to the installed app.
+		     Declaring the scheme allows iOS to resolve that app handoff. -->
+		<key>LSApplicationQueriesSchemes</key>
+		<array>
+			<string>opay</string>
+		</array>
 		<key>UIApplicationSceneManifest</key>
 		<dict>
 			<key>UIApplicationSupportsMultipleScenes</key>
