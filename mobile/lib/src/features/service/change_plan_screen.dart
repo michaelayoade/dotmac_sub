@@ -25,7 +25,6 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
   Object? _error;
   bool _loading = true;
   bool _busy = false;
-  String? _targetServiceAddressId;
 
   String get _subId => widget.service.id;
 
@@ -46,7 +45,6 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       if (mounted) {
         setState(() {
           _options = opts;
-          _targetServiceAddressId = opts.currentServiceAddressId;
         });
       }
     } catch (e) {
@@ -64,7 +62,6 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       quote = await ref.read(catalogRepositoryProvider).planChangeQuote(
             _subId,
             offer.id,
-            targetServiceAddressId: _targetServiceAddressId,
           );
     } catch (_) {
       // Confirmation is disabled without the owner fingerprint; a transport
@@ -102,8 +99,6 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
             offerId: offer.id,
             previewFingerprint: quote.previewFingerprint,
             previewEffectiveAt: quote.previewEffectiveAt!,
-            targetServiceAddressId: _targetServiceAddressId,
-            fieldQuoteFingerprint: quote.fieldDeliveryQuote?.previewFingerprint,
           );
       // A prepaid change posts an exact debit — refresh funding and ledger too.
       ref.invalidate(subscriptionsProvider);
@@ -147,7 +142,9 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
 
   Widget _list(PlanChangeOptions opts) {
     final theme = Theme.of(context);
-    final selectedAddressId = _selectedAddressId(opts);
+    final availableOffers = opts.availableOffers
+        .where((offer) => offer.id != opts.currentOffer?.id)
+        .toList(growable: false);
     return Stack(
       children: [
         ListView(
@@ -183,49 +180,16 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                 ),
               ),
             const SizedBox(height: 8),
-            if (opts.serviceAddresses.isNotEmpty) ...[
-              DropdownButtonFormField<String>(
-                key: ValueKey(selectedAddressId),
-                initialValue: selectedAddressId,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Service address',
-                  helperText:
-                      'A new address requires field delivery; wireless/radio relocation carries a one-time charge.',
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  for (final address in opts.serviceAddresses)
-                    DropdownMenuItem(
-                      value: address.id,
-                      enabled: address.hasCoordinates || address.isCurrent,
-                      child: Text(
-                        '${address.label}${address.isCurrent ? ' — current' : ''}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-                onChanged: _busy
-                    ? null
-                    : (value) =>
-                        setState(() => _targetServiceAddressId = value),
-              ),
-              const SizedBox(height: 16),
-            ],
             Text('Available plans', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            if (opts.availableOffers.isEmpty)
+            if (availableOffers.isEmpty)
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(16),
                   child: Text('No other plans are available right now.'),
                 ),
               ),
-            for (final o in opts.availableOffers.where(
-              (offer) =>
-                  offer.id != opts.currentOffer?.id ||
-                  _targetServiceAddressId != opts.currentServiceAddressId,
-            ))
+            for (final o in availableOffers)
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
@@ -249,14 +213,6 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
           ),
       ],
     );
-  }
-
-  String? _selectedAddressId(PlanChangeOptions opts) {
-    final selected = _targetServiceAddressId;
-    if (selected == null) return null;
-    final matches =
-        opts.serviceAddresses.where((address) => address.id == selected);
-    return matches.length == 1 ? selected : null;
   }
 }
 

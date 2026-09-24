@@ -10,15 +10,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _CatalogRepository extends CatalogRepository {
-  _CatalogRepository({
-    this.currentAddressLabel = 'Current address',
-    this.quote,
-  }) : super(Dio());
+  _CatalogRepository({this.quote}) : super(Dio());
 
-  final String currentAddressLabel;
   final PlanChangeQuote? quote;
 
   String? quotedAddressId;
+  String? submittedAddressId;
+  String? submittedFieldQuoteFingerprint;
 
   @override
   Future<PlanChangeOptions> planChangeOptions(String subscriptionId) async {
@@ -32,6 +30,13 @@ class _CatalogRepository extends CatalogRepository {
       ),
       availableOffers: [
         PlanOffer(
+          id: 'offer-current',
+          name: 'Home 20',
+          amount: 10000,
+          currency: 'NGN',
+          periodLabel: '/month',
+        ),
+        PlanOffer(
           id: 'offer-next',
           name: 'Home 50',
           amount: 15000,
@@ -39,14 +44,14 @@ class _CatalogRepository extends CatalogRepository {
           periodLabel: '/month',
         ),
       ],
-      serviceAddresses: [
+      serviceAddresses: const [
         ServiceAddressOption(
           id: 'addr-current',
-          label: currentAddressLabel,
+          label: 'Current address',
           hasCoordinates: true,
           isCurrent: true,
         ),
-        const ServiceAddressOption(
+        ServiceAddressOption(
           id: 'addr-new',
           label: 'New address',
           hasCoordinates: true,
@@ -69,6 +74,21 @@ class _CatalogRepository extends CatalogRepository {
           previewFingerprint: List.filled(64, 'q').join(),
           previewEffectiveAt: DateTime.utc(2026, 9, 23),
         );
+  }
+
+  @override
+  Future<PlanChangeResult> submitPlanChange(
+    String subscriptionId, {
+    required String offerId,
+    required String previewFingerprint,
+    required DateTime previewEffectiveAt,
+    String? targetServiceAddressId,
+    String? fieldQuoteFingerprint,
+    String? notes,
+  }) async {
+    submittedAddressId = targetServiceAddressId;
+    submittedFieldQuoteFingerprint = fieldQuoteFingerprint;
+    return const PlanChangeResult(status: 'applied');
   }
 
   @override
@@ -98,41 +118,29 @@ Widget _app(_CatalogRepository repository) => ProviderScope(
     );
 
 void main() {
-  testWidgets('selecting a service address updates quote target',
+  testWidgets('plan changes do not expose or submit a service address',
       (tester) async {
     final repository = _CatalogRepository();
     await tester.pumpWidget(_app(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byType(DropdownButtonFormField<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New address').last);
-    await tester.pumpAndSettle();
-
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.text('Service address'), findsNothing);
+    expect(find.text('Home 20'), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('Home 50'));
     await tester.pumpAndSettle();
 
-    expect(repository.quotedAddressId, 'addr-new');
+    expect(repository.quotedAddressId, isNull);
     expect(find.text('Switch to Home 50'), findsOneWidget);
-  });
 
-  testWidgets('long service address fits a narrow viewport', (tester) async {
-    tester.view.physicalSize = const Size(320, 568);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    final repository = _CatalogRepository(
-      currentAddressLabel:
-          '17 Admiralty Way, Lekki Phase One, Lagos, Lagos State, Nigeria',
-    );
-    await tester.pumpWidget(_app(repository));
+    await tester.tap(find.text('Confirm'));
     await tester.pumpAndSettle();
 
+    expect(repository.submittedAddressId, isNull);
+    expect(repository.submittedFieldQuoteFingerprint, isNull);
     expect(tester.takeException(), isNull);
-    expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
   });
 
   testWidgets('detailed confirmation is scrollable without overflow',
@@ -161,16 +169,7 @@ void main() {
         ledgerSource: 'subscription_plan_change_preview',
         ledgerAmount: 12500,
         accessConsequence: 'service_continues_after_verified_funding',
-        deliveryMode: 'field_migration',
-        fieldDeliveryQuote: const FieldDeliveryQuote(
-          targetServiceAddressId: 'addr-current',
-          targetAddressLabel:
-              '17 Admiralty Way, Lekki Phase One, Lagos, Lagos State, Nigeria',
-          qualificationStatus: 'qualified_for_field_delivery',
-          eligible: true,
-          previewFingerprint: 'field-preview',
-          feeAmount: 5000,
-        ),
+        deliveryMode: 'remote_reprovision',
       ),
     );
     await tester.pumpWidget(_app(repository));
