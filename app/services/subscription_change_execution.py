@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -85,6 +86,13 @@ def _relocation_quote_error(
         code=f"service_intent.subscription_change_execution.{suffix}",
         message=message,
     )
+
+
+def _typed_metadata(raw: object) -> dict[str, object]:
+    """Normalize persisted JSON before using it as command evidence."""
+    if not isinstance(raw, Mapping):
+        return {}
+    return {key: value for key, value in raw.items() if isinstance(key, str)}
 
 
 OWNER = "service_intent.subscription_change_execution"
@@ -570,8 +578,6 @@ def prepare_approved_relocation_quote(
     """
 
     def operation() -> PrepareRelocationQuoteOutcome:
-        from fastapi import HTTPException
-
         from app.models.catalog import OfferStatus, SubscriptionStatus
         from app.models.subscriber import AddressType
         from app.schemas.qualification import ServiceQualificationRequest
@@ -599,7 +605,7 @@ def prepare_approved_relocation_quote(
         ).one_or_none()
         if quote is None or quote.subscriber_id != command.subscriber_id:
             raise _relocation_quote_error("quote_not_found", "Quote not found")
-        meta = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
+        meta = _typed_metadata(quote.metadata_)
         try:
             option = ServiceRequestOption(str(meta.get("service_option") or ""))
             source_id = UUID(str(meta.get("source_subscription_id") or ""))
@@ -702,7 +708,7 @@ def prepare_approved_relocation_quote(
             raise _relocation_quote_error(
                 "destination_changed", "The destination plan is no longer available"
             )
-        install = meta.get("install") if isinstance(meta.get("install"), dict) else {}
+        install = _typed_metadata(meta.get("install"))
         address_text = str(install.get("address") or "").strip()
         try:
             latitude = float(install["latitude"])
@@ -777,7 +783,12 @@ def prepare_approved_relocation_quote(
                 },
                 commit=False,
             )
-        except HTTPException as exc:
+        except Exception as exc:
+            # The incumbent change-request adapter still raises a transport
+            # exception for its pending-request guard. Convert only that
+            # known legacy boundary to this owner's domain error.
+            if exc.__class__.__name__ != "HTTPException":
+                raise
             raise _relocation_quote_error(
                 "pending_change", "This service already has a pending change"
             ) from exc

@@ -78,7 +78,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: real dual-session PostgreSQL proof that the accounting-sync feed's keyset
 #: cursor does not skip a stationary row under a genuinely concurrent,
 #: independently-committing writer, with its own `sessionmaker`.
-TEST_FIXTURE_BASELINE_TOTAL = 132
+#: +4 from tests/test_chat_widget_media_transaction.py: two isolated SQLite
+#: transaction-boundary proofs each construct one disposable Engine and Session.
+TEST_FIXTURE_BASELINE_TOTAL = 136
 
 
 def _baseline() -> dict[str, int]:

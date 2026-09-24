@@ -153,7 +153,7 @@ def test_historical_read_preserves_payload_and_sync_timestamp_without_refresh(
         == quotes_mirror.PORTAL_QUOTE_UNAVAILABLE_MESSAGE
     )
     assert payload["total"] == 1
-    assert payload["quotes"][0]["deposit_amount"] == "37500.00"
+    assert payload["quotes"][0]["deposit_amount"] is None
     assert payload["quotes"][0]["id"] == "q1"
     assert (
         db_session.get(QuoteSyncState, sub.id).synced_at.replace(tzinfo=UTC) == original

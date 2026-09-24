@@ -325,6 +325,16 @@ def _row_to_item(row: QuoteMirror) -> dict[str, object]:
 
 def _customer_quote_view(item: dict[str, object]) -> dict[str, object]:
     """Retired snapshots have no current approval evidence; hide pending prices."""
+    # The native read contract grew these optional relocation fields. Historical
+    # CRM snapshots predate the feature, so represent their absence explicitly
+    # rather than exposing a different mobile payload shape.
+    for key in (
+        "service_option",
+        "subscription_id",
+        "destination_offer_id",
+        "relocation_work_order_id",
+    ):
+        item.setdefault(key, None)
     visible = item.get("status") == "accepted"
     item["pricing_visible"] = visible
     if not visible:
