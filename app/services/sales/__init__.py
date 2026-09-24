@@ -5,7 +5,7 @@
   estimate, map-pinned request, accept-with-deposit (§2.2).
 """
 
-from app.services.sales import reports, selfserve
+from app.services.sales import reports
 from app.services.sales.service import (
     LEAD_SOURCE_OPTIONS,
     LeadListDatePreset,
@@ -73,5 +73,4 @@ __all__ = [
     "quote_line_items",
     "quotes",
     "reports",
-    "selfserve",
 ]
