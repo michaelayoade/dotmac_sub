@@ -438,6 +438,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.notifications.deliver_notification_queue": _c(
         "notifications", STATE, GUARDED, STATUS
     ),
+    "app.tasks.zeptomail_delivery.reconcile_submitted_email": _c(
+        "notifications",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "A bounded status sweep; each provider observation has a stable "
+        "idempotency key, failed lookups are logged, and the next scheduled "
+        "sweep retries unresolved emails.",
+    ),
     "app.tasks.oauth.check_token_health": _c("integrations", SWEEP, IDEMP, HEALTH),
     "app.tasks.oauth.refresh_expiring_tokens": _c(
         "integrations", STATE, GUARDED, STATUS
