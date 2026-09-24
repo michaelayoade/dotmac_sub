@@ -622,7 +622,7 @@ def prepare_approved_relocation_quote(
             not quote.is_active
             or quote.status not in {QuoteStatus.draft.value, QuoteStatus.sent.value}
             or not quote_payment_review.resolve_payment_review(quote).approval_current
-            or int(meta.get("deposit_percent") or 0) != 100
+            or int(str(meta.get("deposit_percent") or 0)) != 100
         ):
             raise _relocation_quote_error(
                 "quote_approval_stale",
@@ -711,8 +711,8 @@ def prepare_approved_relocation_quote(
         install = _typed_metadata(meta.get("install"))
         address_text = str(install.get("address") or "").strip()
         try:
-            latitude = float(install["latitude"])
-            longitude = float(install["longitude"])
+            latitude = float(str(install["latitude"]))
+            longitude = float(str(install["longitude"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise _relocation_quote_error(
                 "location_invalid", "Confirm the destination map pin"

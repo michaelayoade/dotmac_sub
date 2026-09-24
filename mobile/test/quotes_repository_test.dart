@@ -105,14 +105,14 @@ void main() {
   });
 
   test(
-    'deposit initiation carries retry evidence and mobile return URL',
+    'deposit initiation carries retry evidence without a client callback',
     () async {
       await repository.initiateDeposit('quote-1');
 
       final body = adapter.calls.single.data as Map<String, dynamic>;
       expect(body['idempotency_key'], startsWith('quote-quote-1-'));
       expect((body['idempotency_key'] as String).length, greaterThan(16));
-      expect(body['redirect_url'], endsWith('://success'));
+      expect(body.containsKey('redirect_url'), isFalse);
     },
   );
 
