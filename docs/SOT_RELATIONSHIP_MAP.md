@@ -5490,6 +5490,11 @@ Service intent:
    Disabled, or Canceled applies the corresponding post-create lifecycle command.
    Disabled is a reversible administrative pause: billing and network access stop,
    while credentials, IP assignments, add-ons, and service configuration remain.
+   When an account has exactly one active PPPoE credential bound to its disabled
+   service, activation of a successor service rebinds that credential, including
+   its username and encrypted secret, to the successor and its RADIUS profile.
+   A replacement never mints a second PPPoE identity; ambiguous or multi-service
+   credential state falls through to the existing multi-service generation path.
    Restore returns that same service to Active and shifts its next billing date
    by the recorded pause duration, preventing catch-up billing for the disabled
    period. Canceled is terminal and releases or ends those operational service
