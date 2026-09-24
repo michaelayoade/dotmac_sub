@@ -4,6 +4,8 @@
 /// decimal strings (e.g. "75000.00") to avoid float drift; use [naira] to format.
 library;
 
+import 'service_request_option.dart';
+
 String _str(dynamic v) => v == null ? '' : v.toString();
 
 Map<String, dynamic>? _asMap(dynamic v) =>
@@ -146,6 +148,8 @@ class Quote {
     this.paymentReviewMessage =
         'Your estimate is under staff review. We will notify you before payment.',
     this.canPayDeposit = false,
+    this.pricingVisible = false,
+    this.serviceOption,
     required this.estimateProvisional,
     required this.feasibility,
     this.depositPercent,
@@ -156,6 +160,7 @@ class Quote {
     this.lineItems = const [],
     this.salesOrderId,
     this.projectId,
+    this.relocationWorkOrderId,
     this.createdAt,
     this.expiresAt,
     this.paymentReviewedAt,
@@ -171,6 +176,8 @@ class Quote {
   final String paymentReviewStatus; // pending | approved | rejected
   final String paymentReviewMessage;
   final bool canPayDeposit;
+  final bool pricingVisible;
+  final ServiceRequestOption? serviceOption;
   final DateTime? paymentReviewedAt;
   final bool estimateProvisional;
   final QuoteFeasibility feasibility;
@@ -181,16 +188,26 @@ class Quote {
   final List<QuoteLineItem> lineItems;
   final String? salesOrderId;
   final String? projectId;
+  final String? relocationWorkOrderId;
   final DateTime? createdAt;
   final DateTime? expiresAt;
 
   bool get isAccepted => status == 'accepted';
+  bool get isRelocation => serviceOption?.kind == ServiceRequestKind.relocation;
   String get statusLabel => switch (status) {
+        'draft' ||
+        'sent'
+            when isRelocation &&
+                paymentReviewStatus == 'approved' &&
+                !canPayDeposit =>
+          'Approved — booking pending',
         'draft' ||
         'sent' when paymentReviewStatus == 'approved' =>
           'Approved — payment required',
         'draft' || 'sent' => 'Awaiting staff review',
-        'accepted' => 'Accepted — installation scheduled',
+        'accepted' => isRelocation
+            ? 'Accepted — relocation scheduled'
+            : 'Accepted — installation scheduled',
         'rejected' => 'Declined',
         'expired' => 'Expired',
         _ => status,
@@ -209,6 +226,10 @@ class Quote {
         paymentReviewMessage: json['payment_review_message'] as String? ??
             'Your estimate is under staff review. We will notify you before payment.',
         canPayDeposit: json['can_pay_deposit'] as bool? ?? false,
+        pricingVisible: json['pricing_visible'] as bool? ?? false,
+        serviceOption: ServiceRequestOption.fromApiValue(
+          json['service_option'] as String?,
+        ),
         paymentReviewedAt: _toDate(json['payment_reviewed_at']),
         estimateProvisional: json['estimate_provisional'] as bool? ?? false,
         feasibility: QuoteFeasibility.fromJson(_asMap(json['feasibility'])),
@@ -222,8 +243,34 @@ class Quote {
         ],
         salesOrderId: json['sales_order_id'] as String?,
         projectId: json['project_id'] as String?,
+        relocationWorkOrderId: json['relocation_work_order_id'] as String?,
         createdAt: _toDate(json['created_at']),
         expiresAt: _toDate(json['expires_at']),
+      );
+}
+
+class RelocationQuotePreparation {
+  const RelocationQuotePreparation({
+    required this.requestId,
+    required this.invoiceId,
+    required this.amount,
+    required this.currency,
+    required this.replayed,
+  });
+
+  final String requestId;
+  final String invoiceId;
+  final String amount;
+  final String currency;
+  final bool replayed;
+
+  factory RelocationQuotePreparation.fromJson(Map<String, dynamic> json) =>
+      RelocationQuotePreparation(
+        requestId: _str(json['request_id']),
+        invoiceId: _str(json['invoice_id']),
+        amount: _str(json['amount']),
+        currency: _str(json['currency']),
+        replayed: json['replayed'] as bool? ?? false,
       );
 }
 

@@ -1481,6 +1481,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "sales.quote_payment_review.customer_required",
                     "sales.quote_payment_review.quote_not_found",
                     "sales.quote_payment_review.quote_status_invalid",
+                    "sales.quote_payment_review.price_required",
                     "sales.quote_payment_review.reason_invalid",
                     "sales.quote_payment_review.reason_required",
                     "sales.quote_payment_review.review_not_pending",

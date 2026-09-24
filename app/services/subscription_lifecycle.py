@@ -751,7 +751,9 @@ def _resolve_field_delivery_quote(
 
     # A wireless/radio address move is never silently free. Operations selects
     # the one-time catalog offer in Settings; its current active one-time price
-    # is the only fee authority consumed by both customer and reseller portals.
+    # is the fee authority for this plan-change preview path. A separately
+    # approved customer service-request Quote uses its exact approved total
+    # through subscription_change_execution's typed handoff instead.
     if access_type == "fixed_wireless":
         configured = settings_spec.resolve_value(
             db, SettingDomain.projects, "wireless_relocation_offer_id"

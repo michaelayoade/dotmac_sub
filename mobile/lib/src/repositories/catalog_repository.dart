@@ -93,6 +93,23 @@ class CatalogRepository {
     return PlanChangeOptions.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Plans compatible with the selected relocation destination technology.
+  Future<List<PlanOffer>> relocationPlans(
+    String subscriptionId,
+    String accessType,
+  ) async {
+    final data = await guard(
+      () => dio.get(
+        '/me/subscriptions/$subscriptionId/relocation-plans',
+        queryParameters: {'access_type': accessType},
+      ),
+    );
+    return (data as List)
+        .map(
+            (item) => PlanOffer.fromJson((item as Map).cast<String, dynamic>()))
+        .toList();
+  }
+
   /// GET …/service-change/quote — exact plan and delivery quote.
   Future<PlanChangeQuote> planChangeQuote(
     String subscriptionId,

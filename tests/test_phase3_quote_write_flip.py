@@ -82,7 +82,8 @@ def test_me_quote_request_flag_on_creates_native_quote(db_session, monkeypatch):
     install = (quote.metadata_ or {}).get("install") or {}
     assert install.get("latitude") == _PIN["latitude"]
     assert install.get("address") == _PIN["address"]
-    assert isinstance(out.get("deposit_amount"), str)
+    assert out.get("deposit_amount") is None
+    assert out.get("pricing_visible") is False
 
 
 def test_me_quote_request_native_needs_no_crm_link(db_session, monkeypatch):

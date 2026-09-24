@@ -3,6 +3,7 @@ import 'package:dotmac_portal/src/core/api_exception.dart';
 import 'package:dotmac_portal/src/features/service/quote_request_screen.dart';
 import 'package:dotmac_portal/src/features/service/quotes_screen.dart';
 import 'package:dotmac_portal/src/models/quote.dart';
+import 'package:dotmac_portal/src/models/service_request_option.dart';
 import 'package:dotmac_portal/src/providers/data_providers.dart';
 import 'package:dotmac_portal/src/repositories/location_repository.dart';
 import 'package:dotmac_portal/src/repositories/quotes_repository.dart';
@@ -37,6 +38,7 @@ Quote _payableQuote() => Quote(
       paymentReviewStatus: 'approved',
       paymentReviewMessage: 'Approved — payment required.',
       canPayDeposit: true,
+      pricingVisible: true,
       estimateProvisional: false,
       feasibility: QuoteFeasibility(coverage: 'covered', feasible: true),
     );
@@ -48,9 +50,13 @@ class _CapturingQuotesRepository extends QuotesRepository {
   double? longitude;
   String? address;
   String? note;
+  ServiceRequestOption? serviceOption;
 
   @override
   Future<Quote> requestQuote({
+    required ServiceRequestOption serviceOption,
+    String? subscriptionId,
+    String? destinationOfferId,
     required double latitude,
     required double longitude,
     String? address,
@@ -61,6 +67,7 @@ class _CapturingQuotesRepository extends QuotesRepository {
     this.longitude = longitude;
     this.address = address;
     this.note = note;
+    this.serviceOption = serviceOption;
     throw ApiException('Expected test refusal', statusCode: 409);
   }
 }
@@ -102,11 +109,11 @@ void main() {
     await tester.pump();
 
     expect(find.text('Please contact support to continue.'), findsOneWidget);
-    expect(find.text('Request installation'), findsNothing);
+    expect(find.text('Request service'), findsNothing);
     expect(find.textContaining('Pay deposit'), findsNothing);
   });
 
-  testWidgets('pending staff review shows estimate and hides deposit payment',
+  testWidgets('pending staff review hides prices and deposit payment',
       (tester) async {
     final quote = Quote(
       id: 'quote-review',
@@ -132,7 +139,8 @@ void main() {
 
     expect(find.text('Awaiting staff review'), findsOneWidget);
     expect(find.textContaining('under staff review'), findsOneWidget);
-    expect(find.text('Estimate'), findsOneWidget);
+    expect(find.text('Cost'), findsNothing);
+    expect(find.text('Deposit'), findsNothing);
     expect(find.textContaining('Pay deposit'), findsNothing);
   });
 
@@ -140,7 +148,11 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _app(
-        child: const QuoteRequestScreen(),
+        child: const QuoteRequestScreen(
+          selection: ServiceRequestSelection(
+            option: ServiceRequestOption.fiberInstallation,
+          ),
+        ),
         page: _page(actionsAvailable: false),
       ),
     );
@@ -155,7 +167,11 @@ void main() {
     final repository = _CapturingQuotesRepository();
     await tester.pumpWidget(
       _app(
-        child: const QuoteRequestScreen(),
+        child: const QuoteRequestScreen(
+          selection: ServiceRequestSelection(
+            option: ServiceRequestOption.fiberInstallation,
+          ),
+        ),
         page: _page(actionsAvailable: true),
         quotesRepository: repository,
       ),
@@ -192,6 +208,7 @@ void main() {
     expect(repository.longitude, 7.4986);
     expect(repository.address, '12 Mississippi Street, Maitama');
     expect(repository.note, 'Blue gate, second floor');
+    expect(repository.serviceOption, ServiceRequestOption.fiberInstallation);
 
     // Let the reverse-geocode debounce finish so no timer outlives the test.
     await tester.pump(const Duration(milliseconds: 500));

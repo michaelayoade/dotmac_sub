@@ -345,11 +345,42 @@ class DashboardScreen extends ConsumerWidget {
                         Icons.timeline_outlined,
                         color: scheme.onSurfaceVariant,
                       ),
-                      title: const Text('Installation in progress'),
+                      title: Text(p.isRelocation
+                          ? 'Relocation in progress'
+                          : 'Installation in progress'),
                       subtitle: Text('$stage · ${p.progressPct}%'),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () =>
                           context.push('/profile/installation-progress'),
+                    ),
+                  ),
+                );
+              },
+            ),
+            Consumer(
+              builder: (context, ref, _) {
+                final orders =
+                    ref.watch(workOrdersProvider).asData?.value.workOrders ??
+                        const <WorkOrderItem>[];
+                WorkOrderItem? relocation;
+                for (final order in orders) {
+                  if (order.workType == 'relocation' &&
+                      order.status != 'completed' &&
+                      order.status != 'canceled') {
+                    relocation = order;
+                    break;
+                  }
+                }
+                if (relocation == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.location_on_outlined),
+                      title: const Text('Relocation in progress'),
+                      subtitle: Text(relocation.status.replaceAll('_', ' ')),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => context.push('/profile/technician-visits'),
                     ),
                   ),
                 );

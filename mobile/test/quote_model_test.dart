@@ -1,4 +1,5 @@
 import 'package:dotmac_portal/src/models/quote.dart';
+import 'package:dotmac_portal/src/models/service_request_option.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -51,6 +52,7 @@ void main() {
         'payment_review_status': 'approved',
         'payment_review_message': 'Approved — payment required.',
         'can_pay_deposit': true,
+        'pricing_visible': true,
         'estimate_provisional': false,
         'feasibility': {
           'coverage': 'covered',
@@ -74,16 +76,19 @@ void main() {
       expect(q.id, 'q1');
       expect(q.feasibility.isCovered, isTrue);
       expect(q.canPayDeposit, isTrue);
+      expect(q.pricingVisible, isTrue);
       expect(q.statusLabel, 'Approved — payment required');
       expect(q.lineItems.single.description, 'Fiber installation (base)');
       expect(naira(q.depositAmount), '₦37,500');
     });
 
-    test('pending review shows the estimate but cannot expose payment', () {
+    test('pending review hides prices and cannot expose payment', () {
       final q = Quote.fromJson({
         'id': 'q-review',
         'status': 'draft',
-        'deposit_amount': '37500.00',
+        'deposit_amount': null,
+        'total': null,
+        'pricing_visible': false,
         'payment_review_status': 'pending',
         'payment_review_message': 'Your estimate is under staff review.',
         'can_pay_deposit': false,
@@ -91,6 +96,7 @@ void main() {
       });
 
       expect(q.canPayDeposit, isFalse);
+      expect(q.pricingVisible, isFalse);
       expect(q.statusLabel, 'Awaiting staff review');
       expect(q.paymentReviewMessage, contains('under staff review'));
     });
@@ -107,6 +113,34 @@ void main() {
       expect(q.isAccepted, isTrue);
       expect(q.canPayDeposit, isFalse);
       expect(q.statusLabel, contains('Accepted'));
+    });
+
+    test('relocation retains its selected service and progress label', () {
+      final q = Quote.fromJson({
+        'id': 'q-relocate',
+        'status': 'accepted',
+        'service_option': 'fiber_to_airfiber_relocation',
+        'deposit_paid': true,
+        'relocation_work_order_id': 'work-1',
+        'feasibility': {'coverage': 'survey_required'},
+      });
+      expect(q.serviceOption, ServiceRequestOption.fiberToAirfiberRelocation);
+      expect(q.isRelocation, isTrue);
+      expect(q.relocationWorkOrderId, 'work-1');
+      expect(q.statusLabel, contains('relocation scheduled'));
+    });
+
+    test('approved relocation waits for its booking handoff', () {
+      final q = Quote.fromJson({
+        'id': 'q-relocate-pending',
+        'status': 'draft',
+        'service_option': 'fiber_to_fiber_relocation',
+        'payment_review_status': 'approved',
+        'can_pay_deposit': false,
+        'pricing_visible': true,
+      });
+      expect(q.statusLabel, 'Approved — booking pending');
+      expect(q.pricingVisible, isTrue);
     });
 
     test('out-of-area provisional estimate', () {

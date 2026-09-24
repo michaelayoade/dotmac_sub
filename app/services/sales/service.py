@@ -1246,9 +1246,24 @@ def _recalculate_quote_totals(db: Session, quote: Quote) -> None:
 def _locked_quote_for_mutation(db: Session, quote_id: uuid.UUID) -> Quote | None:
     """Serialize every commercial mutation with Quote acceptance."""
 
-    return db.scalars(
+    quote = db.scalars(
         select(Quote).where(Quote.id == quote_id).with_for_update()
     ).one_or_none()
+    if quote is not None:
+        from app.models.subscription_change import SubscriptionChangeRequest
+
+        booked = db.scalar(
+            select(SubscriptionChangeRequest.id).where(
+                SubscriptionChangeRequest.confirmation_idempotency_key
+                == f"customer-relocation-quote:{quote.id}"
+            )
+        )
+        if booked is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="A booked relocation Quote cannot be changed",
+            )
+    return quote
 
 
 def _locked_line_and_quote_for_mutation(
