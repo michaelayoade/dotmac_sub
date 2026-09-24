@@ -182,8 +182,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/quotes',
         builder: (_, state) => QuotesScreen(
-          sourceSubscriptionId:
-              state.extra is Subscription ? (state.extra as Subscription).id : null,
+          sourceSubscriptionId: state.extra is Subscription
+              ? (state.extra as Subscription).id
+              : null,
         ),
       ),
       GoRoute(
