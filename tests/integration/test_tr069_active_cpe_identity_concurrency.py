@@ -201,4 +201,3 @@ def test_placeholder_handoff_releases_cpe_identity_before_transfer(engine) -> No
                 delete(Tr069AcsServer).where(Tr069AcsServer.id == server_id)
             )
             cleanup.commit()
-
