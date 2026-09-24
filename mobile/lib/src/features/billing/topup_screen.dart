@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -36,6 +37,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   bool _loadingPage = true;
   bool _previewLoading = false;
   int _previewRequestId = 0;
+  Timer? _previewDebounce;
 
   final _custom = TextEditingController();
   bool _busy = false;
@@ -62,6 +64,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   bool get _isTransfer => _selection == 'transfer';
 
+  String _topupAttemptKey(String prefix) =>
+      '$prefix-${DateTime.now().microsecondsSinceEpoch}-'
+      '${Random().nextInt(0x7fffffff)}';
+
   @override
   void initState() {
     super.initState();
@@ -70,11 +76,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   @override
   void dispose() {
+    _previewDebounce?.cancel();
     _custom.dispose();
     super.dispose();
   }
 
   Future<void> _loadPage() async {
+    _previewDebounce?.cancel();
+    ++_previewRequestId;
     setState(() {
       _loadingPage = true;
       _loadError = null;
@@ -118,7 +127,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Future<TopupPreview?> _refreshPreview() async {
     final page = _page;
     final amount = _amount;
-    if (page == null || amount == null || !_amountValid) {
+    if (page == null ||
+        !page.depositAllowed ||
+        amount == null ||
+        !_amountValid) {
+      ++_previewRequestId;
       if (mounted) {
         setState(() {
           _preview = null;
@@ -133,6 +146,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     if (mounted) {
       setState(() {
         _previewLoading = true;
+        _preview = null;
         _previewError = null;
       });
     }
@@ -140,7 +154,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       final preview =
           await ref.read(billingRepositoryProvider).previewTopup(amount);
       if (!mounted || requestId != _previewRequestId) {
-        return preview;
+        return null;
       }
       setState(() {
         _preview = preview;
@@ -163,8 +177,23 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Future<void> _submit() async {
     final page = _page!;
     final amount = _amount;
+    final reviewedFingerprint = _preview?.previewFingerprint;
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
+    final activeDeposit = page.activeDepositRequest;
+    if (!page.depositAllowed && activeDeposit != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(activeDeposit.message)),
+      );
+      return;
+    }
+    if (!page.depositAllowed ||
+        reviewedFingerprint == null ||
+        reviewedFingerprint.isEmpty ||
+        _previewLoading ||
+        _previewError != null) {
+      return;
+    }
     if (amount == null || amount < page.minAmount || amount > page.maxAmount) {
       messenger.showSnackBar(
         SnackBar(
@@ -178,6 +207,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
 
     setState(() => _busy = true);
+    _previewDebounce?.cancel();
     try {
       final preview = await _refreshPreview();
       if (!mounted) {
@@ -185,10 +215,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       }
       if (preview == null || preview.previewFingerprint.isEmpty) {
         messenger.showSnackBar(
+          SnackBar(content: Text(_previewFailureMessage())),
+        );
+        return;
+      }
+      if (preview.previewFingerprint != reviewedFingerprint) {
+        messenger.showSnackBar(
           const SnackBar(
-            content: Text(
-              'Review the latest allocation preview before checkout.',
-            ),
+            content: Text('Allocation changed. Review the updated preview.'),
           ),
         );
         return;
@@ -206,10 +240,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                 paymentMethodId: cardId,
                 // One key per attempt makes a saved-card charge safe against a
                 // Dio retry; the button busy-guard covers double-taps.
-                idempotencyKey: cardId == null
-                    ? null
-                    : 'topup-${DateTime.now().microsecondsSinceEpoch}-'
-                        '${Random().nextInt(0x7fffffff)}',
+                idempotencyKey: _isTransfer
+                    ? _topupAttemptKey('transfer')
+                    : cardId == null
+                        ? null
+                        : _topupAttemptKey('topup'),
               );
       if (!mounted) {
         return;
@@ -237,7 +272,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         } else {
           await ref
               .read(billingRepositoryProvider)
-              .cancelDirectTransferIntent(initiation.intentId);
+              .cancelTopupIntent(initiation.intentId);
           messenger.showSnackBar(
             const SnackBar(content: Text('Bank transfer canceled.')),
           );
@@ -296,6 +331,92 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Future<void> _submitActiveDepositProof(TopupActiveRequest deposit) async {
+    final page = _page;
+    if (page == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final outcome = await showSubmitProofSheet(
+      context,
+      initialAmount: deposit.amount.toStringAsFixed(2),
+      accounts: page.bankTransfer.accounts,
+      instructions: page.bankTransfer.instructions,
+      intentId: deposit.intentId,
+    );
+    if (outcome == TransferProofOutcome.submitted && mounted) {
+      ref.invalidate(paymentProofsProvider);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Receipt submitted - we will verify it and credit your account.',
+          ),
+        ),
+      );
+      await _loadPage();
+    }
+  }
+
+  Future<void> _cancelActiveDeposit(TopupActiveRequest deposit) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel bank transfer?'),
+        content: Text(
+          'This cancels ${Fmt.money(deposit.amount, deposit.currency)} '
+          '(${deposit.reference}).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep waiting'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Cancel transfer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(billingRepositoryProvider)
+          .cancelTopupIntent(deposit.intentId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Bank transfer canceled.')));
+      await _loadPage();
+    } on ApiException catch (e) {
+      if (mounted) {
+        showPaymentError(
+          context,
+          e,
+          onRetry: () => _cancelActiveDeposit(deposit),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        showPaymentError(
+          context,
+          e,
+          onRetry: () => _cancelActiveDeposit(deposit),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _previewFailureMessage() {
+    final error = _previewError;
+    if (error is ApiException) {
+      return error.message;
+    }
+    return 'Could not load the latest allocation preview. Try again.';
   }
 
   @override
@@ -362,6 +483,33 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
   Widget _form(TopupPage page) {
     final theme = Theme.of(context);
+    final active = page.activeDepositRequest;
+    if (active != null || !page.depositAllowed) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Top-up in progress', style: theme.textTheme.titleLarge),
+          const SizedBox(height: 12),
+          if (active != null)
+            _ActiveDepositCard(
+              deposit: active,
+              onUploadReceipt: active.isAwaitingReceipt
+                  ? () => _submitActiveDepositProof(active)
+                  : null,
+              onCancel:
+                  active.canCancel ? () => _cancelActiveDeposit(active) : null,
+            )
+          else
+            const Text('A top-up is already in progress.'),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _loadPage,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh status'),
+          ),
+        ],
+      );
+    }
     final savedCards =
         ref.watch(paymentMethodsProvider).asData?.value ?? const <SavedCard>[];
     return ListView(
@@ -394,11 +542,22 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         TextField(
           controller: _custom,
           autofocus: true,
+          readOnly: _busy,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           onChanged: (_) {
-            setState(() {});
-            _refreshPreview();
+            _previewDebounce?.cancel();
+            ++_previewRequestId;
+            setState(() {
+              _preview = null;
+              _previewError = null;
+              _previewLoading = false;
+            });
+            if (_amountValid) {
+              _previewDebounce = Timer(const Duration(milliseconds: 350), () {
+                _refreshPreview();
+              });
+            }
           },
           decoration: InputDecoration(
             labelText: 'Amount',
@@ -470,11 +629,21 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         ],
         if (_previewError != null) ...[
           const SizedBox(height: 16),
-          Text(
-            'Could not load the latest allocation preview. Try again.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.error,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _previewFailureMessage(),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _refreshPreview,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry preview'),
+              ),
+            ],
           ),
         ],
         // Pay with: saved card (one-tap), an online gateway, or transfer.
@@ -514,8 +683,15 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed:
-              _busy || !_amountValid || _selection == null ? null : _submit,
+          onPressed: _busy ||
+                  !_amountValid ||
+                  _selection == null ||
+                  _preview == null ||
+                  _previewLoading ||
+                  _previewError != null ||
+                  !page.depositAllowed
+              ? null
+              : _submit,
           icon: _busy
               ? const SizedBox(
                   height: 18,
@@ -532,6 +708,78 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           label: Text(_payLabel(page)),
         ),
       ],
+    );
+  }
+}
+
+class _ActiveDepositCard extends StatelessWidget {
+  const _ActiveDepositCard({
+    required this.deposit,
+    this.onUploadReceipt,
+    this.onCancel,
+  });
+
+  final TopupActiveRequest deposit;
+  final VoidCallback? onUploadReceipt;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final expiresAt = deposit.expiresAt;
+    return Card(
+      color: theme.colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.account_balance_outlined),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Bank transfer pending',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(deposit.message),
+            const SizedBox(height: 8),
+            Text('Reference: ${deposit.reference}'),
+            Text('Amount: ${Fmt.money(deposit.amount, deposit.currency)}'),
+            if (expiresAt != null) Text('Expires: ${Fmt.date(expiresAt)}'),
+            if (deposit.rejectionReason != null) ...[
+              const SizedBox(height: 8),
+              Text('Reason: ${deposit.rejectionReason}'),
+            ],
+            if (onUploadReceipt != null || onCancel != null) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (onUploadReceipt != null)
+                    FilledButton.icon(
+                      onPressed: onUploadReceipt,
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('Upload receipt'),
+                    ),
+                  if (onCancel != null)
+                    OutlinedButton.icon(
+                      onPressed: onCancel,
+                      icon: const Icon(Icons.close),
+                      label: const Text('Cancel'),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

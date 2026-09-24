@@ -1903,6 +1903,7 @@ async def submit_direct_transfer_topup(
                 account
                 for account in accounts
                 if str(account.get("id")) == selected_account_id
+                or str(account.get("account_number")) == selected_account_id
             ),
             None,
         )

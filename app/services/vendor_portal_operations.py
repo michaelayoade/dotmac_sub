@@ -684,7 +684,10 @@ def _serialize_project(
             }
             for event in sorted(
                 getattr(row, "lifecycle_events", ()),
-                key=lambda item: (item.occurred_at, str(item.id)),
+                key=lambda item: (
+                    _as_utc(item.occurred_at) or datetime.min.replace(tzinfo=UTC),
+                    str(item.id),
+                ),
             )
         ],
         "as_built_submissions": [
@@ -1044,7 +1047,18 @@ class VendorPortalOperations:
         db: Session, command: ConfigureVendorProcurementCommand
     ) -> dict:
         def operation() -> dict:
+            from app.services import vendor_project_lifecycle
+
             project = _lifecycle_project(db, command.project_id, for_update=True)
+            if command.mode == "unassigned":
+                return vendor_project_lifecycle.stage_unassign_vendor(
+                    db,
+                    vendor_project_lifecycle.StageUnassignVendor(
+                        project_id=command.project_id,
+                        actor_id=command.context.actor,
+                        reason=command.context.reason,
+                    ),
+                )
             if project.status != InstallationProjectStatus.draft.value:
                 raise _error(
                     "procurement_not_draft",
@@ -1055,9 +1069,15 @@ class VendorPortalOperations:
                     raise _error(
                         "vendor_required", "Choose a vendor for direct assignment."
                     )
-                project.assigned_vendor_id = coerce_uuid(command.vendor_id)
-                project.assignment_type = VendorAssignmentType.direct.value
-                project.status = InstallationProjectStatus.assigned.value
+                return vendor_project_lifecycle.stage_assign_vendor_directly(
+                    db,
+                    vendor_project_lifecycle.StageAssignVendorDirectly(
+                        project_id=command.project_id,
+                        vendor_id=command.vendor_id,
+                        actor_id=command.context.actor,
+                        reason=command.context.reason,
+                    ),
+                )
             elif command.mode == VendorAssignmentType.bidding.value:
                 now = _now()
                 bidding_close_at = _as_utc(command.bidding_close_at)
@@ -1065,17 +1085,19 @@ class VendorPortalOperations:
                     raise _error(
                         "bidding_window_required", "Choose a future bid closing time."
                     )
-                project.assigned_vendor_id = None
-                project.assignment_type = VendorAssignmentType.bidding.value
-                project.bidding_open_at = now
-                project.bidding_close_at = bidding_close_at
-                project.status = InstallationProjectStatus.open_for_bidding.value
+                return vendor_project_lifecycle.stage_publish_for_bidding(
+                    db,
+                    vendor_project_lifecycle.StagePublishForBidding(
+                        project_id=command.project_id,
+                        actor_id=command.context.actor,
+                        bidding_open_at=now,
+                        bidding_close_at=bidding_close_at,
+                    ),
+                )
             else:
                 raise _error(
                     "invalid_procurement_mode", "Choose direct assignment or bidding."
                 )
-            db.flush()
-            return _serialize_project(project)
 
         return _execute(
             db,

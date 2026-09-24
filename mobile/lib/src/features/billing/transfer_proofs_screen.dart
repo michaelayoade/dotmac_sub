@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../../models/payment_proof.dart';
@@ -227,18 +228,11 @@ class SubmitProofSheet extends ConsumerStatefulWidget {
 }
 
 class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
+  late String? _selectedAccountId =
+      widget.accounts.length == 1 ? widget.accounts.first.id : null;
   XFile? _file;
   bool _busy = false;
   String? _error;
-  String? _selectedAccountId;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.accounts.isNotEmpty) {
-      _selectedAccountId = widget.accounts.first.id;
-    }
-  }
 
   Future<void> _pick() async {
     final picked = await ImagePicker().pickImage(
@@ -249,10 +243,12 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
   }
 
   Future<void> _submit() async {
-    if (_selectedAccountId == null || _file == null) {
-      setState(() {
-        _error = 'Choose the account you paid and attach a receipt image.';
-      });
+    if (_file == null) {
+      setState(() => _error = 'Attach a receipt image.');
+      return;
+    }
+    if (widget.accounts.length > 1 && _selectedAccountId == null) {
+      setState(() => _error = 'Choose the Dotmac account you transferred to.');
       return;
     }
     setState(() {
@@ -261,18 +257,20 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
     });
     try {
       await ref.read(billingRepositoryProvider).submitPaymentProof(
-            intentId: widget.intentId,
-            selectedAccountId: _selectedAccountId!,
             filePath: _file!.path,
             fileName: _file!.name,
+            intentId: widget.intentId,
+            selectedAccountId: _selectedAccountId,
           );
       if (mounted) {
         Navigator.of(context).pop(TransferProofOutcome.submitted);
       }
-    } catch (_) {
+    } catch (error) {
       setState(() {
         _busy = false;
-        _error = 'Could not submit — check the details and try again.';
+        _error = error is ApiException
+            ? error.message
+            : 'Could not submit — check the details and try again.';
       });
     }
   }
@@ -298,18 +296,38 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
             if (widget.accounts.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
-                'Transfer to',
+                widget.accounts.length > 1
+                    ? 'Choose the Dotmac account you transferred to'
+                    : 'Transfer to',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 6),
-              for (final acct in widget.accounts)
-                _BankAccountCard(
-                  account: acct,
-                  selected: acct.id == _selectedAccountId,
-                  onSelected: () => setState(
-                    () => _selectedAccountId = acct.id,
+              if (widget.accounts.length > 1)
+                RadioGroup<String>(
+                  groupValue: _selectedAccountId,
+                  onChanged: (value) {
+                    if (_busy) return;
+                    setState(() => _selectedAccountId = value);
+                  },
+                  child: Column(
+                    children: [
+                      for (final acct in widget.accounts)
+                        RadioListTile<String>(
+                          contentPadding: EdgeInsets.zero,
+                          value: acct.id ?? acct.accountNumber,
+                          title: Text('${acct.bankName} ${acct.accountNumber}'),
+                          subtitle: Text(acct.accountName),
+                        ),
+                    ],
                   ),
-                ),
+                )
+              else
+                for (final acct in widget.accounts)
+                  _BankAccountCard(
+                    account: acct,
+                    selected: true,
+                    onSelected: () {},
+                  ),
               if (widget.instructions != null &&
                   widget.instructions!.trim().isNotEmpty)
                 Padding(

@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import (
     InstallationProject,
+    InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteLineItem,
@@ -125,6 +126,86 @@ def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_sessi
     assert installation.status == InstallationProjectStatus.open_for_bidding.value
     assert installation.assignment_type == VendorAssignmentType.bidding.value
     assert installation.bidding_close_at is not None
+
+
+def test_configure_procurement_can_unassign_direct_assignment(db_session):
+    installation, _vendor, user = _chain(db_session)
+    installation.status = InstallationProjectStatus.assigned.value
+    installation.assignment_type = VendorAssignmentType.direct.value
+    installation_id = str(installation.id)
+    user_id = str(user.id)
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_portal_operations.configure_procurement(
+        db_session,
+        ConfigureVendorProcurementCommand(
+            context=_context(
+                actor=user_id,
+                scope=installation_id,
+                reason="test vendor unassignment",
+            ),
+            project_id=installation_id,
+            mode="unassigned",
+        ),
+    )
+
+    db_session.refresh(installation)
+    assert result["status"] == InstallationProjectStatus.draft.value
+    assert installation.assigned_vendor_id is None
+    assert installation.assignment_type is None
+    assert (
+        db_session.query(InstallationProjectLifecycleEvent)
+        .filter(
+            InstallationProjectLifecycleEvent.event_type == "vendor_project.unassigned"
+        )
+        .count()
+        == 1
+    )
+
+
+def test_configure_procurement_can_cancel_award_before_field_work(db_session):
+    installation, vendor, user = _chain(db_session)
+    quote = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.approved.value,
+    )
+    db_session.add(quote)
+    db_session.flush()
+    installation.status = InstallationProjectStatus.approved.value
+    installation.assignment_type = VendorAssignmentType.direct.value
+    installation.approved_quote_id = quote.id
+    installation_id = str(installation.id)
+    user_id = str(user.id)
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_portal_operations.configure_procurement(
+        db_session,
+        ConfigureVendorProcurementCommand(
+            context=_context(
+                actor=user_id,
+                scope=installation_id,
+                reason="test award cancellation",
+            ),
+            project_id=installation_id,
+            mode="unassigned",
+        ),
+    )
+
+    db_session.refresh(installation)
+    db_session.refresh(quote)
+    assert result["status"] == InstallationProjectStatus.draft.value
+    assert installation.assigned_vendor_id is None
+    assert installation.assignment_type is None
+    assert installation.approved_quote_id is None
+    assert quote.status == ProjectQuoteStatus.rejected.value
+    events = db_session.query(EventStore).order_by(EventStore.event_type).all()
+    assert {event.event_type for event in events} == {
+        "vendor_project.unassigned",
+        "vendor_quote.changed",
+    }
 
 
 def test_vendor_project_list_filters_by_project_search(db_session):

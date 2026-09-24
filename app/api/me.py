@@ -42,6 +42,8 @@ from app.schemas.billing import (
     MyPaymentMethodRead,
     PaymentProviderOption,
     PaymentRead,
+    TopupActiveRequestResponse,
+    TopupCancelResponse,
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
@@ -140,6 +142,7 @@ from app.services import (
     customer_experience_lifecycle,
     customer_field_job_chat,
     customer_work_order_selfcare,
+    payment_intent_management,
     quote_deposits,
     quotes_mirror,
     team_inbox_widget,
@@ -177,6 +180,7 @@ from app.services.file_storage import build_content_disposition
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
+from app.services.topup_intents import DirectTransferCancellationSource
 
 router = APIRouter(prefix="/me", tags=["me"])
 logger = logging.getLogger(__name__)
@@ -681,10 +685,9 @@ def my_plan_change_options(
         ),
         available_offers=[o for o in available if o is not None],
         prepaid_funding=ctx.get("prepaid_funding"),
-        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
-        collection_blocking_balance=ctx.get(
-            "collection_blocking_balance", Decimal("0.00")
-        ),
+        postpaid_receivables=ctx.get("postpaid_receivables"),
+        collection_blocking_balance=ctx.get("collection_blocking_balance"),
+        financial_position_unavailable=ctx.get("financial_position_unavailable", False),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
         service_addresses=ctx.get("service_addresses", []),
@@ -941,6 +944,11 @@ def my_topup_page(
         prepaid_balance=ctx.get("prepaid_balance"),
         account_credit=ctx.get("account_credit"),
         deposit_allowed=ctx.get("deposit_allowed", True),
+        active_deposit_request=(
+            TopupActiveRequestResponse.model_validate(ctx["active_deposit_request"])
+            if ctx.get("active_deposit_request") is not None
+            else None
+        ),
         eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
         eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
@@ -1012,23 +1020,22 @@ def my_topup_initiate(
     )
 
 
-@router.delete("/topup/intents/{intent_id}", status_code=status.HTTP_204_NO_CONTENT)
-def my_topup_cancel_direct_transfer(
+@router.post(
+    "/topup/intents/{intent_id}/cancel",
+    response_model=TopupCancelResponse,
+)
+def my_cancel_topup_intent(
     intent_id: UUID,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-) -> Response:
-    """Cancel the caller's unsubmitted direct-transfer intent."""
-    from app.services import payment_intent_management
-    from app.services.domain_errors import DomainError
-    from app.services.topup_intents import DirectTransferCancellationSource
-
+) -> TopupCancelResponse:
+    """Cancel the caller's unsubmitted direct-bank-transfer top-up intent."""
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
     command_id = uuid4()
-    db_session_adapter.release_read_transaction(db)
     try:
-        payment_intent_management.cancel_unsubmitted_direct_transfer(
+        db_session_adapter.release_read_transaction(db)
+        outcome = payment_intent_management.cancel_unsubmitted_direct_transfer(
             db,
             payment_intent_management.CancelPaymentIntentCommand(
                 context=CommandContext(
@@ -1036,18 +1043,21 @@ def my_topup_cancel_direct_transfer(
                     correlation_id=command_id,
                     actor=f"customer:{account_id}",
                     scope=payment_intent_management.CUSTOMER_CANCEL_SCOPE,
-                    reason="Customer canceled an unsubmitted mobile bank transfer",
-                    idempotency_key=f"mobile-cancel-payment-intent:{intent_id}",
+                    reason="Customer canceled an unsubmitted bank-transfer request",
+                    idempotency_key=f"customer-cancel-payment-intent:{intent_id}",
                 ),
                 account_id=UUID(str(account_id)),
                 intent_id=intent_id,
                 source=DirectTransferCancellationSource.customer_selfcare,
             ),
         )
-    except (ValueError, DomainError) as exc:
-        detail = exc.message if isinstance(exc, DomainError) else str(exc)
-        raise HTTPException(status_code=400, detail=detail) from exc
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TopupCancelResponse(
+        intent_id=outcome.intent_id,
+        status="canceled",
+        changed=outcome.changed,
+    )
 
 
 @router.post("/topup/verify", response_model=TopupVerifyResponse)

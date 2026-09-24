@@ -89,11 +89,10 @@ void main() {
   test('cancel direct transfer uses the self-scoped intent endpoint', () async {
     final adapter = _FakeAdapter((_) => ResponseBody.fromString('', 204));
 
-    await BillingRepository(_dio(adapter))
-        .cancelDirectTransferIntent('intent-2');
+    await BillingRepository(_dio(adapter)).cancelTopupIntent('intent-2');
 
-    expect(adapter.calls.single.method, 'DELETE');
-    expect(adapter.calls.single.path, '/me/topup/intents/intent-2');
+    expect(adapter.calls.single.method, 'POST');
+    expect(adapter.calls.single.path, '/me/topup/intents/intent-2/cancel');
   });
 
   test('invoice PDF uses authenticated API path and server filename', () async {
@@ -131,6 +130,37 @@ void main() {
     expect(
       BillingRepository(_dio(adapter)).invoicePdf('i-1'),
       throwsA(isA<ApiException>()),
+    );
+  });
+
+  test('payment proof upload filename preserves supported picker name', () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/scaled_image.jpg',
+        fileName: 'receipt.PNG',
+      ),
+      'receipt.PNG',
+    );
+  });
+
+  test('payment proof upload filename borrows supported path extension', () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/scaled_image.png',
+        fileName: 'image_picker_12345',
+      ),
+      'image_picker_12345.png',
+    );
+  });
+
+  test('payment proof upload filename defaults extensionless images to jpg',
+      () {
+    expect(
+      paymentProofUploadFilename(
+        filePath: '/data/user/0/cache/image_picker_12345',
+        fileName: '',
+      ),
+      'receipt.jpg',
     );
   });
 }

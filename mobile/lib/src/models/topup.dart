@@ -36,21 +36,21 @@ class PaymentProviderOption {
 /// One admin-configured bank account shown under the bank-transfer option.
 class BankAccount {
   BankAccount({
-    required this.id,
+    this.id,
     required this.bankName,
     required this.accountName,
     required this.accountNumber,
     this.sortCode,
   });
 
-  final String id;
+  final String? id;
   final String bankName;
   final String accountName;
   final String accountNumber;
   final String? sortCode;
 
   factory BankAccount.fromJson(Map<String, dynamic> json) => BankAccount(
-        id: json['id']?.toString() ?? '',
+        id: json['id']?.toString(),
         bankName: json['bank_name'] as String? ?? '',
         accountName: json['account_name'] as String? ?? '',
         accountNumber: json['account_number'] as String? ?? '',
@@ -85,6 +85,96 @@ class BankTransferConfig {
   }
 }
 
+enum TopupRequestPhase {
+  awaitingReceipt,
+  awaitingProviderConfirmation,
+  processing,
+  confirmationUnavailable,
+  underReview,
+  receiptRejected,
+  unknown;
+
+  static TopupRequestPhase fromWire(String value) => switch (value) {
+        'awaiting_receipt' => awaitingReceipt,
+        'awaiting_provider_confirmation' => awaitingProviderConfirmation,
+        'processing' => processing,
+        'confirmation_unavailable' => confirmationUnavailable,
+        'under_review' => underReview,
+        'receipt_rejected' => receiptRejected,
+        _ => unknown,
+      };
+}
+
+enum TopupRequestAction {
+  uploadReceipt,
+  waitForProvider,
+  waitForReview,
+  contactSupport,
+  unknown;
+
+  static TopupRequestAction fromWire(String value) => switch (value) {
+        'upload_receipt' => uploadReceipt,
+        'wait_for_provider' => waitForProvider,
+        'wait_for_review' => waitForReview,
+        'contact_support' => contactSupport,
+        _ => unknown,
+      };
+}
+
+/// Current deposit state and next action, projected by the server owner.
+class TopupActiveRequest {
+  const TopupActiveRequest({
+    required this.intentId,
+    required this.phase,
+    required this.nextAction,
+    required this.providerType,
+    required this.reference,
+    required this.amount,
+    required this.currency,
+    required this.createdAt,
+    required this.expiresAt,
+    required this.observedAt,
+    required this.message,
+    required this.rejectionReason,
+    required this.canCancel,
+  });
+
+  final String intentId;
+  final TopupRequestPhase phase;
+  final TopupRequestAction nextAction;
+  final String providerType;
+  final String reference;
+  final double amount;
+  final String currency;
+  final DateTime createdAt;
+  final DateTime? expiresAt;
+  final DateTime observedAt;
+  final String message;
+  final String? rejectionReason;
+  final bool canCancel;
+
+  bool get isAwaitingReceipt => nextAction == TopupRequestAction.uploadReceipt;
+
+  factory TopupActiveRequest.fromJson(Map<String, dynamic> json) =>
+      TopupActiveRequest(
+        intentId: json['intent_id'] as String,
+        phase: TopupRequestPhase.fromWire(json['phase'] as String),
+        nextAction: TopupRequestAction.fromWire(json['next_action'] as String),
+        providerType: json['provider_type'] as String,
+        reference: json['reference'] as String,
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        expiresAt: json['expires_at'] == null
+            ? null
+            : DateTime.parse(json['expires_at'] as String),
+        observedAt: DateTime.parse(json['observed_at'] as String),
+        message: json['message'] as String,
+        rejectionReason: json['rejection_reason'] as String?,
+        canCancel: json['can_cancel'] as bool? ?? false,
+      );
+}
+
 class TopupPage {
   TopupPage({
     required this.providerType,
@@ -97,6 +187,7 @@ class TopupPage {
     this.customerEmail,
     this.providers = const [],
     this.depositAllowed = true,
+    this.activeDepositRequest,
     this.eligibleUnpaidTotal = 0,
     this.eligibleUnpaidInvoices = const [],
     BankTransferConfig? bankTransfer,
@@ -116,6 +207,7 @@ class TopupPage {
 
   /// Customer deposits remain allowed even when eligible invoices exist.
   final bool depositAllowed;
+  final TopupActiveRequest? activeDepositRequest;
   final double eligibleUnpaidTotal;
   final List<Map<String, dynamic>> eligibleUnpaidInvoices;
 
@@ -141,6 +233,10 @@ class TopupPage {
             .map(PaymentProviderOption.fromJson)
             .toList(),
         depositAllowed: json['deposit_allowed'] as bool? ?? true,
+        activeDepositRequest: json['active_deposit_request'] == null
+            ? null
+            : TopupActiveRequest.fromJson(
+                json['active_deposit_request'] as Map<String, dynamic>),
         eligibleUnpaidTotal: asDoubleOrNull(json['eligible_unpaid_total']) ?? 0,
         eligibleUnpaidInvoices:
             (json['eligible_unpaid_invoices'] as List? ?? const [])

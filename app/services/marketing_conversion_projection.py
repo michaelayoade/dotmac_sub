@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid5
 
+from dotmac_kernel.secret_sources import get_secret as held_secret
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -114,7 +115,9 @@ def handles_conversion_event(event: Event) -> bool:
 
 
 def _subject_key(origin: LeadOriginCapture) -> str:
-    key = settings.conversion_ingest_api_key
+    key = settings.conversion_ingest_api_key or str(
+        held_secret("conversion_ingest_api_key") or ""
+    )
     if not key:
         raise RuntimeError(
             "CONVERSION_INGEST_API_KEY is required for Fiber conversion projection"

@@ -100,7 +100,7 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
             ),
           ));
         } else {
-          await repo.cancelDirectTransferIntent(intentId);
+          await repo.cancelTopupIntent(intentId);
           messenger.showSnackBar(
             const SnackBar(content: Text('Bank transfer canceled.')),
           );

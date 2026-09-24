@@ -911,6 +911,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Set the date range, team, status, or other scope before reviewing totals and rows.",
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
+        "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
         route_templates=("/admin/reports",),
     ),
     _guide(
@@ -1593,7 +1594,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     ),
     "reports-overview": (
         _action("choose-report", "Choose a report", 0),
-        _action("filter-report", "Filter report results", 1),
+        _action("filter-report", "Filter report results", 1, 4),
         _action("investigate-report", "Investigate a report item", 2),
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"

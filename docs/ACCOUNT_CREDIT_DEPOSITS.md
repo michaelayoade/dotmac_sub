@@ -88,6 +88,14 @@ against a current succeeded payment is repair drift, not an active customer
 request, so the active-request owner does not block a replacement deposit while
 `financial.topup_intent_proof_reconciliation` remains the repair owner.
 
+The self-care `GET /api/v1/me/topup` response includes both `deposit_allowed`
+and the owner's `active_deposit_request` projection. The mobile Top Up page
+shows the request's message, amount, and reference when deposits are blocked,
+and does not request an allocation preview or offer another checkout. Refresh
+re-reads the owner projection. When a preview request fails for another reason,
+the page shows the API's safe error message and offers a retry; online checkout
+still requires a fresh preview fingerprint.
+
 The owner-generated preview is mandatory before checkout starts. For the exact
 requested amount it reports:
 

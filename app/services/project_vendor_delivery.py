@@ -16,8 +16,10 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.models.vendor_routes import (
     AsBuiltRoute,
     InstallationProject,
+    InstallationProjectStatus,
     ProjectQuote,
     ProposedRouteRevision,
+    VendorAssignmentType,
     VendorPurchaseInvoice,
 )
 from app.schemas.status_presentation import StatusPresentation
@@ -119,6 +121,7 @@ class ProjectVendorDeliveryProjection:
     installation_project_id: UUID
     vendor_name: str
     installation_status: StatusPresentation
+    can_unassign_vendor: bool
     quote: VendorQuoteGlance | None
     route: VendorRouteGlance | None
     as_built: VendorAsBuiltGlance | None
@@ -329,6 +332,16 @@ def project_vendor_delivery_from_record(
         installation_project_id=row.id,
         vendor_name=getattr(row.assigned_vendor, "name", None) or "Unassigned",
         installation_status=installation_project_status_presentation(row.status),
+        can_unassign_vendor=(
+            row.status
+            in {
+                InstallationProjectStatus.assigned.value,
+                InstallationProjectStatus.approved.value,
+            }
+            and row.assignment_type == VendorAssignmentType.direct.value
+            and row.assigned_vendor_id is not None
+            and visibility.can_read_operations
+        ),
         quote=(
             _quote_glance(quote, include_amount=visibility.can_read_financials)
             if operations_visible
