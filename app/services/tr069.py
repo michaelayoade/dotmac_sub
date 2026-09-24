@@ -1499,9 +1499,10 @@ class CpeDevices(ListResponseMixin):
             # so the task aborts cleanly rather than reusing a poisoned session.
             _safe_rollback(db)
             raise
-        except Exception as e:
-            logger.warning("Auto-link ONTs after sync failed: %s", e)
+        except Exception:
+            logger.exception("Auto-link ONTs after sync failed")
             db.rollback()
+            raise
 
         logger.info(
             "GenieACS sync: created=%d, updated=%d, auto_linked=%d",
