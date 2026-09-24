@@ -281,6 +281,11 @@ def quote_payment_page(db: Session, query: QuotePaymentQuery) -> QuotePaymentPag
             "This Quote is not eligible for payment",
             status=status.value,
         )
+    if str(quote.project_type or "").endswith("_relocation"):
+        raise _error(
+            "status_ineligible",
+            "Relocation payment requires the service-change handoff.",
+        )
     payment_review = quote_payment_review.resolve_payment_review(quote)
     if not payment_review.approval_current:
         raise _error(
@@ -602,6 +607,11 @@ def _initiate_deposit_native(
     the ledger — the mirror's ``deposit_paid`` flag plays no part (risk #2:
     a stale mirror must never allow a second charge)."""
     quote = selfserve.selfserve_quotes.get_for_subscriber(db, subscriber_id, quote_id)
+    if str(quote.project_type or "").endswith("_relocation"):
+        raise HTTPException(
+            status_code=409,
+            detail="Relocation payment requires the service-change handoff.",
+        )
     db.scalar(select(Quote.id).where(Quote.id == quote.id).with_for_update())
     payment_review = quote_payment_review.resolve_payment_review(quote)
     if not payment_review.approval_current:
@@ -988,6 +998,11 @@ def _verify_deposit_native(
     """Native tail (§2.2 step 4): verify the payment, then accept the quote
     in sub's own sales vertical — no CRM hop."""
     quote = selfserve.selfserve_quotes.get_for_subscriber(db, subscriber_id, quote_id)
+    if str(quote.project_type or "").endswith("_relocation"):
+        raise HTTPException(
+            status_code=409,
+            detail="Relocation payment requires the service-change handoff.",
+        )
     payment_review = quote_payment_review.resolve_payment_review(quote)
     if not payment_review.approval_current:
         raise HTTPException(status_code=409, detail=payment_review.message)

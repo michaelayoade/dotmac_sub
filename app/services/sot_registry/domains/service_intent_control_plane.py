@@ -1134,6 +1134,7 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.APPLICATION_COORDINATOR,
                         input_names=(
                             "confirmed relocation quote evidence",
+                            "approved customer relocation Quote",
                             "canonical invoice and payment allocation evidence",
                         ),
                     ),
@@ -1201,6 +1202,16 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
+                        name="approved customer relocation Quote",
+                        owner="sales.quote_payment_review",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "current staff approval fingerprint, customer-selected "
+                            "source Subscription and destination offer, destination "
+                            "pin, full Quote total and currency"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="canonical invoice and payment allocation evidence",
                         owner="financial.payments",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -1260,6 +1271,9 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.COORDINATOR_MANAGED,
                     boundary=(
+                        "Approved customer relocation Quote booking atomically links "
+                        "the exact source Subscription, destination Address, "
+                        "qualification, change request and full-charge Invoice. "
                         "Each event admission locks one change request. Remote "
                         "execution durably records any changed-price review before "
                         "network I/O; confirmed execution coordinates the RADIUS "
@@ -1270,6 +1284,8 @@ DOMAIN = DomainSOT(
                     ),
                     locking="The exact SubscriptionChangeRequest is locked first.",
                     idempotency=(
+                        "One deterministic Quote confirmation key replays the "
+                        "same relocation Invoice and rejects changed Quote evidence. "
                         "Unique structural links and deterministic service/work-order "
                         "keys replay the original outcome; an already canceled exact "
                         "request replays cancellation without another transition."
@@ -1283,6 +1299,16 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(
                         "service_intent.subscription_change_execution.service_change_not_found",
+                        "service_intent.subscription_change_execution.quote_not_found",
+                        "service_intent.subscription_change_execution.quote_scope_invalid",
+                        "service_intent.subscription_change_execution.quote_approval_stale",
+                        "service_intent.subscription_change_execution.quote_amount_invalid",
+                        "service_intent.subscription_change_execution.quote_handoff_conflict",
+                        "service_intent.subscription_change_execution.source_changed",
+                        "service_intent.subscription_change_execution.destination_changed",
+                        "service_intent.subscription_change_execution.location_invalid",
+                        "service_intent.subscription_change_execution.destination_not_serviceable",
+                        "service_intent.subscription_change_execution.pending_change",
                         "service_intent.subscription_change_execution.relocation_fee_not_settled",
                         "service_intent.subscription_change_execution.provisioning_verification_missing",
                         "service_intent.subscription_change_execution.remote_radius_profile_ambiguous",

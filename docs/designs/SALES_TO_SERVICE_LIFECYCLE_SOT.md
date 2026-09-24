@@ -125,6 +125,38 @@ fails closed until the revised snapshot is approved. Approval changes the
 customer projection to `Approved — Payment required`; it does not create an
 Invoice, SalesOrder, or Project. Those remain consequences of verified payment.
 
+Mobile service requests first select a typed installation or relocation choice.
+The destination pin and the choice are stored on the Lead and Quote; relocation
+also carries the exact owned source Subscription. A technology change uses the
+customer's selected destination plan; moves that keep
+the same technology retain the current plan. The selected plan must be an
+active, priced, customer-visible offer compatible with the source service.
+Fiber destinations use the native fiber proximity check. Airfiber destinations require a site check and
+must not borrow the fiber feasibility result. Only fiber installation currently
+receives an internal preliminary price. Other choices begin without priced
+lines so staff must author the commercial amount before approval. Customer
+Quote projections omit all price, deposit, and line amounts while review is
+pending or stale; approval requires a priced line, positive total, and deposit
+policy. The existing subscription is not changed by request intake.
+Relocation approval requires the payment percentage to be 100%; its approved
+customer projection labels the payable amount as the full relocation charge.
+Relocation quotes cannot enter the installation Quote-deposit conversion path:
+that path creates a new installation scope and does not settle the canonical
+subscription-change relocation charge. On customer booking, the typed
+`service_intent.subscription_change_execution` handoff locks the approved Quote,
+rechecks the source Subscription and destination offer, records the pinned
+Address and qualification, and issues exactly one Invoice for the full
+staff-approved Quote total. The approved Quote snapshot is the one-time fee
+authority for this path. Quote edits and payment re-review are refused after
+handoff so that the billed amount remains the approved snapshot. A retry
+returns the same Invoice. The existing invoice
+payment owner collects it; only canonical full settlement releases the
+relocation ServiceOrder and WorkOrder. The verified field completion changes
+the existing Subscription to the selected destination offer and address.
+The full quoted relocation charge covers this service change, so finalization
+does not create a second plan-proration charge. The configured wireless
+relocation fee remains the authority for the separate plan-change preview path.
+
 ## Named owners
 
 | Decision or fact | Owner |

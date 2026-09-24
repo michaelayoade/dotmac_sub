@@ -17,7 +17,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.audit import AuditActorType
 from app.models.billing import (
@@ -42,6 +42,7 @@ from app.models.provisioning import (
     ServiceOrderType,
 )
 from app.models.radius import RadiusUser
+from app.models.sales import Quote, QuoteStatus
 from app.models.subscription_change import (
     SubscriptionChangeExecutionState,
     SubscriptionChangeRequest,
@@ -73,12 +74,30 @@ class SubscriptionChangeExecutionError(ValueError):
         self.code = code
 
 
+class RelocationQuotePreparationError(DomainError):
+    """An approved customer Quote cannot be handed to relocation execution."""
+
+
+def _relocation_quote_error(
+    suffix: str, message: str
+) -> RelocationQuotePreparationError:
+    return RelocationQuotePreparationError(
+        code=f"service_intent.subscription_change_execution.{suffix}",
+        message=message,
+    )
+
+
 OWNER = "service_intent.subscription_change_execution"
 _CANCEL_PENDING_CONCERN = "pending service-change cancellation"
 _CANCEL_PENDING = OwnerCommandDefinition(
     owner=OWNER,
     concern=_CANCEL_PENDING_CONCERN,
     name="cancel_pending_plan_change",
+)
+_PREPARE_RELOCATION_QUOTE = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="relocation charge evidence and settlement admission",
+    name="prepare_approved_relocation_quote",
 )
 
 
@@ -99,6 +118,22 @@ class CancelPendingPlanChangeOutcome:
     subscription_id: UUID
     previous_status: SubscriptionChangeStatus
     status: SubscriptionChangeStatus
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PrepareRelocationQuoteCommand:
+    context: CommandContext
+    quote_id: UUID
+    subscriber_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class PrepareRelocationQuoteOutcome:
+    request_id: UUID
+    invoice_id: UUID
+    amount: Decimal
+    currency: str
     replayed: bool
 
 
@@ -519,6 +554,250 @@ def cancel_pending_plan_change(
     return execute_owner_command(
         db,
         definition=_CANCEL_PENDING,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def prepare_approved_relocation_quote(
+    db: Session, command: PrepareRelocationQuoteCommand
+) -> PrepareRelocationQuoteOutcome:
+    """Bind one approved Quote to the exact full relocation Invoice.
+
+    This is the only customer-quote entry to the existing service-change
+    settlement and fulfillment chain. The Quote never enters installation
+    acceptance, and invoice payment remains with the billing owner.
+    """
+
+    def operation() -> PrepareRelocationQuoteOutcome:
+        from fastapi import HTTPException
+
+        from app.models.catalog import OfferStatus, SubscriptionStatus
+        from app.models.subscriber import AddressType
+        from app.schemas.qualification import ServiceQualificationRequest
+        from app.schemas.subscriber import AddressCreate
+        from app.services.customer_portal_context import (
+            get_available_portal_offers,
+            offer_has_positive_recurring_price,
+        )
+        from app.services.qualification import (
+            preview_service_qualification,
+            record_service_qualification,
+        )
+        from app.services.sales import quote_payment_review
+        from app.services.sales.service_request_types import (
+            ServiceRequestKind,
+            ServiceRequestOption,
+        )
+        from app.services.subscriber import AddressOwnerError, create_address
+
+        quote = db.scalars(
+            select(Quote)
+            .where(Quote.id == command.quote_id)
+            .options(selectinload(Quote.line_items))
+            .with_for_update()
+        ).one_or_none()
+        if quote is None or quote.subscriber_id != command.subscriber_id:
+            raise _relocation_quote_error("quote_not_found", "Quote not found")
+        meta = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
+        try:
+            option = ServiceRequestOption(str(meta.get("service_option") or ""))
+            source_id = UUID(str(meta.get("source_subscription_id") or ""))
+            destination_offer_id = UUID(str(meta.get("destination_offer_id") or ""))
+        except ValueError as exc:
+            raise _relocation_quote_error(
+                "quote_scope_invalid", "The relocation selection is incomplete"
+            ) from exc
+        if option.kind is not ServiceRequestKind.relocation:
+            raise _relocation_quote_error(
+                "quote_scope_invalid", "This Quote is not a relocation"
+            )
+        if (
+            not quote.is_active
+            or quote.status not in {QuoteStatus.draft.value, QuoteStatus.sent.value}
+            or not quote_payment_review.resolve_payment_review(quote).approval_current
+            or int(meta.get("deposit_percent") or 0) != 100
+        ):
+            raise _relocation_quote_error(
+                "quote_approval_stale",
+                "This relocation Quote needs current staff approval",
+            )
+        amount = Decimal(str(quote.total or 0)).quantize(Decimal("0.01"))
+        currency = str(quote.currency or "").upper()
+        if amount <= 0 or len(currency) != 3:
+            raise _relocation_quote_error(
+                "quote_amount_invalid", "The full relocation charge is unavailable"
+            )
+        fingerprint = quote_payment_review.quote_fingerprint(quote)
+        key = f"customer-relocation-quote:{quote.id}"
+        prior = db.scalar(
+            select(SubscriptionChangeRequest).where(
+                SubscriptionChangeRequest.confirmation_idempotency_key == key
+            )
+        )
+        if prior is not None:
+            snapshot = prior.confirmation_snapshot or {}
+            invoice = (
+                db.get(Invoice, prior.field_fee_invoice_id)
+                if prior.field_fee_invoice_id is not None
+                else None
+            )
+            if (
+                snapshot.get("quote_fingerprint") != fingerprint
+                or prior.subscription_id != source_id
+                or prior.requested_offer_id != destination_offer_id
+                or invoice is None
+                or Decimal(str(invoice.total or 0)) != amount
+                or invoice.currency != currency
+            ):
+                raise _relocation_quote_error(
+                    "quote_handoff_conflict",
+                    "The booked relocation no longer matches this Quote",
+                )
+            return PrepareRelocationQuoteOutcome(
+                prior.id, invoice.id, amount, currency, True
+            )
+
+        source = db.scalars(
+            select(Subscription).where(Subscription.id == source_id).with_for_update()
+        ).one_or_none()
+        if (
+            source is None
+            or source.subscriber_id != command.subscriber_id
+            or source.status is not SubscriptionStatus.active
+            or source.offer is None
+            or source.offer.access_type.value != option.source_access_type
+        ):
+            raise _relocation_quote_error(
+                "source_changed",
+                "The service to relocate has changed; request a new Quote",
+            )
+        if destination_offer_id == source.offer_id:
+            target_offer = source.offer
+            if (
+                not target_offer.is_active
+                or target_offer.status is not OfferStatus.active
+                or not target_offer.show_on_customer_portal
+                or not offer_has_positive_recurring_price(target_offer)
+            ):
+                target_offer = None
+        else:
+            target_offer = next(
+                (
+                    offer
+                    for offer in get_available_portal_offers(
+                        db,
+                        source,
+                        apply_reseller_availability=False,
+                        require_same_plan_family=False,
+                    )
+                    if offer.id == destination_offer_id
+                ),
+                None,
+            )
+        if (
+            target_offer is None
+            or target_offer.access_type.value != option.destination_access_type
+        ):
+            raise _relocation_quote_error(
+                "destination_changed", "The destination plan is no longer available"
+            )
+        install = meta.get("install") if isinstance(meta.get("install"), dict) else {}
+        address_text = str(install.get("address") or "").strip()
+        try:
+            latitude = float(install["latitude"])
+            longitude = float(install["longitude"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _relocation_quote_error(
+                "location_invalid", "Confirm the destination map pin"
+            ) from exc
+        if not address_text or len(address_text) > 120:
+            raise _relocation_quote_error(
+                "location_invalid",
+                "Confirm a destination address of 120 characters or less",
+            )
+        region = str(install.get("region") or "").strip() or None
+        if region is not None and len(region) > 80:
+            raise _relocation_quote_error(
+                "location_invalid", "The destination region is too long"
+            )
+        try:
+            target_address = create_address(
+                db,
+                AddressCreate(
+                    subscriber_id=command.subscriber_id,
+                    address_type=AddressType.service,
+                    label="Relocation destination",
+                    address_line1=address_text,
+                    region=region,
+                    latitude=latitude,
+                    longitude=longitude,
+                    is_primary=False,
+                ),
+                geocode=False,
+            )
+        except AddressOwnerError as exc:
+            raise _relocation_quote_error("location_invalid", exc.message) from exc
+        qualification_preview = preview_service_qualification(
+            db,
+            ServiceQualificationRequest(
+                address_id=target_address.id,
+                requested_tech=option.destination_access_type,
+                metadata_={
+                    "purpose": "approved_quote_relocation",
+                    "quote_id": str(quote.id),
+                },
+            ),
+        )
+        from app.models.qualification import QualificationStatus
+
+        if qualification_preview.status is not QualificationStatus.eligible:
+            raise _relocation_quote_error(
+                "destination_not_serviceable", "The destination is not yet serviceable"
+            )
+        qualification = record_service_qualification(db, qualification_preview)
+        try:
+            request = subscription_change_requests.create(
+                db,
+                subscription_id=str(source.id),
+                new_offer_id=str(destination_offer_id),
+                effective_date=datetime.now(UTC).date(),
+                requested_by_person_id=str(command.subscriber_id),
+                notes=f"Customer-approved relocation Quote {quote.id}",
+                confirmation_idempotency_key=key,
+                confirmation_origin="customer_approved_quote",
+                confirmation_snapshot={
+                    "delivery_mode": "field_migration",
+                    "delivery_state": "awaiting_payment",
+                    "quote_id": str(quote.id),
+                    "quote_fingerprint": fingerprint,
+                    "service_option": option.value,
+                    "fee_source": "staff_approved_quote_total",
+                    "financial_treatment": "quote_full_charge_no_proration",
+                },
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise _relocation_quote_error(
+                "pending_change", "This service already has a pending change"
+            ) from exc
+        request.target_service_address_id = target_address.id
+        request.service_qualification_id = qualification.id
+        request.field_fee_amount = amount
+        request.field_fee_currency = currency
+        request.field_quote_fingerprint = fingerprint
+        invoice = stage_relocation_charge(db, request)
+        if invoice is None:
+            raise _relocation_quote_error(
+                "quote_amount_invalid", "The full relocation charge is unavailable"
+            )
+        return PrepareRelocationQuoteOutcome(
+            request.id, invoice.id, amount, currency, False
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_PREPARE_RELOCATION_QUOTE,
         context=command.context,
         operation=operation,
     )
@@ -1202,6 +1481,10 @@ def finalize_verified_service_change(
     applied = subscription_change_requests.apply(
         db,
         str(request.id),
+        skip_proration_artifacts=(
+            (request.confirmation_snapshot or {}).get("financial_treatment")
+            == "quote_full_charge_no_proration"
+        ),
         plan_change_operation_key=f"subscription-change:{request.id}:finalize",
         plan_change_actor_id=actor_id,
     )
@@ -1534,6 +1817,9 @@ __all__ = [
     "ExecutionReconciliationItem",
     "ExecutionReconciliationOutcome",
     "FulfillmentOutcome",
+    "PrepareRelocationQuoteCommand",
+    "PrepareRelocationQuoteOutcome",
+    "RelocationQuotePreparationError",
     "RemoteProvisionActionCommand",
     "RemoteProvisionActionOutcome",
     "RemoteProvisionActionStatus",
@@ -1542,6 +1828,7 @@ __all__ = [
     "RemoteReprovisionOutcome",
     "finalize_verified_remote_reprovision",
     "prepare_remote_reprovision",
+    "prepare_approved_relocation_quote",
     "finalize_verified_service_change",
     "audit_execution_chain",
     "inspect_execution_chain_reconciliation",
