@@ -6,7 +6,14 @@ import '../../models/subscription.dart';
 import '../../providers/data_providers.dart';
 
 class ServiceRequestSheet extends ConsumerStatefulWidget {
-  const ServiceRequestSheet({super.key});
+  const ServiceRequestSheet({
+    super.key,
+    this.sourceSubscriptionId,
+  });
+
+  /// The service already selected on the Service tab. A null value supports
+  /// direct navigation to the quote list by using the shared current service.
+  final String? sourceSubscriptionId;
 
   @override
   ConsumerState<ServiceRequestSheet> createState() =>
@@ -16,33 +23,36 @@ class ServiceRequestSheet extends ConsumerStatefulWidget {
 class _ServiceRequestSheetState extends ConsumerState<ServiceRequestSheet> {
   ServiceRequestKind? _kind;
   ServiceRequestOption? _option;
-  String? _subscriptionId;
   String? _destinationOfferId;
 
   @override
   Widget build(BuildContext context) {
-    final subscriptions = ref.watch(subscriptionsProvider);
-    final current = subscriptions.asData?.value.items
-            .where((service) => service.isActive)
-            .toList() ??
-        const <Subscription>[];
+    final source = widget.sourceSubscriptionId == null
+        ? ref.watch(displayedServiceProvider)
+        : ref.watch(subscriptionsProvider).whenData((page) {
+            for (final service in page.items) {
+              if (service.id == widget.sourceSubscriptionId) return service;
+            }
+            return null;
+          });
+    final sourceService = source.asData?.value;
+    final isRelocation = _kind == ServiceRequestKind.relocation;
     final available = ServiceRequestOption.values
         .where((option) => option.kind == _kind)
+        .where((option) =>
+            !isRelocation ||
+            (sourceService != null &&
+                _matchesCurrentService(option, sourceService)))
         .toList();
-    final isRelocation = _kind == ServiceRequestKind.relocation;
-    final needsDestinationPlan = _option?.changesTechnology ?? false;
-    final planOptions = needsDestinationPlan && _subscriptionId != null
+    final selectedOption = available.contains(_option) ? _option : null;
+    final needsDestinationPlan = selectedOption?.changesTechnology ?? false;
+    final planOptions = needsDestinationPlan && sourceService?.isActive == true
         ? ref.watch(relocationPlansProvider(
-            (_subscriptionId!, _option!.destinationAccessType)))
+            (sourceService!.id, selectedOption!.destinationAccessType)))
         : null;
-    Subscription? selectedService;
-    for (final service in current) {
-      if (service.id == _subscriptionId) selectedService = service;
-    }
-    final canContinue = _option != null &&
+    final canContinue = selectedOption != null &&
         (!isRelocation ||
-            (selectedService != null &&
-                _matchesCurrentService(_option!, selectedService) &&
+            (sourceService?.isActive == true &&
                 (!needsDestinationPlan || _destinationOfferId != null)));
 
     return SafeArea(
@@ -79,79 +89,78 @@ class _ServiceRequestSheetState extends ConsumerState<ServiceRequestSheet> {
                 onSelectionChanged: (selected) => setState(() {
                   _kind = selected.isEmpty ? null : selected.first;
                   _option = null;
-                  _subscriptionId = null;
                   _destinationOfferId = null;
                 }),
               ),
               if (isRelocation) ...[
                 const SizedBox(height: 16),
-                if (subscriptions.isLoading)
+                if (source.isLoading)
                   const LinearProgressIndicator()
-                else if (subscriptions.hasError)
+                else if (source.hasError)
                   const Text('Could not load your services. Please try again.')
-                else if (current.isEmpty)
+                else if (sourceService == null)
                   const Text(
-                      'You need an existing service to request a relocation.')
-                else
-                  DropdownButtonFormField<String>(
-                    key: const ValueKey('relocation-existing-service'),
-                    initialValue: _subscriptionId,
+                    'You need an existing service to request a relocation.',
+                  )
+                else ...[
+                  Text(
+                    'Relocating ${sourceService.displayName}',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  if (!sourceService.isActive) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'This service is not active and cannot be relocated. '
+                      'Reactivate it or contact support.',
+                    ),
+                  ],
+                ],
+              ],
+              if (_kind != null &&
+                  (!isRelocation || sourceService?.isActive == true)) ...[
+                const SizedBox(height: 16),
+                if (available.isEmpty)
+                  const Text(
+                    'No relocation types are available for this service.',
+                  )
+                else ...[
+                  DropdownButtonFormField<ServiceRequestOption>(
+                    key: ValueKey(
+                      'service-option-${_kind!.name}-${sourceService?.id}',
+                    ),
+                    initialValue: selectedOption,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Service to relocate',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: isRelocation
+                          ? 'Relocation type'
+                          : 'Installation type',
+                      border: const OutlineInputBorder(),
                     ),
                     items: [
-                      for (final service in current)
+                      for (final option in available)
                         DropdownMenuItem(
-                          value: service.id,
-                          child: Text(service.displayName,
-                              overflow: TextOverflow.ellipsis),
+                          value: option,
+                          child: Text(
+                            option.label,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: (value) => setState(() {
-                      _subscriptionId = value;
-                      _option = null;
+                      _option = value;
                       _destinationOfferId = null;
                     }),
                   ),
-              ],
-              if (_kind != null) ...[
-                const SizedBox(height: 16),
-                DropdownButtonFormField<ServiceRequestOption>(
-                  key: ValueKey('service-option-${_kind!.name}'),
-                  initialValue: _option,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText:
-                        isRelocation ? 'Relocation type' : 'Installation type',
-                    border: const OutlineInputBorder(),
-                  ),
-                  items: [
-                    for (final option in available)
-                      DropdownMenuItem(
-                        value: option,
-                        enabled: !isRelocation ||
-                            selectedService == null ||
-                            _matchesCurrentService(option, selectedService),
-                        child:
-                            Text(option.label, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 12),
+                  for (final option in available)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        '${option.label}: ${option.description}',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
-                  ],
-                  onChanged: (value) => setState(() {
-                    _option = value;
-                    _destinationOfferId = null;
-                  }),
-                ),
-                const SizedBox(height: 12),
-                for (final option in available)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      '${option.label}: ${option.description}',
-                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                  ),
+                ],
                 if (needsDestinationPlan) ...[
                   const SizedBox(height: 8),
                   if (planOptions == null || planOptions.isLoading)
@@ -189,8 +198,9 @@ class _ServiceRequestSheetState extends ConsumerState<ServiceRequestSheet> {
                 onPressed: canContinue
                     ? () => Navigator.of(context).pop(
                           ServiceRequestSelection(
-                            option: _option!,
-                            subscriptionId: _subscriptionId,
+                            option: selectedOption,
+                            subscriptionId:
+                                isRelocation ? sourceService?.id : null,
                             destinationOfferId: _destinationOfferId,
                           ),
                         )
@@ -208,8 +218,6 @@ class _ServiceRequestSheetState extends ConsumerState<ServiceRequestSheet> {
     ServiceRequestOption option,
     Subscription service,
   ) {
-    final access = service.offerAccessType;
-    if (access == null) return true; // The server will validate the source.
-    return access == option.sourceAccessType;
+    return service.offerAccessType == option.sourceAccessType;
   }
 }

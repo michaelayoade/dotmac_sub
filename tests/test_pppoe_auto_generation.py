@@ -103,8 +103,14 @@ class TestAutoGeneratePppoeCredential:
     def test_rebinds_disabled_service_credential_to_replacement_subscription(
         self, db_session, subscriber, catalog_offer
     ):
+        from app.models.catalog import RadiusProfile
+
         _seed_pppoe_settings(db_session, start=64000)
         _set_subscriber_number(db_session, subscriber, "SUB-064000")
+        prior_profile = RadiusProfile(name="Prior replacement profile", is_active=True)
+        successor_profile = RadiusProfile(
+            name="Successor replacement profile", is_active=True
+        )
         old_subscription = Subscription(
             subscriber_id=subscriber.id,
             offer_id=catalog_offer.id,
@@ -116,7 +122,9 @@ class TestAutoGeneratePppoeCredential:
             offer_id=catalog_offer.id,
             status=SubscriptionStatus.pending,
         )
-        db_session.add_all([old_subscription, new_subscription])
+        db_session.add_all(
+            [prior_profile, successor_profile, old_subscription, new_subscription]
+        )
         db_session.flush()
         credential = AccessCredential(
             subscriber_id=subscriber.id,
@@ -124,6 +132,7 @@ class TestAutoGeneratePppoeCredential:
             username="10064000",
             secret_hash="plain:existing-secret",
             is_active=True,
+            radius_profile_id=prior_profile.id,
         )
         db_session.add(credential)
         db_session.commit()
@@ -133,6 +142,7 @@ class TestAutoGeneratePppoeCredential:
             EnsurePppoeCredentialCommand(
                 subscriber_id=subscriber.id,
                 subscription_id=new_subscription.id,
+                radius_profile_id=successor_profile.id,
             ),
         )
 
@@ -143,6 +153,7 @@ class TestAutoGeneratePppoeCredential:
         assert outcome.disposition is PppoeCredentialDisposition.rebound_replacement
         assert credential.subscription_id == new_subscription.id
         assert credential.secret_hash == "plain:existing-secret"
+        assert credential.radius_profile_id == successor_profile.id
         assert new_subscription.login == "10064000"
         assert db_session.query(AccessCredential).count() == 1
 
@@ -200,6 +211,64 @@ class TestAutoGeneratePppoeCredential:
 
         result = _ensure_credential(db_session, str(subscriber.id))
         assert result.id == existing.id
+
+    def test_does_not_rebind_disabled_credential_when_another_service_is_active(
+        self, db_session, subscriber, catalog_offer
+    ):
+        """A replacement must not steal a credential from a multi-service account."""
+        _seed_pppoe_settings(db_session, prefix="SEQ", start=64001)
+        _set_subscriber_number(db_session, subscriber, "SUB-064001")
+        disabled = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.disabled,
+        )
+        other_active_service = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        )
+        successor = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        )
+        db_session.add_all([disabled, other_active_service, successor])
+        db_session.flush()
+        disabled_credential = AccessCredential(
+            subscriber_id=subscriber.id,
+            subscription_id=disabled.id,
+            username="100016989",
+            secret_hash="plain:disabled-service-secret",
+            is_active=True,
+        )
+        other_credential = AccessCredential(
+            subscriber_id=subscriber.id,
+            subscription_id=other_active_service.id,
+            username="100024532",
+            secret_hash="plain:other-service-secret",
+            is_active=True,
+        )
+        db_session.add_all([disabled_credential, other_credential])
+        db_session.commit()
+
+        outcome = ensure_pppoe_credential(
+            db_session,
+            EnsurePppoeCredentialCommand(
+                subscriber_id=subscriber.id,
+                subscription_id=successor.id,
+            ),
+        )
+
+        db_session.refresh(disabled_credential)
+        db_session.refresh(other_credential)
+        assert outcome.disposition is PppoeCredentialDisposition.created
+        assert outcome.credential_id not in {
+            disabled_credential.id,
+            other_credential.id,
+        }
+        assert disabled_credential.subscription_id == disabled.id
+        assert other_credential.subscription_id == other_active_service.id
 
     def test_generates_when_only_inactive_credential_exists(
         self, db_session, subscriber

@@ -749,6 +749,63 @@ class TestAutoLinkOnts:
         assert linked.ont_unit_id == ont.id
         assert linked.acs_server_id == server.id
 
+    def test_sync_propagates_auto_link_failure(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Fail Loud ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        ont = OntUnit(serial_number="AUTOLINK-FAIL-001", is_active=True)
+        db_session.add(ont)
+        db_session.commit()
+
+        mock_device = {
+            "_id": "00D09E-TestProduct-AUTOLINK-FAIL-001",
+            "_deviceId": {
+                "_OUI": "00D09E",
+                "_ProductClass": "TestProduct",
+                "_SerialNumber": "AUTOLINK-FAIL-001",
+            },
+        }
+        with (
+            patch("app.services.tr069.create_genieacs_client") as MockClient,
+            patch("app.services.tr069._link_unassigned_inform_device_to_matching_ont"),
+            patch(
+                "app.services.tr069.link_tr069_device_to_ont",
+                side_effect=RuntimeError("auto-link failed"),
+            ),
+        ):
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                "AUTOLINK-FAIL-001",
+            )
+            instance.extract_parameter_value.return_value = None
+
+            with pytest.raises(RuntimeError, match="auto-link failed"):
+                CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        # The inventory upsert was committed before the idempotent auto-link
+        # phase. A task retry can therefore resume without duplicating the CPE.
+        persisted = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(genieacs_device_id=mock_device["_id"])
+            .one()
+        )
+        assert persisted.serial_number == "AUTOLINK-FAIL-001"
+
     def test_sync_links_existing_unassigned_device_by_serial(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.tr069 import CpeDevices, acs_servers
@@ -1202,9 +1259,9 @@ class TestAutoLinkOnts:
         assert resolve_acs_for_ont(db_session, ont).server_id == str(server.id)
 
     def test_sync_retires_expected_placeholder_when_real_acs_device_arrives(
-        self, db_session
+        self, db_session, subscriber
     ) -> None:
-        from app.models.network import OntUnit
+        from app.models.network import CPEDevice, OntUnit
         from app.services.tr069 import CpeDevices, acs_servers
 
         server = acs_servers.create(
@@ -1224,11 +1281,16 @@ class TestAutoLinkOnts:
             tr069_acs_server_id=server.id,
             is_active=True,
         )
-        db_session.add(ont)
+        cpe = CPEDevice(
+            subscriber_id=subscriber.id,
+            serial_number="HWTC13EE6B84",
+        )
+        db_session.add_all([ont, cpe])
         db_session.flush()
         placeholder = Tr069CpeDevice(
             acs_server_id=server.id,
             ont_unit_id=ont.id,
+            cpe_device_id=cpe.id,
             serial_number="HWTC13EE6B84",
             is_active=True,
         )
@@ -1266,8 +1328,10 @@ class TestAutoLinkOnts:
 
         assert result["created"] == 1
         assert registered.ont_unit_id == ont.id
+        assert registered.cpe_device_id == cpe.id
         assert registered.is_active is True
         assert placeholder.ont_unit_id is None
+        assert placeholder.cpe_device_id == cpe.id
         assert placeholder.is_active is False
         assert ont.tr069_acs_server_id == server.id
 

@@ -2751,6 +2751,11 @@ evidenced owner contract:
   prepaid enforcement, payment settlement, and billing reconciliation.
   `financial.access_resolution`, payment arrangements/proofs/extensions, and
   billing health supply independent decision inputs; none writes access state.
+  A submitted payment proof is unverified evidence only: it provides neither
+  payment nor prepaid-coverage entitlement and cannot shield dunning or the
+  canonical prepaid balance sweep. Verification records the actual payment at
+  its paid-at date; the established funding and restoration lifecycle then
+  decides whether coverage permits access restoration.
 - Grace owner: `app.services.collections.grace_policy` resolves the effective
   duration and provenance once: explicit account override, then active policy
   set, then billing-mode default. Postpaid dunning steps count from the end of
@@ -5490,6 +5495,11 @@ Service intent:
    Disabled, or Canceled applies the corresponding post-create lifecycle command.
    Disabled is a reversible administrative pause: billing and network access stop,
    while credentials, IP assignments, add-ons, and service configuration remain.
+   When an account has exactly one active PPPoE credential bound to its disabled
+   service, activation of a successor service rebinds that credential, including
+   its username and encrypted secret, to the successor and its RADIUS profile.
+   A replacement never mints a second PPPoE identity; ambiguous or multi-service
+   credential state falls through to the existing multi-service generation path.
    Restore returns that same service to Active and shifts its next billing date
    by the recorded pause duration, preventing catch-up billing for the disabled
    period. Canceled is terminal and releases or ends those operational service
@@ -5837,3 +5847,14 @@ rows remain preserved and non-authenticating by design.
 rollback target. On rollback, keep all `party_id` values and backfill evidence;
 do not reverse the data migration. **Never roll back below 534** — a pre-534
 image would mint new sessions with no `party_id`.
+
+
+### Material fulfillment quantity observations
+
+`operations.material_dependencies` owns the versioned ERP line-quantity
+projection described in `docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md`. Partial
+issues remain pending dependencies; ERP owns stock and original requested
+quantities remain immutable. `tests/test_material_partial_fulfillment.py` guards
+complete snapshots, stable SKU matching, stale/regressive delivery, cancellation
+and final-only allocation. Rebuild through the existing status reconciliation;
+unknown historical quantities must not be represented as zero or reissued.

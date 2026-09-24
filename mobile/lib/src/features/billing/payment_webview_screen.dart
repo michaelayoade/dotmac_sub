@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import '../../config/env.dart';
+import '../../core/payment_app_launcher.dart';
+import '../../core/payment_navigation.dart';
 import '../../models/payment_flow.dart';
 import '../../models/reseller.dart';
 import '../../models/topup.dart';
@@ -78,14 +79,20 @@ class CheckoutArgs {
 }
 
 /// Hosts the payment provider's first-party checkout URL in a WebView. On a
-/// successful charge the provider callback redirects to a
-/// brand-specific `<scheme>://` sentinel (see [Brand.paymentScheme]) which we
-/// intercept; the screen then pops the reference back to the caller (which
-/// verifies it). Pops `null` on cancel.
+/// successful charge the provider callback redirects to an app sentinel or the
+/// API's HTTPS verification URL, which we intercept. Native-wallet links are
+/// handed to the operating system while this checkout remains on the back
+/// stack. The screen then pops the reference back to the caller (which verifies
+/// it). Pops `null` on cancel.
 class PaymentWebViewScreen extends StatefulWidget {
-  const PaymentWebViewScreen({super.key, required this.args});
+  const PaymentWebViewScreen({
+    super.key,
+    required this.args,
+    this.paymentAppLauncher = const PlatformPaymentAppLauncher(),
+  });
 
   final CheckoutArgs args;
+  final PaymentAppLauncher paymentAppLauncher;
 
   @override
   State<PaymentWebViewScreen> createState() => _PaymentWebViewScreenState();
@@ -120,35 +127,60 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
       ..loadRequest(Uri.parse(widget.args.checkoutUrl));
   }
 
-  NavigationDecision _handleNavigation(NavigationRequest request) {
-    final url = request.url;
-    if (url.startsWith('${Brand.paymentScheme}://success')) {
-      final reference =
-          Uri.parse(url).queryParameters['reference'] ?? widget.args.reference;
-      Navigator.of(context).pop(reference);
-      return NavigationDecision.prevent;
+  Future<NavigationDecision> _handleNavigation(
+      NavigationRequest request) async {
+    final target = resolvePaymentNavigation(
+      request.url,
+      expectedReference: widget.args.reference,
+    );
+    switch (target.disposition) {
+      case PaymentNavigationDisposition.complete:
+        if (mounted) {
+          Navigator.of(context).pop(target.reference ?? widget.args.reference);
+        }
+        return NavigationDecision.prevent;
+      case PaymentNavigationDisposition.cancel:
+        if (mounted) Navigator.of(context).pop();
+        return NavigationDecision.prevent;
+      case PaymentNavigationDisposition.navigateInWebView:
+        return NavigationDecision.navigate;
+      case PaymentNavigationDisposition.tryExternalApp:
+        final result = await widget.paymentAppLauncher.launch(
+          target.uri!,
+          nonBrowserOnly: true,
+        );
+        return result.launched
+            ? NavigationDecision.prevent
+            : NavigationDecision.navigate;
+      case PaymentNavigationDisposition.launchExternalApp:
+        final result = await widget.paymentAppLauncher.launch(
+          target.uri!,
+          nonBrowserOnly: false,
+        );
+        if (result.launched) return NavigationDecision.prevent;
+        final fallbackUrl = result.fallbackUrl;
+        if (fallbackUrl != null) {
+          await _controller.loadRequest(fallbackUrl);
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'The payment app could not be opened. Make sure it is installed, then try again.',
+              ),
+            ),
+          );
+        }
+        return NavigationDecision.prevent;
+      case PaymentNavigationDisposition.block:
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('This payment link could not be opened safely.'),
+            ),
+          );
+        }
+        return NavigationDecision.prevent;
     }
-    if (url.startsWith('${Brand.paymentScheme}://cancel')) {
-      Navigator.of(context).pop();
-      return NavigationDecision.prevent;
-    }
-    final uri = Uri.tryParse(url);
-    if (uri != null &&
-        uri.host == 'standard.paystack.co' &&
-        uri.path == '/close') {
-      Navigator.of(context).pop();
-      return NavigationDecision.prevent;
-    }
-    final returnedReference = uri?.queryParameters['reference'];
-    if (uri != null &&
-        uri.scheme == 'https' &&
-        returnedReference != null &&
-        returnedReference == widget.args.reference &&
-        uri.path.endsWith('/verify')) {
-      Navigator.of(context).pop(returnedReference);
-      return NavigationDecision.prevent;
-    }
-    return NavigationDecision.navigate;
   }
 
   Future<bool> _confirmLeave() async {

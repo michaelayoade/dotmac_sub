@@ -178,8 +178,15 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) =>
             PaymentWebViewScreen(args: state.extra as CheckoutArgs),
       ),
-      // Self-serve installation quotes (map-pin → estimate → pay deposit).
-      GoRoute(path: '/quotes', builder: (_, __) => const QuotesScreen()),
+      // Self-serve service quotes (map-pin → estimate → pay deposit).
+      GoRoute(
+        path: '/quotes',
+        builder: (_, state) => QuotesScreen(
+          sourceSubscriptionId: state.extra is Subscription
+              ? (state.extra as Subscription).id
+              : null,
+        ),
+      ),
       GoRoute(
         path: '/quotes/request',
         redirect: (_, state) =>

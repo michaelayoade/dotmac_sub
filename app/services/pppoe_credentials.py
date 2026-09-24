@@ -289,7 +289,8 @@ def ensure_pppoe_credential(
                 .with_for_update()
                 .all()
             )
-            if len(replacement) == 1:
+            active_credentials = existing_query.with_for_update().all()
+            if len(active_credentials) == 1 and len(replacement) == 1:
                 existing = replacement[0]
                 existing.subscription_id = command.subscription_id
                 existing.radius_profile_id = command.radius_profile_id

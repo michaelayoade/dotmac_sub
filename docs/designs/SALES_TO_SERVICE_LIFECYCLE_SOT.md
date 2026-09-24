@@ -126,9 +126,12 @@ customer projection to `Approved — Payment required`; it does not create an
 Invoice, SalesOrder, or Project. Those remain consequences of verified payment.
 
 Mobile service requests first select a typed installation or relocation choice.
-The destination pin and the choice are stored on the Lead and Quote; relocation
-also carries the exact owned source Subscription. A technology change uses the
-customer's selected destination plan; moves that keep
+The destination pin and the choice are stored on the Lead and Quote. Relocation
+inherits the exact source Subscription already selected on the mobile Service
+tab instead of asking the customer to select it again. Only relocation choices
+compatible with that Subscription's access technology are offered, and the
+server rechecks that the source is owned and active. A technology change uses
+the customer's selected destination plan; moves that keep
 the same technology retain the current plan. The selected plan must be an
 active, priced, customer-visible offer compatible with the source service.
 Fiber destinations use the native fiber proximity check. Airfiber destinations require a site check and
@@ -371,13 +374,15 @@ permissions and empty/error states remain unchanged. No schema change is needed.
   keyboard focus, accessible labels, and light/dark variants use shared admin
   design tokens.
 
-## Selfcare mobile installation quote page contract
+## Selfcare mobile service quote page contract
 
 - Screen identifiers and routes: the quote list at `/quotes` and the
   map-pinned request form at `/quotes/request`.
-- Audience and job: an authenticated subscriber reviews installation quotes
-  and, only when eligible, requests an estimate for a precisely pinned service
-  location.
+- Audience and job: an authenticated subscriber reviews installation and
+  relocation quotes and, only when eligible, requests an estimate for a
+  precisely pinned service location. Relocation uses the exact Subscription
+  selected on the Service tab, does not expose a second service picker, and
+  offers only relocation types compatible with that service's access type.
 - Authoritative owners: the selected quote read owner supplies
   `source_state`, `actions_available`, and an optional customer-safe
   `actions_unavailable_message`. The mobile adapter renders those values and
