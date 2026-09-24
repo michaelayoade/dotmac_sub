@@ -5847,3 +5847,14 @@ rows remain preserved and non-authenticating by design.
 rollback target. On rollback, keep all `party_id` values and backfill evidence;
 do not reverse the data migration. **Never roll back below 534** — a pre-534
 image would mint new sessions with no `party_id`.
+
+
+### Material fulfillment quantity observations
+
+`operations.material_dependencies` owns the versioned ERP line-quantity
+projection described in `docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md`. Partial
+issues remain pending dependencies; ERP owns stock and original requested
+quantities remain immutable. `tests/test_material_partial_fulfillment.py` guards
+complete snapshots, stable SKU matching, stale/regressive delivery, cancellation
+and final-only allocation. Rebuild through the existing status reconciliation;
+unknown historical quantities must not be represented as zero or reissued.

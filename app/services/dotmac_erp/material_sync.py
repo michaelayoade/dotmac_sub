@@ -51,6 +51,7 @@ from app.models.field_erp_sync import (
     flow_owned_by_sub,
 )
 from app.models.field_material import FieldMaterialRequest, FieldMaterialRequestItem
+from app.schemas.erp_material_webhook import ErpMaterialStatusLine
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.dotmac_erp import outbox
@@ -406,6 +407,80 @@ def _serial_numbers_by_sequence(
     return tuple(observed)
 
 
+def material_line_progress(
+    response: dict[str, object],
+) -> tuple[material_requests.MaterialLineFulfillment, ...] | None:
+    """Adapt the versioned ERP snapshot; legacy status-only replies remain valid."""
+    if response.get("fulfillment_version") is None:
+        return None
+    if response.get("fulfillment_version") != 1:
+        raise MaterialStatusResponseError(
+            code="integration.dotmac_erp_material_support_adapter.invalid_outcome",
+            message="Unsupported ERP fulfillment version.",
+        )
+    raw_items = response.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise MaterialStatusResponseError(
+            code="integration.dotmac_erp_material_support_adapter.invalid_outcome",
+            message="ERP fulfillment snapshot has no lines.",
+        )
+    result: list[material_requests.MaterialLineFulfillment] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raise MaterialStatusResponseError(
+                code="integration.dotmac_erp_material_support_adapter.invalid_outcome",
+                message="Invalid ERP fulfillment line.",
+            )
+        line = ErpMaterialStatusLine.model_validate(
+            {
+                "sequence": raw.get("sequence"),
+                "item_code": raw.get("item_code"),
+                "requested_qty": raw.get("requested_qty"),
+                "issued_qty": raw.get("issued_qty", raw.get("ordered_qty")),
+                "out_of_stock": raw.get("out_of_stock", False),
+                "serial_numbers": raw.get("serial_numbers") or [],
+            }
+        )
+        if (
+            line.item_code is None
+            or line.requested_qty is None
+            or line.issued_qty is None
+        ):
+            raise MaterialStatusResponseError(
+                code="integration.dotmac_erp_material_support_adapter.invalid_outcome",
+                message="Incomplete ERP fulfillment quantities.",
+            )
+        result.append(
+            material_requests.MaterialLineFulfillment(
+                sequence=line.sequence,
+                item_code=line.item_code,
+                requested_qty=line.requested_qty,
+                issued_qty=line.issued_qty,
+                out_of_stock=line.out_of_stock,
+                serial_numbers=line.serial_numbers,
+            )
+        )
+    return tuple(result)
+
+
+def material_source_updated_at(
+    response: dict[str, object], fallback: datetime
+) -> datetime:
+    if response.get("fulfillment_version") is None:
+        return fallback
+    raw = response.get("updated_at")
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("Missing timezone")
+    except (ValueError, TypeError) as exc:
+        raise MaterialStatusResponseError(
+            code="integration.dotmac_erp_material_support_adapter.invalid_outcome",
+            message="ERP fulfillment source timestamp is missing or invalid.",
+        ) from exc
+    return parsed
+
+
 def _observation_command(
     candidate: MaterialStatusRefreshCandidate,
     response: dict[str, object],
@@ -436,8 +511,12 @@ def _observation_command(
         request_id=candidate.request_id,
         provider_request_id=provider_request_id,
         provider_status=provider_status,
-        observed_at=observed_at,
+        observed_at=material_source_updated_at(response, observed_at),
         serial_numbers_by_sequence=_serial_numbers_by_sequence(response),
+        line_progress=material_line_progress(response),
+        provider_request_number=str(response["request_number"])
+        if response.get("request_number")
+        else None,
     )
 
 
@@ -499,6 +578,12 @@ def apply_material_response(
         support_system=PROVIDER,
         support_reference=erp_id,
         support_status=material_status,
+        support_request_number=str(response["request_number"])
+        if response.get("request_number")
+        else None,
+        line_progress=material_line_progress(response),
+        source_updated_at=material_source_updated_at(response, datetime.now(UTC)),
+        serial_numbers_by_sequence=_serial_numbers_by_sequence(response),
     )
 
 

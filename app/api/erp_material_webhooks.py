@@ -16,6 +16,7 @@ from app.schemas.erp_material_webhook import (
     ErpMaterialStatusWebhook,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.dotmac_erp.material_sync import material_line_progress
 from app.services.field import material_requests
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.backoffice_contracts import (
@@ -125,7 +126,11 @@ async def receive_erp_material_status(
                     idempotency_key=delivery_id,
                 ),
                 request_id=payload.source_request_id,
-                provider_request_id=payload.request_number or payload.request_id,
+                provider_request_id=payload.request_id,
+                provider_request_number=payload.request_number,
+                line_progress=material_line_progress(
+                    payload.model_dump(mode="json", exclude_none=True)
+                ),
                 provider_status=payload.new_status,
                 observed_at=payload.updated_at or datetime.now(UTC),
                 serial_numbers_by_sequence=tuple(
