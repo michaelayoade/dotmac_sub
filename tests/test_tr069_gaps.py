@@ -1202,9 +1202,9 @@ class TestAutoLinkOnts:
         assert resolve_acs_for_ont(db_session, ont).server_id == str(server.id)
 
     def test_sync_retires_expected_placeholder_when_real_acs_device_arrives(
-        self, db_session
+        self, db_session, subscriber
     ) -> None:
-        from app.models.network import OntUnit
+        from app.models.network import CPEDevice, OntUnit
         from app.services.tr069 import CpeDevices, acs_servers
 
         server = acs_servers.create(
@@ -1224,11 +1224,16 @@ class TestAutoLinkOnts:
             tr069_acs_server_id=server.id,
             is_active=True,
         )
-        db_session.add(ont)
+        cpe = CPEDevice(
+            subscriber_id=subscriber.id,
+            serial_number="HWTC13EE6B84",
+        )
+        db_session.add_all([ont, cpe])
         db_session.flush()
         placeholder = Tr069CpeDevice(
             acs_server_id=server.id,
             ont_unit_id=ont.id,
+            cpe_device_id=cpe.id,
             serial_number="HWTC13EE6B84",
             is_active=True,
         )
@@ -1266,8 +1271,10 @@ class TestAutoLinkOnts:
 
         assert result["created"] == 1
         assert registered.ont_unit_id == ont.id
+        assert registered.cpe_device_id == cpe.id
         assert registered.is_active is True
         assert placeholder.ont_unit_id is None
+        assert placeholder.cpe_device_id == cpe.id
         assert placeholder.is_active is False
         assert ont.tr069_acs_server_id == server.id
 

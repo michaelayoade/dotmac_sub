@@ -830,9 +830,9 @@ def _refresh_synced_ont_acs_observations(
 def link_tr069_device_to_ont(
     db: Session,
     device: Tr069CpeDevice,
-    ont,
+    ont: OntUnit,
     *,
-    acs_server_id=None,
+    acs_server_id: uuid.UUID | None = None,
 ) -> None:
     """Enforce a single active TR-069 link per ONT.
 
@@ -850,15 +850,25 @@ def link_tr069_device_to_ont(
         .filter(Tr069CpeDevice.is_active.is_(True))
         .all()
     )
+    transferred_cpe_device_id: uuid.UUID | None = None
     for other in other_links:
         other.ont_unit_id = None
         if device.genieacs_device_id and not other.genieacs_device_id:
-            if device.cpe_device_id is None and other.cpe_device_id is not None:
-                device.cpe_device_id = other.cpe_device_id
+            if (
+                transferred_cpe_device_id is None
+                and device.cpe_device_id is None
+                and other.cpe_device_id is not None
+            ):
+                transferred_cpe_device_id = other.cpe_device_id
             other.is_active = False
     if other_links:
-        db.flush()
+        # Release the partial-unique active CPE identity before assigning it to
+        # the replacement row. A single flush containing both UPDATEs can order
+        # the replacement first and trip uq_tr069_cpe_devices_active_cpe_device_id.
+        db.flush(other_links)
 
+    if transferred_cpe_device_id is not None:
+        device.cpe_device_id = transferred_cpe_device_id
     device.ont_unit_id = ont.id
     target_acs_server_id = acs_server_id or device.acs_server_id
     if target_acs_server_id and device.acs_server_id != target_acs_server_id:
