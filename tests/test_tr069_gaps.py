@@ -779,9 +779,7 @@ class TestAutoLinkOnts:
         }
         with (
             patch("app.services.tr069.create_genieacs_client") as MockClient,
-            patch(
-                "app.services.tr069._link_unassigned_inform_device_to_matching_ont"
-            ),
+            patch("app.services.tr069._link_unassigned_inform_device_to_matching_ont"),
             patch(
                 "app.services.tr069.link_tr069_device_to_ont",
                 side_effect=RuntimeError("auto-link failed"),
