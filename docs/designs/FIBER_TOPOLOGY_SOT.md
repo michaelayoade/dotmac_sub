@@ -772,6 +772,21 @@ configuration caches.
   permits non-identity configuration updates only, and returns `410 Gone` for
   direct identity updates, historical creates, and deletes.
 
+### Legacy assignment mode field normalization
+
+`OntAssignment.wan_mode` and `ip_mode` are retired compatibility fields; current
+provisioning and service-intent paths do not depend on them. ORM assignments
+normalize `bridge`, `bridged`, and `setup_via_onu` to `OnuMode.bridging` in
+`wan_mode`, and to the valid `dhcp` value if bridge aliases reach the legacy
+`ip_mode` field. Other
+unknown strings fail validation. Database check constraints enforce the enum
+sets even for direct SQL writers. Migration
+`621_ont_assignment_mode_normalization` backfills bridge aliases, maps legacy
+`static`/`dynamic` aliases, clears unknown retired values to `NULL`, and installs
+the constraints. Keeping the fields loadable matters because customer list
+queries eager-load active ONT assignments; SQLAlchemy otherwise raises while
+decoding an invalid enum and the whole customer search fails.
+
 ## ONT assignment constraint cutover readiness
 
 `network.ont_assignment_cutover` is the exhaustive read-only owner for deciding
