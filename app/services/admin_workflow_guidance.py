@@ -170,6 +170,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/dashboard",),
         notes=(
             "Use visible actions on the owning record; do not work from memory.",
+            "Help shows only the sections, guides, and actions your role may use. Missing content does not grant access.",
             "If a session-expired page appears, use Refresh page so the same Admin page reloads with a fresh token.",
             "When unsure, stop and escalate with the record link and preview result.",
         ),
