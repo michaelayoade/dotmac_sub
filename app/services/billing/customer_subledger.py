@@ -442,7 +442,6 @@ def stage_reversal(
     return reversal
 
 
-
 def stage_legacy_reversal(
     db: Session,
     command: StageReversalCommand,
@@ -519,6 +518,7 @@ def stage_legacy_reversal(
         )
     db.flush()
     return reversal
+
 
 def resolve_position(
     db: Session,
