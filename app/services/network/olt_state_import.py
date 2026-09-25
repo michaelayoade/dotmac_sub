@@ -695,10 +695,10 @@ def import_olt_state_from_dump(
             _upsert_by_keys(
                 db,
                 OltLineProfile,
-                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
+                {"olt_id": olt.id, "profile_id": profile.profile_id},
                 {
-                    "name": line_profile_read.name,
-                    "binding_count": line_profile_read.binding_count,
+                    "name": profile.name,
+                    "binding_count": profile.binding_count,
                     "tr069_management_enabled": None,
                     "raw_config": line_output,
                     "last_imported_at": imported_at,
@@ -716,10 +716,10 @@ def import_olt_state_from_dump(
             _upsert_by_keys(
                 db,
                 OltServiceProfile,
-                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
+                {"olt_id": olt.id, "profile_id": profile.profile_id},
                 {
-                    "name": line_profile_read.name,
-                    "binding_count": line_profile_read.binding_count,
+                    "name": profile.name,
+                    "binding_count": profile.binding_count,
                     "ethernet_ports": None,
                     "voip_ports": None,
                     "catv_ports": None,
