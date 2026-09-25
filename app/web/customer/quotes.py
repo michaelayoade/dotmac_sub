@@ -34,6 +34,9 @@ from app.web.customer.branding import get_customer_templates
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
 logger = logging.getLogger(__name__)
+QUOTE_DEPOSIT_START_ERROR_MESSAGE = (
+    "Online payment is temporarily unavailable. Please try again later."
+)
 
 
 def _login_redirect(request: Request) -> RedirectResponse:
@@ -176,6 +179,18 @@ def customer_quote_payment_intent(
     except (ValueError, quote_deposits.QuoteDepositError) as exc:
         message = exc.message if isinstance(exc, DomainError) else str(exc)
         return JSONResponse({"detail": message}, status_code=409)
+    except DomainError as exc:
+        logger.warning(
+            "customer_quote_deposit_initiation_unavailable",
+            extra={
+                "quote_id": str(quote_id),
+                "error_code": exc.code,
+            },
+            exc_info=True,
+        )
+        return JSONResponse(
+            {"detail": QUOTE_DEPOSIT_START_ERROR_MESSAGE}, status_code=503
+        )
     return JSONResponse(content=jsonable_encoder(outcome.to_response()))
 
 

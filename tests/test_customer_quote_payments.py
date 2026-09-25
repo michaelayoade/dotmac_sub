@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from starlette.responses import Response
 
@@ -23,6 +23,7 @@ from app.models.system_user import SystemUser
 from app.schemas.portal import QuotePaymentIntentRequest
 from app.services import quote_deposits
 from app.services.customer_context import resolve_customer_context
+from app.services.domain_errors import DomainError
 from app.services.sales import quote_payment_review
 from app.web.customer import quotes as quote_routes
 
@@ -589,3 +590,50 @@ def test_quote_payment_command_rejects_client_owned_amount_and_provider():
                 "provider": "wallet",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        ValueError("No online payment provider is currently available"),
+        DomainError(
+            code="financial.payment_routing.checkout_unavailable",
+            message="Payment routing is unavailable",
+        ),
+    ),
+)
+def test_mobile_quote_deposit_start_maps_payment_start_failures_to_503(
+    monkeypatch,
+    failure,
+):
+    from app.api import me as me_api
+
+    monkeypatch.setattr(me_api, "_customer", lambda *_args: {"id": "customer"})
+    monkeypatch.setattr(
+        me_api,
+        "resolve_customer_context",
+        lambda *_args: object(),
+    )
+
+    def routing_unavailable(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        me_api.quote_deposits,
+        "initiate_quote_deposit",
+        routing_unavailable,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        me_api.my_quote_deposit_initiate(
+            uuid4(),
+            QuotePaymentIntentRequest(idempotency_key="quote-payment-routing-error"),
+            request=SimpleNamespace(
+                url_for=lambda *_args, **_kwargs: "https://example.test/verify"
+            ),
+            db=object(),
+            principal={},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == me_api.QUOTE_DEPOSIT_START_ERROR_MESSAGE
