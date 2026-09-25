@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -20,7 +21,7 @@ from app.models.automation import (
     AutomationRuleStatus,
     AutomationRuleVersion,
 )
-from app.services import automation_capabilities
+from app.services import automation_actions, automation_capabilities
 from app.services.automation_contracts import (
     AutomationActionCapability,
     AutomationConditionField,
@@ -34,6 +35,9 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+
+if TYPE_CHECKING:
+    from app.services.support_automation import AutomationCenterLegacyRuleConflict
 
 OWNER = "automation.rule_definitions"
 RULE_READ_PERMISSION = "automation:rule:read"
@@ -363,6 +367,40 @@ def _legacy_conflicts(selected_scopes: set[str]) -> tuple[str, ...]:
     )
 
 
+def _live_legacy_rule_conflicts(
+    db: Session, *, rule: AutomationRule, version: AutomationRuleVersion
+) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
+    """Read current legacy rule evidence for the bounded Support pilot.
+
+    Static SOT conflict scopes cover permanent, blanket exclusions. This pilot
+    instead needs a live check because the legacy rule only blocks publication
+    while it is active and can overlap an urgent incoming Ticket.
+    """
+
+    if rule.trigger_key != "support.ticket.created" or not any(
+        str(action.get("action_key") or "") == "support.ticket.assign_service_team"
+        for action in version.actions
+    ):
+        return ()
+    priority = next(
+        (
+            str(condition.get("value") or "").strip()
+            for condition in version.conditions
+            if str(condition.get("field_key") or "") == "priority"
+            and str(condition.get("operator") or "") == AutomationOperator.equals.value
+        ),
+        "",
+    )
+    from app.services import support_automation
+
+    return support_automation.list_automation_center_ticket_assignment_conflicts(
+        db,
+        support_automation.AutomationCenterTicketAssignmentConflictQuery(
+            priority=priority
+        ),
+    )
+
+
 def _validate_definition(
     *,
     trigger_key: str,
@@ -410,6 +448,7 @@ def _validate_definition(
 
 def _validate_persisted_definition(
     *,
+    db: Session,
     rule: AutomationRule,
     version: AutomationRuleVersion,
     permission_keys: frozenset[str],
@@ -417,6 +456,12 @@ def _validate_persisted_definition(
     automation_capabilities.require_valid_capability_registry()
     trigger = automation_capabilities.trigger_capability(rule.trigger_key)
     _require_permission(permission_keys, trigger.author_permission)
+    if not trigger.runtime_enabled:
+        raise _error(
+            "trigger_runtime_unavailable",
+            "This trigger is available for drafting but is not ready to run.",
+            trigger_key=trigger.key,
+        )
     if version.trigger_schema_version != trigger.event_schema_version:
         raise _error(
             "trigger_schema_stale",
@@ -463,6 +508,12 @@ def _validate_persisted_definition(
                 action_key=action_key,
             )
         _require_permission(permission_keys, capability.author_permission)
+        if not capability.runtime_enabled:
+            raise _error(
+                "action_runtime_unavailable",
+                "This action is available for drafting but is not ready to run.",
+                action_key=action_key,
+            )
         declared = {item.key: item for item in capability.inputs}
         stored_inputs = _stored_mapping_list(step.get("inputs"))
         if stored_inputs is None:
@@ -505,6 +556,20 @@ def _validate_persisted_definition(
             "legacy_scope_conflict",
             "The rule overlaps an exclusively legacy-owned automation scope.",
             legacy_surfaces=conflicts,
+        )
+    live_conflicts = _live_legacy_rule_conflicts(db, rule=rule, version=version)
+    if live_conflicts:
+        raise _error(
+            "live_legacy_rule_conflict",
+            "An active legacy rule could also assign this Ticket.",
+            legacy_rules=tuple(
+                {
+                    "surface_key": conflict.surface_key,
+                    "rule_id": str(conflict.rule_id),
+                    "rule_name": conflict.rule_name,
+                }
+                for conflict in live_conflicts
+            ),
         )
 
 
@@ -740,10 +805,18 @@ def publish_rule(
                 )
             raise _error("draft_not_found", "The rule has no draft to publish.")
         _validate_persisted_definition(
+            db=db,
             rule=rule,
             version=version,
             permission_keys=command.permission_keys,
         )
+        try:
+            automation_actions.require_valid_runtime_registry()
+        except automation_actions.AutomationActionExecutorError as exc:
+            raise _error(
+                "action_runtime_unavailable",
+                "The rule cannot be published because its runtime is unavailable.",
+            ) from exc
         version.published_at = datetime.now(UTC)
         version.published_by = command.context.actor
         rule.active_version_id = version.id

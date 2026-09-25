@@ -16,11 +16,18 @@
         icon=automation_icon,
         color="indigo"
     ) %}
+        {% if ticket_assignment_draft_authoring_available %}
+        <a href="/admin/automation/ticket-assignment/new" class="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New ticket-assignment draft
+        </a>
+        {% else %}
         <button type="button" disabled aria-describedby="authoring-note"
                 class="inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             New rule
         </button>
+        {% endif %}
     {% endcall %}
 
     <section aria-labelledby="runtime-heading" class="overflow-hidden rounded-2xl border {% if runtime_state == 'blocked' %}border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25{% elif runtime_state == 'ready' %}border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/25{% else %}border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/25{% endif %}">
@@ -41,7 +48,7 @@
                         The control plane is installed, but no module can execute actions yet. Deployment creates no rules and causes no business side effects.
                     {% endif %}
                 </p>
-                <p id="authoring-note" class="mt-1 text-xs text-slate-600 dark:text-slate-400">Rule authoring remains unavailable until the first complete module adapter is admitted.</p>
+                <p id="authoring-note" class="mt-1 text-xs text-slate-600 dark:text-slate-400">The ticket-assignment pilot can save drafts only. Publishing and execution remain unavailable until their separate safety checks are complete.</p>
             </div>
             <dl class="grid min-w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700 sm:min-w-[22rem] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
                 <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Known</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ module_count }}</dd></div>

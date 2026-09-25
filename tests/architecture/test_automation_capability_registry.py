@@ -20,9 +20,9 @@ def test_every_sot_domain_is_visible_in_module_catalogue() -> None:
     assert "automation_control_plane" in {item.module_key for item in modules}
 
 
-def test_unregistered_domain_cannot_resolve_a_trigger() -> None:
+def test_unregistered_trigger_cannot_resolve() -> None:
     with pytest.raises(automation_capabilities.AutomationCapabilityError):
-        automation_capabilities.trigger_capability("support.ticket.created")
+        automation_capabilities.trigger_capability("support.ticket.deleted")
 
 
 def test_checked_in_registry_is_structurally_valid() -> None:

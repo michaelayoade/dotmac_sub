@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from app.services.automation_contracts import (
+    AutomationActionCapability,
+    AutomationActionInput,
+    AutomationConditionField,
+    AutomationDomainCapabilities,
+    AutomationOperator,
+    AutomationTriggerCapability,
+    AutomationValueType,
+    LegacyAutomationSurface,
+)
 from app.services.sot_manifest import (
     AuthorityInput,
     AuthorityKind,
@@ -547,6 +557,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "typed TicketCreate, TicketUpdate, TicketMentionTarget, "
+                            "AssignTicketServiceTeamFromAutomationCommand, "
                             "comment, merge, link, resolution, typed "
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
                             "attachment-reference repair, and bulk command inputs "
@@ -711,6 +722,7 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_invalid",
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
+                        "automation_assignment_team_unavailable",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -727,6 +739,7 @@ DOMAIN = DomainSOT(
                 events=EventContract(
                     event_types=(
                         "ticket.created",
+                        "support.ticket.created",
                         "ticket.assigned",
                         "ticket.resolution_requested",
                         "ticket.resolution_confirmed",
@@ -1708,4 +1721,73 @@ DOMAIN = DomainSOT(
     rule="Support adapters request ticket mutations through the ticket service. "
     "The lifecycle owner validates raw statuses; settings may expose a "
     "subset but cannot add states or define their semantic presentation.",
+    automation=AutomationDomainCapabilities(
+        target_types=("support.ticket",),
+        triggers=(
+            AutomationTriggerCapability(
+                key="support.ticket.created",
+                label="New support ticket created",
+                event_type="support.ticket.created",
+                event_schema_version=2,
+                entity_type="support.ticket",
+                tenant_id_field="tenant_id",
+                entity_id_field="ticket_id",
+                fields=(
+                    AutomationConditionField(
+                        key="priority",
+                        label="Priority",
+                        value_type=AutomationValueType.enum,
+                        operators=(AutomationOperator.equals,),
+                        enum_values=(
+                            "lower",
+                            "low",
+                            "medium",
+                            "normal",
+                            "high",
+                            "urgent",
+                        ),
+                    ),
+                ),
+                author_permission="support:ticket:read",
+                runtime_enabled=False,
+            ),
+        ),
+        actions=(
+            AutomationActionCapability(
+                key="support.ticket.assign_service_team",
+                label="Assign service team",
+                entity_type="support.ticket",
+                command_owner="support.ticket_lifecycle",
+                command_name="assign_ticket_service_team_from_automation",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="service_team_id",
+                        label="Service team",
+                        value_type=AutomationValueType.uuid,
+                    ),
+                ),
+                author_permission="support:ticket:update",
+                runtime_scope="support:ticket:update",
+                idempotency="event, rule version, and step",
+                runtime_enabled=False,
+            ),
+        ),
+        legacy_surfaces=(
+            LegacyAutomationSurface(
+                key="support.ticket_assignment_rules",
+                label="Ticket assignment rules",
+                owner_service="support.ticket_assignment_evaluation",
+                management_path="/admin/support/assignment-rules",
+                conflict_scopes=(),
+            ),
+            LegacyAutomationSurface(
+                key="support.ticket_creation_automation",
+                label="Ticket creation automation",
+                owner_service="support.ticket_automation_rule_configuration",
+                management_path="/admin/support/automation",
+                conflict_scopes=(),
+            ),
+        ),
+    ),
 )

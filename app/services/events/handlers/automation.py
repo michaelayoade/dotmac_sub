@@ -20,6 +20,7 @@ def _registered_triggers():
         trigger
         for module in automation_capabilities.registered_module_manifests()
         for trigger in module.triggers
+        if trigger.runtime_enabled
     )
 
 
