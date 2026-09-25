@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import and_, case, func, or_, select
@@ -45,6 +45,13 @@ from app.models.billing import (
 from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInbox,
+)
+from app.models.customer_subledger import (
+    CustomerPositionEffect,
+    CustomerPostingGroup,
+    PostingCommandKind,
+    PostingProducer,
+    PostingSourceKind,
 )
 from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.schemas.billing import (
@@ -1107,6 +1114,80 @@ class AccountCreditApplications:
         return _invoice_void_release_preview(db, invoice_id)
 
     @staticmethod
+    def _reverse_customer_credit_application_posting_for_void(
+        db: Session,
+        *,
+        allocation: PaymentAllocation,
+    ) -> CustomerPostingGroup | None:
+        """Reverse customer-position consumption when a void releases credit.
+
+        ``release_for_invoice_void`` is still called from the legacy invoice-void
+        root, so it cannot use ``customer_subledger.stage_reversal`` until that
+        boundary is fully owner-command migrated. This compatibility shim writes
+        the same linked reversal evidence idempotently for the narrow void-release
+        case owned by account-credit applications.
+        """
+        original = db.scalar(
+            select(CustomerPostingGroup).where(
+                CustomerPostingGroup.source_kind
+                == PostingSourceKind.payment_allocation.value,
+                CustomerPostingGroup.source_id == allocation.id,
+                CustomerPostingGroup.command_kind
+                == PostingCommandKind.customer_credit_application,
+                CustomerPostingGroup.producer_owner
+                == PostingProducer.account_credit_applications.value,
+                CustomerPostingGroup.reverses_group_id.is_(None),
+            )
+        )
+        if original is None:
+            return None
+        existing = db.scalar(
+            select(CustomerPostingGroup).where(
+                CustomerPostingGroup.reverses_group_id == original.id
+            )
+        )
+        if existing is not None:
+            return existing
+
+        from app.services.billing.customer_subledger import permitted_authority
+
+        occurred_at = datetime.now(UTC)
+        command_id = uuid4()
+        reversal = CustomerPostingGroup(
+            account_id=original.account_id,
+            currency=original.currency,
+            authority=permitted_authority(db),
+            command_kind=PostingCommandKind.reversal,
+            producer_owner=PostingProducer.account_credit_applications.value,
+            source_kind=PostingSourceKind.payment_allocation.value,
+            source_id=allocation.id,
+            occurred_at=occurred_at,
+            command_id=command_id,
+            correlation_id=command_id,
+            causation_id=original.id,
+            idempotency_key=f"posting:invoice-void-release:{allocation.id}",
+            reverses_group_id=original.id,
+            actor="financial.account_credit_applications",
+            reason="Invoice void released account-credit allocation",
+        )
+        reversal.effects = [
+            CustomerPositionEffect(
+                effect=effect.effect,
+                amount=effect.amount,
+                currency=effect.currency,
+                obligation_id=effect.obligation_id,
+                invoice_id=effect.invoice_id,
+                payment_id=effect.payment_id,
+                credit_note_id=effect.credit_note_id,
+                entitlement_id=effect.entitlement_id,
+            )
+            for effect in original.effects
+        ]
+        db.add(reversal)
+        db.flush()
+        return reversal
+
+    @staticmethod
     def release_for_invoice_void(
         db: Session,
         *,
@@ -1148,6 +1229,9 @@ class AccountCreditApplications:
             )
             reversals.append((reversal, entry.original_entry_id))
         for allocation in allocations:
+            AccountCreditApplications._reverse_customer_credit_application_posting_for_void(
+                db, allocation=allocation
+            )
             allocation.is_active = False
             allocation.payment.updated_at = datetime.now(UTC)
         db.flush()

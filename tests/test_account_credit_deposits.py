@@ -43,6 +43,12 @@ from app.models.integration_platform import (
     IntegrationInbox,
     IntegrationInstallation,
 )
+from app.models.customer_subledger import (
+    CustomerPostingGroup,
+    PostingCommandKind,
+    PostingProducer,
+    PostingSourceKind,
+)
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate, PaymentSyncRead
@@ -1031,6 +1037,20 @@ def test_voiding_invoice_releases_applied_account_credit(db_session, subscriber)
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "4000.00"
     )
+    original_posting = (
+        db_session.query(CustomerPostingGroup)
+        .filter(
+            CustomerPostingGroup.source_kind
+            == PostingSourceKind.payment_allocation.value,
+            CustomerPostingGroup.source_id == allocation.id,
+            CustomerPostingGroup.command_kind
+            == PostingCommandKind.customer_credit_application,
+            CustomerPostingGroup.producer_owner
+            == PostingProducer.account_credit_applications.value,
+            CustomerPostingGroup.reverses_group_id.is_(None),
+        )
+        .one()
+    )
 
     result = Invoices.void_system(
         db_session,
@@ -1043,6 +1063,17 @@ def test_voiding_invoice_releases_applied_account_credit(db_session, subscriber)
     assert result.invoice.status == InvoiceStatus.void
     assert allocation.is_active is False
     assert len(result.closure.ledger_evidence) == 2
+    posting_reversal = (
+        db_session.query(CustomerPostingGroup)
+        .filter(CustomerPostingGroup.reverses_group_id == original_posting.id)
+        .one()
+    )
+    assert posting_reversal.command_kind == PostingCommandKind.reversal
+    assert (
+        posting_reversal.producer_owner
+        == PostingProducer.account_credit_applications.value
+    )
+    assert posting_reversal.source_id == allocation.id
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "10000.00"
     )
