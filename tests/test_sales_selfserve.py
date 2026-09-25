@@ -38,10 +38,11 @@ from app.models.qualification import QualificationStatus
 from app.models.sales import Lead, QuoteLineItem, SalesOrder
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.schemas.sales import QuoteUpdate
+from app.schemas.sales import QuoteLineItemCreate, QuoteUpdate
 from app.services.owner_commands import CommandContext
 from app.services.qualification import ServiceQualificationPreview
 from app.services.sales import quote_payment_review, selfserve
+from app.services.sales.service import quote_line_items
 from app.services.sales.service import quotes as sales_quotes
 from app.services.sales.service_request_types import ServiceRequestOption
 from app.services.subscription_change_execution import (
@@ -354,7 +355,6 @@ def test_customer_quote_hides_prices_until_sales_authors_terms(db_session):
     assert pending["feasibility"]["coverage"] == "covered"
 
 
-
 def test_airfiber_request_waits_for_staff_pricing_and_site_check(db_session):
     sub = _subscriber(db_session)
     quote = _request(
@@ -591,9 +591,22 @@ def test_request_quote_404_for_unknown_subscriber(db_session):
 # ---------------------------------------------------------------------------
 
 
+def _staff_price_quote(db, quote) -> None:
+    quote_line_items.create(
+        db,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Staff-authored installation charge",
+            quantity=Decimal("1"),
+            unit_price=Decimal("75000.00"),
+        ),
+    )
+
+
 def test_accept_with_deposit_accepts_and_marks_sales_order(db_session):
     sub = _subscriber(db_session)
     quote = _request(db_session, sub, distance=1300.0)
+    _staff_price_quote(db_session, quote)
 
     payload = selfserve.selfserve_quotes.accept_with_deposit(
         db_session,
@@ -626,6 +639,7 @@ def test_accept_with_deposit_accepts_and_marks_sales_order(db_session):
 def test_accept_with_deposit_is_idempotent(db_session):
     sub = _subscriber(db_session)
     quote = _request(db_session, sub, distance=1300.0)
+    _staff_price_quote(db_session, quote)
 
     first = selfserve.selfserve_quotes.accept_with_deposit(
         db_session,
@@ -655,6 +669,7 @@ def test_accept_with_deposit_is_idempotent(db_session):
 def test_accept_full_deposit_marks_order_paid(db_session):
     sub = _subscriber(db_session)
     quote = _request(db_session, sub, distance=1300.0)
+    _staff_price_quote(db_session, quote)
     selfserve.selfserve_quotes.accept_with_deposit(
         db_session,
         str(sub.id),

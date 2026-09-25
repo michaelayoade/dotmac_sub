@@ -493,6 +493,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "A Customer-backed Quote uses the selected Subscriber account directly and does not create a Lead or require a Party binding.",
             "Accepting a Lead-backed Quote converts its reviewed identity and marks that Lead Won; accepting a Customer-backed Quote reuses the existing active Subscriber. Both continue through the same sales-order and implementation workflow.",
             "Typing text alone does not select a recipient. Choose an exact typeahead result; changing the text clears the previous selection.",
+            "Before payment review, use the Quote detail line controls to edit a Draft or Sent line, or open Remove and confirm the deletion. Each action applies only to the displayed Quote.",
             "Customers can see an installation estimate while it is under review, but payment remains unavailable.",
             "Approval records the reviewer, time, revision, and exact Quote snapshot. Material Quote changes require a new review.",
         ),

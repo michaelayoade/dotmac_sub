@@ -87,7 +87,7 @@ from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.sales import quote_acceptance
-from app.services.sales.service import leads, quote_line_items, quotes
+from app.services.sales.service import leads, quotes
 from app.services.sales.service_request_types import (
     ServiceRequestKind,
     ServiceRequestOption,
