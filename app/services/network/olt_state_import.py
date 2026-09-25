@@ -695,10 +695,10 @@ def import_olt_state_from_dump(
             _upsert_by_keys(
                 db,
                 OltLineProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
                 {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
+                    "name": line_profile_read.name,
+                    "binding_count": line_profile_read.binding_count,
                     "tr069_management_enabled": None,
                     "raw_config": line_output,
                     "last_imported_at": imported_at,
@@ -716,10 +716,10 @@ def import_olt_state_from_dump(
             _upsert_by_keys(
                 db,
                 OltServiceProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
                 {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
+                    "name": line_profile_read.name,
+                    "binding_count": line_profile_read.binding_count,
                     "ethernet_ports": None,
                     "voip_ports": None,
                     "catv_ports": None,
@@ -1030,43 +1030,43 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
         # Every SSH operation has completed. The remaining work is local and
         # runs in one short transaction, so the import cannot be terminated as
         # an idle database transaction while the OLT is responding.
-        for profile in line_reads:
+        for line_profile_read in line_reads:
             _upsert_by_keys(
                 db,
                 OltLineProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
                 {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
+                    "name": line_profile_read.name,
+                    "binding_count": line_profile_read.binding_count,
                     "tr069_management_enabled": parse_line_profile_tr069_enabled(
-                        profile.detail
+                        line_profile_read.detail
                     ),
-                    "raw_config": profile.detail,
+                    "raw_config": line_profile_read.detail,
                     "last_imported_at": imported_at,
                 },
             )
             _import_line_profile_gem_mappings_from_config(
-                db, olt, profile.detail, imported_at
+                db, olt, line_profile_read.detail, imported_at
             )
 
-        for profile in service_reads:
+        for service_profile_read in service_reads:
             parsed = parse_service_profile_detail(
-                profile.detail,
-                profile_id=profile.profile_id,
-                name=profile.name,
-                binding_count=profile.binding_count,
+                service_profile_read.detail,
+                profile_id=service_profile_read.profile_id,
+                name=service_profile_read.name,
+                binding_count=service_profile_read.binding_count,
             )
             _upsert_by_keys(
                 db,
                 OltServiceProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
                 {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
+                    "name": line_profile_read.name,
+                    "binding_count": line_profile_read.binding_count,
                     "ethernet_ports": parsed.ethernet_ports,
                     "voip_ports": parsed.voip_ports,
                     "catv_ports": parsed.catv_ports,
-                    "raw_config": profile.detail,
+                    "raw_config": line_profile_read.detail,
                     "last_imported_at": imported_at,
                 },
             )
