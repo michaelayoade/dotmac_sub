@@ -175,8 +175,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/chat', redirect: (_, __) => '/support/chat'),
       GoRoute(
         path: '/pay',
-        builder: (_, state) =>
-            PaymentWebViewScreen(args: state.extra as CheckoutArgs),
+        // CheckoutArgs is intentionally in-memory only. A gateway return URL
+        // cannot reconstruct it, so PaymentLinkHandler owns those links.
+        // Keep this guard as defence in depth for stale external links and
+        // process-restoration attempts.
+        redirect: (_, state) => paymentRouteRedirect(state.extra),
+        builder: (_, state) => PaymentWebViewScreen(
+          args: state.extra as CheckoutArgs,
+        ),
       ),
       // Self-serve service quotes (map-pin → estimate → pay deposit).
       GoRoute(
@@ -424,6 +430,13 @@ final routerProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+/// /pay may only be opened by an active checkout flow, which supplies its
+/// non-serializable [CheckoutArgs] via GoRouter's in-memory `extra` value.
+/// Deep links have no such value and must return to a stable screen instead of
+/// throwing while casting null to CheckoutArgs.
+String? paymentRouteRedirect(Object? extra) =>
+    extra is CheckoutArgs ? null : '/billing';
 
 /// Root navigator key. Drill-down routes live inside the shell (bottom bar
 /// stays); only modal money tasks (/topup, /pay) sit above it as top-level

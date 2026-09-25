@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 	<dict>
+		<!-- PaymentLinkHandler owns gateway-return links.  Disabling Flutter's
+		     automatic route reconstruction prevents a return URL from opening
+		     /pay without its in-memory CheckoutArgs. -->
+		<key>FlutterDeepLinkingEnabled</key>
+		<false/>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Use Face ID to unlock the app.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
