@@ -1519,7 +1519,11 @@ def my_quote_deposit_initiate(
                 quote_id=quote_id,
                 idempotency_key=payload.idempotency_key,
                 redirect_url=(
-                    str(request.url_for("my_quote_deposit_verify"))
+                    str(
+                        request.url_for(
+                            "my_quote_deposit_verify", quote_id=str(quote_id)
+                        )
+                    )
                     if request
                     else payload.redirect_url or "dotmac://success"
                 ),
