@@ -1009,7 +1009,9 @@ class Notifications(ListResponseMixin):
         return {
             "queued": totals.get(NotificationStatus.queued, 0),
             "sending": totals.get(NotificationStatus.sending, 0),
+            "submitted": totals.get(NotificationStatus.submitted, 0),
             "delivered": totals.get(NotificationStatus.delivered, 0),
+            "bounced": totals.get(NotificationStatus.bounced, 0),
             "failed": totals.get(NotificationStatus.failed, 0),
         }
 

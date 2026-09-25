@@ -88,7 +88,9 @@ def notification_queue_presentation(
     presentations = {
         NotificationStatus.queued: ("Queued and due", "warning"),
         NotificationStatus.sending: ("Sending", "info"),
+        NotificationStatus.submitted: ("Accepted by email provider", "info"),
         NotificationStatus.delivered: ("Delivered", "active"),
+        NotificationStatus.bounced: ("Bounced", "error"),
         NotificationStatus.failed: ("Retrying" if send_at else "Failed", "error"),
         NotificationStatus.canceled: ("Canceled", "neutral"),
     }
