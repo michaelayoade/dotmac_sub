@@ -75,6 +75,8 @@ def test_help_center_loads_permissions_before_selecting_guides(
 
     help_center_web.help_center(
         request=request,
+        q="",
+        category="",
         article="find-customer",
         db=object(),
         auth=auth,

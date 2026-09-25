@@ -109,7 +109,9 @@ def help_center(
     # permission dependency to populate the request cache. The Help hierarchy
     # still needs the same cached permissions as the contextual help control to
     # decide which registered guides and actions may be shown.
-    load_permission_keys(auth, db)
+    request_auth = getattr(request.state, "auth", None)
+    if isinstance(request_auth, dict):
+        load_permission_keys(request_auth, db)
     query = q.strip().casefold()
     selected = category.strip()
     visible_sections = tuple(

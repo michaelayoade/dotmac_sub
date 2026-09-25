@@ -753,6 +753,20 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 # contextual question-mark control to a page.
 HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
+        "help-center",
+        "Getting started",
+        "Use the Help Center",
+        "All staff",
+        "Find guidance for Admin work that your role is allowed to perform.",
+        (),
+        "Open Help from the sidebar to search or browse the guidance available to your role.",
+        "Choose a guide, then use only the actions your role can see and perform.",
+        route_templates=("/admin/help",),
+        notes=(
+            "Help hides sections, guides, and actions your role cannot use. Missing content does not grant access.",
+        ),
+    ),
+    _guide(
         "workqueue",
         "Workqueue",
         "Work assigned through the workqueue",
