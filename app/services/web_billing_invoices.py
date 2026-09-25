@@ -303,6 +303,15 @@ def create_invoice_lines(
         )
 
 
+def _draft_issue_time(invoice: Invoice) -> datetime:
+    """Preserve an explicitly authored draft issue date; default only when absent."""
+    if invoice.issued_at is None:
+        return datetime.now(UTC)
+    if invoice.issued_at.tzinfo is None or invoice.issued_at.utcoffset() is None:
+        return invoice.issued_at.replace(tzinfo=UTC)
+    return invoice.issued_at.astimezone(UTC)
+
+
 def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | None):
     """Issue invoice when requested."""
     if not issue_immediately:
@@ -317,7 +326,7 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
         str(invoice_id),
         issuance=verified_draft_issuance(
             invoice,
-            issued_at=datetime.now(UTC),
+            issued_at=_draft_issue_time(invoice),
             reason="admin_invoice_create",
         ),
         announce=False,
@@ -360,7 +369,7 @@ def issue_invoice_from_detail(
         invoice_id_text,
         issuance=verified_draft_issuance(
             invoice,
-            issued_at=datetime.now(UTC),
+            issued_at=_draft_issue_time(invoice),
             reason="admin_invoice_detail_issue",
         ),
         announce=announce,
