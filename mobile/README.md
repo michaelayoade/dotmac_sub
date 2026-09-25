@@ -119,6 +119,11 @@ and iOS Info.plist; for a white-label build, override `BRAND_PAYMENT_SCHEME` in
 the Dart build *and* the matching native entries (Gradle `-PpaymentScheme=`,
 iOS `CFBundleURLSchemes`).
 
+Gateway return links are owned by `PaymentLinkHandler`, which verifies the
+returned reference with the API and refreshes billing data. Flutter's default
+deep-link router is disabled for this app because a URL cannot reconstruct the
+in-memory checkout context required to open `/pay`.
+
 ## How auth works
 
 1. `POST /auth/login` returns either a token pair **or** an MFA challenge
