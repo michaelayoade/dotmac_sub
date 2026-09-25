@@ -59,6 +59,7 @@ from app.schemas.sales import (
     PipelineStageUpdate,
     PipelineUpdate,
     QuoteLineItemCreate,
+    QuoteLineItemUpdate,
     QuoteUpdate,
 )
 from app.schemas.sales_order import (
@@ -2872,9 +2873,51 @@ def delete_quote_line_item(
     db: Session,
     item_id: str,
     *,
+    quote_id: str,
     context: CommandContext | None = None,
 ) -> None:
-    sales_service.quote_line_items.delete(db, item_id, context=context)
+    sales_service.quote_line_items.delete(
+        db,
+        item_id,
+        expected_quote_id=coerce_uuid(quote_id),
+        context=context,
+    )
+
+
+def update_quote_line_item_from_form(
+    db: Session,
+    *,
+    quote_id: str,
+    item_id: str,
+    description: str | None,
+    quantity: str | None,
+    unit_price: str | None,
+    context: CommandContext | None = None,
+) -> None:
+    """Apply the staff line-editor fields through the typed line command."""
+
+    clean_description = (description or "").strip()
+    if not clean_description:
+        raise ValueError("A line item needs a description.")
+
+    def _decimal(value: str | None, field: str) -> Decimal:
+        try:
+            return Decimal((value or "").strip())
+        except (ArithmeticError, ValueError):
+            raise ValueError(f"{field} must be a number.") from None
+
+    payload = QuoteLineItemUpdate(
+        description=clean_description,
+        quantity=_decimal(quantity, "Quantity"),
+        unit_price=_decimal(unit_price, "Unit price"),
+    )
+    sales_service.quote_line_items.update(
+        db,
+        item_id,
+        payload,
+        expected_quote_id=coerce_uuid(quote_id),
+        context=context,
+    )
 
 
 def change_quote_discount_from_form(

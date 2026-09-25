@@ -2601,6 +2601,7 @@ class QuoteLineItems(ListResponseMixin):
         item_id: str,
         payload: QuoteLineItemUpdate,
         *,
+        expected_quote_id: uuid.UUID | None = None,
         context: CommandContext | None = None,
     ) -> QuoteLineItem:
         from app.services.sales import quote_acceptance
@@ -2612,6 +2613,10 @@ class QuoteLineItems(ListResponseMixin):
         if not item:
             raise HTTPException(status_code=404, detail="Quote line item not found")
         assert quote is not None
+        if expected_quote_id is not None and quote.id != expected_quote_id:
+            # A nested web route must not be able to mutate a line belonging to
+            # a different Quote merely by substituting its line identifier.
+            raise HTTPException(status_code=404, detail="Quote line item not found")
         quote_acceptance.assert_quote_mutable(
             quote,
             mutation="line_item_update",
@@ -2639,6 +2644,7 @@ class QuoteLineItems(ListResponseMixin):
         db: Session,
         item_id: str,
         *,
+        expected_quote_id: uuid.UUID | None = None,
         context: CommandContext | None = None,
     ) -> None:
         """Remove a line and re-derive the quote's money from what is left.
@@ -2655,6 +2661,8 @@ class QuoteLineItems(ListResponseMixin):
         if not item:
             raise HTTPException(status_code=404, detail="Quote line item not found")
         assert quote is not None
+        if expected_quote_id is not None and quote.id != expected_quote_id:
+            raise HTTPException(status_code=404, detail="Quote line item not found")
         quote_acceptance.assert_quote_mutable(
             quote,
             mutation="line_item_delete",

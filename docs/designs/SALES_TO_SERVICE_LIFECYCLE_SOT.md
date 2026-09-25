@@ -373,6 +373,12 @@ permissions and empty/error states remain unchanged. No schema change is needed.
   rows stack on narrow screens; each Line Item becomes a touch-friendly card;
   keyboard focus, accessible labels, and light/dark variants use shared admin
   design tokens.
+- Quote-detail line controls: a staff member with `crm:quote:write` may edit
+  or remove a Draft or Sent Line Item when the Quote has no active discount and
+  is not a booked relocation. The visible Remove control submits the canonical
+  line-removal command after a browser confirmation; Edit opens the adjacent
+  typed line editor. Both nested actions bind the Line Item to the displayed
+  Quote before the owner mutates it.
 
 ## Selfcare mobile service quote page contract
 
