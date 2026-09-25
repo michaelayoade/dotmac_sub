@@ -170,6 +170,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/dashboard",),
         notes=(
             "Use visible actions on the owning record; do not work from memory.",
+            "Help shows only the sections, guides, and actions your role may use. Missing content does not grant access.",
             "If a session-expired page appears, use Refresh page so the same Admin page reloads with a fresh token.",
             "When unsure, stop and escalate with the record link and preview result.",
         ),
@@ -179,15 +180,16 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Administration",
         "Review the Automation Center",
         "Administrators and automation operators",
-        "Review the governed module, rule, and execution surfaces for central automation.",
-        ("/admin/automation",),
+        "Review central automation and save the available ticket-assignment pilot as a draft.",
+        ("/admin/automation", "/admin/automation/ticket-assignment/new"),
         "Confirm that your role has Automation Center access before opening the hub.",
         "Review the module registry to see which modules and events are eligible for central automation.",
         "Review central rules and recent execution evidence only when your role grants those additional permissions.",
+        "Use the ticket-assignment pilot to choose an active service team and save an urgent-ticket rule as a draft.",
         "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
         notes=(
-            "The initial hub is read-only and creates no rules or business side effects.",
-            "Custom fields and migration of existing rules are outside this delivery sequence.",
+            "The registry, published rules, and execution evidence remain read-only. The pilot saves a draft only; it cannot publish, assign a ticket, or start automation.",
+            "Custom fields, publishing, and migration of existing rules are outside this delivery sequence.",
         ),
     ),
     _guide(
@@ -1010,9 +1012,14 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "review-automation-rules", "Review central rules and execution evidence", 2
         ),
         _action(
+            "save-ticket-assignment-draft",
+            "Save an urgent-ticket assignment draft",
+            3,
+        ),
+        _action(
             "confirm-automation-boundary",
             "Confirm the remaining module ownership boundary",
-            3,
+            4,
         ),
     ),
     "admin-workspace": (

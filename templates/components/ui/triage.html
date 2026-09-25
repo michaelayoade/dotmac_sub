@@ -140,7 +140,7 @@
                     {% else %}{% set priority_label = "Low" %}{% endif %}
                     {{ status_badge(priority_label, "negative" if row.priority <= 25 else "warning", size="sm", show_icon=False) }}
                 {% endif %}
-                {% if row.latest_delivery_status == 'failed' %}{{ status_badge("Send failed", "negative", size="sm") }}{% endif %}
+                {% if row.latest_delivery_status in ('failed', 'bounced') %}{{ status_badge("Send failed", "negative", size="sm") }}{% endif %}
                 {% if row.is_snoozed %}{{ status_badge("Snoozed", "neutral", size="sm", show_icon=False) }}{% endif %}
                 {% if row.is_muted %}<span title="Muted" aria-label="Muted">🔕</span>{% endif %}
                 {% if row.is_unread %}<span class="ml-auto inline-flex min-w-5 items-center justify-center rounded-lg bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Unread conversation">1</span>{% elif row.active_assigned_person_id %}<span class="ml-auto flex h-5 min-w-5 items-center justify-center rounded-lg bg-slate-200 px-1 text-[9px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-200" title="{{ assignee.name or 'Assigned agent' }}" aria-label="{{ assignee.name or 'Assigned agent' }}">{{ assignee.initials or "AG" }}</span>{% endif %}
@@ -271,7 +271,7 @@
         <div class="mt-1 flex items-center gap-2 {% if outbound %}justify-end{% endif %}">
             {% if outbound %}
             {% set delivery = metadata.get('delivery_status') or 'sent' %}
-            <span data-inbox-delivery-status="{{ message.id }}" class="text-[10px] font-medium {% if delivery == 'failed' %}text-rose-600{% else %}text-slate-400{% endif %}">{{ delivery | title }}{% if metadata.get('read_at') %} · Read{% endif %}</span>
+            <span data-inbox-delivery-status="{{ message.id }}" class="text-[10px] font-medium {% if delivery in ('failed', 'bounced') %}text-rose-600{% else %}text-slate-400{% endif %}">{{ delivery | title }}{% if metadata.get('read_at') %} · Read{% endif %}</span>
             {% endif %}
             <button type="button"
                     @click.prevent.stop='$dispatch("inbox-quote", {{ {"id": message.id, "author": (outbound_sender_name if outbound else (message.from_address or "Customer")), "excerpt": (message.body or "")[:120]} | tojson }})'

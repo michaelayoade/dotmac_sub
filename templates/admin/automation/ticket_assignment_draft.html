@@ -1,0 +1,42 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header %}
+
+{% block title %}New ticket-assignment draft - Automation Center{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-7">
+    {% call page_header(title="New ticket-assignment draft", subtitle="This pilot saves a draft only. It cannot yet be published or assign a ticket.", color="indigo") %}
+        <a href="/admin/automation" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Back to Automation Center</a>
+    {% endcall %}
+
+    {% if error %}
+    <div role="alert" class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/admin/automation/ticket-assignment/drafts" class="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <section aria-labelledby="trigger-heading">
+            <h2 id="trigger-heading" class="text-base font-semibold text-slate-950 dark:text-white">When this happens</h2>
+            <p class="mt-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-200">A new support ticket is created.</p>
+        </section>
+        <section aria-labelledby="condition-heading">
+            <h2 id="condition-heading" class="text-base font-semibold text-slate-950 dark:text-white">Only when</h2>
+            <p class="mt-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-200">Ticket priority is <strong>Urgent</strong>.</p>
+        </section>
+        <section aria-labelledby="action-heading" class="space-y-3">
+            <h2 id="action-heading" class="text-base font-semibold text-slate-950 dark:text-white">Then do this</h2>
+            <label for="service_team_id" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Assign service team</label>
+            <select id="service_team_id" name="service_team_id" required class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                <option value="">Choose a team</option>
+                {% for team_id, team_name in service_teams %}<option value="{{ team_id }}" {% if service_team_id == team_id|string %}selected{% endif %}>{{ team_name }}</option>{% endfor %}
+            </select>
+        </section>
+        <section class="space-y-2">
+            <label for="name" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Rule name</label>
+            <input id="name" name="name" value="{{ name }}" required maxlength="160" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Urgent tickets to Escalation Team">
+        </section>
+        <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">Saving creates a draft only. It will not change ticket assignment, publish a rule, or start automation.</div>
+        <div class="flex justify-end gap-3"><a href="/admin/automation" class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a><button type="submit" class="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">Save draft</button></div>
+    </form>
+</div>
+{% endblock %}

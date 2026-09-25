@@ -28,6 +28,8 @@ def _module_row(manifest: AutomationModuleManifest) -> AutomationModuleRow:
         return AutomationModuleRow(manifest, "available", "Not registered")
     if not manifest.triggers or not manifest.actions:
         return AutomationModuleRow(manifest, "declared", "Declared only")
+    if not any(action.runtime_enabled for action in manifest.actions):
+        return AutomationModuleRow(manifest, "draft", "Draft authoring")
     action_errors = automation_actions.runtime_registry_errors()
     if action_errors:
         return AutomationModuleRow(manifest, "blocked", "Adapter mismatch")
@@ -39,6 +41,9 @@ def build_automation_center_data(
     *,
     can_read_rules: bool,
     can_read_runs: bool,
+    can_create_rules: bool,
+    can_read_support_tickets: bool,
+    can_update_support_tickets: bool,
 ) -> dict[str, object]:
     """Build one permission-aware, tenant-scoped hub projection."""
 
@@ -78,6 +83,20 @@ def build_automation_center_data(
     legacy_surfaces = tuple(
         surface for manifest in manifests for surface in manifest.legacy_surfaces
     )
+    support_manifest = automation_capabilities.module_manifest("support_operations")
+    ticket_assignment_draft_authoring_available = (
+        can_create_rules
+        and can_read_support_tickets
+        and can_update_support_tickets
+        and any(
+            item.key == "support.ticket.created" for item in support_manifest.triggers
+        )
+        and any(
+            item.key == "support.ticket.assign_service_team"
+            for item in support_manifest.actions
+        )
+        and not automation_capabilities.capability_registry_errors()
+    )
     return {
         "modules": modules,
         "module_count": len(modules),
@@ -91,6 +110,9 @@ def build_automation_center_data(
         "can_read_rules": can_read_rules,
         "can_read_runs": can_read_runs,
         "authoring_available": ready_count > 0 and not registry_errors,
+        "ticket_assignment_draft_authoring_available": (
+            ticket_assignment_draft_authoring_available
+        ),
     }
 
 

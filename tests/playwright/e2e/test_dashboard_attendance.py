@@ -41,8 +41,8 @@ def _page_html(action: str = "check-in", *, include_csrf_meta: bool = True) -> s
 
 def _completed_partial(*, checked_out: bool = False) -> str:
     if checked_out:
-        return """<section id="attendance-widget"><time data-attendance-elapsed data-attendance-start="2026-08-09T08:04:00+00:00" data-attendance-end="2026-08-09T17:11:00+00:00">00:00:00</time><p data-attendance-error></p></section>"""
-    return """<section id="attendance-widget"><time data-attendance-elapsed data-attendance-start="2026-08-09T08:04:00+00:00">00:00:00</time><p data-attendance-error></p><button data-attendance-action="check-out">Check Out</button></section>"""
+        return """<section id="attendance-widget" data-attendance-state="checked_out"><time data-attendance-elapsed data-attendance-start="2026-08-09T08:04:00+00:00" data-attendance-end="2026-08-09T17:11:00+00:00">00:00:00</time><p data-attendance-error></p></section>"""
+    return """<section id="attendance-widget" data-attendance-state="checked_in"><time data-attendance-elapsed data-attendance-start="2026-08-09T08:04:00+00:00">00:00:00</time><p data-attendance-error></p><button data-attendance-action="check-out">Check Out</button></section>"""
 
 
 def _open(page: Page, html: str) -> None:
@@ -119,6 +119,36 @@ def test_check_in_uses_browser_location_and_updates_authoritative_state(
     assert payloads[0]["latitude"] == 9.0765
     assert payloads[0]["longitude"] == 7.3986
     assert payloads[0]["accuracy_m"] == 12.5
+
+
+def test_confirmed_check_in_clears_the_saved_attendance_reminder(
+    attendance_page: Page,
+):
+    page = attendance_page
+    page.add_init_script(
+        "navigator.geolocation.getCurrentPosition = (ok) => ok({coords: {latitude: 9.08, longitude: 7.40, accuracy: 8}, timestamp: Date.now()});"
+    )
+    page.route(
+        "**/admin/dashboard/attendance/check-in",
+        lambda route: route.fulfill(
+            status=200, content_type="text/html", body=_completed_partial()
+        ),
+    )
+    _open(page, _page_html())
+    page.add_script_tag(path=str(REMINDER_SCRIPT))
+    page.evaluate(
+        "localStorage.setItem('dotmac_attendance_reminder:anonymous:cache', JSON.stringify({needsReminder: true, expiresAt: Date.now() + 600000}))"
+    )
+
+    page.get_by_role("button", name="Check In").click()
+
+    expect(page.get_by_role("button", name="Check Out")).to_be_visible()
+    assert (
+        page.evaluate(
+            "localStorage.getItem('dotmac_attendance_reminder:anonymous:cache')"
+        )
+        is None
+    )
 
 
 def test_checked_in_timer_starts_from_erp_timestamp_after_widget_replacement(

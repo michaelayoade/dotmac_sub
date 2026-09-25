@@ -15,7 +15,11 @@ def test_rule_definition_owner_is_fully_contracted() -> None:
     service = service_relationship("automation.rule_definitions")
     assert service.module == "app.services.automation_rules"
     assert service.is_contracted
-    assert service.depends_on == ("automation.capability_registry",)
+    assert service.depends_on == (
+        "automation.capability_registry",
+        "support.ticket_assignment_rule_configuration",
+        "support.ticket_automation_rule_configuration",
+    )
 
 
 def test_rule_tables_are_tenant_isolated_and_versions_are_immutable() -> None:

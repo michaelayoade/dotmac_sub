@@ -13,15 +13,14 @@ from typing import TypedDict
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.billing import (
     Invoice,
     InvoiceDiscountType,
     InvoiceStatus,
 )
-from app.models.subscriber import Subscriber
 from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
     CreditNoteApplicationReversalRequest,
@@ -45,7 +44,9 @@ from app.services import (
 from app.services.audit_helpers import (
     extract_changes,
     format_changes,
+    load_audit_actor_subscribers,
     log_audit_event,
+    resolve_actor_name,
 )
 from app.services.billing.credit_notes import (
     CreditApplicationReversalOption,
@@ -92,6 +93,14 @@ class InvoiceLineItem(TypedDict):
     quantity: Decimal
     unit_price: Decimal
     tax_rate_id: UUID | None
+
+
+class InvoiceActivityItem(TypedDict):
+    """One attributed invoice activity row for the admin detail screen."""
+
+    title: str
+    description: str
+    occurred_at: datetime
 
 
 def _discount_from_form(
@@ -925,7 +934,44 @@ def reverse_credit_note_application_web(
     return metadata_payload
 
 
-def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
+def _closure_id(event: AuditEvent) -> str | None:
+    """Return the durable closure reference when the audit event carries one."""
+
+    value = (event.metadata_ or {}).get("closure_id")
+    return str(value) if value else None
+
+
+def _is_staff_attributed(event: AuditEvent) -> bool:
+    """Whether an audit row identifies the staff/API principal who acted."""
+
+    return event.actor_type in {
+        AuditActorType.user,
+        AuditActorType.api_key,
+    } and bool(event.actor_id or event.actor_label)
+
+
+def _is_duplicate_system_closure_event(
+    event: AuditEvent,
+    *,
+    staff_attributed_closures: set[tuple[str, str | None, str]],
+) -> bool:
+    """Hide a redundant system mirror when the same closure names its actor.
+
+    The raw audit evidence remains untouched. This only keeps the operational
+    activity feed from presenting one staff action as two separate actions.
+    """
+
+    closure_id = _closure_id(event)
+    return (
+        event.actor_type == AuditActorType.system
+        and closure_id is not None
+        and (event.action, event.entity_id, closure_id) in staff_attributed_closures
+    )
+
+
+def build_invoice_activities(
+    db: Session, *, invoice_id: str
+) -> list[InvoiceActivityItem]:
     audit_events = audit_service.audit_events.list(
         db=db,
         actor_id=None,
@@ -942,29 +988,20 @@ def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
         limit=10,
         offset=0,
     )
-    actor_ids = {
-        str(event.actor_id)
+    staff_attributed_closures = {
+        (event.action, event.entity_id, closure_id)
         for event in audit_events
-        if getattr(event, "actor_id", None)
+        if _is_staff_attributed(event)
+        if (closure_id := _closure_id(event)) is not None
     }
-    people = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.scalars(
-                select(Subscriber).where(Subscriber.id.in_(actor_ids))
-            ).all()
-        }
-    activities = []
+    people = load_audit_actor_subscribers(db, audit_events)
+    activities: list[InvoiceActivityItem] = []
     for event in audit_events:
-        actor = (
-            people.get(str(event.actor_id))
-            if getattr(event, "actor_id", None)
-            else None
-        )
-        actor_name = (
-            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        )
+        if _is_duplicate_system_closure_event(
+            event, staff_attributed_closures=staff_attributed_closures
+        ):
+            continue
+        actor_name = resolve_actor_name(event, people)
         metadata = getattr(event, "metadata_", None) or {}
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
@@ -1152,6 +1189,7 @@ def confirm_invoice_void_web(
             idempotency_key=idempotency_key,
             memo=memo,
         ),
+        stage_audit=False,
     )
     log_audit_event(
         db=db,
@@ -1183,6 +1221,7 @@ def confirm_invoice_write_off_web(
             idempotency_key=idempotency_key,
             memo=memo,
         ),
+        stage_audit=False,
     )
     log_audit_event(
         db=db,

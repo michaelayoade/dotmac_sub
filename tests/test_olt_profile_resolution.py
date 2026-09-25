@@ -23,16 +23,80 @@ from app.models.network import (
     OltServiceProfile,
     OntUnit,
 )
+from app.services.network import olt_ssh, olt_state_import
 from app.services.network.olt_profile_resolution import (
     OntCapabilityCounts,
     ServiceProfileDetail,
     choose_service_profile,
     resolve_authorization_profiles_from_import,
 )
+from app.services.network.olt_ssh_profiles import OltProfileEntry
 from app.services.network.olt_state_import import (
     _import_profile_mappings,
     import_olt_state_from_dump,
 )
+
+
+def test_live_olt_import_releases_read_transaction_before_ssh(db_session, monkeypatch):
+    """A slow OLT read must not hold Postgres idle in a transaction."""
+
+    olt = OLTDevice(
+        name="Slow Read OLT",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.10",
+        ssh_username="operator",
+        ssh_password="encrypted-placeholder",
+    )
+    db_session.add(olt)
+    db_session.commit()
+
+    class DummyTransport:
+        def close(self) -> None:
+            return None
+
+    class DummyChannel:
+        def send(self, _value: str) -> None:
+            return None
+
+    opened_without_transaction: list[bool] = []
+
+    def fake_open_shell(_olt):
+        opened_without_transaction.append(not db_session.in_transaction())
+        return DummyTransport(), DummyChannel(), object()
+
+    def fake_run_command(_channel, command: str, prompt: str = r"#\s*$") -> str:
+        del prompt
+        if command == "display ont-lineprofile gpon all":
+            return "line profiles"
+        if command == "display ont-srvprofile gpon all":
+            return "service profiles"
+        if "ont-lineprofile" in command:
+            return "line profile detail"
+        if "ont-srvprofile" in command:
+            return "service profile detail"
+        return ""
+
+    monkeypatch.setattr(olt_ssh, "_open_shell", fake_open_shell)
+    monkeypatch.setattr(olt_ssh, "_read_until_prompt", lambda *_args, **_kwargs: "OLT#")
+    monkeypatch.setattr(olt_ssh, "_run_huawei_cmd", fake_run_command)
+    monkeypatch.setattr(
+        olt_state_import,
+        "_parse_profile_table",
+        lambda output: [
+            OltProfileEntry(
+                profile_id=40 if output == "line profiles" else 41,
+                name="profile",
+                binding_count=0,
+            )
+        ],
+    )
+
+    result = olt_state_import.import_olt_state(db_session, str(olt.id))
+
+    assert result.success is True
+    assert opened_without_transaction == [True]
+    assert result.line_profiles == 1
+    assert result.service_profiles == 1
 
 
 def test_choose_service_profile_prefers_model_name_over_generic_count_match():

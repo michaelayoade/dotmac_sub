@@ -39,7 +39,9 @@ class NotificationChannel(enum.Enum):
 class NotificationStatus(enum.Enum):
     queued = "queued"
     sending = "sending"
+    submitted = "submitted"
     delivered = "delivered"
+    bounced = "bounced"
     failed = "failed"
     canceled = "canceled"
 
