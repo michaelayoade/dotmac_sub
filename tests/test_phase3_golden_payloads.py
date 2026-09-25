@@ -28,12 +28,14 @@ from app.schemas.portal import (
     QuoteItem,
     ReferralItem,
 )
+from app.schemas.sales import QuoteLineItemCreate
 from app.services import (
     quotes_mirror,
     referrals_mirror,
     reseller_crm_views,
 )
 from app.services import referrals as referrals_service
+from app.services.sales import quote_line_items
 from app.services.sales import selfserve as selfserve_service
 
 # ── shape comparison ──────────────────────────────────────────────────────────
@@ -182,9 +184,7 @@ def _mirror_quote(db, sub) -> QuoteMirror:
 
 
 def _native_quote(db, sub, *, accept=True):
-    """A fully-populated native quote: self-serve request (map pin +
-    feasibility + estimate lines) then the deposit accept (sales order) and
-    its structurally linked acceptance-owned Project."""
+    """A native quote with a staff-authored line and optional deposit acceptance."""
     fap = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
     with patch(
         "app.services.sales.selfserve._nearest_fiber_access_point",
@@ -199,6 +199,15 @@ def _native_quote(db, sub, *, accept=True):
             region="Abuja",
         )
     if accept:
+        quote_line_items.create(
+            db,
+            QuoteLineItemCreate(
+                quote_id=quote.id,
+                description="Staff-authored installation charge",
+                quantity=Decimal("1"),
+                unit_price=Decimal("75000.00"),
+            ),
+        )
         selfserve_service.selfserve_quotes.accept_with_deposit(
             db,
             str(sub.id),

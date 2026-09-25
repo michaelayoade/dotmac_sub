@@ -23,11 +23,12 @@ from app.models.rbac import Role, SystemUserRole
 from app.models.sales import Quote, QuotePaymentReviewDecision, SalesOrder
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
+from app.schemas.sales import QuoteLineItemCreate
 from app.services import quote_deposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.payment_routing import GatewayOption
-from app.services.sales import quote_payment_review, selfserve
+from app.services.sales import quote_line_items, quote_payment_review, selfserve
 from app.services.subscriber import _default_reseller_id
 
 _FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
@@ -96,6 +97,15 @@ def test_quote_lifecycle_native(db_session):
             db_session, str(sub.id), **_PIN
         )
     assert quote.status == "draft"
+    quote_line_items.create(
+        db_session,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Staff-authored installation charge",
+            quantity=Decimal("1"),
+            unit_price=Decimal("75000.00"),
+        ),
+    )
     payload = selfserve.build_portal_quote_payload(db_session, quote)
     deposit = Decimal(payload["deposit_amount"])
     assert deposit > 0

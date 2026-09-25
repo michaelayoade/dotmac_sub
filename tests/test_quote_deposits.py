@@ -27,8 +27,14 @@ from app.models.sales import (
 )
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
+from app.schemas.sales import QuoteLineItemCreate
 from app.services import quote_deposits, quotes_mirror
-from app.services.sales import quote_acceptance, quote_payment_review, selfserve
+from app.services.sales import (
+    quote_acceptance,
+    quote_line_items,
+    quote_payment_review,
+    selfserve,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -207,8 +213,7 @@ _FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
 
 
 def _native_quote(db, sub):
-    """A native draft quote created through the self-serve flow (75,000 total,
-    37,500 deposit at the default 50%)."""
+    """A staff-priced native quote with a 37,500 deposit at the default 50%."""
     with patch(
         "app.services.sales.selfserve._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
@@ -220,6 +225,15 @@ def _native_quote(db, sub):
             longitude=7.3986,
             address="12 Mississippi St, Maitama",
         )
+    quote_line_items.create(
+        db,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Staff-authored installation charge",
+            quantity=Decimal("1"),
+            unit_price=Decimal("75000.00"),
+        ),
+    )
     reviewer = SystemUser(
         first_name="Quote",
         last_name="Reviewer",

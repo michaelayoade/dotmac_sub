@@ -1661,9 +1661,46 @@ def quote_line_item_delete(
         web_sales_service.delete_quote_line_item(
             db,
             item_id,
+            quote_id=quote_id,
             context=_quote_command_context(request, quote_id, action="line-remove"),
         )
     except (DomainError, ValidationError, ValueError) as exc:
+        context = _ctx(request, db, "sales-quotes")
+        context.update(
+            web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
+        )
+        context["error"] = _error_detail(exc)
+        return templates.TemplateResponse(
+            "admin/sales/quotes/detail.html", context, status_code=400
+        )
+    return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
+
+
+@router.post(
+    "/quotes/{quote_id}/line-items/{item_id}/edit",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_line_item_update(
+    request: Request,
+    quote_id: str,
+    item_id: str,
+    description: str | None = Form(default=None),
+    quantity: str | None = Form(default=None),
+    unit_price: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_sales_service.update_quote_line_item_from_form(
+            db,
+            quote_id=quote_id,
+            item_id=item_id,
+            description=description,
+            quantity=quantity,
+            unit_price=unit_price,
+            context=_quote_command_context(request, quote_id, action="line-update"),
+        )
+    except (DomainError, ValidationError, ValueError) as exc:
+        db_session_adapter.discard_failed_transaction(db)
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
