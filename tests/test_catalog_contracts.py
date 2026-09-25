@@ -139,3 +139,17 @@ def test_catalog_detail_retains_edit_archive_and_restore_actions():
     assert 'action="/admin/catalog/offers/{{ offer.id }}/archive"' in source
     assert 'action="/admin/catalog/offers/{{ offer.id }}/restore"' in source
     assert "components/forms/csrf_input.html" in source
+
+
+def test_catalog_detail_displays_offer_speeds_in_mbps():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "templates/admin/catalog/offer_detail.html"
+    ).read_text(encoding="utf-8")
+
+    expected_speed = (
+        "{{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} "
+        "Mbps"
+    )
+    assert source.count(expected_speed) == 2
+    assert "Kbps" not in source

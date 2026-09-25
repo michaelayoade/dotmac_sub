@@ -92,7 +92,7 @@
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Bandwidth</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
-                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
+                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Mbps
                                 {% else %}-{% endif %}
                             </dd>
                         </div>
@@ -116,7 +116,7 @@
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Download/Upload</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
-                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
+                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Mbps
                                 {% else %}-{% endif %}
                             </dd>
                         </div>

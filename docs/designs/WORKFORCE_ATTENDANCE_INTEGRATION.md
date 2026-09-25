@@ -92,6 +92,11 @@ from ERP's confirmed `check_in_at`; after checkout it freezes using ERP's
 confirmed `check_out_at`. This is display-only and never becomes attendance
 evidence or a local work-hours calculation.
 
+The cross-page check-in reminder may temporarily cache an ERP read to limit
+repeat requests. After the dashboard receives a confirmed `checked_in` state,
+the browser removes that reminder cache and closes any visible reminder. The
+reminder cache is never attendance evidence and cannot override an ERP read.
+
 Overnight shifts remain excluded from v1 because ERP's existing next-morning
 checkout lookup requires a separate domain fix. Selfcare must render the ERP
 pilot-exclusion state without offering a punch.
