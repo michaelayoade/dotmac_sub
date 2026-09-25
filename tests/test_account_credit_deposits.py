@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event
@@ -38,7 +38,9 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.customer_subledger import (
+    CustomerPositionEffect,
     CustomerPostingGroup,
+    PositionEffectKind,
     PostingCommandKind,
     PostingProducer,
     PostingSourceKind,
@@ -63,6 +65,7 @@ from app.services.account_credit_deposits import (
 )
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.account_credit import AccountCreditApplications
+from app.services.billing.customer_subledger import permitted_authority
 from app.services.billing.invoices import InvoiceIssuanceInput, Invoices
 from app.services.billing_health import (
     billing_health_observations,
@@ -1037,20 +1040,42 @@ def test_voiding_invoice_releases_applied_account_credit(db_session, subscriber)
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "4000.00"
     )
-    original_posting = (
-        db_session.query(CustomerPostingGroup)
-        .filter(
-            CustomerPostingGroup.source_kind
-            == PostingSourceKind.payment_allocation.value,
-            CustomerPostingGroup.source_id == allocation.id,
-            CustomerPostingGroup.command_kind
-            == PostingCommandKind.customer_credit_application,
-            CustomerPostingGroup.producer_owner
-            == PostingProducer.account_credit_applications.value,
-            CustomerPostingGroup.reverses_group_id.is_(None),
-        )
-        .one()
+    original_posting = CustomerPostingGroup(
+        account_id=subscriber.id,
+        currency="NGN",
+        authority=permitted_authority(db_session),
+        command_kind=PostingCommandKind.customer_credit_application,
+        producer_owner=PostingProducer.account_credit_applications.value,
+        source_kind=PostingSourceKind.payment_allocation.value,
+        source_id=allocation.id,
+        occurred_at=allocation.created_at or issued_at,
+        command_id=uuid4(),
+        correlation_id=uuid4(),
+        idempotency_key=f"posting:test-void-application:{allocation.id}",
+        actor="pytest",
+        reason="seed customer-credit application posting for void release",
     )
+    db_session.add(original_posting)
+    db_session.flush()
+    db_session.add_all(
+        [
+            CustomerPositionEffect(
+                group_id=original_posting.id,
+                effect=PositionEffectKind.customer_credit_consumed,
+                amount=Decimal("6000.00"),
+                currency="NGN",
+                payment_id=settlement.payment.id,
+            ),
+            CustomerPositionEffect(
+                group_id=original_posting.id,
+                effect=PositionEffectKind.receivable_settled,
+                amount=Decimal("6000.00"),
+                currency="NGN",
+                invoice_id=invoice.id,
+            ),
+        ]
+    )
+    db_session.flush()
 
     result = Invoices.void_system(
         db_session,
