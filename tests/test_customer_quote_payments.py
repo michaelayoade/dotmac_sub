@@ -592,6 +592,64 @@ def test_quote_payment_command_rejects_client_owned_amount_and_provider():
         )
 
 
+def test_mobile_quote_deposit_start_uses_quoted_verify_callback(monkeypatch):
+    from app.api import me as me_api
+
+    quote_id = uuid4()
+    scope = dict(_request(f"/me/quotes/{quote_id}/deposit/initiate").scope)
+    scope["router"] = me_api.router
+    request = Request(scope)
+    captured: list[quote_deposits.InitiateQuoteDepositCommand] = []
+    invoice_id = uuid4()
+    outcome = quote_deposits.QuoteDepositIntentOutcome(
+        invoice_id=invoice_id,
+        quote_id=quote_id,
+        amount=Decimal("50000.00"),
+        currency="NGN",
+        provider_type="paystack",
+        provider_public_key="pk_test_quote",
+        payment_reference="test-ref",
+        checkout_metadata=quote_deposits.QuoteCheckoutMetadata(
+            payment_flow="invoice_payment",
+            invoice_id=invoice_id,
+            invoice_number="INV-TEST",
+            account_id=uuid4(),
+            provider_id=uuid4(),
+        ),
+        checkout_url="https://paystack.example.test/checkout",
+        customer_email="customer@example.test",
+        charged=False,
+        replayed=False,
+    )
+    monkeypatch.setattr(me_api, "_customer", lambda *_args: {"id": "customer"})
+    monkeypatch.setattr(me_api, "resolve_customer_context", lambda *_args: object())
+
+    def initiate(
+        _db: object,
+        _customer: object,
+        command: quote_deposits.InitiateQuoteDepositCommand,
+    ) -> quote_deposits.QuoteDepositIntentOutcome:
+        captured.append(command)
+        return outcome
+
+    monkeypatch.setattr(me_api.quote_deposits, "initiate_quote_deposit", initiate)
+
+    result = me_api.my_quote_deposit_initiate(
+        quote_id,
+        me_api.QuoteDepositInitiateRequest(
+            idempotency_key="quote-payment-callback-key"
+        ),
+        request=request,
+        db=object(),
+        principal={},
+    )
+
+    assert result["payment_reference"] == "test-ref"
+    assert captured[0].redirect_url == (
+        f"https://selfcare.example.com/me/quotes/{quote_id}/deposit/verify"
+    )
+
+
 @pytest.mark.parametrize(
     "failure",
     (
