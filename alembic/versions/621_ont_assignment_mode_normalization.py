@@ -22,7 +22,7 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE ont_assignments
-        SET wan_mode = CASE lower(btrim(wan_mode))
+        SET wan_mode = CASE lower(btrim(wan_mode::text))
             WHEN 'bridge' THEN 'bridging'
             WHEN 'bridged' THEN 'bridging'
             WHEN 'setup_via_onu' THEN 'bridging'
@@ -31,13 +31,13 @@ def upgrade() -> None:
             ELSE NULL
         END
         WHERE wan_mode IS NOT NULL
-          AND lower(btrim(wan_mode)) NOT IN ('routing', 'bridging')
+          AND lower(btrim(wan_mode::text)) NOT IN ('routing', 'bridging')
         """
     )
     op.execute(
         """
         UPDATE ont_assignments
-        SET ip_mode = CASE lower(btrim(ip_mode))
+        SET ip_mode = CASE lower(btrim(ip_mode::text))
             WHEN 'bridge' THEN 'dhcp'
             WHEN 'bridged' THEN 'dhcp'
             WHEN 'dynamic' THEN 'dhcp'
@@ -48,7 +48,7 @@ def upgrade() -> None:
             ELSE NULL
         END
         WHERE ip_mode IS NOT NULL
-          AND lower(btrim(ip_mode)) NOT IN ('inactive', 'static_ip', 'dhcp')
+          AND lower(btrim(ip_mode::text)) NOT IN ('inactive', 'static_ip', 'dhcp')
         """
     )
     op.create_check_constraint(
