@@ -502,6 +502,7 @@ def _eligible_notification_query(
 def _empty_delivery_stats(*, expired: int = 0) -> dict[str, int]:
     return {
         "delivered": 0,
+        "submitted": 0,
         "retried": 0,
         "failed": 0,
         "expired": expired,
@@ -547,6 +548,7 @@ def _deliver_notification_queue_stats(
     )
     stats = _empty_delivery_stats(expired=expired)
     delivered = stats["delivered"]
+    submitted = stats["submitted"]
     retried = stats["retried"]
     failed = stats["failed"]
     reclaimed = stats["reclaimed"]
@@ -1439,10 +1441,16 @@ def _deliver_notification_queue_stats(
                 notification.last_error = str(exc)
 
         if success:
-            notification.status = NotificationStatus.delivered
-            notification.sent_at = datetime.now(UTC)
-            notification.last_error = None
-            delivered += 1
+            if (
+                notification.channel == NotificationChannel.email
+                and notification.status == NotificationStatus.submitted
+            ):
+                submitted += 1
+            else:
+                notification.status = NotificationStatus.delivered
+                notification.sent_at = datetime.now(UTC)
+                notification.last_error = None
+                delivered += 1
         else:
             notification.retry_count = (notification.retry_count or 0) + 1
             if notification.retry_count >= max_retries:
@@ -1501,6 +1509,7 @@ def _deliver_notification_queue_stats(
         )
     delivery_stats: dict[str, int] = {
         "delivered": delivered,
+        "submitted": submitted,
         "retried": retried,
         "failed": failed,
         "expired": expired,

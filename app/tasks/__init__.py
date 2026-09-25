@@ -247,6 +247,7 @@ from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
+from app.tasks.zeptomail_delivery import reconcile_submitted_email
 
 __all__ = [
     "cleanup_old_operations",
@@ -343,6 +344,7 @@ __all__ = [
     "run_vpn_health_scan",
     "deliver_notification_queue",
     "deliver_notification",
+    "reconcile_submitted_email",
     "observe_channel_health",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",

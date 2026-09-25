@@ -73,6 +73,9 @@ celery_app.conf.task_routes = {
         "queue": "notifications_immediate"
     },
     "app.tasks.notifications.deliver_notification_queue": {"queue": "notifications"},
+    "app.tasks.zeptomail_delivery.reconcile_submitted_email": {
+        "queue": "notifications"
+    },
     "app.tasks.tr069.sync_all_acs_devices": {"queue": "acs"},
     "app.tasks.tr069.reconcile_command_outcomes": {"queue": "acs"},
     "app.tasks.tr069.execute_network_operation_job": {"queue": "acs"},

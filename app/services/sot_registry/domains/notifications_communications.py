@@ -3517,6 +3517,54 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.zeptomail_delivery_reconciliation",
+            module="app.services.zeptomail_delivery_reconciliation",
+            owns=("ZeptoMail provider delivery reconciliation",),
+            depends_on=(
+                "communications.notification_service",
+                "communications.team_inbox_outbound_intents",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.zeptomail_delivery_reconciliation",
+                concerns=(
+                    (
+                        "ZeptoMail provider delivery reconciliation",
+                        OwnerRole.RECONCILER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="authenticated ZeptoMail delivery observation",
+                        owner="external:zeptomail",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "Signed webhook or OAuth email-log status, provider "
+                            "references, observed time, and bounded failure reason."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="submitted notification client reference",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Notification UUID sent as X-TM-CLIENT-REF and its current "
+                            "provider-submission state."
+                        ),
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                projections=(
+                    "provider-confirmed Notification and Inbox delivery state",
+                ),
+                test_refs=("tests/test_zeptomail_delivery_tracking.py",),
+            ),
+            notes=(
+                "SMTP acceptance is recorded as submitted, never delivered. Signed "
+                "callbacks handle delivered and bounce outcomes; the OAuth log "
+                "reconciler repairs missed callbacks and Process failed outcomes."
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_delivery_receipts",
             module="app.services.team_inbox_delivery_receipts",
             owns=("provider delivery receipt reconciliation",),
