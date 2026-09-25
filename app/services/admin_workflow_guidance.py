@@ -188,7 +188,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use the ticket-assignment pilot to choose an active service team and save an urgent-ticket rule as a draft.",
         "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
         notes=(
-            "The pilot saves a draft only. It cannot publish, assign a ticket, or start automation.",
+            "The registry, published rules, and execution evidence remain read-only. The pilot saves a draft only; it cannot publish, assign a ticket, or start automation.",
             "Custom fields, publishing, and migration of existing rules are outside this delivery sequence.",
         ),
     ),
