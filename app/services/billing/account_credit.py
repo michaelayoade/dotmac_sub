@@ -42,6 +42,12 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
+from app.models.customer_subledger import (
+    CustomerPostingGroup,
+    PostingCommandKind,
+    PostingProducer,
+    PostingSourceKind,
+)
 from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInbox,
@@ -1107,12 +1113,74 @@ class AccountCreditApplications:
         return _invoice_void_release_preview(db, invoice_id)
 
     @staticmethod
+    def _reverse_customer_credit_application_posting_for_void(
+        db: Session,
+        *,
+        allocation: PaymentAllocation,
+    ) -> CustomerPostingGroup | None:
+        """Reverse customer-position consumption when a void releases credit.
+
+        ``release_for_invoice_void`` is still called from legacy invoice-void
+        roots that are not always wrapped by ``execute_owner_command``. The
+        customer-subledger owner supplies the bounded compatibility writer so
+        posting rows still have exactly one constructing owner.
+        """
+        original = db.scalar(
+            select(CustomerPostingGroup).where(
+                CustomerPostingGroup.source_kind
+                == PostingSourceKind.payment_allocation.value,
+                CustomerPostingGroup.source_id == allocation.id,
+                CustomerPostingGroup.command_kind
+                == PostingCommandKind.customer_credit_application,
+                CustomerPostingGroup.producer_owner
+                == PostingProducer.account_credit_applications.value,
+                CustomerPostingGroup.reverses_group_id.is_(None),
+            )
+        )
+        if original is None:
+            return None
+        existing = db.scalar(
+            select(CustomerPostingGroup).where(
+                CustomerPostingGroup.reverses_group_id == original.id
+            )
+        )
+        if existing is not None:
+            return existing
+
+        from app.services.billing.customer_subledger import (
+            StageReversalCommand,
+            stage_legacy_reversal,
+        )
+        from app.services.owner_commands import CommandContext
+
+        key = f"posting:invoice-void-release:{allocation.id}"
+        return stage_legacy_reversal(
+            db,
+            StageReversalCommand(
+                original_group_id=original.id,
+                producer_owner=PostingProducer.account_credit_applications,
+                source_kind=PostingSourceKind.payment_allocation,
+                source_id=allocation.id,
+                occurred_at=datetime.now(UTC),
+                idempotency_key=key,
+            ),
+            context=CommandContext.system(
+                actor="financial.account_credit_applications",
+                scope="invoice_void_account_credit_release",
+                reason="Invoice void released account-credit allocation",
+                causation_id=original.id,
+                idempotency_key=key,
+            ),
+        )
+
+    @staticmethod
     def release_for_invoice_void(
         db: Session,
         *,
         invoice_id: UUID,
         expected_allocation_ids: tuple[UUID, ...],
         memo: str,
+        reverse_customer_posting: bool = True,
     ) -> list[tuple[LedgerEntry, UUID]]:
         """Append reversals and retire allocations; the caller owns the commit."""
         invoice = db.get(Invoice, invoice_id)
@@ -1148,6 +1216,10 @@ class AccountCreditApplications:
             )
             reversals.append((reversal, entry.original_entry_id))
         for allocation in allocations:
+            if reverse_customer_posting:
+                AccountCreditApplications._reverse_customer_credit_application_posting_for_void(
+                    db, allocation=allocation
+                )
             allocation.is_active = False
             allocation.payment.updated_at = datetime.now(UTC)
         db.flush()
@@ -1179,6 +1251,7 @@ class AccountCreditApplications:
             invoice_id=command.invoice_id,
             expected_allocation_ids=(command.allocation_id,),
             memo=reason,
+            reverse_customer_posting=False,
         )
 
     @staticmethod
