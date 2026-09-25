@@ -135,9 +135,9 @@ the customer's selected destination plan; moves that keep
 the same technology retain the current plan. The selected plan must be an
 active, priced, customer-visible offer compatible with the source service.
 Fiber destinations use the native fiber proximity check. Airfiber destinations require a site check and
-must not borrow the fiber feasibility result. Only fiber installation currently
-receives an internal preliminary price. Other choices begin without priced
-lines so staff must author the commercial amount before approval. Customer
+must not borrow the fiber feasibility result. No self-service installation or
+relocation request receives a system-generated preliminary price. Every choice
+begins without priced lines, so Sales must author the commercial amount before approval. Customer
 Quote projections omit all price, deposit, and line amounts while review is
 pending or stale; approval requires a priced line, positive total, and deposit
 policy. The existing subscription is not changed by request intake.

@@ -292,8 +292,8 @@ def test_request_quote_captures_map_pin_on_lead_and_quote(db_session):
     assert meta["feasibility"]["coverage"] == "covered"
     assert meta["feasibility"]["nearest_fap_name"] == "NAP-041"
     assert meta["deposit_percent"] == 50
-    assert meta["estimate_provisional"] is False
-    assert meta["pricing_mode"] == "derived"
+    assert meta["estimate_provisional"] is True
+    assert meta["pricing_mode"] == "staff"
     # §1.4: never write the legacy subscriber_external_id key for new quotes.
     assert "subscriber_external_id" not in meta
 
@@ -307,10 +307,10 @@ def test_request_quote_captures_map_pin_on_lead_and_quote(db_session):
     assert lead.address == "12 Mississippi St, Maitama"
     assert lead.notes == "Front gate faces the street"
 
-    # Estimate lines + totals landed on the draft quote.
+    # The draft has no system-created commercial terms.
     assert quote.status == "draft"
-    assert quote.total == Decimal("75000.00")
-    assert len(quote.line_items) == 2
+    assert quote.total == Decimal("0.00")
+    assert quote.line_items == []
 
 
 def test_request_quote_payload_serializes_pin_and_money_strings(db_session):
@@ -322,9 +322,9 @@ def test_request_quote_payload_serializes_pin_and_money_strings(db_session):
     assert payload["latitude"] == 9.0765
     assert payload["longitude"] == 7.3986
     assert payload["address"] == "12 Mississippi St, Maitama"
-    # §2.5 mobile contract: money and quantities are strings.
-    assert payload["total"] == "75000.00"
-    assert payload["deposit_amount"] == "37500.00"
+    # §2.5 mobile contract: an unpriced request carries zero internal totals.
+    assert payload["total"] == "0.00"
+    assert payload["deposit_amount"] == "0.00"
     assert payload["deposit_percent"] == 50
     assert payload["deposit_paid"] is False
     assert payload["payment_review_status"] == "pending"
@@ -339,7 +339,7 @@ def test_request_quote_payload_serializes_pin_and_money_strings(db_session):
     assert payload["project_id"] is None  # PR 6 seam
 
 
-def test_customer_quote_hides_prices_until_current_staff_approval(db_session):
+def test_customer_quote_hides_prices_until_sales_authors_terms(db_session):
     sub = _subscriber(db_session)
     quote = _request(db_session, sub)
 
@@ -353,16 +353,6 @@ def test_customer_quote_hides_prices_until_current_staff_approval(db_session):
     assert pending["line_items"] == []
     assert pending["feasibility"]["coverage"] == "covered"
 
-    from app.services.sales import quote_payment_review
-
-    quote.payment_review_status = "approved"
-    quote.payment_review_fingerprint = quote_payment_review.quote_fingerprint(quote)
-    approved = selfserve.build_portal_quote_payload(
-        db_session, quote, customer_view=True
-    )
-    assert approved["pricing_visible"] is True
-    assert approved["total"] == "75000.00"
-    assert approved["deposit_amount"] == "37500.00"
 
 
 def test_airfiber_request_waits_for_staff_pricing_and_site_check(db_session):
