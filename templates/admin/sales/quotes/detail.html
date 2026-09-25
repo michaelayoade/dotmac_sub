@@ -4,8 +4,8 @@
 
 {% set quote_status_values = ['draft', 'sent', 'accepted', 'rejected', 'expired'] %}
 {% set has_legacy_line_discount = (items | selectattr('discount_percent') | list | length) > 0 %}
-{% set can_edit_lines = not is_accepted and not relocation_booked and not quote.discount_type %}
 {% set can_write_quote = can(request, "crm:quote:write") %}
+{% set can_edit_lines = can_write_quote and status_val in ['draft', 'sent'] and not relocation_booked and not quote.discount_type %}
 {% set can_review_quote_payment = can(request, "sales:quote:review") %}
 {% set recipient_label = subscriber_label or (lead.title if lead else ('Quote ' ~ quote.id|string|truncate(8, True, ''))) %}
 
@@ -181,7 +181,7 @@
                                 {% if has_legacy_line_discount %}<th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Previous Line Discount</th>{% endif %}
                                 <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Amount</th>
                                 {% if can_edit_lines %}
-                                <th class="px-4 py-2.5"><span class="sr-only">Remove</span></th>
+                                <th class="px-4 py-2.5"><span class="sr-only">Line item actions</span></th>
                                 {% endif %}
                             </tr>
                         </thead>
@@ -200,16 +200,21 @@
                                 <td class="px-4 py-2.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{{ quote.currency }} {{ "{:,.2f}".format(item.amount or 0) }}</td>
                                 {% if can_edit_lines %}
                                 <td class="px-4 py-2.5 text-right">
-                                    <details class="relative inline-block text-left">
-                                        <summary class="cursor-pointer list-none text-xs font-medium text-red-600 hover:underline dark:text-red-400">Remove</summary>
-                                        <div class="absolute right-0 z-10 mt-2 w-64 rounded-lg border border-red-200 bg-white p-3 text-left shadow-lg dark:border-red-900/40 dark:bg-slate-900">
-                                            <p class="text-xs text-slate-600 dark:text-slate-300">Remove this line from the quote?</p>
-                                            <form method="post" action="/admin/sales/quotes/{{ quote.id }}/line-items/{{ item.id }}/delete" class="mt-3">
+                                    <div class="flex items-center justify-end gap-3">
+                                        <details class="relative text-left">
+                                            <summary class="cursor-pointer list-none text-xs font-medium text-cyan-700 hover:underline dark:text-cyan-400">Edit</summary>
+                                            <form method="post" action="/admin/sales/quotes/{{ quote.id }}/line-items/{{ item.id }}/edit" class="absolute right-0 z-10 mt-2 grid w-72 gap-2 rounded-lg border border-cyan-200 bg-white p-3 text-left shadow-lg dark:border-cyan-900/40 dark:bg-slate-900">
                                                 {% include "components/forms/csrf_input.html" %}
-                                                <button type="submit" class="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700">Remove Line</button>
+                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Description<input name="description" required value="{{ item.description }}" class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></label>
+                                                <div class="grid grid-cols-2 gap-2"><label class="text-xs font-medium text-slate-600 dark:text-slate-300">Qty<input name="quantity" required inputmode="decimal" value="{{ item.quantity }}" class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></label><label class="text-xs font-medium text-slate-600 dark:text-slate-300">Unit price<input name="unit_price" required inputmode="decimal" value="{{ item.unit_price }}" class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></label></div>
+                                                <button type="submit" class="justify-self-end rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700">Save line</button>
                                             </form>
-                                        </div>
-                                    </details>
+                                        </details>
+                                        <form method="post" action="/admin/sales/quotes/{{ quote.id }}/line-items/{{ item.id }}/delete" onsubmit="return confirm('Remove this line from the quote?');">
+                                            {% include "components/forms/csrf_input.html" %}
+                                            <button type="submit" class="text-xs font-medium text-red-600 hover:underline dark:text-red-400">Remove</button>
+                                        </form>
+                                    </div>
                                 </td>
                                 {% endif %}
                             </tr>
