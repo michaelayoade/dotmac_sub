@@ -1059,14 +1059,14 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             _upsert_by_keys(
                 db,
                 OltServiceProfile,
-                {"olt_id": olt.id, "profile_id": line_profile_read.profile_id},
+                {"olt_id": olt.id, "profile_id": service_profile_read.profile_id},
                 {
-                    "name": line_profile_read.name,
-                    "binding_count": line_profile_read.binding_count,
+                    "name": service_profile_read.name,
+                    "binding_count": service_profile_read.binding_count,
                     "ethernet_ports": parsed.ethernet_ports,
                     "voip_ports": parsed.voip_ports,
                     "catv_ports": parsed.catv_ports,
-                    "raw_config": line_profile_read.detail,
+                    "raw_config": service_profile_read.detail,
                     "last_imported_at": imported_at,
                 },
             )
